@@ -1,0 +1,46 @@
+# 知识卡导出索引文件
+schema_version: 1
+locale: en-US
+branch: Q0DeR-MaG1C-BrAnCh-Fo2-NoN-GiT-Or-No-C0MmIt
+nodes_managed: true
+exported_at: "2026-07-30T11:58:16Z"
+modules:
+    "":
+        dir_name: Carrot Desktop AI Assistant
+        title: Carrot Desktop AI Assistant
+        scope:
+            - README.md
+            - PLAN.md
+            - .gitignore
+            - pyproject.toml
+            - build.bat
+        source_files: []
+        children:
+            - carrot_core
+            - electron_gui
+        depends_on: []
+        related_to: []
+    carrot_core:
+        dir_name: Carrot Core Application & CLI
+        title: Carrot Core Application & CLI
+        scope:
+            - carrot/app.py
+            - carrot/main.py
+            - carrot/config.py
+            - carrot/database.py
+            - carrot/__init__.py
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: electron_gui
+    electron_gui:
+        dir_name: Carrot Desktop Electron GUI
+        title: Carrot Desktop Electron GUI
+        scope:
+            - gui/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: carrot_core

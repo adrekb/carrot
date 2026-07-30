@@ -1,0 +1,40 @@
+{
+  "name": "carrot-desktop",
+  "version": "0.2.0",
+  "description": "Carrot - A local-first AI assistant with speech, hybrid search, notes, and planning",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron . --dev",
+    "package": "electron-builder --win --dir",
+    "dist": "electron-builder --win --x64 --publish=never"
+  },
+  "keywords": ["carrot", "ai", "assistant", "local", "ollama", "speech"],
+  "author": "Carrot Community",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^30.0.0",
+    "electron-builder": "^24.9.1"
+  },
+  "build": {
+    "appId": "com.carrot.ai",
+    "productName": "Carrot",
+    "win": {
+      "target": "nsis",
+      "icon": "public/icon.ico"
+    },
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "public/**/*"
+    ],
+    "extraFiles": [
+      {
+        "from": "../assets/ollama-setup.exe",
+        "to": "assets/ollama-setup.exe"
+      }
+    ]
+  }
+}

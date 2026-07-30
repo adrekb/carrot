@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+carrot.db
+carrot.db-wal
+carrot.db-shm
+data/
+.venv/
+venv/
+.env
+
+# Build artifacts
+assets/
+gui/dist/
+gui/node_modules/
+*.egg-info/
+build/

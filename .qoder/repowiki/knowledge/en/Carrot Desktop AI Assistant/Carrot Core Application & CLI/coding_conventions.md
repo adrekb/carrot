@@ -1,0 +1,5 @@
+- Each feature area (conversations, search, goals, reminders, notes, computer_use, terminal, recap, leaderboard) is implemented as a separate sibling module and accessed through short alias imports (`conv_mod`, `cpu_mod`, `term_mod`, etc.) inside `app.py`.
+- HTTP request bodies are validated with Pydantic `BaseModel` classes defined inline near their corresponding route handlers, with optional fields marked using `Optional[...] = None` or default values.
+- Database access goes through `get_db()` which returns a connection with `row_factory=sqlite3.Row`, enabling dictionary-style column access throughout the codebase.
+- Configuration is always read via `get_config()` which merges hardcoded `DEFAULTS` with persisted key/value pairs from the `config` table, never reading the DB directly outside this module.
+- Routes follow a consistent pattern: accept a typed request model, delegate to the corresponding domain function, and raise `HTTPException` with descriptive detail strings on error conditions.

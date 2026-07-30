@@ -1,0 +1,1 @@
+FastAPI + Uvicorn for the HTTP server, SQLite with FTS5 virtual tables for full-text search, Pydantic models for request validation, and raw `sqlite3.Row` cursors for data access. Ollama integration is provided through `OllamaClient`.

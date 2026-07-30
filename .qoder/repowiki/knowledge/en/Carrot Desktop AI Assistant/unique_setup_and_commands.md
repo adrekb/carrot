@@ -1,0 +1,1 @@
+Run `build.bat` from the repo root to install Python and Node dependencies, build the React frontend, and package the Electron installer (`gui\dist\Carrot Setup.exe`). Development modes: `cd gui && npm start` for the desktop app, or `carrot start` / `python -m carrot.main <command>` for the CLI/server directly.

@@ -1,0 +1,12 @@
+schema_version: 1
+module_path: ""
+title: Carrot Desktop AI Assistant
+scope:
+    - README.md
+    - PLAN.md
+    - .gitignore
+    - pyproject.toml
+    - build.bat
+source_files: []
+depends_on: []
+related_to: []

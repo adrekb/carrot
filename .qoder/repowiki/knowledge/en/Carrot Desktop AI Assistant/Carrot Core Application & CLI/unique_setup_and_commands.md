@@ -1,0 +1,1 @@
+Run the CLI with `python -m carrot.main <command>` (e.g. `carrot start` launches the server and opens a browser). The server itself runs via `python -m carrot.app` and listens on `127.0.0.1:8181` by default. Database and config files live under `carrot/data/` (created automatically).

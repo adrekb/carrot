@@ -1,0 +1,1 @@
+Core Python package providing the FastAPI web server, CLI entry point, SQLite-backed persistence, configuration management, and a unified public API surface for conversations, search, goals, reminders, notes, computer use, and leaderboard features.
