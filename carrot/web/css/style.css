@@ -1533,8 +1533,80 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   padding: 7px 9px;
   border-bottom: 1px solid var(--border);
 }
-.routing-table td { padding: 7px 9px; border-bottom: 1px solid var(--border); }
+.routing-table td { padding: 7px 9px; border-bottom: 1px solid var(--border); vertical-align: top; }
 .routing-table tr:last-child td { border-bottom: none; }
+.routing-table select,
+.routing-table input {
+  width: 100%;
+  min-width: 120px;
+  padding: 5px 7px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--text);
+  font-size: 12px;
+}
+.routing-table input:focus, .routing-table select:focus { border-color: var(--border-hi); outline: none; }
+.route-actions { white-space: nowrap; }
+.route-actions .btn { padding: 4px 8px; font-size: 11.5px; }
+
+/* Providers */
+.provider-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 12px;
+  align-items: center;
+  padding: 10px 12px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 8px;
+}
+.provider-main { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.provider-name { font-weight: 600; font-size: 13px; }
+.provider-detail { font-size: 11.5px; }
+.provider-actions {
+  grid-column: 2; grid-row: 1 / span 2;
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end;
+}
+.provider-actions .btn { padding: 4px 9px; font-size: 11.5px; }
+.provider-key {
+  width: 170px;
+  padding: 5px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--text);
+  font-size: 12px;
+}
+.provider-key:focus { border-color: var(--border-hi); outline: none; }
+.provider-result { grid-column: 1 / -1; font-size: 11.5px; }
+.provider-result:empty { display: none; }
+.provider-result.ok { color: var(--green); }
+.provider-result.error { color: var(--red); }
+.dot.off { background: var(--muted); box-shadow: none; }
+
+.provider-add { margin-top: 14px; }
+.provider-add > summary {
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--muted);
+  padding: 4px 0;
+  list-style: none;
+}
+.provider-add > summary::before { content: '+ '; }
+.provider-add[open] > summary::before { content: '− '; }
+.provider-add > summary:hover { color: var(--text); }
+.provider-add select,
+.provider-add input {
+  padding: 7px 10px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 12.5px;
+}
+.provider-add select:focus, .provider-add input:focus { border-color: var(--border-hi); outline: none; }
 
 /* Backups */
 .backup-row {
@@ -1548,3 +1620,56 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   border-radius: var(--radius);
   margin: 10px 0 0;
 }
+
+/* Doc to agent — reference chips under the note toolbar */
+.doc-refs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--border);
+}
+.doc-refs.hidden { display: none; }
+.doc-ref {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  font-size: 11.5px;
+}
+.doc-ref.ok { border-color: rgba(63, 214, 143, 0.35); }
+.doc-ref.bad { border-color: rgba(255, 92, 31, 0.35); }
+.doc-ref.route { border-color: var(--border-hi); color: var(--muted); }
+.doc-ref-detail { color: var(--muted); }
+
+/* The '@' mention menu */
+.mention-menu {
+  position: fixed;
+  z-index: 300;
+  width: 320px;
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 5px;
+  background: var(--panel, var(--card));
+  border: 1px solid var(--border-hi);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+.mention-menu.hidden { display: none; }
+.mention-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 9px;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 12.5px;
+}
+.mention-item.active, .mention-item:hover { background: var(--accent-soft); }
+.mention-label { font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mention-source { color: var(--muted); font-size: 11px; flex-shrink: 0; }
+.mention-empty { padding: 8px 10px; color: var(--muted); font-size: 12px; }

@@ -412,7 +412,18 @@ async function sendChat() {
         document.getElementById('chat-title').textContent = msg.slice(0, 42);
     }
 
-    const skill = activeSkill;
+    await streamTurn('/api/chat/stream', {
+        message: msg,
+        conversation_id: currentConversationId,
+        model: currentModel,
+        skill: activeSkill ? activeSkill.slug : null,
+    }, activeSkill);
+}
+
+// Renders one streamed turn into the chat view. Shared by the chat box and by
+// "send to agent" in Notes, so both get the same tool trace, reasoning panel
+// and approval prompts without duplicating any of it.
+async function streamTurn(url, payload, skill) {
     const assistantEl = appendMessage('assistant', '');
     const contentEl = assistantEl.querySelector('.content');
     contentEl.innerHTML = '<span class="caret">&nbsp;</span>';
@@ -453,15 +464,10 @@ async function sendChat() {
     }
 
     try {
-        const resp = await fetch('/api/chat/stream', {
+        const resp = await fetch(url, {
             method: 'POST',
             headers: authHeaders(),
-            body: JSON.stringify({
-                message: msg,
-                conversation_id: currentConversationId,
-                model: currentModel,
-                skill: skill ? skill.slug : null,
-            }),
+            body: JSON.stringify(payload),
         });
         if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).detail || resp.statusText);
 
@@ -482,10 +488,22 @@ async function sendChat() {
                 const box = document.getElementById('chat-messages');
                 if (payload.skill) toolLine('skill active: ' + payload.skill.name, 'intent');
                 if (payload.route) {
-                    // Always say where the answer came from — local vs cloud is
+                    // Always say where the answer came from — local vs hosted is
                     // the single most important thing to be honest about here.
-                    const where = payload.route.provider === 'anthropic' ? 'cloud' : 'on-device';
+                    const where = payload.route.local ? 'on-device' : payload.route.provider;
                     toolLine(`${payload.route.model} (${where})`, 'intent');
+                }
+                if (payload.document) {
+                    // A doc send reports what it actually attached, before any
+                    // tokens arrive — a citation that silently failed is worse
+                    // than useless, so failures are shown too.
+                    for (const ref of payload.document.references || []) {
+                        toolLine(`${ref.raw} ${ref.ok ? '✓' : '✗'} ${ref.detail}`,
+                                 ref.ok ? 'search' : 'error');
+                    }
+                    for (const warning of payload.document.warnings || []) {
+                        toolLine(warning, 'error');
+                    }
                 }
                 if (payload.tool) {
                     toolLine(`tool → ${payload.tool.name}(${JSON.stringify(payload.tool.args)})`, 'search');

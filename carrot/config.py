@@ -36,8 +36,18 @@ DEFAULTS = {
     "agent_tools_enabled": True,
     "agent_require_approval": True,
     "code_workspace_dir": "",
-    # Model routing
+    # Model routing. `model_routes` maps a task to {provider, model, effort};
+    # a bare model string from an older build is still read.
     "model_routes": {},
+    "custom_tasks": [],
+    # Providers. Built-ins (ollama, anthropic, openai) live in providers.py;
+    # these hold user-added endpoints, per-provider tweaks, and BYOK keys.
+    "custom_providers": [],
+    "provider_settings": {},
+    "provider_keys": {},
+    # Automatic escalation — which provider unassigned opted-in tasks go to.
+    "escalation_provider": "anthropic",
+    "escalation_model": "",
     "cloud_enabled": False,
     "cloud_api_key": "",
     "cloud_model": "claude-opus-5",
@@ -54,8 +64,22 @@ DEFAULTS = {
     "proactive_disabled_checks": [],
 }
 
-# Keys that must never be returned by the read-only config endpoint.
-SECRET_KEYS = {"cloud_api_key"}
+# Keys that must never be returned by the read-only config endpoint. A dict
+# value is reduced to a map of booleans, so the UI can still tell which
+# providers have a key without any key leaving the process.
+SECRET_KEYS = {"cloud_api_key", "provider_keys"}
+
+
+def redact(settings):
+    """Replace every secret with a boolean (or a boolean per entry)."""
+    redacted = dict(settings)
+    for key in SECRET_KEYS:
+        value = redacted.get(key)
+        if isinstance(value, dict):
+            redacted[key] = {name: bool(secret) for name, secret in value.items()}
+        else:
+            redacted[key] = bool(value)
+    return redacted
 
 
 def get_config():

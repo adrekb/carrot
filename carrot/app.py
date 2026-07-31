@@ -41,7 +41,10 @@ from carrot import (
     summarize as summarize_mod,
     indexer as indexer_mod,
     agent_tools as agent_mod,
+    extensions as extensions_mod,
+    doc_agent,
     router as router_mod,
+    providers as providers_mod,
     security as security_mod,
     proactive as proactive_mod,
     backup as backup_mod,
@@ -95,6 +98,7 @@ class ChatRequest(BaseModel):
     stream: Optional[bool] = False
     skill: Optional[str] = None
     task: Optional[str] = None
+    provider: Optional[str] = None
     cloud: Optional[bool] = False
 
 
@@ -230,6 +234,54 @@ class ApprovalRequest(BaseModel):
 class RouteRequest(BaseModel):
     task: str
     model: str
+    provider: Optional[str] = None
+    effort: Optional[str] = None
+
+
+class DocSendRequest(BaseModel):
+    """A note (or a selection from one) being sent to the agent."""
+
+    text: str
+    note_id: Optional[str] = None
+    title: Optional[str] = None
+    conversation_id: Optional[str] = None
+    task: Optional[str] = None
+    skill: Optional[str] = None
+
+
+class LatexRequest(BaseModel):
+    source: str
+    out_path: Optional[str] = None
+
+
+class BibliographyRequest(BaseModel):
+    bib: str
+    tex: str = ""
+
+
+class ProviderRequest(BaseModel):
+    id: str
+    label: str = ""
+    kind: str = "openai"
+    base_url: str = ""
+    models: Optional[List[str]] = None
+    env_var: str = ""
+    api_key: Optional[str] = None
+
+
+class ProviderKeyRequest(BaseModel):
+    api_key: str = ""
+
+
+class ProviderEnabledRequest(BaseModel):
+    enabled: bool = True
+
+
+class TaskRequest(BaseModel):
+    id: str
+    label: str = ""
+    description: str = ""
+    local_only: bool = False
 
 
 class BackupExportRequest(BaseModel):
@@ -407,13 +459,14 @@ async def pull_model(req: ModelPullRequest):
 
 # ===== Chat =====
 
-def _prepare_history(conv, message, skill_slug):
+def _prepare_history(conv, message, skill_slug, extra_system=None):
     """Build the model message list for a turn.
 
-    Order matters: skill instructions, then what Carrot remembers about the
-    user, then the rolling summary of everything older than the recent window,
-    then the recent turns verbatim. Long conversations therefore keep their
-    early context instead of falling off a fixed-size slice.
+    Order matters: skill instructions, then any caller-supplied context (a
+    document's cited files, say), then what Carrot remembers about the user,
+    then the rolling summary of everything older than the recent window, then
+    the recent turns verbatim. Long conversations therefore keep their early
+    context instead of falling off a fixed-size slice.
     """
     history = []
     skill = None
@@ -427,6 +480,9 @@ def _prepare_history(conv, message, skill_slug):
                     f"Follow these instructions:\n\n{skill['instructions']}"
                 ),
             })
+
+    if extra_system:
+        history.append({"role": "system", "content": extra_system})
 
     if config.get_config().get("memory_enabled", True):
         try:
@@ -445,8 +501,12 @@ MAX_TOOL_ROUNDS = 8
 
 
 def _available_tools():
-    """Built-in tools plus every tool exposed by enabled MCP servers."""
+    """Built-in tools, enabled extension packs, and every enabled MCP server."""
     tools = list(agent_mod.ollama_tools())
+    try:
+        tools += extensions_mod.ollama_tools()
+    except Exception:
+        pass
     try:
         tools += mcp_mod.ollama_tools()
     except Exception:
@@ -469,6 +529,8 @@ def _run_tool(name, args, conversation_id):
         try:
             if agent_mod.is_builtin(name):
                 outcome["result"] = agent_mod.call(name, args, conversation_id, events.put)
+            elif extensions_mod.is_extension_tool(name):
+                outcome["result"] = extensions_mod.call(name, args, conversation_id, events.put)
             else:
                 outcome["result"] = mcp_mod.call_namespaced_tool(name, args)
         except Exception as exc:
@@ -593,18 +655,24 @@ def _resolve_chat_route(req):
     resolved = router_mod.route(
         task=getattr(req, "task", None) or router_mod.TASK_CHAT,
         model=req.model,
+        provider=getattr(req, "provider", None),
         prefer_cloud=bool(getattr(req, "cloud", False)),
     )
-    if resolved.provider == router_mod.PROVIDER_LOCAL:
-        if not ollama_mod.OllamaClient().is_available():
-            raise HTTPException(status_code=503, detail="Ollama is not available")
+    if resolved.local and not ollama_mod.OllamaClient().is_available():
+        raise HTTPException(status_code=503, detail="Ollama is not available")
     return resolved
 
 
-def _chat_stream_response(req, conv, history, skill, resolved):
-    """Shared SSE body for both chat endpoints."""
+def _chat_stream_response(req, conv, history, skill, resolved, prelude=None):
+    """Shared SSE body for the chat and doc-send endpoints.
+
+    ``prelude`` is emitted as the first event, which is how a doc send reports
+    its resolved citations before any tokens arrive.
+    """
     async def stream():
         final_text = ""
+        if prelude:
+            yield f"data: {json.dumps({'document': prelude})}\n\n"
         for event in _agentic_chat_events(history, resolved, skill, req.conversation_id):
             if "_final_text" in event:
                 final_text = event["_final_text"]
@@ -977,10 +1045,7 @@ async def get_app_config():
     Secrets are reported as a boolean so the UI can show "configured" without
     the value ever leaving the process.
     """
-    settings = dict(config.get_config())
-    for key in config.SECRET_KEYS:
-        settings[key] = bool(settings.get(key))
-    return settings
+    return config.redact(config.get_config())
 
 
 @app.put("/api/config/{key}")
@@ -1418,16 +1483,262 @@ async def router_status():
 
 @app.put("/api/router/route")
 async def set_router_route(req: RouteRequest):
+    """Pin a task to a provider and model."""
     try:
-        return {"routes": router_mod.set_route(req.task, req.model)}
+        routes = router_mod.set_route(req.task, req.model, provider=req.provider, effort=req.effort)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    return {"routes": routes, "route": router_mod.route(req.task).as_dict()}
+
+
+@app.delete("/api/router/route/{task}")
+async def clear_router_route(task: str):
+    """Drop an assignment so the task falls back to the automatic rules."""
+    return {"routes": router_mod.clear_route(task), "route": router_mod.route(task).as_dict()}
 
 
 @app.get("/api/router/recommendation")
 async def router_recommendation():
     """A local model sized to this machine's memory."""
     return router_mod.recommend_local_model()
+
+
+# ===== Extension packs =====
+
+@app.get("/api/extensions")
+async def list_extensions():
+    return {"extensions": extensions_mod.list_packs()}
+
+
+@app.get("/api/extensions/{pack_id}")
+async def get_extension(pack_id: str):
+    """One pack in full: tools, skills, probed capabilities and settings."""
+    try:
+        return extensions_mod.require_pack(pack_id).as_dict(deep=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.put("/api/extensions/{pack_id}/enabled")
+async def set_extension_enabled(pack_id: str, req: ProviderEnabledRequest):
+    """Turn a pack on or off. Enabling installs its skills; disabling removes them."""
+    try:
+        return extensions_mod.set_enabled(pack_id, req.enabled)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.put("/api/extensions/{pack_id}/settings/{key}")
+async def set_extension_setting(pack_id: str, key: str, value: Any = Body(...)):
+    try:
+        return {"settings": extensions_mod.set_pack_setting(pack_id, key, value)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+# ===== LaTeX workbench =====
+
+@app.post("/api/latex/analyze")
+async def latex_analyze(req: LatexRequest):
+    """Validation, outline and math blocks — everything that needs no TeX engine."""
+    from carrot.packs.academia import latex as latex_mod
+
+    return {
+        **latex_mod.validate(req.source),
+        "outline": latex_mod.outline(req.source),
+        "math": latex_mod.math_blocks(req.source),
+        "engine": latex_mod.available_engine(),
+    }
+
+
+@app.post("/api/latex/compile")
+async def latex_compile(req: LatexRequest):
+    from carrot.packs.academia import latex as latex_mod
+
+    try:
+        return latex_mod.compile_document(req.source, req.out_path or "document.pdf")
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@app.post("/api/latex/bibliography")
+async def latex_bibliography(req: BibliographyRequest):
+    from carrot.packs.academia import bibliography as bib_mod
+
+    return bib_mod.check(req.bib, req.tex)
+
+
+# ===== Doc to agent =====
+
+@app.get("/api/doc/candidates")
+async def doc_candidates(kind: str = "file", q: str = "", provider: str = "", limit: int = 40):
+    """Completions for the editor's '@' menu.
+
+    ``model`` needs a provider first — the list is whatever that provider
+    reports for the key on file, not a hardcoded set.
+    """
+    if kind == "provider":
+        return {"kind": "provider", "candidates": doc_agent.provider_candidates(q)}
+    if kind == "model":
+        if not provider:
+            return {"kind": "provider", "candidates": doc_agent.provider_candidates(q)}
+        return {"kind": "model", "provider": provider,
+                "candidates": doc_agent.model_candidates(provider, q)}
+    return {"kind": "file", "candidates": doc_agent.file_candidates(q, limit=limit)}
+
+
+@app.post("/api/doc/parse")
+async def doc_parse(req: DocSendRequest):
+    """Resolve a document's references without sending it.
+
+    This is what the editor shows under the note: which files will be attached,
+    which model will serve it, and what could not be resolved.
+    """
+    resolved = doc_agent.resolve(req.text, task=req.task or router_mod.TASK_CHAT)
+    return resolved.as_dict()
+
+
+@app.post("/api/doc/send")
+async def doc_send(req: DocSendRequest):
+    """Send a note straight to the agent, cited files and chosen model included.
+
+    Deliberately reuses the ordinary chat turn: the note's text becomes the user
+    message, its cited files become a system context block, and everything else
+    — memory, tools, summaries, approvals — behaves exactly as it does in chat.
+    """
+    if not (req.text or "").strip():
+        raise HTTPException(status_code=400, detail="Nothing to send")
+
+    resolved = doc_agent.resolve(req.text, task=req.task or router_mod.TASK_CHAT)
+
+    chat_req = ChatRequest(
+        message=resolved.prompt,
+        conversation_id=req.conversation_id,
+        task=req.task,
+        skill=req.skill,
+        stream=True,
+    )
+    if chat_req.conversation_id is None:
+        title = (req.title or resolved.prompt[:80]).strip() or "Untitled note"
+        chat_req.conversation_id = conv_mod.create_conversation(title=title)["id"]
+    conv = conv_mod.get_conversation(chat_req.conversation_id)
+    if conv is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    route = resolved.route
+    if route is None:
+        route = _resolve_chat_route(chat_req)
+    elif route.local and not ollama_mod.OllamaClient().is_available():
+        raise HTTPException(status_code=503, detail="Ollama is not available")
+
+    history, skill = _prepare_history(
+        conv, resolved.prompt, chat_req.skill, extra_system=resolved.context or None
+    )
+    conv_mod.add_message(chat_req.conversation_id, "user", resolved.prompt)
+    return _chat_stream_response(chat_req, conv, history, skill, route, prelude=resolved.as_dict())
+
+
+# ===== Providers (BYOK) =====
+
+@app.get("/api/router/providers")
+async def list_providers():
+    """Every configured provider. Keys are reported as booleans, never values."""
+    return {
+        "providers": providers_mod.list_providers(),
+        "presets": providers_mod.PRESETS,
+        "kinds": list(providers_mod.KINDS),
+    }
+
+
+@app.post("/api/router/providers")
+async def upsert_provider(req: ProviderRequest):
+    """Add or update a provider. An ``api_key`` in the body is stored separately."""
+    try:
+        provider = providers_mod.upsert_provider(
+            req.id, label=req.label, kind=req.kind, base_url=req.base_url,
+            models=req.models, env_var=req.env_var,
+        )
+        if req.api_key is not None and req.api_key.strip():
+            providers_mod.set_api_key(provider["id"], req.api_key.strip())
+            provider = providers_mod.require_provider(provider["id"])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return provider
+
+
+@app.delete("/api/router/providers/{provider_id}")
+async def delete_provider(provider_id: str):
+    try:
+        if not providers_mod.delete_provider(provider_id):
+            raise HTTPException(status_code=404, detail="Provider not found")
+    except providers_mod.ProviderError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"deleted": provider_id}
+
+
+@app.put("/api/router/providers/{provider_id}/key")
+async def set_provider_key(provider_id: str, req: ProviderKeyRequest):
+    """Store or clear a provider's key. An empty string forgets it."""
+    try:
+        providers_mod.require_provider(provider_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    providers_mod.set_api_key(provider_id, req.api_key.strip())
+    return providers_mod.require_provider(provider_id)
+
+
+@app.put("/api/router/providers/{provider_id}/enabled")
+async def set_provider_enabled(provider_id: str, req: ProviderEnabledRequest):
+    try:
+        return providers_mod.set_enabled(provider_id, req.enabled)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.get("/api/router/providers/{provider_id}/models")
+async def provider_models(provider_id: str):
+    """Ask the provider what it serves — Carrot never hardcodes model names."""
+    try:
+        return providers_mod.list_models(provider_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.post("/api/router/providers/{provider_id}/test")
+async def test_provider(provider_id: str):
+    """Probe a provider so a bad key surfaces here rather than mid-chat."""
+    try:
+        return providers_mod.test_provider(provider_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+# ===== Tasks =====
+
+@app.get("/api/router/tasks")
+async def list_tasks():
+    return {"tasks": router_mod.tasks(), "assignments": router_mod.assignments()}
+
+
+@app.post("/api/router/tasks")
+async def create_task(req: TaskRequest):
+    """Define a custom routing target, callable as ``task=<id>``."""
+    try:
+        return router_mod.add_task(
+            req.id, label=req.label, description=req.description, local_only=req.local_only
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.delete("/api/router/tasks/{task_id}")
+async def delete_task(task_id: str):
+    try:
+        if not router_mod.delete_task(task_id):
+            raise HTTPException(status_code=404, detail="Task not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"deleted": task_id}
 
 
 # ===== Notifications =====

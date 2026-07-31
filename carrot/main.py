@@ -242,10 +242,21 @@ def main():
         from carrot.router import status as router_status
 
         state = router_status()
-        print("Cloud escalation:", "on" if state["cloud_enabled"] else "off")
+        print("Providers:")
+        for provider in state.get("providers", []):
+            if not provider["enabled"]:
+                mark, note = "-", "disabled"
+            elif provider["configured"]:
+                mark, note = "*", "ready"
+            else:
+                mark, note = " ", "no key"
+            print(f"  {mark} {provider['id']:<14} {provider['kind']:<10} {note}")
+
+        print("\nAutomatic escalation:", "on" if state["cloud_enabled"] else "off")
+        print("\nTasks:")
         for task, route in state["routes"].items():
-            where = "cloud" if route["provider"] == "anthropic" else "on-device"
-            print(f"  {task:<10} {route['model']:<20} ({where})")
+            where = "on-device" if route.get("local") else route["provider"]
+            print(f"  {task:<12} {route['model']:<24} ({where})")
         recommendation = state.get("recommendation") or {}
         if recommendation.get("model"):
             print(f"\nSuggested local model: {recommendation['model']} — {recommendation['reason']}")

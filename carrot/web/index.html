@@ -248,8 +248,11 @@
           <input type="text" id="note-title" class="title-input" placeholder="Untitled note" oninput="scheduleNoteSave()">
           <span id="note-status" class="editor-status"></span>
           <span id="note-words" class="editor-words"></span>
+          <button class="btn btn-primary" onclick="sendDocToAgent()"
+                  title="Send this note (or the selected text) to the agent">Send to agent</button>
           <button class="btn btn-ghost" onclick="deleteCurrentNote()">Delete</button>
         </div>
+        <div id="doc-refs" class="doc-refs hidden"></div>
         <div id="note-editor-host" class="milkdown-host"></div>
         <textarea id="note-fallback" class="note-fallback hidden" placeholder="Write your note…" oninput="scheduleNoteSave()"></textarea>
         <div id="note-empty" class="editor-empty">Select a note on the left, or create a new one.</div>
@@ -495,23 +498,65 @@
 
       <div class="settings-card">
         <div class="settings-head">
-          <svg class="ico"><use href="#i-chip"/></svg>
-          <h3>Model Routing</h3>
+          <svg class="ico"><use href="#i-cloud"/></svg>
+          <h3>Providers</h3>
         </div>
         <p class="muted small">
-          Every task names the model that serves it. Small local models handle classification
-          and summarizing; you can optionally send the hardest reasoning and coding work to a
-          frontier model. Nothing leaves your machine unless you switch this on.
+          Ollama runs on this machine and needs no key. Add any other service you have a key
+          for — Anthropic, OpenAI, or anything speaking the OpenAI format (OpenRouter, Groq,
+          Together, DeepSeek, Mistral, LM Studio, vLLM, your own endpoint). Keys are stored
+          locally and never returned by the API once saved.
         </p>
-        <div id="routing-panel"></div>
+        <div id="providers-panel"><div class="empty">Loading…</div></div>
+
+        <details class="provider-add">
+          <summary>Add a provider</summary>
+          <div class="settings-row">
+            <select id="prov-preset" onchange="applyProviderPreset()"></select>
+            <input type="text" id="prov-id" placeholder="id (e.g. openrouter)" spellcheck="false">
+            <input type="text" id="prov-label" placeholder="Display name" spellcheck="false">
+          </div>
+          <div class="settings-row">
+            <select id="prov-kind">
+              <option value="openai">OpenAI-compatible</option>
+              <option value="anthropic">Anthropic</option>
+            </select>
+            <input type="text" id="prov-base" placeholder="https://api.example.com/v1" spellcheck="false">
+            <input type="password" id="prov-key" placeholder="API key (optional now)" spellcheck="false">
+            <button class="btn btn-ghost" onclick="addProvider()">Add</button>
+          </div>
+        </details>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-chip"/></svg>
+          <h3>Task Routing</h3>
+        </div>
+        <p class="muted small">
+          Every model call names the task it is doing, and you decide which provider and model
+          serves each one. Leave a task on <span class="mono">auto</span> to keep it on-device
+          (with optional escalation), or pin it to any provider you configured above. You can
+          also add your own tasks and call them from the API with
+          <span class="mono">task=&lt;id&gt;</span>.
+        </p>
+        <div id="routing-panel"><div class="empty">Loading…</div></div>
+
+        <details class="provider-add">
+          <summary>Add a custom task</summary>
+          <div class="settings-row">
+            <input type="text" id="task-id" placeholder="id (e.g. checking)" spellcheck="false">
+            <input type="text" id="task-label" placeholder="Display name" spellcheck="false">
+            <input type="text" id="task-desc" placeholder="What it's for" spellcheck="false">
+            <button class="btn btn-ghost" onclick="addTask()">Add</button>
+          </div>
+        </details>
+
         <div class="settings-row">
           <label class="settings-toggle">
-            <input type="checkbox" id="cloud-enabled"> Allow cloud escalation
+            <input type="checkbox" id="cloud-enabled" onchange="saveCloudSettings()">
+            Allow automatic escalation for unpinned tasks
           </label>
-        </div>
-        <div class="settings-row">
-          <input type="password" id="cloud-key" placeholder="Anthropic API key (stored locally)" spellcheck="false">
-          <button class="btn btn-ghost" onclick="saveCloudSettings()">Save</button>
           <button class="btn btn-ghost" onclick="loadRouting()">Refresh</button>
         </div>
       </div>
@@ -629,5 +674,6 @@
 <script src="/js/dashboard.js"></script>
 <script src="/js/app.js"></script>
 <script src="/js/agentops.js"></script>
+<script src="/js/docagent.js"></script>
 </body>
 </html>

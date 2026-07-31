@@ -24,6 +24,8 @@ It searches through all your past conversations, notes, and even old goals to fi
 
 **You want to start your day informed without doom-scrolling Twitter.** When your PC is plugged in and idle in the morning, Carrot fetches the day's tech and science news, summarizes it with AI, and saves it for you. You can ask "what's in today's recap?" anytime.
 
+**You think in documents, not in chat boxes.** Write the plan in a note — with `@/file/` references to the code it's about and an `@/model/` line picking which model should do it — then hit Send to agent. The note *is* the prompt. No copy-and-paste, and the cited files are read fresh at send time.
+
 **You need to remember things.** Carrot has reminders that work like any to-do app, but because everything is connected, you can search across them, link them to conversations, and never lose track of what matters.
 
 **You want an assistant that actually knows you.** Carrot doesn't just search what you typed — it builds a structured memory of what's true about you. Preferences, decisions, projects, commitments. Every belief is traceable back to the message it came from, and you can read, edit, pin, or delete any of it from the Memory tab. Get something wrong once and mark it wrong; Carrot won't record that subject again.
@@ -37,6 +39,7 @@ It searches through all your past conversations, notes, and even old goals to fi
 - **It reads your files, not just your chats.** A local document index over PDFs, markdown, code, and saved HTML, searchable alongside everything else.
 - **It can do things, safely.** Built-in agent tools for reading, editing, searching and running code — every mutating action asks first, and every file edit can be reverted with its diff.
 - **Powered by Ollama.** The AI runs on your own hardware using the `gemma4:e4b` model. You don't need an API key — and if you don't have Ollama, Carrot installs it for you on first launch.
+- **Your keys, your choice of model.** If you do want a hosted model for some things, bring a key for Anthropic, OpenAI, or anything OpenAI-compatible, and assign it per task — a frontier model for hard reasoning, something cheap for classification, everything else on-device.
 - **One-click setup.** On first run Carrot detects whether Ollama is present, silently installs it if not, and pulls `gemma4:e4b` — all with a progress splash screen. No manual terminal steps required.
 - **Search-first design.** Every conversation, note, goal entry, and reminder is indexed and searchable. If you've ever typed something that Carrot heard, you can find it again.
 - **One app instead of five.** Code editor + notes + reminders + goal tracker + search + AI chat, all in one place with one interface.
@@ -66,16 +69,27 @@ It searches through all your past conversations, notes, and even old goals to fi
 - **Hybrid search**: exact phrases (FTS5) reranked by conceptual similarity (embeddings via `nomic-embed-text`)
 - **`/api/search/all`**: one query across conversations, indexed files, and memory
 
+### Doc to Agent
+- **Write the plan, then send it** (`carrot/doc_agent.py`): think something through in a note and hand it straight to the model — no copy-and-paste, no losing the structure. Select part of a note to send only that.
+- **`@/file/` citations**: type `@` in the editor, pick `file`, and choose from your workspace and indexed folders. The file is read *at send time* and attached as context, so the model sees the actual file rather than your description of it.
+- **`@/model/` selection**: a three-step picker — `@` → `model` → provider (`openai`, `google`, `anthropic`, `local`, or anything you added) → a scrollable list of the models *that provider serves for your key*, fetched live rather than hardcoded. A research note can name a frontier model while a scratch note stays on-device.
+- **Shown before it runs**: chips under the note say which citations resolved, how large they are, and which model will serve it. A citation that cannot be read is reported, never silently dropped.
+- **Confined to what you opted into**: citations reach the agent workspace and your indexed folders, and nothing else.
+
 ### Agent Tools
 - **Built-in tools** (`carrot/agent_tools.py`) alongside MCP: read/write files, list directories, regex search, run commands, and search memory, documents and past conversations
 - **Approval gate**: every mutating tool blocks until you allow or deny it, with "don't ask again this session" per tool
 - **Undo journal**: file writes record their previous contents, so any agent edit can be reverted with its diff shown first
 
 ### Model Routing
-- **Task-aware** (`carrot/router.py`): each call names its task (chat, code, reasoning, classify, summarize, extract, recap) and the router picks the model
-- **Optional cloud escalation**: attach an Anthropic API key and route only the hardest reasoning and coding work to a frontier model. Off by default; high-volume tasks like classification never escalate.
+- **Task-aware** (`carrot/router.py`): each call names its task (chat, code, reasoning, classify, summarize, extract, recap) and the router picks the provider and model
+- **Bring your own key** (`carrot/providers.py`): Ollama on-device, plus Anthropic, OpenAI, Google (Gemini), or any endpoint speaking the OpenAI format — OpenRouter, Groq, Together, DeepSeek, Mistral, LM Studio, vLLM, your own server. Adding one is a name, a base URL and a key; nothing about it is special-cased.
+- **Per-task assignment**: pin any task to any provider and model — model A for recap, model B for code, a cheap local model for classification. An assignment always beats the automatic rules.
+- **Custom tasks**: define your own routing targets in Settings and call them with `task=<id>`. They route exactly like the built-ins.
+- **Optional automatic escalation**: with a key attached, send only the hardest reasoning and coding work to a frontier model. Off by default; high-volume tasks like classification never escalate on their own.
 - **Provenance**: every chat turn announces which provider and model served it, in the stream and in the UI
 - **Hardware-aware suggestions**: recommends a local model sized to your available RAM
+- **Keys stay local**: stored in the local config, resolved from the environment if you already export them, and reduced to booleans by the config API — a saved key is never readable over HTTP
 
 ### Security
 - **Session token**: `127.0.0.1` keeps Carrot off the network but not away from the browser. Every `/api` call requires a token injected into the app's own HTML, which the same-origin policy keeps out of reach of other pages.
@@ -168,7 +182,7 @@ carrot find "scaled dot-product attention"
 carrot memory
 carrot memory editor
 
-# See which model serves each task
+# See which provider and model serves each task
 carrot route
 
 # Back up and restore everything
@@ -189,8 +203,12 @@ carrot status
 
 Carrot is fully functional with the base install. These are opt-in:
 
+Note that only the Anthropic provider needs an extra package. Every
+OpenAI-compatible provider — OpenAI itself, OpenRouter, Groq, Together,
+DeepSeek, Mistral, LM Studio, vLLM — works with the base install.
+
 ```bash
-pip install 'carrot[cloud]'    # route the hardest tasks to a frontier model
+pip install 'carrot[cloud]'    # the Anthropic SDK, for the Anthropic provider
 pip install 'carrot[vectors]'  # sqlite-vec ANN backend (numpy fallback otherwise)
 pip install 'carrot[speech]'   # Kokoro TTS voice output
 ```
