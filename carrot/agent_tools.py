@@ -526,22 +526,25 @@ def _summarize_call(name: str, arguments: Dict[str, Any]) -> str:
     return f"{name}({', '.join(f'{k}={v!r}'[:60] for k, v in arguments.items())})"
 
 
-def call(
-    namespaced_name: str,
+def run_tool(
+    name: str,
+    spec: Dict[str, Any],
     arguments: Dict[str, Any],
     conversation_id: Optional[str] = None,
     emit: Optional[Callable] = None,
+    summary: Optional[str] = None,
 ) -> str:
-    """Execute a built-in tool, gating mutating calls behind user approval."""
-    name = namespaced_name.split("__", 1)[-1]
-    spec = TOOLS.get(name)
-    if spec is None:
-        return f"error: unknown tool {namespaced_name}"
+    """Run one tool spec: approval gate, dispatch, error containment.
 
+    Extension packs supply their own tool specs but must not reimplement any of
+    this — a pack tool that writes a file has to hit the same approval prompt a
+    built-in one does, so both go through here.
+    """
     arguments = arguments or {}
-    if spec["mutating"] and get_config().get("agent_require_approval", True):
+    if spec.get("mutating") and get_config().get("agent_require_approval", True):
         approved, reason = _request_approval(
-            name, arguments, _summarize_call(name, arguments), spec["risk"], emit
+            name, arguments, summary or _summarize_call(name, arguments),
+            spec.get("risk", "medium"), emit,
         )
         if not approved:
             return f"error: {reason}"
@@ -559,3 +562,17 @@ def call(
     if elapsed > 5:
         result = f"{result}\n\n(took {elapsed:.1f}s)"
     return result
+
+
+def call(
+    namespaced_name: str,
+    arguments: Dict[str, Any],
+    conversation_id: Optional[str] = None,
+    emit: Optional[Callable] = None,
+) -> str:
+    """Execute a built-in tool, gating mutating calls behind user approval."""
+    name = namespaced_name.split("__", 1)[-1]
+    spec = TOOLS.get(name)
+    if spec is None:
+        return f"error: unknown tool {namespaced_name}"
+    return run_tool(name, spec, arguments, conversation_id, emit)

@@ -41,6 +41,7 @@ from carrot import (
     summarize as summarize_mod,
     indexer as indexer_mod,
     agent_tools as agent_mod,
+    extensions as extensions_mod,
     doc_agent,
     router as router_mod,
     providers as providers_mod,
@@ -246,6 +247,16 @@ class DocSendRequest(BaseModel):
     conversation_id: Optional[str] = None
     task: Optional[str] = None
     skill: Optional[str] = None
+
+
+class LatexRequest(BaseModel):
+    source: str
+    out_path: Optional[str] = None
+
+
+class BibliographyRequest(BaseModel):
+    bib: str
+    tex: str = ""
 
 
 class ProviderRequest(BaseModel):
@@ -490,8 +501,12 @@ MAX_TOOL_ROUNDS = 8
 
 
 def _available_tools():
-    """Built-in tools plus every tool exposed by enabled MCP servers."""
+    """Built-in tools, enabled extension packs, and every enabled MCP server."""
     tools = list(agent_mod.ollama_tools())
+    try:
+        tools += extensions_mod.ollama_tools()
+    except Exception:
+        pass
     try:
         tools += mcp_mod.ollama_tools()
     except Exception:
@@ -514,6 +529,8 @@ def _run_tool(name, args, conversation_id):
         try:
             if agent_mod.is_builtin(name):
                 outcome["result"] = agent_mod.call(name, args, conversation_id, events.put)
+            elif extensions_mod.is_extension_tool(name):
+                outcome["result"] = extensions_mod.call(name, args, conversation_id, events.put)
             else:
                 outcome["result"] = mcp_mod.call_namespaced_tool(name, args)
         except Exception as exc:
@@ -1484,6 +1501,71 @@ async def clear_router_route(task: str):
 async def router_recommendation():
     """A local model sized to this machine's memory."""
     return router_mod.recommend_local_model()
+
+
+# ===== Extension packs =====
+
+@app.get("/api/extensions")
+async def list_extensions():
+    return {"extensions": extensions_mod.list_packs()}
+
+
+@app.get("/api/extensions/{pack_id}")
+async def get_extension(pack_id: str):
+    """One pack in full: tools, skills, probed capabilities and settings."""
+    try:
+        return extensions_mod.require_pack(pack_id).as_dict(deep=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.put("/api/extensions/{pack_id}/enabled")
+async def set_extension_enabled(pack_id: str, req: ProviderEnabledRequest):
+    """Turn a pack on or off. Enabling installs its skills; disabling removes them."""
+    try:
+        return extensions_mod.set_enabled(pack_id, req.enabled)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.put("/api/extensions/{pack_id}/settings/{key}")
+async def set_extension_setting(pack_id: str, key: str, value: Any = Body(...)):
+    try:
+        return {"settings": extensions_mod.set_pack_setting(pack_id, key, value)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+# ===== LaTeX workbench =====
+
+@app.post("/api/latex/analyze")
+async def latex_analyze(req: LatexRequest):
+    """Validation, outline and math blocks — everything that needs no TeX engine."""
+    from carrot.packs.academia import latex as latex_mod
+
+    return {
+        **latex_mod.validate(req.source),
+        "outline": latex_mod.outline(req.source),
+        "math": latex_mod.math_blocks(req.source),
+        "engine": latex_mod.available_engine(),
+    }
+
+
+@app.post("/api/latex/compile")
+async def latex_compile(req: LatexRequest):
+    from carrot.packs.academia import latex as latex_mod
+
+    try:
+        return latex_mod.compile_document(req.source, req.out_path or "document.pdf")
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@app.post("/api/latex/bibliography")
+async def latex_bibliography(req: BibliographyRequest):
+    from carrot.packs.academia import bibliography as bib_mod
+
+    return bib_mod.check(req.bib, req.tex)
 
 
 # ===== Doc to agent =====

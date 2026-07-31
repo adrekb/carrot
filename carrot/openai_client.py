@@ -104,9 +104,19 @@ class OpenAICompatibleClient:
             yield {"type": "tool_calls", "calls": resolved}
 
     def chat(self, messages: List[Dict[str, Any]], model: str, max_tokens: int = 16000) -> str:
+        return self.chat_raw(to_openai_messages(messages), model, max_tokens)
+
+    def chat_raw(self, messages: List[Dict[str, Any]], model: str,
+                 max_tokens: int = 16000) -> str:
+        """Post messages that are already in wire format.
+
+        Multimodal turns carry a list of content parts rather than a string, and
+        translating those back and forth through Carrot's internal shape would
+        only lose information — so callers that build them pass them straight in.
+        """
         payload = {
             "model": model,
-            "messages": to_openai_messages(messages),
+            "messages": messages,
             "max_completion_tokens": max_tokens,
         }
         response = self._request(payload, stream=False)

@@ -657,6 +657,77 @@ def complete(resolved: Route, messages: List[Dict[str, Any]]) -> str:
     return "".join(block.text for block in response.content if getattr(block, "type", None) == "text")
 
 
+# ===== Vision =====
+
+MEDIA_TYPES = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".gif": "image/gif", ".webp": "image/webp",
+}
+
+
+def vision_complete(resolved: Route, prompt: str, image_path: str) -> str:
+    """Ask a model about an image, whichever provider the route names.
+
+    Each protocol carries images differently — Ollama takes bare base64 on the
+    message, OpenAI takes a data URI content part, Anthropic takes a typed
+    source block — so the encoding is done once here rather than in every caller.
+    """
+    import base64
+    import os
+
+    extension = os.path.splitext(image_path)[1].lower()
+    if extension not in MEDIA_TYPES:
+        raise ValueError(
+            f"'{extension}' is not an image format that can be sent to a model "
+            f"({', '.join(sorted(MEDIA_TYPES))})"
+        )
+    with open(image_path, "rb") as handle:
+        encoded = base64.b64encode(handle.read()).decode("ascii")
+    media_type = MEDIA_TYPES[extension]
+    kind = _kind_of(resolved)
+
+    if kind == providers_mod.KIND_OLLAMA:
+        from .ollama_client import OllamaClient
+
+        return OllamaClient().chat(
+            [{"role": "user", "content": prompt, "images": [encoded]}],
+            model=resolved.model,
+        )
+
+    if kind == providers_mod.KIND_OPENAI:
+        from .openai_client import OpenAICompatibleClient
+
+        provider = providers_mod.require_provider(resolved.provider)
+        client = OpenAICompatibleClient(
+            base_url=provider["base_url"], api_key=providers_mod.api_key(resolved.provider)
+        )
+        return client.chat_raw([{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url",
+                 "image_url": {"url": f"data:{media_type};base64,{encoded}"}},
+            ],
+        }], model=resolved.model)
+
+    client = _client(resolved.provider)
+    response = client.messages.create(
+        model=resolved.model,
+        max_tokens=CLOUD_MAX_TOKENS_SYNC,
+        messages=[{
+            "role": "user",
+            "content": [
+                {"type": "image", "source": {"type": "base64",
+                                             "media_type": media_type, "data": encoded}},
+                {"type": "text", "text": prompt},
+            ],
+        }],
+    )
+    return "".join(
+        block.text for block in response.content if getattr(block, "type", None) == "text"
+    )
+
+
 def _kind_of(resolved: Route) -> str:
     """The wire protocol for a route, re-resolved in case the Route is stale."""
     if resolved.kind in providers_mod.KINDS:
