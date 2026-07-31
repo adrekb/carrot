@@ -94,6 +94,12 @@ def add_message(conv_id: str, role: str, content: str, metadata: dict = None):
     )
     conn.commit()
     conn.close()
+
+    # Embed on a background worker so a slow (or absent) embedding model never
+    # blocks the write. Anything missed here is caught by the vector backfill.
+    from carrot import vectors
+
+    vectors.enqueue(vectors.NS_MESSAGE, str(cursor.lastrowid), content)
     return {"id": cursor.lastrowid, "role": role, "content": content, "timestamp": ts}
 
 

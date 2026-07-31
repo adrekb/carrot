@@ -25,7 +25,37 @@ DEFAULTS = {
         "https://www.reddit.com/r/programming/.rss",
     ],
     "recap_max_items": 10,
+    # Memory
+    "memory_enabled": True,
+    "memory_min_confidence": 0.6,
+    "summarize_enabled": True,
+    # Local document index
+    "index_dirs": [],
+    "index_on_startup": False,
+    # Agent tools
+    "agent_tools_enabled": True,
+    "agent_require_approval": True,
+    "code_workspace_dir": "",
+    # Model routing
+    "model_routes": {},
+    "cloud_enabled": False,
+    "cloud_api_key": "",
+    "cloud_model": "claude-opus-5",
+    "cloud_effort": "high",
+    "cloud_tasks": ["reasoning", "code"],
+    # Security
+    "auth_enabled": True,
+    "terminal_confirm_destructive": True,
+    "terminal_restrict_cwd": False,
+    "terminal_extra_roots": [],
+    # Proactive notifications
+    "proactive_enabled": True,
+    "proactive_interval_seconds": 300,
+    "proactive_disabled_checks": [],
 }
+
+# Keys that must never be returned by the read-only config endpoint.
+SECRET_KEYS = {"cloud_api_key"}
 
 
 def get_config():

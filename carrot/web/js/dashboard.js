@@ -694,6 +694,11 @@ async function loadSettings() {
     const endpoint = document.getElementById('health-endpoint');
     if (endpoint) endpoint.textContent = `POST ${location.origin}/api/health/sync`;
 
+    const cloudToggle = document.getElementById('cloud-enabled');
+    if (cloudToggle) cloudToggle.checked = !!cfg.cloud_enabled;
+    if (typeof loadRouting === 'function') loadRouting();
+    if (typeof loadBackups === 'function') loadBackups();
+
     const toggle = document.getElementById('recap-auto-toggle');
     if (toggle) toggle.checked = !!cfg.recap_auto_enabled;
     const rtime = document.getElementById('recap-auto-time');

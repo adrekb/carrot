@@ -124,10 +124,19 @@ def test_mcp_call_namespaced_tool(mcp_config):
 
 # ===== chat tool-call loop =====
 
-def test_agentic_chat_tool_loop(monkeypatch):
+def _local_route():
+    from carrot import router as router_mod
+
+    return router_mod.Route(
+        task="chat", provider=router_mod.PROVIDER_LOCAL, model="m", reason="test",
+    )
+
+
+def test_agentic_chat_tool_loop(isolated_db, monkeypatch):
     """Model emits a tool call, it runs via MCP, result feeds a final answer."""
     from carrot import app as app_mod
     from carrot import mcp_client as mcp_mod
+    from carrot import router as router_mod
 
     monkeypatch.setattr(mcp_mod, "ollama_tools", lambda: [{
         "type": "function",
@@ -139,21 +148,23 @@ def test_agentic_chat_tool_loop(monkeypatch):
         lambda name, args: calls.append((name, args)) or "echo: hi",
     )
 
-    class ToolClient:
-        default_model = "gemma4:e4b"
-        def __init__(self):
-            self.round = 0
-        def chat_stream_events(self, messages, model=None, tools=None):
-            self.round += 1
-            if self.round == 1:
-                yield {"type": "tool_calls", "calls": [
-                    {"function": {"name": "stub__echo", "arguments": {"text": "hi"}}},
-                ]}
-            else:
-                yield {"type": "content", "text": "done: "}
-                yield {"type": "content", "text": "echo: hi"}
+    rounds = {"n": 0}
 
-    events = list(app_mod._agentic_chat_events(ToolClient(), [{"role": "user", "content": "hi"}], "m"))
+    def fake_stream(resolved, messages, tools=None):
+        rounds["n"] += 1
+        if rounds["n"] == 1:
+            yield {"type": "tool_calls", "calls": [
+                {"function": {"name": "stub__echo", "arguments": {"text": "hi"}}},
+            ]}
+        else:
+            yield {"type": "content", "text": "done: "}
+            yield {"type": "content", "text": "echo: hi"}
+
+    monkeypatch.setattr(router_mod, "stream_events", fake_stream)
+
+    events = list(
+        app_mod._agentic_chat_events([{"role": "user", "content": "hi"}], _local_route())
+    )
     tool_events = [e["tool"] for e in events if "tool" in e]
     result_events = [e["tool_result"] for e in events if "tool_result" in e]
     chunks = "".join(e["chunk"] for e in events if "chunk" in e)
@@ -166,18 +177,37 @@ def test_agentic_chat_tool_loop(monkeypatch):
     assert final == "done: echo: hi"
 
 
-def test_agentic_chat_no_tools_passthrough(monkeypatch):
-    """With no MCP tools, the loop streams content straight through."""
+def test_agentic_chat_emits_route(isolated_db, monkeypatch):
+    """The turn announces which provider and model served it."""
     from carrot import app as app_mod
+    from carrot import router as router_mod
+
+    monkeypatch.setattr(
+        router_mod, "stream_events",
+        lambda resolved, messages, tools=None: iter([{"type": "content", "text": "hi"}]),
+    )
+    events = list(app_mod._agentic_chat_events([], _local_route()))
+    route_event = next(e["route"] for e in events if "route" in e)
+    assert route_event["provider"] == "ollama"
+    assert route_event["model"] == "m"
+
+
+def test_agentic_chat_no_tools_passthrough(isolated_db, monkeypatch):
+    """With every tool source disabled, the loop streams content straight through."""
+    from carrot import app as app_mod
+    from carrot import config
     from carrot import mcp_client as mcp_mod
+    from carrot import router as router_mod
+
+    config.set_config("agent_tools_enabled", False)
     monkeypatch.setattr(mcp_mod, "ollama_tools", lambda: [])
 
-    class PlainClient:
-        default_model = "gemma4:e4b"
-        def chat_stream_events(self, messages, model=None, tools=None):
-            assert tools is None
-            yield {"type": "content", "text": "plain answer"}
+    def fake_stream(resolved, messages, tools=None):
+        assert tools is None
+        yield {"type": "content", "text": "plain answer"}
 
-    events = list(app_mod._agentic_chat_events(PlainClient(), [], "m"))
+    monkeypatch.setattr(router_mod, "stream_events", fake_stream)
+
+    events = list(app_mod._agentic_chat_events([], _local_route()))
     assert "".join(e["chunk"] for e in events if "chunk" in e) == "plain answer"
     assert not any("tool" in e for e in events)

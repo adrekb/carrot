@@ -105,6 +105,106 @@ CREATE TABLE IF NOT EXISTS chat_folders (
     position INTEGER DEFAULT 0,
     created_at TEXT NOT NULL
 );
+
+-- Unified vector store. Embeddings are float32 blobs, not JSON, and are keyed
+-- by (namespace, ref_id) so messages, memories and document chunks share one
+-- table and one search path. Supersedes the JSON message_embeddings table,
+-- which is migrated on startup and then left in place for older builds.
+CREATE TABLE IF NOT EXISTS vectors (
+    namespace TEXT NOT NULL,
+    ref_id TEXT NOT NULL,
+    model TEXT DEFAULT 'nomic-embed-text',
+    dim INTEGER DEFAULT 0,
+    embedding BLOB,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (namespace, ref_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_vectors_namespace ON vectors(namespace);
+
+-- Structured long-term memory. Every row carries provenance back to the
+-- message it came from; updates supersede rather than overwrite so the history
+-- of a belief is preserved.
+CREATE TABLE IF NOT EXISTS memories (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL DEFAULT 'fact',
+    subject TEXT NOT NULL DEFAULT '',
+    content TEXT NOT NULL,
+    confidence REAL DEFAULT 1.0,
+    status TEXT NOT NULL DEFAULT 'active',
+    pinned INTEGER DEFAULT 0,
+    source_message_id INTEGER,
+    source_conversation_id TEXT,
+    superseded_by TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_memories_subject ON memories(subject, status);
+
+CREATE TABLE IF NOT EXISTS conversation_summaries (
+    conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+    summary TEXT DEFAULT '',
+    covered_through INTEGER DEFAULT 0,
+    message_count INTEGER DEFAULT 0,
+    updated_at TEXT NOT NULL
+);
+
+-- Indexed local files and their chunks.
+CREATE TABLE IF NOT EXISTS documents (
+    id TEXT PRIMARY KEY,
+    path TEXT NOT NULL UNIQUE,
+    title TEXT DEFAULT '',
+    ext TEXT DEFAULT '',
+    size INTEGER DEFAULT 0,
+    mtime REAL DEFAULT 0,
+    hash TEXT DEFAULT '',
+    chunk_count INTEGER DEFAULT 0,
+    char_count INTEGER DEFAULT 0,
+    indexed_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS document_chunks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    ordinal INTEGER DEFAULT 0,
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_chunks_document ON document_chunks(document_id);
+
+-- Proactive notifications raised by the background watcher.
+CREATE TABLE IF NOT EXISTS notifications (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT DEFAULT '',
+    severity TEXT DEFAULT 'info',
+    dedupe_key TEXT,
+    read INTEGER DEFAULT 0,
+    dismissed INTEGER DEFAULT 0,
+    created_at TEXT NOT NULL,
+    metadata TEXT DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_notifications_dedupe ON notifications(dedupe_key);
+
+-- Undo journal for agent-initiated file writes. before_content is the full
+-- prior file (NULL when the agent created the file), which is what makes a
+-- one-click revert possible.
+CREATE TABLE IF NOT EXISTS file_journal (
+    id TEXT PRIMARY KEY,
+    path TEXT NOT NULL,
+    operation TEXT NOT NULL,
+    before_content TEXT,
+    after_content TEXT,
+    reverted INTEGER DEFAULT 0,
+    conversation_id TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_file_journal_created ON file_journal(created_at DESC);
 """
 
 # Content-storing FTS5 index. Kept separate from SCHEMA so it can be re-applied
@@ -135,7 +235,54 @@ CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
 END;
 """
 
-SCHEMA = SCHEMA + FTS_SCHEMA
+# FTS indexes for memories and document chunks. Both are content-storing (the
+# same choice messages_fts settled on) and kept in sync by triggers so callers
+# only ever write to the base table.
+AUX_FTS_SCHEMA = """
+CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+    content,
+    subject,
+    memory_id UNINDEXED,
+    kind UNINDEXED
+);
+
+CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+    INSERT INTO memories_fts(memory_id, content, subject, kind)
+    VALUES (new.id, new.content, new.subject, new.kind);
+END;
+
+CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+    DELETE FROM memories_fts WHERE memory_id = old.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
+    UPDATE memories_fts SET content = new.content, subject = new.subject, kind = new.kind
+    WHERE memory_id = old.id;
+END;
+
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+    content,
+    chunk_id UNINDEXED,
+    document_id UNINDEXED
+);
+
+CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON document_chunks BEGIN
+    INSERT INTO chunks_fts(rowid, chunk_id, content, document_id)
+    VALUES (new.id, new.id, new.content, new.document_id);
+END;
+
+CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON document_chunks BEGIN
+    DELETE FROM chunks_fts WHERE rowid = old.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON document_chunks BEGIN
+    DELETE FROM chunks_fts WHERE rowid = old.id;
+    INSERT INTO chunks_fts(rowid, chunk_id, content, document_id)
+    VALUES (new.id, new.id, new.content, new.document_id);
+END;
+"""
+
+SCHEMA = SCHEMA + FTS_SCHEMA + AUX_FTS_SCHEMA
 
 
 def get_db():

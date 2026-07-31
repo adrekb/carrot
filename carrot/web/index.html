@@ -101,6 +101,9 @@
     <button class="nav-item sub" data-tab="reminders" onclick="switchTab('reminders')"><svg class="ico"><use href="#i-pulse"/></svg><span class="nav-label">Reminders</span></button>
     <button class="nav-item sub" data-tab="assignments" onclick="switchTab('assignments')"><svg class="ico"><use href="#i-news"/></svg><span class="nav-label">Assignments</span></button>
     <button class="nav-item sub" data-tab="extensions" onclick="switchTab('extensions')"><svg class="ico"><use href="#i-chip"/></svg><span class="nav-label">Extensions</span></button>
+    <button class="nav-item sub" data-tab="memory" onclick="switchTab('memory')"><svg class="ico"><use href="#i-cap"/></svg><span class="nav-label">Memory</span></button>
+    <button class="nav-item sub" data-tab="files" onclick="switchTab('files')"><svg class="ico"><use href="#i-doc"/></svg><span class="nav-label">Your Files</span></button>
+    <button class="nav-item sub" data-tab="inbox" onclick="switchTab('inbox')"><svg class="ico"><use href="#i-pulse"/></svg><span class="nav-label">Inbox</span><span id="notification-badge" class="notif-badge hidden">0</span></button>
     <button class="nav-item sub" data-tab="leaderboard" onclick="switchTab('leaderboard')"><svg class="ico"><use href="#i-download"/></svg><span class="nav-label">Leaderboard</span></button>
   </div>
 </nav>
@@ -390,6 +393,80 @@
     </div>
   </section>
 
+  <!-- Memory — what Carrot believes about you, and where it learned it -->
+  <section id="view-memory" class="view">
+    <div class="page">
+      <div class="page-head"><h2>Memory</h2></div>
+      <p class="muted">
+        What Carrot has learned about you from your conversations. Every entry links back to
+        the message it came from — edit anything that's wrong, pin what matters, and mark
+        mistakes so they're never recorded again.
+      </p>
+      <div id="memory-stats" class="subtle"></div>
+      <div class="composer">
+        <input id="memory-search" placeholder="Search memory…" onkeydown="if(event.key==='Enter')searchMemory()">
+        <select onchange="setMemoryFilter('kind', this.value)">
+          <option value="">All kinds</option>
+          <option value="preference">Preferences</option>
+          <option value="fact">Facts</option>
+          <option value="decision">Decisions</option>
+          <option value="attribute">Attributes</option>
+          <option value="relationship">Relationships</option>
+          <option value="project">Projects</option>
+        </select>
+        <select onchange="setMemoryFilter('status', this.value)">
+          <option value="active">Active</option>
+          <option value="superseded">Superseded</option>
+          <option value="rejected">Rejected</option>
+          <option value="">Everything</option>
+        </select>
+        <button class="btn btn-ghost" onclick="loadMemory()">Refresh</button>
+      </div>
+      <div id="memory-list" class="list"></div>
+    </div>
+  </section>
+
+  <!-- Your Files — the local document index -->
+  <section id="view-files" class="view">
+    <div class="page">
+      <div class="page-head"><h2>Your Files</h2></div>
+      <p class="muted">
+        Point Carrot at folders of notes, papers, and code. It reads them locally and makes
+        them searchable alongside your conversations — nothing is uploaded anywhere.
+      </p>
+      <div id="index-status" class="subtle"></div>
+      <div class="composer">
+        <input id="index-dir-input" placeholder="/path/to/a/folder" onkeydown="if(event.key==='Enter')addIndexDir()">
+        <button class="btn btn-primary" onclick="addIndexDir()">Add folder</button>
+        <button class="btn btn-ghost" onclick="startIndexScan(false)">Scan</button>
+        <button class="btn btn-ghost" onclick="startIndexScan(true)">Rebuild</button>
+        <button class="btn btn-ghost" onclick="backfillEmbeddings()">Backfill embeddings</button>
+      </div>
+      <div id="index-dirs" class="list"></div>
+
+      <div class="page-head"><h3>Search everything</h3></div>
+      <div class="composer">
+        <input id="unified-query" placeholder="Search files, conversations and memory at once…"
+               onkeydown="if(event.key==='Enter')searchEverything(this.value)">
+        <button class="btn btn-primary" onclick="searchEverything(document.getElementById('unified-query').value)">Search</button>
+      </div>
+      <div id="unified-results" class="list"></div>
+    </div>
+  </section>
+
+  <!-- Inbox — proactive notifications -->
+  <section id="view-inbox" class="view">
+    <div class="page">
+      <div class="page-head"><h2>Inbox</h2></div>
+      <p class="muted">Things Carrot noticed without being asked.</p>
+      <div class="composer">
+        <button class="btn btn-ghost" onclick="runNotificationChecks()">Check now</button>
+        <button class="btn btn-ghost" onclick="markAllNotificationsRead()">Mark all read</button>
+      </div>
+      <div id="notification-list" class="list"></div>
+    </div>
+  </section>
+
   <!-- Settings -->
   <section id="view-settings" class="view">
     <div class="page">
@@ -414,6 +491,46 @@
           <div class="muted small">Enter this code in the browser tab that opened:</div>
           <div class="gh-code" id="gh-user-code"></div>
         </div>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-chip"/></svg>
+          <h3>Model Routing</h3>
+        </div>
+        <p class="muted small">
+          Every task names the model that serves it. Small local models handle classification
+          and summarizing; you can optionally send the hardest reasoning and coding work to a
+          frontier model. Nothing leaves your machine unless you switch this on.
+        </p>
+        <div id="routing-panel"></div>
+        <div class="settings-row">
+          <label class="settings-toggle">
+            <input type="checkbox" id="cloud-enabled"> Allow cloud escalation
+          </label>
+        </div>
+        <div class="settings-row">
+          <input type="password" id="cloud-key" placeholder="Anthropic API key (stored locally)" spellcheck="false">
+          <button class="btn btn-ghost" onclick="saveCloudSettings()">Save</button>
+          <button class="btn btn-ghost" onclick="loadRouting()">Refresh</button>
+        </div>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-download"/></svg>
+          <h3>Backup &amp; Restore</h3>
+        </div>
+        <p class="muted small">
+          Export everything — conversations, memory, notes, goals, and the document index —
+          into a single archive you own. Restoring replaces the current contents, after taking
+          a safety copy first.
+        </p>
+        <div class="settings-row">
+          <button class="btn btn-primary" onclick="exportBackup()">Export now</button>
+          <button class="btn btn-ghost" onclick="loadBackups()">Refresh list</button>
+        </div>
+        <div id="backup-list" class="list"></div>
       </div>
 
       <div class="settings-card">
@@ -511,5 +628,6 @@
 <script src="/js/features.js"></script>
 <script src="/js/dashboard.js"></script>
 <script src="/js/app.js"></script>
+<script src="/js/agentops.js"></script>
 </body>
 </html>

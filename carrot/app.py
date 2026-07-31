@@ -4,13 +4,16 @@ Consolidated API server exposing chat (streaming + non-streaming), bootstrap,
 search, computer-use, terminal, recap, goals, reminders, notes, config,
 leaderboard, and speech endpoints.
 """
-from fastapi import FastAPI, HTTPException, Body
+from fastapi import FastAPI, HTTPException, Body, Request
+from fastapi.responses import JSONResponse
 from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import os
 import json
+import queue
+import threading
 
 from carrot.database import get_db, init_db
 from carrot import (
@@ -33,6 +36,15 @@ from carrot import (
     health as health_mod,
     github_oauth as gh_mod,
     files_api,
+    vectors as vectors_mod,
+    memory as memory_mod,
+    summarize as summarize_mod,
+    indexer as indexer_mod,
+    agent_tools as agent_mod,
+    router as router_mod,
+    security as security_mod,
+    proactive as proactive_mod,
+    backup as backup_mod,
 )
 from carrot.speech import whisper_stt, kokoro_tts
 from carrot.recap import DUCKDUCKGO_QUERY
@@ -82,6 +94,8 @@ class ChatRequest(BaseModel):
     model: Optional[str] = None
     stream: Optional[bool] = False
     skill: Optional[str] = None
+    task: Optional[str] = None
+    cloud: Optional[bool] = False
 
 
 class AddMessageRequest(BaseModel):
@@ -108,6 +122,7 @@ class CommandRequest(BaseModel):
     command: str
     cwd: Optional[str] = None
     timeout: Optional[int] = 30
+    confirm: Optional[bool] = False
 
 
 class GoalRequest(BaseModel):
@@ -176,6 +191,57 @@ class McpServerRequest(BaseModel):
     enabled: bool = True
 
 
+class MemoryRequest(BaseModel):
+    kind: str = "fact"
+    subject: str
+    content: str
+    confidence: Optional[float] = 1.0
+    pinned: Optional[bool] = False
+
+
+class MemoryUpdateRequest(BaseModel):
+    kind: Optional[str] = None
+    subject: Optional[str] = None
+    content: Optional[str] = None
+    confidence: Optional[float] = None
+    pinned: Optional[bool] = None
+    status: Optional[str] = None
+
+
+class MemoryExtractRequest(BaseModel):
+    user_text: str
+    assistant_text: Optional[str] = ""
+    conversation_id: Optional[str] = None
+
+
+class IndexDirRequest(BaseModel):
+    path: str
+
+
+class IndexScanRequest(BaseModel):
+    force: Optional[bool] = False
+
+
+class ApprovalRequest(BaseModel):
+    decision: str
+    remember: Optional[bool] = False
+
+
+class RouteRequest(BaseModel):
+    task: str
+    model: str
+
+
+class BackupExportRequest(BaseModel):
+    path: Optional[str] = None
+    include_vectors: Optional[bool] = True
+
+
+class BackupImportRequest(BaseModel):
+    path: str
+    safety_copy: Optional[bool] = True
+
+
 class McpEnableRequest(BaseModel):
     enabled: bool = True
 
@@ -186,7 +252,33 @@ class McpEnableRequest(BaseModel):
 def startup():
     init_db()
     os.makedirs(DB_DIR, exist_ok=True)
+    vectors_mod.migrate_legacy_embeddings()
     dr_mod.start_scheduler()
+    proactive_mod.start_watcher()
+    if config.get_config().get("index_on_startup", False) and indexer_mod.index_dirs():
+        indexer_mod.start_scan_async()
+
+
+@app.middleware("http")
+async def require_session_token(request: Request, call_next):
+    """Gate the API behind the session token.
+
+    The bind to loopback stops the network, not the machine — any page in the
+    browser can reach 127.0.0.1. The token lives in the app's own HTML, which
+    the same-origin policy keeps out of reach of other origins.
+    """
+    if not security_mod.auth_enabled() or security_mod.is_public_path(request.url.path):
+        return await call_next(request)
+
+    presented = request.headers.get(security_mod.TOKEN_HEADER) or request.query_params.get(
+        security_mod.TOKEN_QUERY_PARAM
+    )
+    if not security_mod.token_valid(presented):
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "missing or invalid session token"},
+        )
+    return await call_next(request)
 
 
 # ===== Index / static =====
@@ -195,7 +287,8 @@ def startup():
 async def index():
     index_path = os.path.join(WEB_DIR, "index.html")
     if os.path.exists(index_path):
-        return FileResponse(index_path)
+        with open(index_path, "r", encoding="utf-8") as handle:
+            return HTMLResponse(security_mod.inject_token(handle.read()))
     return HTMLResponse("<h1>Carrot</h1><p>Frontend not found. Run from project root.</p>")
 
 
@@ -315,7 +408,13 @@ async def pull_model(req: ModelPullRequest):
 # ===== Chat =====
 
 def _prepare_history(conv, message, skill_slug):
-    """Build the model message list: optional skill system prompt + recent turns."""
+    """Build the model message list for a turn.
+
+    Order matters: skill instructions, then what Carrot remembers about the
+    user, then the rolling summary of everything older than the recent window,
+    then the recent turns verbatim. Long conversations therefore keep their
+    early context instead of falling off a fixed-size slice.
+    """
     history = []
     skill = None
     if skill_slug:
@@ -328,139 +427,230 @@ def _prepare_history(conv, message, skill_slug):
                     f"Follow these instructions:\n\n{skill['instructions']}"
                 ),
             })
-    history += [
-        {"role": m["role"], "content": m["content"]}
-        for m in conv["messages"][-20:]
-    ]
+
+    if config.get_config().get("memory_enabled", True):
+        try:
+            block = memory_mod.as_prompt_block(memory_mod.recall(message))
+            if block:
+                history.append({"role": "system", "content": block})
+        except Exception:
+            pass
+
+    history += summarize_mod.build_history(conv)
     history.append({"role": "user", "content": message})
     return history, skill
 
 
-MAX_TOOL_ROUNDS = 5
+MAX_TOOL_ROUNDS = 8
 
 
-def _agentic_chat_events(client, history, model, skill=None):
-    """Yield SSE dicts for a chat turn, running the MCP tool-calling loop.
+def _available_tools():
+    """Built-in tools plus every tool exposed by enabled MCP servers."""
+    tools = list(agent_mod.ollama_tools())
+    try:
+        tools += mcp_mod.ollama_tools()
+    except Exception:
+        pass
+    return tools
 
-    When enabled MCP tools exist and the model emits tool_calls, each call is
-    surfaced as a `tool` event, executed via MCP, and fed back to the model
-    (up to MAX_TOOL_ROUNDS) before the final answer streams as `chunk` events.
-    Returns the assembled assistant text via the final {'done': ...} dict.
+
+def _run_tool(name, args, conversation_id):
+    """Run one tool, forwarding any approval prompt it raises to the stream.
+
+    Built-in mutating tools block on user approval, and the prompt has to reach
+    the browser *while* they are blocked. The tool runs on a worker thread and
+    pushes events onto a queue this generator drains, so the SSE stream stays
+    live for the whole wait.
+    """
+    events = queue.Queue()
+    outcome = {}
+
+    def work():
+        try:
+            if agent_mod.is_builtin(name):
+                outcome["result"] = agent_mod.call(name, args, conversation_id, events.put)
+            else:
+                outcome["result"] = mcp_mod.call_namespaced_tool(name, args)
+        except Exception as exc:
+            outcome["result"] = f"error: {exc}"
+        finally:
+            events.put(None)
+
+    threading.Thread(target=work, daemon=True, name="carrot-tool").start()
+    while True:
+        event = events.get()
+        if event is None:
+            break
+        yield event
+    yield {"_tool_result": outcome.get("result", "")}
+
+
+def _agentic_chat_events(history, resolved, skill=None, conversation_id=None):
+    """Yield SSE dicts for one chat turn, running the tool-calling loop.
+
+    Tool calls are dispatched to built-in tools or MCP by name prefix, surfaced
+    to the UI as they happen, and fed back to the model for up to
+    MAX_TOOL_ROUNDS rounds before the final answer streams as `chunk` events.
     """
     if skill:
         yield {"skill": {"slug": skill["slug"], "name": skill["name"]}}
-    try:
-        tools = mcp_mod.ollama_tools()
-    except Exception:
-        tools = []
+    yield {"route": resolved.as_dict()}
+
+    tools = _available_tools()
     working = list(history)
     final_text = []
+
     for _ in range(MAX_TOOL_ROUNDS):
         content_parts = []
         tool_calls = []
-        for ev in client.chat_stream_events(working, model=model, tools=tools or None):
-            if ev["type"] == "thinking":
-                yield {"thinking": ev["text"]}
-            elif ev["type"] == "tool_calls":
-                tool_calls.extend(ev["calls"])
+        for event in router_mod.stream_events(resolved, working, tools=tools or None):
+            if event["type"] == "thinking":
+                yield {"thinking": event["text"]}
+            elif event["type"] == "tool_calls":
+                tool_calls.extend(event["calls"])
             else:
-                content_parts.append(ev["text"])
-                yield {"chunk": ev["text"]}
+                content_parts.append(event["text"])
+                yield {"chunk": event["text"]}
+
         content_str = "".join(content_parts)
         if content_str:
             final_text.append(content_str)
         if not tool_calls:
             break
+
         working.append({"role": "assistant", "content": content_str, "tool_calls": tool_calls})
         for call in tool_calls:
-            fn = call.get("function", {})
-            name = fn.get("name", "")
-            args = fn.get("arguments", {})
+            function = call.get("function", {})
+            name = function.get("name", "")
+            args = function.get("arguments", {})
             if isinstance(args, str):
                 try:
                     args = json.loads(args)
                 except json.JSONDecodeError:
                     args = {}
+
             yield {"tool": {"name": name, "args": args}}
-            try:
-                result = mcp_mod.call_namespaced_tool(name, args)
-            except Exception as e:
-                result = f"error: {e}"
+            result = ""
+            for event in _run_tool(name, args, conversation_id):
+                if "_tool_result" in event:
+                    result = event["_tool_result"]
+                else:
+                    yield event
             yield {"tool_result": {"name": name, "result": result[:2000]}}
-            working.append({"role": "tool", "content": result, "name": name})
+            working.append(
+                {
+                    "role": "tool",
+                    "content": result,
+                    "name": name,
+                    "tool_call_id": call.get("id", name),
+                }
+            )
+
     yield {"_final_text": "".join(final_text)}
+
+
+def _post_turn(conversation_id, user_message, assistant_text, message_id):
+    """Extract memories and refresh the rolling summary after a turn.
+
+    Both call the model, so they run on a worker thread — the user gets their
+    answer without waiting for Carrot's bookkeeping.
+    """
+    def work():
+        settings = config.get_config()
+        if settings.get("memory_enabled", True):
+            try:
+                memory_mod.extract_from_turn(
+                    user_text=user_message,
+                    assistant_text=assistant_text,
+                    conversation_id=conversation_id,
+                    message_id=message_id,
+                    min_confidence=settings.get("memory_min_confidence", 0.6),
+                )
+            except Exception:
+                pass
+        if settings.get("summarize_enabled", True):
+            try:
+                summarize_mod.maybe_summarize(conversation_id)
+            except Exception:
+                pass
+
+    threading.Thread(target=work, daemon=True, name="carrot-post-turn").start()
+
+
+def _open_conversation(req):
+    """Resolve (or create) the conversation a chat request targets."""
+    if req.conversation_id is None:
+        created = conv_mod.create_conversation(title=req.message[:80])
+        req.conversation_id = created["id"]
+    conv = conv_mod.get_conversation(req.conversation_id)
+    if conv is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return conv
+
+
+def _resolve_chat_route(req):
+    """Pick the model for this turn, failing early if nothing can serve it."""
+    resolved = router_mod.route(
+        task=getattr(req, "task", None) or router_mod.TASK_CHAT,
+        model=req.model,
+        prefer_cloud=bool(getattr(req, "cloud", False)),
+    )
+    if resolved.provider == router_mod.PROVIDER_LOCAL:
+        if not ollama_mod.OllamaClient().is_available():
+            raise HTTPException(status_code=503, detail="Ollama is not available")
+    return resolved
+
+
+def _chat_stream_response(req, conv, history, skill, resolved):
+    """Shared SSE body for both chat endpoints."""
+    async def stream():
+        final_text = ""
+        for event in _agentic_chat_events(history, resolved, skill, req.conversation_id):
+            if "_final_text" in event:
+                final_text = event["_final_text"]
+                continue
+            yield f"data: {json.dumps(event)}\n\n"
+        stored = conv_mod.add_message(req.conversation_id, "assistant", final_text)
+        _post_turn(
+            req.conversation_id, req.message, final_text,
+            stored.get("id") if isinstance(stored, dict) else None,
+        )
+        yield f"data: {json.dumps({'done': True, 'conversation_id': req.conversation_id})}\n\n"
+
+    return StreamingResponse(stream(), media_type="text/event-stream")
 
 
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
-    client = ollama_mod.OllamaClient()
-    if not client.is_available():
-        raise HTTPException(status_code=503, detail="Ollama is not available")
-
-    if req.conversation_id is None:
-        conv = conv_mod.create_conversation(title=req.message[:80])
-        req.conversation_id = conv["id"]
-
-    conv = conv_mod.get_conversation(req.conversation_id)
-    if conv is None:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-
+    conv = _open_conversation(req)
+    resolved = _resolve_chat_route(req)
     history, skill = _prepare_history(conv, req.message, req.skill)
     conv_mod.add_message(req.conversation_id, "user", req.message)
 
-    model = req.model or config.get_config().get("ollama_model", bootstrap_mod.DEFAULT_MODEL)
-
     if req.stream:
-        async def stream():
-            final_text = ""
-            for ev in _agentic_chat_events(client, history, model, skill):
-                if "_final_text" in ev:
-                    final_text = ev["_final_text"]
-                    continue
-                yield f"data: {json.dumps(ev)}\n\n"
-            conv_mod.add_message(req.conversation_id, "assistant", final_text)
-            yield f"data: {json.dumps({'done': True, 'conversation_id': req.conversation_id})}\n\n"
-        return StreamingResponse(stream(), media_type="text/event-stream")
+        return _chat_stream_response(req, conv, history, skill, resolved)
 
-    response = client.chat(history, model=model)
-    conv_mod.add_message(req.conversation_id, "assistant", response)
+    response = router_mod.complete(resolved, history)
+    stored = conv_mod.add_message(req.conversation_id, "assistant", response)
+    _post_turn(
+        req.conversation_id, req.message, response,
+        stored.get("id") if isinstance(stored, dict) else None,
+    )
     return {
         "conversation_id": req.conversation_id,
         "response": response,
+        "route": resolved.as_dict(),
     }
 
 
 @app.post("/api/chat/stream")
 async def chat_stream(req: ChatRequest):
     """Dedicated SSE streaming endpoint."""
-    client = ollama_mod.OllamaClient()
-    if not client.is_available():
-        raise HTTPException(status_code=503, detail="Ollama is not available")
-
-    if req.conversation_id is None:
-        conv = conv_mod.create_conversation(title=req.message[:80])
-        req.conversation_id = conv["id"]
-
-    conv = conv_mod.get_conversation(req.conversation_id)
-    if conv is None:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-
+    conv = _open_conversation(req)
+    resolved = _resolve_chat_route(req)
     history, skill = _prepare_history(conv, req.message, req.skill)
     conv_mod.add_message(req.conversation_id, "user", req.message)
-
-    model = req.model or config.get_config().get("ollama_model", bootstrap_mod.DEFAULT_MODEL)
-
-    async def stream():
-        final_text = ""
-        for ev in _agentic_chat_events(client, history, model, skill):
-            if "_final_text" in ev:
-                final_text = ev["_final_text"]
-                continue
-            yield f"data: {json.dumps(ev)}\n\n"
-        conv_mod.add_message(req.conversation_id, "assistant", final_text)
-        yield f"data: {json.dumps({'done': True, 'conversation_id': req.conversation_id})}\n\n"
-
-    return StreamingResponse(stream(), media_type="text/event-stream")
+    return _chat_stream_response(req, conv, history, skill, resolved)
 
 
 # ===== Conversations =====
@@ -606,7 +796,33 @@ async def analyze_screenshot(req: dict):
 
 @app.post("/api/terminal/execute")
 async def execute_command(req: CommandRequest):
-    return term_mod.execute_command(req.command, cwd=req.cwd, timeout=req.timeout)
+    """Run a shell command, screening destructive ones for confirmation first.
+
+    A 428 means "this needs a second look" — the client re-sends with
+    confirm=true once the user has agreed.
+    """
+    verdict = security_mod.check_command(req.command, confirmed=bool(req.confirm))
+    if not verdict["allowed"]:
+        raise HTTPException(
+            status_code=428,
+            detail={
+                "message": verdict["message"],
+                "reasons": verdict["reasons"],
+                "command": req.command,
+                "needs_confirmation": True,
+            },
+        )
+    try:
+        cwd = security_mod.resolve_cwd(req.cwd)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    return term_mod.execute_command(req.command, cwd=cwd, timeout=req.timeout)
+
+
+@app.post("/api/terminal/check")
+async def check_terminal_command(req: CommandRequest):
+    """Screen a command without running it, so the UI can warn as the user types."""
+    return security_mod.classify_command(req.command)
 
 
 @app.get("/api/terminal/history")
@@ -756,7 +972,15 @@ async def delete_note(note_id: str):
 
 @app.get("/api/config")
 async def get_app_config():
-    return config.get_config()
+    """The full config with secrets redacted.
+
+    Secrets are reported as a boolean so the UI can show "configured" without
+    the value ever leaving the process.
+    """
+    settings = dict(config.get_config())
+    for key in config.SECRET_KEYS:
+        settings[key] = bool(settings.get(key))
+    return settings
 
 
 @app.put("/api/config/{key}")
@@ -999,6 +1223,299 @@ async def speech_speak(req: SpeechSpeakRequest):
 async def speech_voices():
     """List available TTS voices."""
     return {"voices": kokoro_tts.list_voices()}
+
+
+# ===== Memory =====
+
+@app.get("/api/memory")
+async def list_memories(kind: str = None, status: str = "active", subject: str = None, limit: int = 200):
+    return {
+        "memories": memory_mod.list_memories(
+            kind=kind, status=status or None, subject=subject, limit=limit
+        ),
+        "stats": memory_mod.stats(),
+    }
+
+
+@app.get("/api/memory/search")
+async def search_memories(q: str, limit: int = 10, include_superseded: bool = False):
+    return {"results": memory_mod.search(q, limit=limit, include_superseded=include_superseded)}
+
+
+@app.get("/api/memory/history/{subject}")
+async def memory_history(subject: str, kind: str = None):
+    """Every version of a belief, oldest first."""
+    return {"subject": subject, "versions": memory_mod.history(subject, kind=kind)}
+
+
+@app.post("/api/memory")
+async def create_memory(req: MemoryRequest):
+    return memory_mod.create(
+        kind=req.kind, subject=req.subject, content=req.content,
+        confidence=req.confidence, pinned=bool(req.pinned),
+    )
+
+
+@app.put("/api/memory/{memory_id}")
+async def update_memory(memory_id: str, req: MemoryUpdateRequest):
+    updated = memory_mod.update(memory_id, **req.model_dump(exclude_none=True))
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Memory not found")
+    return updated
+
+
+@app.post("/api/memory/{memory_id}/reject")
+async def reject_memory(memory_id: str):
+    """Mark a memory wrong. Its subject is excluded from future extraction."""
+    rejected = memory_mod.reject(memory_id)
+    if rejected is None:
+        raise HTTPException(status_code=404, detail="Memory not found")
+    return rejected
+
+
+@app.delete("/api/memory/{memory_id}")
+async def delete_memory(memory_id: str):
+    if not memory_mod.delete(memory_id):
+        raise HTTPException(status_code=404, detail="Memory not found")
+    return {"deleted": True}
+
+
+@app.post("/api/memory/extract")
+async def extract_memory(req: MemoryExtractRequest):
+    """Run extraction over a turn on demand."""
+    return {
+        "extracted": memory_mod.extract_from_turn(
+            user_text=req.user_text,
+            assistant_text=req.assistant_text or "",
+            conversation_id=req.conversation_id,
+        )
+    }
+
+
+# ===== Conversation summaries =====
+
+@app.get("/api/conversations/{conv_id}/summary")
+async def conversation_summary(conv_id: str):
+    return summarize_mod.get_summary(conv_id) or {"conversation_id": conv_id, "summary": ""}
+
+
+@app.post("/api/conversations/{conv_id}/summarize")
+async def summarize_conversation(conv_id: str):
+    return summarize_mod.maybe_summarize(conv_id) or {"conversation_id": conv_id, "summary": ""}
+
+
+# ===== Vectors =====
+
+@app.get("/api/vectors/stats")
+async def vector_stats():
+    return vectors_mod.stats()
+
+
+@app.post("/api/vectors/backfill")
+async def vector_backfill(namespace: str = None, limit: int = 200):
+    """Embed anything written while the embedding model was unavailable."""
+    if namespace:
+        return vectors_mod.backfill(namespace, limit=limit)
+    return vectors_mod.backfill_all(limit_per_namespace=limit)
+
+
+# ===== Document index =====
+
+@app.get("/api/index/status")
+async def index_status():
+    return {**indexer_mod.scan_state(), "stats": indexer_mod.stats()}
+
+
+@app.get("/api/index/documents")
+async def index_documents(limit: int = 100, offset: int = 0):
+    return {"documents": indexer_mod.list_documents(limit=limit, offset=offset)}
+
+
+@app.post("/api/index/dirs")
+async def add_index_dir(req: IndexDirRequest):
+    try:
+        return {"dirs": indexer_mod.add_index_dir(req.path)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.delete("/api/index/dirs")
+async def remove_index_dir(path: str):
+    return {"dirs": indexer_mod.remove_index_dir(path)}
+
+
+@app.post("/api/index/scan")
+async def start_index_scan(req: IndexScanRequest = IndexScanRequest()):
+    if not indexer_mod.index_dirs():
+        raise HTTPException(status_code=400, detail="No directories are configured for indexing")
+    return indexer_mod.start_scan_async(force=bool(req.force))
+
+
+@app.get("/api/index/search")
+async def search_index(q: str, limit: int = 10, hybrid_weight: float = 0.5):
+    return indexer_mod.search_documents(q, limit=limit, hybrid_weight=hybrid_weight)
+
+
+@app.get("/api/search/all")
+async def search_everything(q: str, limit: int = 10):
+    """One query across conversations, documents and memory."""
+    conversations = search.search_conversations(q, limit=limit)
+    return {
+        "query": q,
+        "conversations": conversations["results"],
+        "documents": indexer_mod.search_documents(q, limit=limit)["results"],
+        "memories": memory_mod.search(q, limit=limit),
+    }
+
+
+# ===== Agent tools =====
+
+@app.get("/api/agent/tools")
+async def list_agent_tools():
+    return {
+        "tools": [
+            {"name": name, "mutating": spec["mutating"], "risk": spec["risk"],
+             "description": spec["description"]}
+            for name, spec in agent_mod.TOOLS.items()
+        ],
+        "enabled": config.get_config().get("agent_tools_enabled", True),
+        "require_approval": config.get_config().get("agent_require_approval", True),
+    }
+
+
+@app.get("/api/agent/approvals")
+async def list_approvals():
+    return {"pending": agent_mod.pending_approvals()}
+
+
+@app.post("/api/agent/approvals/{approval_id}")
+async def resolve_approval(approval_id: str, req: ApprovalRequest):
+    if not agent_mod.resolve_approval(approval_id, req.decision, remember=bool(req.remember)):
+        raise HTTPException(status_code=404, detail="No such pending approval")
+    return {"resolved": True, "decision": req.decision}
+
+
+@app.get("/api/agent/journal")
+async def agent_journal(limit: int = 50):
+    """Agent file edits, newest first, each with its diff."""
+    return {"entries": agent_mod.list_journal(limit=limit)}
+
+
+@app.post("/api/agent/journal/{entry_id}/revert")
+async def revert_journal(entry_id: str):
+    result = agent_mod.revert_journal_entry(entry_id)
+    if not result["success"]:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+# ===== Model routing =====
+
+@app.get("/api/router/status")
+async def router_status():
+    return router_mod.status()
+
+
+@app.put("/api/router/route")
+async def set_router_route(req: RouteRequest):
+    try:
+        return {"routes": router_mod.set_route(req.task, req.model)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/router/recommendation")
+async def router_recommendation():
+    """A local model sized to this machine's memory."""
+    return router_mod.recommend_local_model()
+
+
+# ===== Notifications =====
+
+@app.get("/api/notifications")
+async def list_notifications(unread_only: bool = False, limit: int = 50):
+    return {
+        "notifications": proactive_mod.list_notifications(unread_only=unread_only, limit=limit),
+        "unread": proactive_mod.unread_count(),
+    }
+
+
+@app.post("/api/notifications/check")
+async def run_notification_checks():
+    return proactive_mod.run_checks()
+
+
+@app.post("/api/notifications/read-all")
+async def read_all_notifications():
+    return {"marked": proactive_mod.mark_all_read()}
+
+
+@app.post("/api/notifications/{notification_id}/read")
+async def read_notification(notification_id: str):
+    if not proactive_mod.mark_read(notification_id):
+        raise HTTPException(status_code=404, detail="Notification not found")
+    return {"read": True}
+
+
+@app.delete("/api/notifications/{notification_id}")
+async def dismiss_notification(notification_id: str):
+    if not proactive_mod.dismiss(notification_id):
+        raise HTTPException(status_code=404, detail="Notification not found")
+    return {"dismissed": True}
+
+
+@app.get("/api/notifications/stream")
+async def stream_notifications():
+    """SSE feed of notifications as they are raised."""
+    def stream():
+        for notification in proactive_mod.stream_new():
+            yield f"data: {json.dumps(notification)}\n\n"
+
+    return StreamingResponse(stream(), media_type="text/event-stream")
+
+
+# ===== Security =====
+
+@app.get("/api/security/status")
+async def security_status():
+    return security_mod.status()
+
+
+@app.post("/api/security/rotate-token")
+async def rotate_session_token():
+    """Invalidate every existing client. The caller must reload to get the new token."""
+    return {"token": security_mod.rotate_token()}
+
+
+# ===== Backup =====
+
+@app.get("/api/backup")
+async def list_backups():
+    return {"backups": backup_mod.list_backups()}
+
+
+@app.post("/api/backup/export")
+async def export_backup(req: BackupExportRequest = BackupExportRequest()):
+    try:
+        return backup_mod.export_archive(
+            destination=req.path, include_vectors=bool(req.include_vectors)
+        )
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Export failed: {exc}")
+
+
+@app.post("/api/backup/inspect")
+async def inspect_backup(req: BackupImportRequest):
+    return backup_mod.inspect_archive(req.path)
+
+
+@app.post("/api/backup/import")
+async def import_backup(req: BackupImportRequest):
+    """Replace this instance's data with an archive. A safety copy is taken first."""
+    result = backup_mod.import_archive(req.path, safety_copy=bool(req.safety_copy))
+    if not result["success"]:
+        raise HTTPException(status_code=400, detail=result.get("error", "Import failed"))
+    return result
 
 
 if __name__ == "__main__":

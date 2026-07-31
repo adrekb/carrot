@@ -1,11 +1,11 @@
 [build-system]
 requires = ["setuptools>=68.0"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "carrot"
-version = "0.2.0"
-description = "Carrot - On-device AI agent ecosystem with hybrid search, web search, and vision tools"
+version = "0.3.0"
+description = "Carrot - On-device AI assistant with structured memory, local document search, agent tools, and hybrid model routing"
 requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.104.0",
@@ -19,6 +19,7 @@ dependencies = [
     "beautifulsoup4>=4.12.0",
     "numpy>=1.26.0",
     "psutil>=5.9.0",
+    "pypdf>=4.0.0",
 ]
 
 [project.scripts]
@@ -26,3 +27,16 @@ carrot = "carrot.main:main"
 
 [project.optional-dependencies]
 dev = ["pytest", "httpx", "pylint"]
+# Optional cloud escalation. Carrot is fully functional without it — install
+# only if you want the router to send hard reasoning work to a frontier model.
+cloud = ["anthropic>=0.69.0"]
+# Optional ANN backend. Without it the vector store falls back to a numpy scan,
+# which is fine well past 100k vectors.
+vectors = ["sqlite-vec>=0.1.6"]
+speech = ["kokoro-onnx>=0.4.0", "sounddevice>=0.4.6"]
+
+[tool.setuptools.packages.find]
+include = ["carrot*"]
+
+[tool.setuptools.package-data]
+carrot = ["web/**/*"]

@@ -1,5 +1,6 @@
-const { app, BrowserWindow, globalShortcut, ipcMain, screen, shell } = require('electron');
+const { app, BrowserWindow, globalShortcut, ipcMain, Notification, screen, shell } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const { spawn } = require('child_process');
 const http = require('http');
 
@@ -169,11 +170,30 @@ app.on('window-all-closed', () => {
 });
 
 // ===== IPC =====
+
+// The backend gates /api behind a session token it writes to disk. The renderer
+// gets it injected into its HTML; the main process has to read the same file.
+function sessionToken() {
+  try {
+    const tokenPath = path.join(__dirname, '..', 'carrot', 'data', 'config', 'session.json');
+    return JSON.parse(fs.readFileSync(tokenPath, 'utf8')).token || '';
+  } catch (e) {
+    return '';
+  }
+}
+
+function apiHeaders() {
+  const headers = { 'Content-Type': 'application/json' };
+  const token = sessionToken();
+  if (token) headers['X-Carrot-Token'] = token;
+  return headers;
+}
+
 ipcMain.handle('send-command', async (event, command) => {
   try {
     const response = await fetch(`${BACKEND_URL}/api/chat`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: apiHeaders(),
       body: JSON.stringify({ message: command }),
     });
     return await response.json();
@@ -184,9 +204,24 @@ ipcMain.handle('send-command', async (event, command) => {
 
 ipcMain.handle('get-status', async () => {
   try {
-    const response = await fetch(`${BACKEND_URL}/api/status`);
+    const response = await fetch(`${BACKEND_URL}/api/status`, { headers: apiHeaders() });
     return await response.json();
   } catch (e) {
     return { error: e.message };
   }
+});
+
+ipcMain.handle('notify', async (event, { title, body }) => {
+  if (!Notification.isSupported()) return { shown: false };
+  const notification = new Notification({ title: title || 'Carrot', body: body || '' });
+  // Clicking a toast should bring the user to the thing it is about.
+  notification.on('click', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  });
+  notification.show();
+  return { shown: true };
 });
