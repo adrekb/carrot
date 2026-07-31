@@ -24,6 +24,8 @@ It searches through all your past conversations, notes, and even old goals to fi
 
 **You want to start your day informed without doom-scrolling Twitter.** When your PC is plugged in and idle in the morning, Carrot fetches the day's tech and science news, summarizes it with AI, and saves it for you. You can ask "what's in today's recap?" anytime.
 
+**You think in documents, not in chat boxes.** Write the plan in a note — with `@file:` references to the code it's about and an `@model:` line picking which model should do it — then hit Send to agent. The note *is* the prompt. No copy-and-paste, and the cited files are read fresh at send time.
+
 **You need to remember things.** Carrot has reminders that work like any to-do app, but because everything is connected, you can search across them, link them to conversations, and never lose track of what matters.
 
 **You want an assistant that actually knows you.** Carrot doesn't just search what you typed — it builds a structured memory of what's true about you. Preferences, decisions, projects, commitments. Every belief is traceable back to the message it came from, and you can read, edit, pin, or delete any of it from the Memory tab. Get something wrong once and mark it wrong; Carrot won't record that subject again.
@@ -66,6 +68,13 @@ It searches through all your past conversations, notes, and even old goals to fi
 - **SQLite FTS5** full-text search with a time-aware query parser
 - **Hybrid search**: exact phrases (FTS5) reranked by conceptual similarity (embeddings via `nomic-embed-text`)
 - **`/api/search/all`**: one query across conversations, indexed files, and memory
+
+### Doc to Agent
+- **Write the plan, then send it** (`carrot/doc_agent.py`): think something through in a note and hand it straight to the model — no copy-and-paste, no losing the structure. Select part of a note to send only that.
+- **`@file:` citations**: type `@` in the editor, pick `file`, and choose from your workspace and indexed folders. The file is read *at send time* and attached as context, so the model sees the actual file rather than your description of it.
+- **`@model:` selection**: pick the provider and model for that specific note — a research note can name a frontier model while a scratch note stays on-device.
+- **Shown before it runs**: chips under the note say which citations resolved, how large they are, and which model will serve it. A citation that cannot be read is reported, never silently dropped.
+- **Confined to what you opted into**: citations reach the agent workspace and your indexed folders, and nothing else.
 
 ### Agent Tools
 - **Built-in tools** (`carrot/agent_tools.py`) alongside MCP: read/write files, list directories, regex search, run commands, and search memory, documents and past conversations

@@ -248,8 +248,11 @@
           <input type="text" id="note-title" class="title-input" placeholder="Untitled note" oninput="scheduleNoteSave()">
           <span id="note-status" class="editor-status"></span>
           <span id="note-words" class="editor-words"></span>
+          <button class="btn btn-primary" onclick="sendDocToAgent()"
+                  title="Send this note (or the selected text) to the agent">Send to agent</button>
           <button class="btn btn-ghost" onclick="deleteCurrentNote()">Delete</button>
         </div>
+        <div id="doc-refs" class="doc-refs hidden"></div>
         <div id="note-editor-host" class="milkdown-host"></div>
         <textarea id="note-fallback" class="note-fallback hidden" placeholder="Write your note…" oninput="scheduleNoteSave()"></textarea>
         <div id="note-empty" class="editor-empty">Select a note on the left, or create a new one.</div>
@@ -671,5 +674,6 @@
 <script src="/js/dashboard.js"></script>
 <script src="/js/app.js"></script>
 <script src="/js/agentops.js"></script>
+<script src="/js/docagent.js"></script>
 </body>
 </html>

@@ -41,6 +41,7 @@ from carrot import (
     summarize as summarize_mod,
     indexer as indexer_mod,
     agent_tools as agent_mod,
+    doc_agent,
     router as router_mod,
     providers as providers_mod,
     security as security_mod,
@@ -234,6 +235,17 @@ class RouteRequest(BaseModel):
     model: str
     provider: Optional[str] = None
     effort: Optional[str] = None
+
+
+class DocSendRequest(BaseModel):
+    """A note (or a selection from one) being sent to the agent."""
+
+    text: str
+    note_id: Optional[str] = None
+    title: Optional[str] = None
+    conversation_id: Optional[str] = None
+    task: Optional[str] = None
+    skill: Optional[str] = None
 
 
 class ProviderRequest(BaseModel):
@@ -436,13 +448,14 @@ async def pull_model(req: ModelPullRequest):
 
 # ===== Chat =====
 
-def _prepare_history(conv, message, skill_slug):
+def _prepare_history(conv, message, skill_slug, extra_system=None):
     """Build the model message list for a turn.
 
-    Order matters: skill instructions, then what Carrot remembers about the
-    user, then the rolling summary of everything older than the recent window,
-    then the recent turns verbatim. Long conversations therefore keep their
-    early context instead of falling off a fixed-size slice.
+    Order matters: skill instructions, then any caller-supplied context (a
+    document's cited files, say), then what Carrot remembers about the user,
+    then the rolling summary of everything older than the recent window, then
+    the recent turns verbatim. Long conversations therefore keep their early
+    context instead of falling off a fixed-size slice.
     """
     history = []
     skill = None
@@ -456,6 +469,9 @@ def _prepare_history(conv, message, skill_slug):
                     f"Follow these instructions:\n\n{skill['instructions']}"
                 ),
             })
+
+    if extra_system:
+        history.append({"role": "system", "content": extra_system})
 
     if config.get_config().get("memory_enabled", True):
         try:
@@ -630,10 +646,16 @@ def _resolve_chat_route(req):
     return resolved
 
 
-def _chat_stream_response(req, conv, history, skill, resolved):
-    """Shared SSE body for both chat endpoints."""
+def _chat_stream_response(req, conv, history, skill, resolved, prelude=None):
+    """Shared SSE body for the chat and doc-send endpoints.
+
+    ``prelude`` is emitted as the first event, which is how a doc send reports
+    its resolved citations before any tokens arrive.
+    """
     async def stream():
         final_text = ""
+        if prelude:
+            yield f"data: {json.dumps({'document': prelude})}\n\n"
         for event in _agentic_chat_events(history, resolved, skill, req.conversation_id):
             if "_final_text" in event:
                 final_text = event["_final_text"]
@@ -1462,6 +1484,67 @@ async def clear_router_route(task: str):
 async def router_recommendation():
     """A local model sized to this machine's memory."""
     return router_mod.recommend_local_model()
+
+
+# ===== Doc to agent =====
+
+@app.get("/api/doc/candidates")
+async def doc_candidates(kind: str = "file", q: str = "", limit: int = 40):
+    """Completions for the editor's '@' menu."""
+    if kind == "model":
+        return {"kind": "model", "candidates": doc_agent.model_candidates(q, limit=limit)}
+    return {"kind": "file", "candidates": doc_agent.file_candidates(q, limit=limit)}
+
+
+@app.post("/api/doc/parse")
+async def doc_parse(req: DocSendRequest):
+    """Resolve a document's references without sending it.
+
+    This is what the editor shows under the note: which files will be attached,
+    which model will serve it, and what could not be resolved.
+    """
+    resolved = doc_agent.resolve(req.text, task=req.task or router_mod.TASK_CHAT)
+    return resolved.as_dict()
+
+
+@app.post("/api/doc/send")
+async def doc_send(req: DocSendRequest):
+    """Send a note straight to the agent, cited files and chosen model included.
+
+    Deliberately reuses the ordinary chat turn: the note's text becomes the user
+    message, its cited files become a system context block, and everything else
+    — memory, tools, summaries, approvals — behaves exactly as it does in chat.
+    """
+    if not (req.text or "").strip():
+        raise HTTPException(status_code=400, detail="Nothing to send")
+
+    resolved = doc_agent.resolve(req.text, task=req.task or router_mod.TASK_CHAT)
+
+    chat_req = ChatRequest(
+        message=resolved.prompt,
+        conversation_id=req.conversation_id,
+        task=req.task,
+        skill=req.skill,
+        stream=True,
+    )
+    if chat_req.conversation_id is None:
+        title = (req.title or resolved.prompt[:80]).strip() or "Untitled note"
+        chat_req.conversation_id = conv_mod.create_conversation(title=title)["id"]
+    conv = conv_mod.get_conversation(chat_req.conversation_id)
+    if conv is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    route = resolved.route
+    if route is None:
+        route = _resolve_chat_route(chat_req)
+    elif route.local and not ollama_mod.OllamaClient().is_available():
+        raise HTTPException(status_code=503, detail="Ollama is not available")
+
+    history, skill = _prepare_history(
+        conv, resolved.prompt, chat_req.skill, extra_system=resolved.context or None
+    )
+    conv_mod.add_message(chat_req.conversation_id, "user", resolved.prompt)
+    return _chat_stream_response(chat_req, conv, history, skill, route, prelude=resolved.as_dict())
 
 
 # ===== Providers (BYOK) =====

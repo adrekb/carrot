@@ -1620,3 +1620,56 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   border-radius: var(--radius);
   margin: 10px 0 0;
 }
+
+/* Doc to agent — reference chips under the note toolbar */
+.doc-refs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--border);
+}
+.doc-refs.hidden { display: none; }
+.doc-ref {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  font-size: 11.5px;
+}
+.doc-ref.ok { border-color: rgba(63, 214, 143, 0.35); }
+.doc-ref.bad { border-color: rgba(255, 92, 31, 0.35); }
+.doc-ref.route { border-color: var(--border-hi); color: var(--muted); }
+.doc-ref-detail { color: var(--muted); }
+
+/* The '@' mention menu */
+.mention-menu {
+  position: fixed;
+  z-index: 300;
+  width: 320px;
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 5px;
+  background: var(--panel, var(--card));
+  border: 1px solid var(--border-hi);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+.mention-menu.hidden { display: none; }
+.mention-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 9px;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 12.5px;
+}
+.mention-item.active, .mention-item:hover { background: var(--accent-soft); }
+.mention-label { font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mention-source { color: var(--muted); font-size: 11px; flex-shrink: 0; }
+.mention-empty { padding: 8px 10px; color: var(--muted); font-size: 12px; }
