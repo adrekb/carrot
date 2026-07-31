@@ -18,10 +18,27 @@ function escHtml(str) {
     return d.innerHTML;
 }
 
+// The backend injects the session token into this page's <head>. It is the
+// only way to obtain it, and the same-origin policy is what keeps another
+// origin from reading it — so every API call has to carry it.
+const CARROT_TOKEN = (document.querySelector('meta[name="carrot-token"]') || {}).content || '';
+
+function authHeaders(extra = {}) {
+    const headers = { 'Content-Type': 'application/json', ...extra };
+    if (CARROT_TOKEN) headers['X-Carrot-Token'] = CARROT_TOKEN;
+    return headers;
+}
+
+// EventSource cannot set headers, so SSE URLs carry the token as a query param.
+function tokenUrl(path) {
+    if (!CARROT_TOKEN) return path;
+    return path + (path.includes('?') ? '&' : '?') + 'carrot_token=' + encodeURIComponent(CARROT_TOKEN);
+}
+
 async function api(path, options = {}) {
     const resp = await fetch(path, {
-        headers: { 'Content-Type': 'application/json' },
         ...options,
+        headers: authHeaders(options.headers || {}),
     });
     if (!resp.ok) {
         let detail = resp.statusText;
@@ -85,6 +102,9 @@ function switchTab(tab) {
         assignments: loadAssignments,
         extensions: loadExtensions,
         leaderboard: loadLeaderboard,
+        memory: () => loadMemory(),
+        files: () => loadIndex(),
+        inbox: () => refreshNotifications(),
     };
     if (loaders[tab]) loaders[tab]();
 }
@@ -318,7 +338,7 @@ async function pullModel(name) {
     try {
         const resp = await fetch('/api/models/pull', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: authHeaders(),
             body: JSON.stringify({ model: name }),
         });
         if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).detail || resp.statusText);
@@ -435,7 +455,7 @@ async function sendChat() {
     try {
         const resp = await fetch('/api/chat/stream', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: authHeaders(),
             body: JSON.stringify({
                 message: msg,
                 conversation_id: currentConversationId,
@@ -461,11 +481,23 @@ async function sendChat() {
                 const payload = JSON.parse(raw.slice(5).trim());
                 const box = document.getElementById('chat-messages');
                 if (payload.skill) toolLine('skill active: ' + payload.skill.name, 'intent');
+                if (payload.route) {
+                    // Always say where the answer came from — local vs cloud is
+                    // the single most important thing to be honest about here.
+                    const where = payload.route.provider === 'anthropic' ? 'cloud' : 'on-device';
+                    toolLine(`${payload.route.model} (${where})`, 'intent');
+                }
                 if (payload.tool) {
                     toolLine(`tool → ${payload.tool.name}(${JSON.stringify(payload.tool.args)})`, 'search');
                 }
                 if (payload.tool_result) {
                     toolLine(`  ← ${String(payload.tool_result.result).slice(0, 160)}`, 'stage');
+                }
+                if (payload.approval_request) {
+                    showApprovalPrompt(payload.approval_request);
+                }
+                if (payload.approval_resolved) {
+                    dismissApprovalPrompt(payload.approval_resolved.id);
                 }
                 if (payload.thinking) {
                     ensureThink();
@@ -926,12 +958,35 @@ async function runTerminal() {
     if (!cmd) return;
     input.value = '';
     termAppend(`$ ${cmd}\n`, 't-cmd');
+    await executeTerminal(cmd, false);
+}
+
+// The server answers 428 for commands it judges destructive. That is a
+// question, not a failure — ask, then re-send with confirm set.
+async function executeTerminal(cmd, confirm) {
     try {
-        const resp = await api('/api/terminal/execute', {
+        const resp = await fetch('/api/terminal/execute', {
             method: 'POST',
-            body: JSON.stringify({ command: cmd }),
+            headers: authHeaders(),
+            body: JSON.stringify({ command: cmd, confirm: !!confirm }),
         });
-        termAppend((resp.output || '') + '\n');
+
+        if (resp.status === 428) {
+            const detail = (await resp.json()).detail || {};
+            const reasons = (detail.reasons || []).join(', ');
+            termAppend(`⚠ ${reasons || 'this command looks destructive'}\n`, 't-warn');
+            if (window.confirm(`This command ${reasons || 'looks destructive'}.\n\n${cmd}\n\nRun it anyway?`)) {
+                return executeTerminal(cmd, true);
+            }
+            termAppend('cancelled\n', 't-err');
+            return;
+        }
+        if (!resp.ok) {
+            const detail = (await resp.json().catch(() => ({}))).detail;
+            throw new Error(typeof detail === 'string' ? detail : resp.statusText);
+        }
+        const data = await resp.json();
+        termAppend((data.output || '') + '\n');
     } catch (e) {
         termAppend('error: ' + e.message + '\n', 't-err');
     }
@@ -1047,7 +1102,7 @@ async function runRecap() {
     try {
         const resp = await fetch('/api/recap/run/stream', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: authHeaders(),
             body: JSON.stringify({}),
         });
         if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).detail || resp.statusText);

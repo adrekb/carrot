@@ -22,6 +22,89 @@ Exposed via `GET /api/bootstrap/status` and `POST /api/bootstrap/run`; the web U
 ## Frontend: Glassmorphism Dashboard
 The web UI (`carrot/web/`) is a single-page glassmorphism dashboard: an animated aurora background with translucent, blurred panels and carrot-orange accents. A sidebar navigates between views (chat, search, terminal, notes, goals, reminders, recap, assignments, status, leaderboard). Chat streams tokens over SSE (`/api/chat/stream`), supports voice input (mic → whisper) and read-aloud replies (Kokoro). The Electron shell (`gui/main.js`) spawns the FastAPI backend and loads this UI from `http://127.0.0.1:8181`.
 
+## Memory Architecture
+
+Conversation search answers *"what did I say"*. Memory answers *"what is true about
+me"*. Three layers cooperate:
+
+**1. Structured memory (`memory.py`).** After each turn the model is asked to extract
+durable facts — preferences, decisions, stable attributes, ongoing projects. Three
+rules make this trustworthy rather than a hallucination store:
+
+- *Provenance is mandatory.* Every memory records the message and conversation it came
+  from. A memory with no source cannot be checked, so it is not worth keeping.
+- *Supersede, never overwrite.* A new value for an existing `(kind, subject)` marks the
+  old row `superseded` and links forward. History stays intact.
+- *The user is the authority.* Memories can be edited, pinned, or rejected from the
+  Memory tab; rejected subjects are excluded from future extraction.
+
+Relevant memories (plus anything pinned) are injected as a system block at the top of
+each chat turn.
+
+**2. Rolling summaries (`summarize.py`).** Chat history used to be a hard
+`messages[-20:]` slice, so long conversations silently forgot their own beginning.
+Everything older than the recent window is now folded into an incremental summary —
+each pass summarizes only the newly-aged-out messages, so cost stays flat no matter how
+long the conversation runs.
+
+**3. Vector store (`vectors.py`).** One table, namespaced by content type
+(`message` / `memory` / `chunk`), storing embeddings as packed float32 blobs rather
+than JSON — a 768-dim vector costs ~3KB instead of ~15KB. Search uses `sqlite-vec`
+when the extension is installed and a single numpy matmul otherwise. Embedding runs on
+a background worker so writes never block on Ollama, and `backfill` catches up anything
+written while the model was unavailable.
+
+## Local Document Index
+
+`indexer.py` extends recall past the chat box. Configured folders are walked, text is
+extracted (markdown/code direct, HTML via BeautifulSoup with scripts stripped, PDF via
+pypdf), chunked at ~1200 characters with 150 characters of overlap on paragraph
+boundaries, and written to `documents` / `document_chunks` — indexed into FTS5 by
+trigger and embedded through the same vector store.
+
+Scans are incremental: files are fingerprinted by `(size, mtime, sha1-of-head)` and
+re-read only when that changes, so a rescan of an unchanged tree costs one stat per
+file and no parsing. Vanished files are pruned. `node_modules`, `.git`, virtualenvs and
+similar are never walked.
+
+## Agent Tools
+
+`agent_tools.py` exposes native tools to the chat loop alongside MCP: `read_file`,
+`write_file`, `list_dir`, `search_files`, `run_command`, plus recall tools over memory,
+documents and past conversations. Two safety properties hold for all of them:
+
+- **Mutating tools ask first.** The tool runs on a worker thread and pushes an approval
+  prompt onto the SSE stream, blocking until the user answers or the request times out.
+  Read-only tools run unattended.
+- **File writes are reversible.** Every write journals the previous contents before
+  touching disk, so any edit can be reverted with its unified diff shown first.
+
+All paths resolve against a workspace root and refuse to escape it.
+
+## Model Routing
+
+`router.py` maps a *task* to a model rather than hardcoding one. Small local models
+handle classification, extraction and summarization; chat and code get the configured
+default; and — only if the user attaches an API key and opts in — the hardest reasoning
+and coding work can escalate to a frontier model through the Anthropic SDK. High-volume
+tasks are excluded from escalation by construction.
+
+The cloud path translates Ollama-shaped history and tool schemas into Anthropic content
+blocks and emits the same typed events back, so the agentic loop is provider-agnostic
+and written once. Every turn announces which provider and model served it.
+
+## Security Model
+
+Binding to `127.0.0.1` keeps Carrot off the network, but not away from the machine —
+any page open in the browser can reach `http://127.0.0.1:8181`, including the endpoint
+that runs shell commands. Two defences:
+
+- **A session token** minted at startup and injected into the app's own HTML. Every
+  `/api` call must present it via `X-Carrot-Token` (or `?carrot_token=` for SSE, which
+  cannot set headers). A cross-origin page cannot read the HTML to obtain it.
+- **Destructive-command screening** (`security.py`): commands matching known-destructive
+  patterns return `428` until re-sent with `confirm=true`.
+
 ## Core Features
 
 ### 1. Conversation Search (Carrot Recall)
@@ -113,7 +196,16 @@ carrot/
 │   ├── goals.py               # Goal tracking
 │   ├── reminders.py           # Reminder system
 │   ├── notes.py               # Note management
-│   ├── leaderboard.py         # Crowd-sourced hardware/model directory
+│   ├── leaderboard.py         # Hardware/model directory (local table)
+│   ├── vectors.py             # Unified packed-float32 vector store + backfill
+│   ├── memory.py              # Structured long-term memory with provenance
+│   ├── summarize.py           # Rolling conversation summaries
+│   ├── indexer.py             # Local document index (md/code/html/pdf)
+│   ├── agent_tools.py         # Built-in agent tools, approval gate, undo journal
+│   ├── router.py              # Task -> model routing, optional cloud escalation
+│   ├── security.py            # Session token + destructive-command screening
+│   ├── proactive.py           # Background watcher and notifications
+│   ├── backup.py              # Full export / import
 │   ├── speech/
 │   │   ├── whisper_stt.py     # Voice input (whisper.cpp)
 │   │   └── kokoro_tts.py      # Voice output (Kokoro-82M)
@@ -210,7 +302,89 @@ CREATE TABLE config (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+
+-- Unified vector store. Embeddings are packed float32 blobs, not JSON, and are
+-- keyed by (namespace, ref_id) so messages, memories and document chunks share
+-- one table and one search path.
+CREATE TABLE vectors (
+    namespace TEXT NOT NULL,       -- 'message' | 'memory' | 'chunk'
+    ref_id TEXT NOT NULL,
+    model TEXT,
+    dim INTEGER,
+    embedding BLOB,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (namespace, ref_id)
+);
+
+-- Structured memory. Provenance is mandatory; updates supersede rather than
+-- overwrite, so the history of a belief survives.
+CREATE TABLE memories (
+    id TEXT PRIMARY KEY,
+    kind TEXT,                     -- fact | preference | decision | attribute | relationship | project
+    subject TEXT,
+    content TEXT NOT NULL,
+    confidence REAL,
+    status TEXT,                   -- active | superseded | rejected
+    pinned INTEGER DEFAULT 0,
+    source_message_id INTEGER,
+    source_conversation_id TEXT,
+    superseded_by TEXT,
+    created_at TEXT, updated_at TEXT
+);
+
+CREATE TABLE conversation_summaries (
+    conversation_id TEXT PRIMARY KEY,
+    summary TEXT,
+    covered_through INTEGER,       -- highest message id absorbed so far
+    message_count INTEGER,
+    updated_at TEXT
+);
+
+-- Indexed local files. `hash` is a sha1 of the file head, enough to detect an
+-- edit without reading the whole file on every scan.
+CREATE TABLE documents (
+    id TEXT PRIMARY KEY,
+    path TEXT NOT NULL UNIQUE,
+    title TEXT, ext TEXT,
+    size INTEGER, mtime REAL, hash TEXT,
+    chunk_count INTEGER, char_count INTEGER,
+    indexed_at TEXT
+);
+
+CREATE TABLE document_chunks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id TEXT REFERENCES documents(id) ON DELETE CASCADE,
+    ordinal INTEGER,
+    content TEXT NOT NULL,
+    created_at TEXT
+);
+
+CREATE TABLE notifications (
+    id TEXT PRIMARY KEY,
+    kind TEXT, title TEXT, body TEXT,
+    severity TEXT,                 -- info | warning | urgent
+    dedupe_key TEXT,               -- suppresses repeat notifications
+    read INTEGER DEFAULT 0,
+    dismissed INTEGER DEFAULT 0,
+    created_at TEXT, metadata TEXT
+);
+
+-- Undo journal for agent file writes. before_content is the full prior file
+-- (NULL when the agent created it), which is what makes revert possible.
+CREATE TABLE file_journal (
+    id TEXT PRIMARY KEY,
+    path TEXT NOT NULL,
+    operation TEXT,                -- create | edit
+    before_content TEXT,
+    after_content TEXT,
+    reverted INTEGER DEFAULT 0,
+    conversation_id TEXT,
+    created_at TEXT
+);
 ```
+
+Plus two more content-storing FTS5 indexes kept in sync by triggers:
+`memories_fts(content, subject)` and `chunks_fts(content)`.
 
 ## Search Implementation Detail
 

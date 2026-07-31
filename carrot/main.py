@@ -21,6 +21,14 @@ def main():
         print("  goals           List goals")
         print("  reminders       List reminders")
         print("  notes <folder>  List notes in a folder")
+        print("  memory [query]  Show or search what Carrot remembers about you")
+        print("  index <dir>     Add a folder to the local document index")
+        print("  index-scan      Scan indexed folders for new or changed files")
+        print("  find <query>    Search files, conversations and memory at once")
+        print("  backup [path]   Export everything to an archive")
+        print("  restore <path>  Restore from an archive (replaces current data)")
+        print("  route           Show which model serves each task")
+        print("  token           Print the API session token")
         print("  status          Show system status")
         return
 
@@ -129,6 +137,124 @@ def main():
         for n in notes:
             print(f"  {n['id']}: {n.get('title', n['filename'])}")
 
+    elif command == "memory":
+        init_db()
+        from carrot.memory import list_memories, search as search_memory, stats
+
+        query = " ".join(sys.argv[2:])
+        entries = search_memory(query) if query else list_memories()
+        if not entries:
+            print("Nothing remembered yet." if not query else "No matching memories.")
+            return
+        for m in entries:
+            pin = "*" if m.get("pinned") else " "
+            print(f" {pin} ({m['kind']}/{m['subject']}) {m['content']}")
+        if not query:
+            print(f"\n{stats()['total']} total")
+
+    elif command == "index":
+        init_db()
+        from carrot.indexer import add_index_dir, index_dirs
+
+        if len(sys.argv) < 3:
+            configured = index_dirs()
+            print("Indexed folders:" if configured else "No folders indexed yet.")
+            for directory in configured:
+                print(f"  {directory}")
+            return
+        try:
+            add_index_dir(sys.argv[2])
+            print(f"Added {sys.argv[2]}. Run 'carrot index-scan' to index it.")
+        except ValueError as exc:
+            print(f"Error: {exc}")
+
+    elif command == "index-scan":
+        init_db()
+        from carrot.indexer import index_dirs, run_scan, stats
+
+        if not index_dirs():
+            print("No folders configured. Add one with 'carrot index <dir>'.")
+            return
+        print("Scanning…")
+        state = run_scan()
+        print(f"Scanned {state['scanned']}, indexed {state['indexed']}, "
+              f"skipped {state['skipped']}, failed {state['failed']}")
+        print(f"Index now holds {stats()['documents']} documents.")
+
+    elif command == "find":
+        init_db()
+        if len(sys.argv) < 3:
+            print("Usage: carrot find <query>")
+            return
+        query = " ".join(sys.argv[2:])
+        from carrot.indexer import search_documents
+        from carrot.memory import search as search_memory
+        from carrot.search import search_conversations
+
+        memories = search_memory(query, limit=5)
+        if memories:
+            print("Memory:")
+            for m in memories:
+                print(f"  ({m['kind']}) {m['content']}")
+
+        documents = search_documents(query, limit=5)["results"]
+        if documents:
+            print("\nYour files:")
+            for d in documents:
+                print(f"  {d['path']}")
+                print(f"    {d['content'][:200]}")
+
+        conversations = search_conversations(query, limit=5)["results"]
+        if conversations:
+            print("\nConversations:")
+            for c in conversations:
+                print(f"  [{c['timestamp'][:10]}] {c['content'][:200]}")
+
+        if not (memories or documents or conversations):
+            print("No matches.")
+
+    elif command == "backup":
+        init_db()
+        from carrot.backup import export_archive
+
+        destination = sys.argv[2] if len(sys.argv) > 2 else None
+        result = export_archive(destination)
+        print(f"Wrote {result['path']} ({result['size_bytes'] // 1024} KB)")
+
+    elif command == "restore":
+        if len(sys.argv) < 3:
+            print("Usage: carrot restore <archive.zip>")
+            return
+        from carrot.backup import import_archive
+
+        print("This replaces everything currently in Carrot. A safety copy is taken first.")
+        if input("Continue? [y/N] ").strip().lower() != "y":
+            print("Cancelled.")
+            return
+        result = import_archive(sys.argv[2])
+        if result["success"]:
+            print(f"Restored. Safety copy: {result.get('safety_copy', 'none')}")
+        else:
+            print(f"Failed: {result.get('error')}")
+
+    elif command == "route":
+        init_db()
+        from carrot.router import status as router_status
+
+        state = router_status()
+        print("Cloud escalation:", "on" if state["cloud_enabled"] else "off")
+        for task, route in state["routes"].items():
+            where = "cloud" if route["provider"] == "anthropic" else "on-device"
+            print(f"  {task:<10} {route['model']:<20} ({where})")
+        recommendation = state.get("recommendation") or {}
+        if recommendation.get("model"):
+            print(f"\nSuggested local model: {recommendation['model']} — {recommendation['reason']}")
+
+    elif command == "token":
+        from carrot.security import session_token
+
+        print(session_token())
+
     elif command == "status":
         init_db()
         config = get_config()
@@ -144,6 +270,17 @@ def main():
         print(f"  Messages: {msg_count}")
         print(f"  Goals: {goal_count}")
         print(f"  Reminders: {rem_count}")
+
+        from carrot.indexer import stats as index_stats
+        from carrot.memory import stats as memory_stats
+        from carrot.vectors import stats as vector_stats
+
+        print(f"  Memories: {memory_stats()['total']}")
+        documents = index_stats()
+        print(f"  Indexed files: {documents['documents']} ({documents['chunks']} chunks)")
+        vectors = vector_stats()
+        pending = sum(n["pending"] for n in vectors["namespaces"])
+        print(f"  Vectors: {vectors['total']} ({pending} pending, {vectors['backend']} backend)")
         print(f"  Ollama: {config.get('ollama_host')}")
         print(f"  Default model: {config.get('ollama_model')}")
 

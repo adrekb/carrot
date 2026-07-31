@@ -13,10 +13,16 @@ from carrot import database, config
 @pytest.fixture
 def isolated_db(tmp_path, monkeypatch):
     """Point the database and config modules at a temporary SQLite file."""
+    from carrot import security
+
     db_path = str(tmp_path / "carrot.db")
     monkeypatch.setattr(database, "DB_PATH", db_path)
     monkeypatch.setattr(database, "DBCORE_DIR", str(tmp_path))
     monkeypatch.setattr(config, "CARROT_DIR", str(tmp_path))
+    # Keep the session token out of the real data directory too.
+    monkeypatch.setattr(security, "CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setattr(security, "TOKEN_PATH", str(tmp_path / "config" / "session.json"))
+    monkeypatch.setattr(security, "_token", None)
     database.init_db()
     return db_path
 
@@ -70,7 +76,20 @@ def fake_ollama(monkeypatch):
 
 @pytest.fixture
 def client(isolated_db, fake_ollama):
-    """A TestClient wired to the isolated DB and mocked Ollama."""
+    """A TestClient wired to the isolated DB, mocked Ollama, and a session token."""
+    from fastapi.testclient import TestClient
+    from carrot import app as carrot_app, security
+
+    with TestClient(
+        carrot_app.app,
+        headers={security.TOKEN_HEADER: security.session_token()},
+    ) as c:
+        yield c
+
+
+@pytest.fixture
+def unauthenticated_client(isolated_db, fake_ollama):
+    """A TestClient with no session token, for testing the auth gate itself."""
     from fastapi.testclient import TestClient
     from carrot import app as carrot_app
 
