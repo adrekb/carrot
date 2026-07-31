@@ -382,61 +382,334 @@ function unifiedSection(title, items, render) {
     return section;
 }
 
-// ---------- Model routing ----------
+// ---------- Providers and model routing ----------
+
+// The last /api/router/status payload, so the task table can be re-rendered
+// (on a provider change, say) without another round trip.
+let routerState = null;
+// Models are fetched from each provider on demand and cached for the session —
+// Carrot never hardcodes model names, because they go stale.
+const providerModels = {};
 
 async function loadRouting() {
     const host = document.getElementById('routing-panel');
     if (!host) return;
     try {
-        const status = await api('/api/router/status');
-        renderRouting(status);
+        routerState = await api('/api/router/status');
+        renderProviders(routerState);
+        renderRouting(routerState);
+        const enabled = document.getElementById('cloud-enabled');
+        if (enabled) enabled.checked = !!routerState.cloud_enabled;
     } catch (e) {
         host.innerHTML = `<div class="empty error">${escHtml(e.message)}</div>`;
     }
 }
 
+function providerLabel(id) {
+    const provider = (routerState?.providers || []).find(p => p.id === id);
+    return provider ? provider.label : id;
+}
+
+// ---------- Providers ----------
+
+function renderProviders(status) {
+    const host = document.getElementById('providers-panel');
+    if (!host) return;
+
+    host.innerHTML = (status.providers || []).map(provider => {
+        const state = !provider.enabled ? ['dot', 'off']
+            : provider.configured ? ['dot', 'ok'] : ['dot', 'warn'];
+        const detail = !provider.enabled ? 'disabled'
+            : provider.configured
+                ? (provider.requires_key ? 'key configured' : 'no key needed')
+                : `needs a key${provider.env_var ? ` (or $${provider.env_var})` : ''}`;
+        const id = escHtml(provider.id);
+        return `
+        <div class="provider-row">
+          <div class="provider-main">
+            <span class="${state.join(' ')}"></span>
+            <span class="provider-name">${escHtml(provider.label)}</span>
+            <span class="tag">${escHtml(provider.kind)}</span>
+            ${provider.builtin ? '' : '<span class="tag">custom</span>'}
+            <span class="subtle mono">${escHtml(provider.base_url || 'local')}</span>
+          </div>
+          <div class="provider-detail subtle">${escHtml(detail)}</div>
+          <div class="provider-actions">
+            ${provider.requires_key ? `
+              <input type="password" id="key-${id}" class="provider-key"
+                     placeholder="${provider.key_set ? 'Replace key' : 'Paste API key'}" spellcheck="false">
+              <button class="btn btn-ghost" onclick="saveProviderKey('${id}')">Save</button>` : ''}
+            ${provider.key_set ? `<button class="btn btn-ghost" onclick="clearProviderKey('${id}')">Forget</button>` : ''}
+            <button class="btn btn-ghost" onclick="testProvider('${id}')">Test</button>
+            <button class="btn btn-ghost" onclick="toggleProvider('${id}', ${!provider.enabled})">
+              ${provider.enabled ? 'Disable' : 'Enable'}</button>
+            ${provider.builtin ? '' : `<button class="btn btn-ghost" onclick="removeProvider('${id}')">Remove</button>`}
+          </div>
+          <div class="provider-result subtle" id="test-${id}"></div>
+        </div>`;
+    }).join('');
+
+    const preset = document.getElementById('prov-preset');
+    if (preset && !preset.options.length) {
+        preset.innerHTML = (status.presets || [])
+            .map(p => `<option value="${escHtml(p.id)}">${escHtml(p.label)}</option>`).join('');
+        applyProviderPreset();
+    }
+
+    if (status.cloud_configured && !status.sdk_installed) {
+        host.innerHTML += `<div class="empty error">The anthropic package is not installed —
+            run <span class="mono">pip install 'carrot[cloud]'</span> to use Anthropic.</div>`;
+    }
+}
+
+function applyProviderPreset() {
+    const select = document.getElementById('prov-preset');
+    const preset = (routerState?.presets || []).find(p => p.id === select?.value);
+    if (!preset) return;
+    const set = (elementId, value) => {
+        const element = document.getElementById(elementId);
+        if (element) element.value = value;
+    };
+    set('prov-id', preset.id === 'custom' ? '' : preset.id);
+    set('prov-label', preset.id === 'custom' ? '' : preset.label);
+    set('prov-base', preset.base_url);
+    set('prov-kind', preset.kind);
+}
+
+async function addProvider() {
+    const value = id => (document.getElementById(id)?.value || '').trim();
+    try {
+        await api('/api/router/providers', {
+            method: 'POST',
+            body: JSON.stringify({
+                id: value('prov-id'),
+                label: value('prov-label'),
+                kind: value('prov-kind') || 'openai',
+                base_url: value('prov-base'),
+                api_key: value('prov-key'),
+            }),
+        });
+        const key = document.getElementById('prov-key');
+        if (key) key.value = '';
+        loadRouting();
+    } catch (e) {
+        alert(e.message);
+    }
+}
+
+async function saveProviderKey(providerId) {
+    const input = document.getElementById(`key-${providerId}`);
+    if (!input || !input.value.trim()) return;
+    try {
+        await api(`/api/router/providers/${encodeURIComponent(providerId)}/key`, {
+            method: 'PUT', body: JSON.stringify({ api_key: input.value.trim() }),
+        });
+        input.value = '';
+        delete providerModels[providerId];
+        loadRouting();
+    } catch (e) {
+        alert(e.message);
+    }
+}
+
+async function clearProviderKey(providerId) {
+    if (!confirm(`Forget the stored API key for ${providerLabel(providerId)}?`)) return;
+    try {
+        await api(`/api/router/providers/${encodeURIComponent(providerId)}/key`, {
+            method: 'PUT', body: JSON.stringify({ api_key: '' }),
+        });
+        loadRouting();
+    } catch (e) {
+        alert(e.message);
+    }
+}
+
+async function toggleProvider(providerId, enabled) {
+    try {
+        await api(`/api/router/providers/${encodeURIComponent(providerId)}/enabled`, {
+            method: 'PUT', body: JSON.stringify({ enabled }),
+        });
+        loadRouting();
+    } catch (e) {
+        alert(e.message);
+    }
+}
+
+async function removeProvider(providerId) {
+    if (!confirm(`Remove ${providerLabel(providerId)} and forget its key?`)) return;
+    try {
+        await api(`/api/router/providers/${encodeURIComponent(providerId)}`, { method: 'DELETE' });
+        loadRouting();
+    } catch (e) {
+        alert(e.message);
+    }
+}
+
+async function testProvider(providerId) {
+    const host = document.getElementById(`test-${providerId}`);
+    if (host) host.textContent = 'Testing…';
+    try {
+        const result = await api(`/api/router/providers/${encodeURIComponent(providerId)}/test`,
+            { method: 'POST' });
+        if (host) {
+            host.textContent = result.ok
+                ? `Reachable${result.models ? ` — ${result.models} models` : ''}`
+                : `Failed: ${result.error}`;
+            host.className = `provider-result subtle ${result.ok ? 'ok' : 'error'}`;
+        }
+    } catch (e) {
+        if (host) {
+            host.textContent = `Failed: ${e.message}`;
+            host.className = 'provider-result subtle error';
+        }
+    }
+}
+
+// ---------- Task routing ----------
+
 function renderRouting(status) {
     const host = document.getElementById('routing-panel');
     if (!host) return;
 
-    const rows = Object.entries(status.routes).map(([task, route]) => `
+    const usable = (status.providers || []).filter(p => p.enabled && p.configured);
+    const assignments = status.assignments || {};
+
+    const rows = (status.tasks || []).map(task => {
+        const route = status.routes[task.id] || {};
+        const pinned = assignments[task.id];
+        const options = ['<option value="">auto</option>'].concat(usable.map(p =>
+            `<option value="${escHtml(p.id)}"${pinned && pinned.provider === p.id ? ' selected' : ''}>
+                ${escHtml(p.label)}</option>`)).join('');
+        return `
         <tr>
-            <td>${escHtml(task)}</td>
-            <td class="mono">${escHtml(route.model)}</td>
-            <td><span class="tag ${route.provider === 'anthropic' ? 'cloud' : ''}">
-                ${route.provider === 'anthropic' ? 'cloud' : 'on-device'}</span></td>
-            <td class="subtle">${escHtml(route.reason)}</td>
-        </tr>`).join('');
+            <td>
+              <div>${escHtml(task.label)}</div>
+              <div class="subtle mono">${escHtml(task.id)}</div>
+            </td>
+            <td><select id="route-provider-${escHtml(task.id)}"
+                        onchange="loadRouteModels('${escHtml(task.id)}')">${options}</select></td>
+            <td>
+              <input list="models-${escHtml(task.id)}" id="route-model-${escHtml(task.id)}"
+                     class="mono" placeholder="${escHtml(route.model || 'auto')}"
+                     value="${escHtml(pinned ? pinned.model : '')}" spellcheck="false">
+              <datalist id="models-${escHtml(task.id)}"></datalist>
+            </td>
+            <td>
+              <span class="tag ${route.local ? '' : 'cloud'}">
+                ${route.local ? 'on-device' : escHtml(route.provider || '')}</span>
+              <div class="subtle">${escHtml(route.reason || '')}</div>
+            </td>
+            <td class="route-actions">
+              <button class="btn btn-ghost" onclick="saveRoute('${escHtml(task.id)}')">Save</button>
+              ${pinned ? `<button class="btn btn-ghost" onclick="clearRoute('${escHtml(task.id)}')">Auto</button>` : ''}
+              ${task.builtin ? '' : `<button class="btn btn-ghost" onclick="removeTask('${escHtml(task.id)}')">Delete</button>`}
+            </td>
+        </tr>`;
+    }).join('');
 
     const recommendation = status.recommendation || {};
     host.innerHTML = `
         <div class="routing-summary">
             ${status.cloud_enabled
-                ? `<span class="dot warn"></span> Cloud escalation is on for: ${escHtml(status.cloud_tasks.join(', ') || 'nothing')}`
-                : '<span class="dot ok"></span> Everything runs on this machine'}
+                ? `<span class="dot warn"></span> Unpinned tasks may escalate to
+                   ${escHtml(providerLabel(status.escalation_provider))}: ${escHtml(status.cloud_tasks.join(', ') || 'nothing')}`
+                : '<span class="dot ok"></span> Everything not pinned to a provider runs on this machine'}
         </div>
         ${recommendation.model
             ? `<div class="subtle">Suggested local model: <span class="mono">${escHtml(recommendation.model)}</span>
                — ${escHtml(recommendation.reason)}</div>` : ''}
         <table class="routing-table">
-            <thead><tr><th>Task</th><th>Model</th><th>Where</th><th>Why</th></tr></thead>
+            <thead><tr><th>Task</th><th>Provider</th><th>Model</th><th>Resolves to</th><th></th></tr></thead>
             <tbody>${rows}</tbody>
-        </table>
-        ${status.cloud_configured && !status.sdk_installed
-            ? `<div class="empty error">The anthropic package is not installed —
-               run <span class="mono">pip install 'carrot[cloud]'</span> to enable cloud routing.</div>` : ''}`;
+        </table>`;
+
+    for (const task of status.tasks || []) {
+        if (assignments[task.id]) fillModelList(task.id, assignments[task.id].provider);
+    }
+}
+
+async function loadRouteModels(taskId) {
+    const select = document.getElementById(`route-provider-${taskId}`);
+    if (select) fillModelList(taskId, select.value);
+}
+
+async function fillModelList(taskId, providerId) {
+    const list = document.getElementById(`models-${taskId}`);
+    if (!list || !providerId) return;
+    try {
+        if (!providerModels[providerId]) {
+            const result = await api(`/api/router/providers/${encodeURIComponent(providerId)}/models`);
+            providerModels[providerId] = result.models || [];
+        }
+        list.innerHTML = providerModels[providerId]
+            .map(m => `<option value="${escHtml(m)}"></option>`).join('');
+    } catch (_) {
+        // A provider that cannot list its models is still usable — the model
+        // field is a free-text input, so the user can just type the name.
+    }
+}
+
+async function saveRoute(taskId) {
+    const provider = document.getElementById(`route-provider-${taskId}`)?.value || '';
+    const model = (document.getElementById(`route-model-${taskId}`)?.value || '').trim();
+    try {
+        if (!provider || !model) {
+            await api(`/api/router/route/${encodeURIComponent(taskId)}`, { method: 'DELETE' });
+        } else {
+            await api('/api/router/route', {
+                method: 'PUT',
+                body: JSON.stringify({ task: taskId, provider, model }),
+            });
+        }
+        loadRouting();
+    } catch (e) {
+        alert(e.message);
+    }
+}
+
+async function clearRoute(taskId) {
+    try {
+        await api(`/api/router/route/${encodeURIComponent(taskId)}`, { method: 'DELETE' });
+        loadRouting();
+    } catch (e) {
+        alert(e.message);
+    }
+}
+
+async function addTask() {
+    const value = id => (document.getElementById(id)?.value || '').trim();
+    try {
+        await api('/api/router/tasks', {
+            method: 'POST',
+            body: JSON.stringify({
+                id: value('task-id'),
+                label: value('task-label'),
+                description: value('task-desc'),
+            }),
+        });
+        for (const id of ['task-id', 'task-label', 'task-desc']) {
+            const element = document.getElementById(id);
+            if (element) element.value = '';
+        }
+        loadRouting();
+    } catch (e) {
+        alert(e.message);
+    }
+}
+
+async function removeTask(taskId) {
+    if (!confirm(`Delete the '${taskId}' task and its assignment?`)) return;
+    try {
+        await api(`/api/router/tasks/${encodeURIComponent(taskId)}`, { method: 'DELETE' });
+        loadRouting();
+    } catch (e) {
+        alert(e.message);
+    }
 }
 
 async function saveCloudSettings() {
-    const key = document.getElementById('cloud-key');
     const enabled = document.getElementById('cloud-enabled');
     try {
-        if (key && key.value.trim()) {
-            await api('/api/config/cloud_api_key', {
-                method: 'PUT', body: JSON.stringify(key.value.trim()),
-            });
-            key.value = '';
-        }
         if (enabled) {
             await api('/api/config/cloud_enabled', {
                 method: 'PUT', body: JSON.stringify(enabled.checked),

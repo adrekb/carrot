@@ -1,30 +1,40 @@
 """Task-aware model routing.
 
-Local-first should not mean local-only. Every model call in Carrot names the
-*task* it is performing, and the router maps that task to a model — a small
-local model for classification, embedding and summarization, a larger one for
-chat, and optionally a frontier model for the work a 4B model genuinely cannot
-do. Which model actually ran is returned with every route so the UI can show it,
-and nothing escalates to the cloud unless the user turned it on.
+Local-first should not mean local-only, and it should not mean one-cloud-only
+either. Every model call in Carrot names the *task* it is performing, and the
+router maps that task to a provider and a model.
 
-Local calls go to Ollama. Cloud calls go to the Anthropic API through the
-official SDK, imported lazily so a local-only install never needs it.
+Three things are configurable, and they compose:
 
-The cloud path emits the same event shape as ``OllamaClient.chat_stream_events``
-(``{'type': 'thinking'|'content'|'tool_calls'}``) so the agentic chat loop is
-provider-agnostic and only has to be written once.
+* **Providers** (``providers.py``) — Ollama plus any number of BYOK endpoints
+  speaking the Anthropic or OpenAI wire format.
+* **Tasks** — the seven built-ins (chat, code, reasoning, classify, summarize,
+  extract, recap) plus any the user defines. A custom task is a first-class
+  routing target: name it "checking", point it at a provider and model, and
+  call it with ``?task=checking``.
+* **Assignments** — an explicit ``task -> (provider, model)`` mapping. This is
+  the direct answer to "model A for recap, model B for checking": an assignment
+  always wins over the automatic escalation rules below.
+
+With no assignment, a task runs on-device unless the user opted it into
+escalation, and the high-volume tasks never escalate at all.
+
+Every provider path emits the same event shape as
+``OllamaClient.chat_stream_events`` (``{'type': 'thinking'|'content'|'tool_calls'}``)
+so the agentic chat loop is provider-agnostic and only written once.
 """
 
 from __future__ import annotations
 
 import json
-import os
+import re
 from dataclasses import dataclass, asdict
 from typing import Any, Dict, Generator, List, Optional
 
+from . import providers as providers_mod
 from .config import get_config, set_config
 
-PROVIDER_LOCAL = "ollama"
+PROVIDER_LOCAL = providers_mod.LOCAL_PROVIDER  # "ollama"
 PROVIDER_CLOUD = "anthropic"
 
 # Tasks the rest of Carrot routes by.
@@ -41,9 +51,21 @@ TASKS = (
     TASK_SUMMARIZE, TASK_EXTRACT, TASK_RECAP,
 )
 
-# Cheap, high-volume tasks that should never escalate — they run on every
-# message and would make cloud routing expensive and slow for no quality gain.
+# Cheap, high-volume tasks that should never escalate *automatically* — they run
+# on every message and would make cloud routing expensive and slow for no
+# quality gain. An explicit assignment still overrides this; it is a default,
+# not a prohibition.
 LOCAL_ONLY_TASKS = frozenset({TASK_CLASSIFY, TASK_EXTRACT, TASK_SUMMARIZE})
+
+BUILTIN_TASK_SPECS: Dict[str, Dict[str, Any]] = {
+    TASK_CHAT: {"label": "Chat", "description": "Ordinary conversation turns."},
+    TASK_CODE: {"label": "Code", "description": "Writing and editing code."},
+    TASK_REASONING: {"label": "Reasoning", "description": "Hard multi-step problems."},
+    TASK_CLASSIFY: {"label": "Classify", "description": "Query classification, run on every search."},
+    TASK_SUMMARIZE: {"label": "Summarize", "description": "Rolling conversation summaries."},
+    TASK_EXTRACT: {"label": "Extract", "description": "Pulling durable facts out of a turn."},
+    TASK_RECAP: {"label": "Recap", "description": "The morning briefing."},
+}
 
 DEFAULT_CLOUD_MODEL = "claude-opus-5"
 DEFAULT_CLOUD_EFFORT = "high"
@@ -67,6 +89,8 @@ HARDWARE_TIERS = [
     (0, "llama3.2:1b", "under 8GB of RAM needs the smallest model"),
 ]
 
+TASK_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
+
 
 @dataclass
 class Route:
@@ -77,16 +101,176 @@ class Route:
     model: str
     reason: str
     effort: Optional[str] = None
+    kind: str = providers_mod.KIND_OLLAMA
+    local: bool = True
 
     def as_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
 
-# ===== Configuration =====
+# ===== Tasks =====
+
+def custom_tasks() -> List[Dict[str, Any]]:
+    """User-defined routing targets."""
+    raw = get_config().get("custom_tasks", [])
+    return [t for t in raw if isinstance(t, dict) and t.get("id") and t["id"] not in TASKS]
+
+
+def tasks() -> List[Dict[str, Any]]:
+    """Every routable task, built-ins first."""
+    listed = [
+        {
+            "id": task,
+            "label": BUILTIN_TASK_SPECS[task]["label"],
+            "description": BUILTIN_TASK_SPECS[task]["description"],
+            "local_only": task in LOCAL_ONLY_TASKS,
+            "builtin": True,
+        }
+        for task in TASKS
+    ]
+    for spec in custom_tasks():
+        listed.append({
+            "id": spec["id"],
+            "label": spec.get("label") or spec["id"],
+            "description": spec.get("description", ""),
+            "local_only": bool(spec.get("local_only", False)),
+            "builtin": False,
+        })
+    return listed
+
+
+def task_ids() -> List[str]:
+    return [task["id"] for task in tasks()]
+
+
+def is_local_only(task: str) -> bool:
+    if task in TASKS:
+        return task in LOCAL_ONLY_TASKS
+    for spec in custom_tasks():
+        if spec["id"] == task:
+            return bool(spec.get("local_only", False))
+    return False
+
+
+def add_task(task_id: str, label: str = "", description: str = "", local_only: bool = False) -> Dict[str, Any]:
+    """Define a custom task. Re-adding an existing one updates it."""
+    task_id = (task_id or "").strip().lower()
+    if not TASK_ID_PATTERN.match(task_id):
+        raise ValueError("task id must be 1-40 characters of lowercase letters, digits, '-' or '_'")
+    if task_id in TASKS:
+        raise ValueError(f"'{task_id}' is a built-in task")
+
+    existing = custom_tasks()
+    spec = {
+        "id": task_id,
+        "label": label or task_id,
+        "description": description,
+        "local_only": bool(local_only),
+    }
+    for index, current in enumerate(existing):
+        if current["id"] == task_id:
+            existing[index] = spec
+            break
+    else:
+        existing.append(spec)
+    set_config("custom_tasks", existing)
+    return {**spec, "builtin": False}
+
+
+def delete_task(task_id: str) -> bool:
+    """Remove a custom task and its assignment. Built-ins cannot be deleted."""
+    if task_id in TASKS:
+        raise ValueError(f"'{task_id}' is a built-in task and cannot be deleted")
+    existing = custom_tasks()
+    remaining = [t for t in existing if t["id"] != task_id]
+    if len(remaining) == len(existing):
+        return False
+    set_config("custom_tasks", remaining)
+    clear_route(task_id)
+    return True
+
+
+# ===== Assignments =====
+
+def _infer_provider(model: str) -> str:
+    """Best guess at the provider for a bare model name.
+
+    Only used when the caller did not name one — an explicit ``model=`` from the
+    UI's model picker, or a route stored by an older build as a plain string.
+    """
+    return PROVIDER_CLOUD if model.startswith("claude") else PROVIDER_LOCAL
+
+
+def _normalize_assignment(value: Any) -> Optional[Dict[str, Any]]:
+    """Coerce a stored assignment into ``{provider, model, effort}``.
+
+    Older builds stored a bare model string, so that shape has to keep working.
+    """
+    if isinstance(value, str) and value:
+        return {"provider": _infer_provider(value), "model": value, "effort": None}
+    if isinstance(value, dict) and value.get("model"):
+        return {
+            "provider": value.get("provider") or _infer_provider(value["model"]),
+            "model": value["model"],
+            "effort": value.get("effort"),
+        }
+    return None
+
+
+def assignments() -> Dict[str, Dict[str, Any]]:
+    """Every explicit task assignment, normalized."""
+    raw = get_config().get("model_routes", {})
+    if not isinstance(raw, dict):
+        return {}
+    resolved = {}
+    for task, value in raw.items():
+        normalized = _normalize_assignment(value)
+        if normalized:
+            resolved[task] = normalized
+    return resolved
+
+
+def assignment(task: str) -> Optional[Dict[str, Any]]:
+    return assignments().get(task)
+
+
+def set_route(
+    task: str,
+    model: str,
+    provider: Optional[str] = None,
+    effort: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Pin a task to a provider and model.
+
+    ``provider`` is optional so the older single-argument form still works; it
+    is inferred from the model name when omitted.
+    """
+    if task not in task_ids():
+        raise ValueError(f"unknown task: {task}")
+    if not model:
+        raise ValueError("a model is required")
+    provider = provider or _infer_provider(model)
+    providers_mod.require_provider(provider)
+
+    routes = dict(get_config().get("model_routes", {}) or {})
+    routes[task] = {"provider": provider, "model": model, "effort": effort}
+    set_config("model_routes", routes)
+    return routes
+
+
+def clear_route(task: str) -> Dict[str, Any]:
+    """Drop a task's assignment so it falls back to the automatic rules."""
+    routes = dict(get_config().get("model_routes", {}) or {})
+    routes.pop(task, None)
+    set_config("model_routes", routes)
+    return routes
+
+
+# ===== Legacy cloud escalation =====
 
 def cloud_api_key() -> str:
     """The Anthropic key, from config or the environment."""
-    return get_config().get("cloud_api_key", "") or os.environ.get("ANTHROPIC_API_KEY", "")
+    return providers_mod.api_key(PROVIDER_CLOUD)
 
 
 def cloud_enabled() -> bool:
@@ -94,28 +278,32 @@ def cloud_enabled() -> bool:
     return bool(config.get("cloud_enabled", False)) and bool(cloud_api_key())
 
 
+def escalation_provider() -> str:
+    """The provider automatic escalation targets. Anthropic unless changed."""
+    return get_config().get("escalation_provider", PROVIDER_CLOUD) or PROVIDER_CLOUD
+
+
+def escalation_model() -> str:
+    config = get_config()
+    if escalation_provider() == PROVIDER_CLOUD:
+        return config.get("cloud_model", DEFAULT_CLOUD_MODEL)
+    return config.get("escalation_model", "") or config.get("cloud_model", DEFAULT_CLOUD_MODEL)
+
+
 def cloud_tasks() -> List[str]:
     """Tasks the user has opted into escalating."""
     configured = get_config().get("cloud_tasks", [TASK_REASONING, TASK_CODE])
-    return [t for t in configured if t in TASKS and t not in LOCAL_ONLY_TASKS]
+    known = set(task_ids())
+    return [t for t in configured if t in known and not is_local_only(t)]
 
 
 def local_model(task: str) -> str:
     """The local model for a task, falling back to the configured default."""
     config = get_config()
-    routes = config.get("model_routes", {})
-    if isinstance(routes, dict) and routes.get(task):
-        return routes[task]
+    pinned = assignment(task)
+    if pinned and pinned["provider"] == PROVIDER_LOCAL:
+        return pinned["model"]
     return config.get("ollama_model", "gemma4:e4b")
-
-
-def set_route(task: str, model: str) -> Dict[str, str]:
-    if task not in TASKS:
-        raise ValueError(f"unknown task: {task}")
-    routes = dict(get_config().get("model_routes", {}) or {})
-    routes[task] = model
-    set_config("model_routes", routes)
-    return routes
 
 
 # ===== Hardware-aware auto-pick =====
@@ -138,44 +326,70 @@ def recommend_local_model() -> Dict[str, Any]:
 
 # ===== Routing =====
 
-def route(task: str = TASK_CHAT, model: Optional[str] = None, prefer_cloud: bool = False) -> Route:
-    """Resolve a task to a provider and model.
-
-    An explicit ``model`` always wins — it is what the user picked in the UI.
-    Otherwise the task escalates to the cloud only when the cloud is configured,
-    the user opted this task in (or asked for it on this call), and the task is
-    not one of the high-volume local-only ones.
-    """
-    task = task if task in TASKS else TASK_CHAT
-
-    if model:
-        provider = PROVIDER_CLOUD if model.startswith("claude") else PROVIDER_LOCAL
-        return Route(task=task, provider=provider, model=model, reason="explicitly selected")
-
-    if task not in LOCAL_ONLY_TASKS and (prefer_cloud or task in cloud_tasks()):
-        if cloud_enabled():
-            config = get_config()
-            return Route(
-                task=task,
-                provider=PROVIDER_CLOUD,
-                model=config.get("cloud_model", DEFAULT_CLOUD_MODEL),
-                effort=config.get("cloud_effort", DEFAULT_CLOUD_EFFORT),
-                reason=f"'{task}' is routed to the cloud",
-            )
-        if prefer_cloud:
-            return Route(
-                task=task,
-                provider=PROVIDER_LOCAL,
-                model=local_model(task),
-                reason="cloud requested but not configured — staying local",
-            )
-
+def _build(task: str, provider_id: str, model: str, reason: str, effort: Optional[str] = None) -> Route:
+    provider = providers_mod.get_provider(provider_id)
+    kind = provider["kind"] if provider else providers_mod.KIND_OLLAMA
     return Route(
         task=task,
-        provider=PROVIDER_LOCAL,
-        model=local_model(task),
-        reason=f"'{task}' runs on-device",
+        provider=provider_id,
+        model=model,
+        reason=reason,
+        effort=effort,
+        kind=kind,
+        local=kind == providers_mod.KIND_OLLAMA,
     )
+
+
+def _local_route(task: str, reason: str) -> Route:
+    return _build(task, PROVIDER_LOCAL, local_model(task), reason)
+
+
+def route(
+    task: str = TASK_CHAT,
+    model: Optional[str] = None,
+    prefer_cloud: bool = False,
+    provider: Optional[str] = None,
+) -> Route:
+    """Resolve a task to a provider and model.
+
+    Precedence, highest first:
+
+    1. An explicit ``model`` — it is what the user picked in the UI.
+    2. The task's assignment, if the user pinned one and its provider is usable.
+    3. Automatic escalation, when the cloud is configured, the user opted this
+       task in (or asked for it on this call), and the task is not high-volume.
+    4. On-device.
+    """
+    if task not in task_ids():
+        task = TASK_CHAT
+
+    if model:
+        return _build(task, provider or _infer_provider(model), model, "explicitly selected")
+
+    pinned = assignment(task)
+    if pinned:
+        if providers_mod.usable(pinned["provider"]):
+            return _build(
+                task, pinned["provider"], pinned["model"],
+                f"'{task}' is assigned to {pinned['provider']}", pinned.get("effort"),
+            )
+        if pinned["provider"] != PROVIDER_LOCAL:
+            return _local_route(
+                task, f"{pinned['provider']} is not configured — staying on-device"
+            )
+
+    if not is_local_only(task) and (prefer_cloud or task in cloud_tasks()):
+        target = escalation_provider()
+        if cloud_enabled() and providers_mod.usable(target):
+            return _build(
+                task, target, escalation_model(),
+                f"'{task}' is routed to {target}",
+                get_config().get("cloud_effort", DEFAULT_CLOUD_EFFORT),
+            )
+        if prefer_cloud:
+            return _local_route(task, "cloud requested but not configured — staying local")
+
+    return _local_route(task, f"'{task}' runs on-device")
 
 
 def status() -> Dict[str, Any]:
@@ -186,8 +400,13 @@ def status() -> Dict[str, Any]:
         "cloud_model": config.get("cloud_model", DEFAULT_CLOUD_MODEL),
         "cloud_effort": config.get("cloud_effort", DEFAULT_CLOUD_EFFORT),
         "cloud_tasks": cloud_tasks(),
+        "escalation_provider": escalation_provider(),
         "sdk_installed": _sdk_available(),
-        "routes": {task: route(task).as_dict() for task in TASKS},
+        "providers": providers_mod.list_providers(),
+        "presets": providers_mod.PRESETS,
+        "tasks": tasks(),
+        "assignments": assignments(),
+        "routes": {task: route(task).as_dict() for task in task_ids()},
         "recommendation": recommend_local_model(),
     }
 
@@ -203,7 +422,7 @@ def _sdk_available() -> bool:
         return False
 
 
-def _client():
+def _client(provider_id: str = PROVIDER_CLOUD):
     """Build an Anthropic client, or raise a message the UI can show verbatim."""
     try:
         import anthropic
@@ -211,10 +430,25 @@ def _client():
         raise RuntimeError(
             "the anthropic package is not installed — run: pip install 'carrot[cloud]'"
         ) from exc
-    key = cloud_api_key()
+    key = providers_mod.api_key(provider_id)
     if not key:
-        raise RuntimeError("no Anthropic API key configured")
+        raise RuntimeError(f"no API key configured for {provider_id}")
+    provider = providers_mod.get_provider(provider_id) or {}
+    base_url = provider.get("base_url") or ""
+    if base_url and base_url != providers_mod.BUILTIN_PROVIDERS["anthropic"]["base_url"]:
+        return anthropic.Anthropic(api_key=key, base_url=base_url)
     return anthropic.Anthropic(api_key=key)
+
+
+def _openai_client(provider_id: str):
+    from .openai_client import OpenAICompatibleClient
+
+    provider = providers_mod.require_provider(provider_id)
+    if provider["requires_key"] and not providers_mod.api_key(provider_id):
+        raise RuntimeError(f"no API key configured for {provider_id}")
+    return OpenAICompatibleClient(
+        base_url=provider["base_url"], api_key=providers_mod.api_key(provider_id)
+    )
 
 
 # ===== Message/tool translation =====
@@ -338,13 +572,21 @@ def stream_events(
     Yields the same typed events as ``OllamaClient.chat_stream_events`` so the
     agentic loop does not need to know which provider ran.
     """
-    if resolved.provider == PROVIDER_LOCAL:
+    kind = _kind_of(resolved)
+
+    if kind == providers_mod.KIND_OLLAMA:
         from .ollama_client import OllamaClient
 
         yield from OllamaClient().chat_stream_events(messages, model=resolved.model, tools=tools)
         return
 
-    client = _client()
+    if kind == providers_mod.KIND_OPENAI:
+        yield from _openai_client(resolved.provider).chat_stream_events(
+            messages, model=resolved.model, tools=tools
+        )
+        return
+
+    client = _client(resolved.provider)
     system, conversation = _split_system(messages)
     request: Dict[str, Any] = {
         "model": resolved.model,
@@ -383,12 +625,19 @@ def stream_events(
 
 def complete(resolved: Route, messages: List[Dict[str, Any]]) -> str:
     """Non-streaming completion through whichever provider the route names."""
-    if resolved.provider == PROVIDER_LOCAL:
+    kind = _kind_of(resolved)
+
+    if kind == providers_mod.KIND_OLLAMA:
         from .ollama_client import OllamaClient
 
         return OllamaClient().chat(messages, model=resolved.model)
 
-    client = _client()
+    if kind == providers_mod.KIND_OPENAI:
+        return _openai_client(resolved.provider).chat(
+            messages, model=resolved.model, max_tokens=CLOUD_MAX_TOKENS_SYNC
+        )
+
+    client = _client(resolved.provider)
     system, conversation = _split_system(messages)
     request: Dict[str, Any] = {
         "model": resolved.model,
@@ -406,3 +655,11 @@ def complete(resolved: Route, messages: List[Dict[str, Any]]) -> str:
     if response.stop_reason == "refusal":
         return REFUSAL_MESSAGE
     return "".join(block.text for block in response.content if getattr(block, "type", None) == "text")
+
+
+def _kind_of(resolved: Route) -> str:
+    """The wire protocol for a route, re-resolved in case the Route is stale."""
+    if resolved.kind in providers_mod.KINDS:
+        return resolved.kind
+    provider = providers_mod.get_provider(resolved.provider)
+    return provider["kind"] if provider else providers_mod.KIND_OLLAMA
