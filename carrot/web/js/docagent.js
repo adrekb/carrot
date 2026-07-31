@@ -9,12 +9,15 @@
 // directly would leave the editor's internal state out of sync.
 // ================================================================
 
-// Matches the reference being typed immediately before the caret.
-const MENTION_PATTERN = /@(?:(file|model):)?([^\s@]*)$/;
+// Matches the reference being typed immediately before the caret. Everything
+// after '@/' is slash-delimited, which is what lets the menu walk through
+// kind -> provider -> model one segment at a time.
+const MENTION_PATTERN = /@\/?([a-z]*)(?:\/([^\s@]*))?$/;
 
 let mentionMenu = null;
-let mentionState = null;      // { kind, query, node, start, end, isTextarea }
+let mentionState = null;      // { stage, kind, provider, query, node, start, end }
 let mentionIndex = 0;
+let lastMentionKey = '';
 let docParseTimer = null;
 let lastParsedText = '';
 
@@ -72,6 +75,12 @@ function scheduleDocParse() {
 async function refreshDocReferences() {
     const bar = document.getElementById('doc-refs');
     if (!bar || !currentNoteId) return;
+    // A reference being typed is always momentarily incomplete. Reporting that
+    // back as a problem while the picker is still open is just noise.
+    if (mentionMenu && !mentionMenu.classList.contains('hidden')) {
+        scheduleDocParse();
+        return;
+    }
     const text = getEditorMarkdown();
     if (text === lastParsedText) return;
     lastParsedText = text;
@@ -122,33 +131,56 @@ function activeEditable() {
     return document.getElementById('note-editor-host');
 }
 
+/**
+ * Work out which of the three stages the caret is in.
+ *
+ *   @/            -> kind      (file | model)
+ *   @/model/      -> provider  (openai, google, anthropic, local, …)
+ *   @/model/o…/   -> model     (whatever that provider serves for your key)
+ *   @/file/       -> file      (the query may itself contain slashes)
+ */
+function describeMention(match) {
+    const kind = (match[1] || '').toLowerCase();
+    const rest = match[2];
+
+    if (rest === undefined) return { stage: 'kind', kind: '', query: kind };
+    if (kind !== 'file' && kind !== 'model') return null;
+    if (kind === 'file') return { stage: 'file', kind, query: rest };
+
+    const slash = rest.indexOf('/');
+    if (slash === -1) return { stage: 'provider', kind, provider: '', query: rest };
+    return {
+        stage: 'model', kind,
+        provider: rest.slice(0, slash), query: rest.slice(slash + 1),
+    };
+}
+
 /** Read what is being typed immediately before the caret, if anything. */
 function readMentionAtCaret() {
     const fallback = document.getElementById('note-fallback');
+    let node, caret, isTextarea;
+
     if (fallback && !fallback.classList.contains('hidden')
         && document.activeElement === fallback) {
-        const caret = fallback.selectionStart;
-        const match = MENTION_PATTERN.exec(fallback.value.slice(0, caret));
-        if (!match) return null;
-        return {
-            kind: match[1] || '', query: match[2] || '', isTextarea: true,
-            node: fallback, start: caret - match[0].length, end: caret,
-        };
+        node = fallback;
+        caret = fallback.selectionStart;
+        isTextarea = true;
+    } else {
+        const selection = window.getSelection();
+        if (!selection || !selection.rangeCount || !selection.isCollapsed) return null;
+        const host = document.getElementById('note-editor-host');
+        node = selection.anchorNode;
+        if (!node || !host || !host.contains(node) || node.nodeType !== Node.TEXT_NODE) return null;
+        caret = selection.anchorOffset;
+        isTextarea = false;
     }
 
-    const selection = window.getSelection();
-    if (!selection || !selection.rangeCount || !selection.isCollapsed) return null;
-    const node = selection.anchorNode;
-    const host = document.getElementById('note-editor-host');
-    if (!node || !host || !host.contains(node) || node.nodeType !== Node.TEXT_NODE) return null;
-
-    const caret = selection.anchorOffset;
-    const match = MENTION_PATTERN.exec(node.textContent.slice(0, caret));
+    const text = isTextarea ? node.value : node.textContent;
+    const match = MENTION_PATTERN.exec(text.slice(0, caret));
     if (!match) return null;
-    return {
-        kind: match[1] || '', query: match[2] || '', isTextarea: false,
-        node, start: caret - match[0].length, end: caret,
-    };
+    const described = describeMention(match);
+    if (!described) return null;
+    return { ...described, node, isTextarea, start: caret - match[0].length, end: caret };
 }
 
 function ensureMentionMenu() {
@@ -189,31 +221,44 @@ async function updateMentionMenu() {
         hideMentionMenu();
         return;
     }
+    // Moving to a different stage or query starts the highlight over, so the
+    // selection never lands somewhere arbitrary in a freshly filtered list.
+    const key = `${state.stage}:${state.provider || ''}:${state.query || ''}`;
+    if (key !== lastMentionKey) {
+        lastMentionKey = key;
+        mentionIndex = 0;
+    }
     mentionState = state;
-    const menu = ensureMentionMenu();
 
     // Stage one: '@' typed, but no kind chosen yet.
-    if (!state.kind) {
+    if (state.stage === 'kind') {
         const kinds = [
-            { value: 'file', label: 'file', hint: 'cite a file as context' },
-            { value: 'model', label: 'model', hint: 'pick the model for this note' },
+            { value: 'file', hint: 'cite a file as context' },
+            { value: 'model', hint: 'pick the model for this note' },
         ].filter(k => !state.query || k.value.startsWith(state.query.toLowerCase()));
         if (!kinds.length) {
             hideMentionMenu();
             return;
         }
         renderMentionMenu(kinds.map(k => ({
-            value: k.value, label: `/${k.label}`, source: k.hint, stage: 'kind',
+            value: k.value, label: `/${k.value}`, source: k.hint, stage: 'kind',
         })));
         return;
     }
 
-    // Stage two: a kind is chosen, so complete against real candidates.
+    // Stages two and three: complete against real candidates. A model needs its
+    // provider chosen first, so the server hands back the provider list until
+    // one is named and only then the models that key can reach.
+    const params = new URLSearchParams({
+        kind: state.stage === 'file' ? 'file' : 'model',
+        q: state.query || '',
+    });
+    if (state.stage === 'model') params.set('provider', state.provider);
+
     try {
-        const data = await api(
-            `/api/doc/candidates?kind=${encodeURIComponent(state.kind)}`
-            + `&q=${encodeURIComponent(state.query)}`);
-        renderMentionMenu((data.candidates || []).map(c => ({ ...c, stage: 'value' })));
+        const data = await api(`/api/doc/candidates?${params}`);
+        const stage = data.kind === 'provider' ? 'provider' : 'value';
+        renderMentionMenu((data.candidates || []).map(c => ({ ...c, stage })));
     } catch (_) {
         hideMentionMenu();
     }
@@ -243,16 +288,24 @@ function renderMentionMenu(items) {
     });
     menu.classList.remove('hidden');
     positionMentionMenu();
+    // A provider can serve dozens of models, so keep the highlight in view
+    // rather than letting arrow keys walk it off the bottom of the list.
+    menu.querySelector('.mention-item.active')?.scrollIntoView({ block: 'nearest' });
 }
 
 /** Replace the in-progress mention with the chosen value. */
 function chooseMention(item) {
     if (!mentionState || !item) return;
     const state = mentionState;
-    const needsQuotes = item.stage === 'value' && /\s/.test(item.value);
-    const replacement = item.stage === 'kind'
-        ? `@${item.value}:`
-        : `@${state.kind}:${needsQuotes ? `"${item.value}"` : item.value} `;
+
+    // The first two stages narrow the reference and reopen the menu; only the
+    // last one completes it and moves the caret past a trailing space.
+    let replacement;
+    if (item.stage === 'kind') replacement = `@/${item.value}/`;
+    else if (item.stage === 'provider') replacement = `@/model/${item.value}/`;
+    else if (state.stage === 'file') {
+        replacement = `@/file/${/\s/.test(item.value) ? `"${item.value}"` : item.value} `;
+    } else replacement = `@/model/${item.value} `;
 
     if (state.isTextarea) {
         const element = state.node;
@@ -276,9 +329,9 @@ function chooseMention(item) {
 
     hideMentionMenu();
     scheduleNoteSave();
-    // Choosing "file" or "model" leaves a half-finished reference, so reopen
-    // the menu straight away on the values for that kind.
-    if (item.stage === 'kind') setTimeout(updateMentionMenu, 0);
+    // A kind or a provider leaves a half-finished reference, so reopen the menu
+    // straight away on whatever comes next.
+    if (item.stage === 'kind' || item.stage === 'provider') setTimeout(updateMentionMenu, 0);
     else setTimeout(scheduleDocParse, 0);
 }
 

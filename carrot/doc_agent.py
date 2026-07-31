@@ -4,14 +4,19 @@ The workflow this replaces is copy-and-paste: you think something through in a
 note, then re-type or paste it into the chat box, losing the note's structure
 and any sense of which files it was about. Here the note *is* the prompt.
 
-Two inline references make a note self-describing, and both are plain text so
-they survive a round trip through the markdown editor untouched:
+Two inline references make a note self-describing. Everything after ``@/`` is
+slash-delimited, and both forms are plain text so they survive a round trip
+through the markdown editor untouched:
 
-* ``@file:src/router.py`` — cite a file. Its contents are read at send time and
+* ``@/file/src/router.py`` — cite a file. Its contents are read at send time and
   attached as context, so the model sees the actual file, not your description
-  of it. Quote paths with spaces: ``@file:"my paper.pdf"``.
-* ``@model:groq/some-model`` — pick the provider and model for this note. A
+  of it. Quote paths with spaces: ``@/file/"my paper.pdf"``.
+* ``@/model/openai/some-model`` — pick the provider and model for this note. A
   research note can name a frontier model while a scratch note stays on-device.
+
+Naming the provider is mandatory rather than inferred, which is what makes the
+model form unambiguous: the segment after ``model/`` is always the provider, so
+everything left over is the model id no matter how many slashes it contains.
 
 Citations may only reach two places, both of which the user already pointed
 Carrot at deliberately: the agent workspace, and the indexed document folders.
@@ -29,7 +34,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from . import agent_tools, indexer, providers as providers_mod, router as router_mod
 
-REFERENCE_PATTERN = re.compile(r'@(file|model):(?:"([^"\n]+)"|([^\s]+))')
+REFERENCE_PATTERN = re.compile(r'@/(file|model)/(?:"([^"\n]+)"|([^\s]+))')
+
+# "local" reads better than the daemon's name in a document, and is what the
+# picker offers, but the underlying provider id is still ollama.
+PROVIDER_ALIASES = {"local": providers_mod.LOCAL_PROVIDER}
 
 # Punctuation that is almost certainly sentence structure rather than part of a
 # path or model name. ':' is excluded — Ollama tags like `gemma4:e4b` need it.
@@ -49,7 +58,7 @@ _candidate_cache: Dict[str, Tuple[float, Any]] = {}
 
 @dataclass
 class Reference:
-    """One ``@file:`` or ``@model:`` mention found in a document."""
+    """One ``@/file/`` or ``@/model/`` mention found in a document."""
 
     kind: str
     value: str
@@ -89,7 +98,7 @@ class ResolvedDoc:
 # ===== Parsing =====
 
 def parse_references(text: str) -> List[Reference]:
-    """Every ``@file:``/``@model:`` mention in a document, in order."""
+    """Every ``@/file/``/``@/model/`` mention in a document, in order."""
     found: List[Reference] = []
     for match in REFERENCE_PATTERN.finditer(text or ""):
         kind = match.group(1)
@@ -149,18 +158,23 @@ def read_citation(path: str) -> str:
 
 # ===== Model citations =====
 
-def resolve_model_reference(value: str) -> Tuple[str, str]:
-    """Split ``provider/model`` into its parts, tolerating slashes in model ids.
+def provider_id_for(name: str) -> str:
+    """Resolve a name written in a document to a real provider id."""
+    name = (name or "").lower()
+    return PROVIDER_ALIASES.get(name, name)
 
-    Only the leading segment is treated as a provider, and only when it names a
-    real one — so ``groq/meta-llama/llama-3-70b`` keeps its full model id, and a
-    bare ``gemma4:e4b`` is understood as a local model.
+
+def resolve_model_reference(value: str) -> Tuple[str, str]:
+    """Split ``provider/model`` into its parts.
+
+    The provider is always the first segment, so a model id with slashes of its
+    own — ``openrouter/meta-llama/llama-3-70b`` — needs no special handling.
+    A value with no provider returns an empty one, which the caller reports.
     """
-    if "/" in value:
-        head, _, tail = value.partition("/")
-        if tail and providers_mod.get_provider(head.lower()):
-            return head.lower(), tail
-    return "", value
+    head, separator, tail = value.partition("/")
+    if not separator or not tail:
+        return "", value
+    return provider_id_for(head), tail
 
 
 # ===== Resolution =====
@@ -177,22 +191,36 @@ def resolve(text: str, task: str = router_mod.TASK_CHAT) -> ResolvedDoc:
     # --- model ---
     if len(model_refs) > 1:
         resolved.warnings.append(
-            f"{len(model_refs)} @model references — using the last one, '{model_refs[-1].value}'"
+            f"{len(model_refs)} @/model references — using the last one, '{model_refs[-1].value}'"
         )
     if model_refs:
         chosen = model_refs[-1]
         provider_id, model = resolve_model_reference(chosen.value)
-        if provider_id and not providers_mod.usable(provider_id):
+        head = chosen.value.partition("/")[0]
+        if not provider_id and chosen.value.endswith("/") and providers_mod.get_provider(
+                provider_id_for(head)):
+            # Half-typed: the provider is named but the model is not. Say what
+            # is missing rather than accusing them of skipping the provider.
+            chosen.detail = f"pick a model for {head}"
+            resolved.warnings.append(f"@/model/{chosen.value} — {chosen.detail}")
+        elif not provider_id:
+            chosen.detail = "name a provider, as in @/model/openai/…"
+            resolved.warnings.append(f"@/model/{chosen.value} — {chosen.detail}")
+        elif not providers_mod.get_provider(provider_id):
+            chosen.detail = f"no provider called '{provider_id}'"
+            resolved.warnings.append(f"@/model/{chosen.value} — {chosen.detail}")
+        elif not providers_mod.usable(provider_id):
             chosen.detail = f"{provider_id} is not configured"
             resolved.warnings.append(
-                f"@model:{chosen.value} — {provider_id} is not configured, falling back to the usual route"
+                f"@/model/{chosen.value} — {provider_id} is not configured, "
+                "falling back to the usual route"
             )
         else:
-            resolved.route = router_mod.route(task=task, model=model, provider=provider_id or None)
+            resolved.route = router_mod.route(task=task, model=model, provider=provider_id)
             chosen.ok = True
             chosen.detail = f"{resolved.route.provider} · {resolved.route.model}"
         for other in model_refs[:-1]:
-            other.detail = "overridden by a later @model"
+            other.detail = "overridden by a later @/model"
 
     # --- files ---
     blocks: List[str] = []
@@ -207,19 +235,19 @@ def resolve(text: str, task: str = router_mod.TASK_CHAT) -> ResolvedDoc:
 
         if len([r for r in file_refs if r.ok]) >= MAX_FILES:
             reference.detail = f"skipped — at the {MAX_FILES} file limit"
-            resolved.warnings.append(f"@file:{reference.value} — {reference.detail}")
+            resolved.warnings.append(f"@/file/{reference.value} — {reference.detail}")
             continue
         try:
             path = citable_path(reference.value)
             body = read_citation(path)
         except Exception as exc:
             reference.detail = str(exc)
-            resolved.warnings.append(f"@file:{reference.value} — {reference.detail}")
+            resolved.warnings.append(f"@/file/{reference.value} — {reference.detail}")
             continue
 
         if total + len(body) > MAX_TOTAL_CHARS:
             reference.detail = "skipped — the cited files exceed the total size budget"
-            resolved.warnings.append(f"@file:{reference.value} — {reference.detail}")
+            resolved.warnings.append(f"@/file/{reference.value} — {reference.detail}")
             continue
 
         total += len(body)
@@ -240,6 +268,13 @@ def resolve(text: str, task: str = router_mod.TASK_CHAT) -> ResolvedDoc:
 # ===== Candidates for the '@' menu =====
 
 def _cached(key: str, build):
+    """Cache by key, but only within one version of the provider registry.
+
+    The TTL keeps the menu snappy; the version keeps it honest. Pasting a key
+    should show that provider's models on the next keystroke, not two minutes
+    later, so any registry change retires every entry cached before it.
+    """
+    key = f"{providers_mod.registry_version()}:{key}"
     hit = _candidate_cache.get(key)
     if hit and time.time() - hit[0] < CANDIDATE_TTL_SECONDS:
         return hit[1]
@@ -290,27 +325,51 @@ def file_candidates(query: str = "", limit: int = 40) -> List[Dict[str, str]]:
     return results
 
 
-def model_candidates(query: str = "", limit: int = 60) -> List[Dict[str, str]]:
-    """Models the user can pick, as ``provider/model``, from usable providers."""
-    def build():
-        offered: List[Dict[str, str]] = []
-        for provider in providers_mod.list_providers(include_disabled=False):
-            if not provider["configured"]:
-                continue
-            try:
-                models = providers_mod.list_models(provider["id"]).get("models", [])
-            except Exception:
-                models = []
-            for model in models:
-                offered.append({
-                    "value": f"{provider['id']}/{model}",
-                    "label": model,
-                    "source": provider["label"],
-                })
-        return offered
+def provider_candidates(query: str = "") -> List[Dict[str, str]]:
+    """Providers a note may name, offered before the model list.
 
-    candidates = _cached("models", build)
+    Only providers that are enabled *and* have whatever they need to run are
+    listed — picking one whose key is missing would only produce a warning two
+    steps later.
+    """
     query = (query or "").lower()
-    if query:
-        candidates = [c for c in candidates if query in c["value"].lower()]
-    return candidates[:limit]
+    offered: List[Dict[str, str]] = []
+    for provider in providers_mod.list_providers(include_disabled=False):
+        if not provider["configured"]:
+            continue
+        name = "local" if provider["id"] == providers_mod.LOCAL_PROVIDER else provider["id"]
+        if query and not name.startswith(query):
+            continue
+        offered.append({
+            "value": name,
+            "label": name,
+            "source": provider["label"],
+        })
+    return offered
+
+
+def model_candidates(provider_id: str, query: str = "", limit: int = 200) -> List[Dict[str, str]]:
+    """Every model one provider can serve with the key on file.
+
+    The list comes from the provider's own endpoint rather than anything
+    hardcoded, so it reflects what this key is actually entitled to.
+    """
+    provider_id = provider_id_for(provider_id)
+    provider = providers_mod.get_provider(provider_id)
+    if not provider:
+        return []
+
+    def build():
+        try:
+            return providers_mod.list_models(provider_id).get("models", [])
+        except Exception:
+            return []
+
+    models = _cached(f"models:{provider_id}", build)
+    query = (query or "").lower()
+    name = "local" if provider_id == providers_mod.LOCAL_PROVIDER else provider_id
+    return [
+        {"value": f"{name}/{model}", "label": model, "source": provider["label"]}
+        for model in models
+        if not query or query in model.lower()
+    ][:limit]

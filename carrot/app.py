@@ -1489,10 +1489,19 @@ async def router_recommendation():
 # ===== Doc to agent =====
 
 @app.get("/api/doc/candidates")
-async def doc_candidates(kind: str = "file", q: str = "", limit: int = 40):
-    """Completions for the editor's '@' menu."""
+async def doc_candidates(kind: str = "file", q: str = "", provider: str = "", limit: int = 40):
+    """Completions for the editor's '@' menu.
+
+    ``model`` needs a provider first — the list is whatever that provider
+    reports for the key on file, not a hardcoded set.
+    """
+    if kind == "provider":
+        return {"kind": "provider", "candidates": doc_agent.provider_candidates(q)}
     if kind == "model":
-        return {"kind": "model", "candidates": doc_agent.model_candidates(q, limit=limit)}
+        if not provider:
+            return {"kind": "provider", "candidates": doc_agent.provider_candidates(q)}
+        return {"kind": "model", "provider": provider,
+                "candidates": doc_agent.model_candidates(provider, q)}
     return {"kind": "file", "candidates": doc_agent.file_candidates(q, limit=limit)}
 
 

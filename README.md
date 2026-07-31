@@ -24,7 +24,7 @@ It searches through all your past conversations, notes, and even old goals to fi
 
 **You want to start your day informed without doom-scrolling Twitter.** When your PC is plugged in and idle in the morning, Carrot fetches the day's tech and science news, summarizes it with AI, and saves it for you. You can ask "what's in today's recap?" anytime.
 
-**You think in documents, not in chat boxes.** Write the plan in a note — with `@file:` references to the code it's about and an `@model:` line picking which model should do it — then hit Send to agent. The note *is* the prompt. No copy-and-paste, and the cited files are read fresh at send time.
+**You think in documents, not in chat boxes.** Write the plan in a note — with `@/file/` references to the code it's about and an `@/model/` line picking which model should do it — then hit Send to agent. The note *is* the prompt. No copy-and-paste, and the cited files are read fresh at send time.
 
 **You need to remember things.** Carrot has reminders that work like any to-do app, but because everything is connected, you can search across them, link them to conversations, and never lose track of what matters.
 
@@ -71,8 +71,8 @@ It searches through all your past conversations, notes, and even old goals to fi
 
 ### Doc to Agent
 - **Write the plan, then send it** (`carrot/doc_agent.py`): think something through in a note and hand it straight to the model — no copy-and-paste, no losing the structure. Select part of a note to send only that.
-- **`@file:` citations**: type `@` in the editor, pick `file`, and choose from your workspace and indexed folders. The file is read *at send time* and attached as context, so the model sees the actual file rather than your description of it.
-- **`@model:` selection**: pick the provider and model for that specific note — a research note can name a frontier model while a scratch note stays on-device.
+- **`@/file/` citations**: type `@` in the editor, pick `file`, and choose from your workspace and indexed folders. The file is read *at send time* and attached as context, so the model sees the actual file rather than your description of it.
+- **`@/model/` selection**: a three-step picker — `@` → `model` → provider (`openai`, `google`, `anthropic`, `local`, or anything you added) → a scrollable list of the models *that provider serves for your key*, fetched live rather than hardcoded. A research note can name a frontier model while a scratch note stays on-device.
 - **Shown before it runs**: chips under the note say which citations resolved, how large they are, and which model will serve it. A citation that cannot be read is reported, never silently dropped.
 - **Confined to what you opted into**: citations reach the agent workspace and your indexed folders, and nothing else.
 
@@ -83,7 +83,7 @@ It searches through all your past conversations, notes, and even old goals to fi
 
 ### Model Routing
 - **Task-aware** (`carrot/router.py`): each call names its task (chat, code, reasoning, classify, summarize, extract, recap) and the router picks the provider and model
-- **Bring your own key** (`carrot/providers.py`): Ollama on-device, plus Anthropic, OpenAI, or any endpoint speaking the OpenAI format — OpenRouter, Groq, Together, DeepSeek, Mistral, LM Studio, vLLM, your own server. Adding one is a name, a base URL and a key; nothing about it is special-cased.
+- **Bring your own key** (`carrot/providers.py`): Ollama on-device, plus Anthropic, OpenAI, Google (Gemini), or any endpoint speaking the OpenAI format — OpenRouter, Groq, Together, DeepSeek, Mistral, LM Studio, vLLM, your own server. Adding one is a name, a base URL and a key; nothing about it is special-cased.
 - **Per-task assignment**: pin any task to any provider and model — model A for recap, model B for code, a cheap local model for classification. An assignment always beats the automatic rules.
 - **Custom tasks**: define your own routing targets in Settings and call them with `task=<id>`. They route exactly like the built-ins.
 - **Optional automatic escalation**: with a key attached, send only the hardest reasoning and coding work to a frontier model. Off by default; high-volume tasks like classification never escalate on their own.

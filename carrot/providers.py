@@ -65,6 +65,17 @@ BUILTIN_PROVIDERS: Dict[str, Dict[str, Any]] = {
         "env_var": "OPENAI_API_KEY",
         "docs": "https://platform.openai.com",
     },
+    # Gemini through its OpenAI-compatibility layer, so it needs no separate
+    # protocol implementation.
+    "google": {
+        "id": "google",
+        "label": "Google (Gemini)",
+        "kind": KIND_OPENAI,
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "requires_key": True,
+        "env_var": "GEMINI_API_KEY",
+        "docs": "https://aistudio.google.com/apikey",
+    },
 }
 
 LOCAL_PROVIDER = "ollama"
@@ -91,6 +102,22 @@ PRESETS: List[Dict[str, str]] = [
 ]
 
 ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
+
+# Bumped on every change to the registry. Callers that cache anything derived
+# from a provider — model lists, mostly — mix this into their cache key, so
+# pasting a key shows that provider's models immediately instead of after a TTL.
+_registry_version = 0
+
+
+def registry_version() -> int:
+    return _registry_version
+
+
+def _store(key, value):
+    """Persist a registry change and invalidate anything cached from it."""
+    global _registry_version
+    set_config(key, value)
+    _registry_version += 1
 
 
 class ProviderError(ValueError):
@@ -240,7 +267,7 @@ def upsert_provider(
     if provider_id in BUILTIN_PROVIDERS:
         overrides = dict(_overrides())
         overrides[provider_id] = {**overrides.get(provider_id, {}), **patch}
-        set_config("provider_settings", overrides)
+        _store("provider_settings", overrides)
         return require_provider(provider_id)
 
     providers = _custom()
@@ -259,7 +286,7 @@ def upsert_provider(
             "models": models or [],
             "enabled": True,
         })
-    set_config("custom_providers", providers)
+    _store("custom_providers", providers)
     return require_provider(provider_id)
 
 
@@ -270,7 +297,7 @@ def delete_provider(provider_id: str) -> bool:
     providers = [p for p in _custom() if p["id"] != provider_id]
     if len(providers) == len(_custom()):
         return False
-    set_config("custom_providers", providers)
+    _store("custom_providers", providers)
     set_api_key(provider_id, "")
     return True
 
@@ -282,7 +309,7 @@ def set_api_key(provider_id: str, key: str) -> bool:
         keys[provider_id] = key
     else:
         keys.pop(provider_id, None)
-    set_config("provider_keys", keys)
+    _store("provider_keys", keys)
     # Keep the legacy field in step so an older build reading it still works.
     if provider_id == "anthropic":
         set_config("cloud_api_key", key)
@@ -294,13 +321,13 @@ def set_enabled(provider_id: str, enabled: bool) -> Dict[str, Any]:
     if provider_id in BUILTIN_PROVIDERS:
         overrides = dict(_overrides())
         overrides[provider_id] = {**overrides.get(provider_id, {}), "enabled": bool(enabled)}
-        set_config("provider_settings", overrides)
+        _store("provider_settings", overrides)
     else:
         providers = _custom()
         for existing in providers:
             if existing["id"] == provider_id:
                 existing["enabled"] = bool(enabled)
-        set_config("custom_providers", providers)
+        _store("custom_providers", providers)
     return require_provider(provider_id)
 
 
