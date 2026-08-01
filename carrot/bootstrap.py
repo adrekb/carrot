@@ -1,6 +1,20 @@
-"""Carrot bootstrap: ensures Ollama and the default model are ready before first use."""
+"""Carrot bootstrap: ensures Ollama and the default model are ready before first use.
+
+Works on all three platforms, without admin rights where possible:
+  - Windows: run the official installer silently (bundled with the app or
+    downloaded). The installer ships CUDA and ROCm support, so NVIDIA and
+    AMD both work out of the box.
+  - macOS: download the official ``ollama-darwin.tgz`` binary into Carrot's
+    own data directory and run it from there. Metal acceleration is built
+    in — Apple Silicon and Intel both covered by the universal binary.
+  - Linux: download ``ollama-linux-{amd64,arm64}.tgz`` into the data
+    directory (CUDA runners included); when an AMD GPU is detected, also
+    fetch the ROCm add-on archive so Radeon cards accelerate too.
+"""
 import os
 import json
+import platform
+import tarfile
 import time
 import shutil
 import subprocess
@@ -16,7 +30,28 @@ from carrot.config import CARROT_DIR, get_config, set_config
 DEFAULT_MODEL = "gemma4:e4b"
 OLLAMA_PORT = 11434
 OLLAMA_DOWNLOAD_URL = "https://ollama.com/download/OllamaSetup.exe"
+OLLAMA_RELEASE_BASE = "https://github.com/ollama/ollama/releases/latest/download"
 BOOTSTRAP_STATE_PATH = os.path.join(CARROT_DIR, "config", "bootstrap.json")
+# Where the tarball-based install lands on macOS/Linux (user-writable, no sudo).
+MANAGED_OLLAMA_DIR = os.path.join(CARROT_DIR, "ollama")
+
+
+def ollama_artifact_url() -> str:
+    """The right Ollama artifact for this OS and architecture."""
+    system = platform.system()
+    if system == "Windows":
+        return OLLAMA_DOWNLOAD_URL
+    if system == "Darwin":
+        return f"{OLLAMA_RELEASE_BASE}/ollama-darwin.tgz"
+    arch = "arm64" if platform.machine().lower() in ("arm64", "aarch64") else "amd64"
+    return f"{OLLAMA_RELEASE_BASE}/ollama-linux-{arch}.tgz"
+
+
+def ollama_rocm_addon_url() -> Optional[str]:
+    """The ROCm add-on archive, only meaningful on x86-64 Linux."""
+    if platform.system() == "Linux" and platform.machine().lower() not in ("arm64", "aarch64"):
+        return f"{OLLAMA_RELEASE_BASE}/ollama-linux-amd64-rocm.tgz"
+    return None
 
 
 def _now_iso():
@@ -44,12 +79,20 @@ def get_ollama_executable() -> Optional[str]:
     ollama_exe = shutil.which("ollama")
     if ollama_exe:
         return ollama_exe
-    # Common Windows install locations
     candidates = [
+        # Carrot's own managed install (macOS/Linux tarball layout).
+        os.path.join(MANAGED_OLLAMA_DIR, "bin", "ollama"),
+        os.path.join(MANAGED_OLLAMA_DIR, "ollama"),
+        # Common Windows install locations.
         os.path.expandvars(r"%LOCALAPPDATA%\Programs\Ollama\ollama.exe"),
         os.path.expandvars(r"%LOCALAPPDATA%\Ollama\ollama.exe"),
         os.path.expandvars(r"%ProgramFiles%\Ollama\ollama.exe"),
         os.path.expandvars(r"%ProgramFiles(x86)%\Ollama\ollama.exe"),
+        # Common macOS/Linux locations.
+        "/usr/local/bin/ollama",
+        "/opt/homebrew/bin/ollama",
+        "/usr/bin/ollama",
+        "/Applications/Ollama.app/Contents/Resources/ollama",
     ]
     for c in candidates:
         if os.path.exists(c):
@@ -107,6 +150,11 @@ def find_bundled_installer() -> Optional[str]:
         os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "assets", "ollama-setup.exe"),
         os.path.join(os.path.expandvars(r"%LOCALAPPDATA%\Carrot\assets"), "ollama-setup.exe"),
     ]
+    # The Electron shell passes its resources dir so a packaged app finds
+    # the installer regardless of where it was installed to.
+    resources = os.environ.get("CARROT_RESOURCES")
+    if resources:
+        candidates.insert(0, os.path.join(resources, "assets", "ollama-setup.exe"))
     # When running from Electron asar, the unpacked extraFiles land near exe
     if getattr(__import__("sys"), "frozen", False):
         candidates.insert(0, os.path.join(os.path.dirname(__import__("sys").executable), "assets", "ollama-setup.exe"))
@@ -116,11 +164,12 @@ def find_bundled_installer() -> Optional[str]:
     return None
 
 
-def download_installer(destination: str, progress_cb: Optional[Callable] = None) -> bool:
-    """Download the Ollama Windows installer with optional progress callback."""
+def download_installer(destination: str, progress_cb: Optional[Callable] = None,
+                       url: str = OLLAMA_DOWNLOAD_URL) -> bool:
+    """Download an Ollama artifact with optional progress callback."""
     try:
         os.makedirs(os.path.dirname(destination), exist_ok=True)
-        with requests.get(OLLAMA_DOWNLOAD_URL, stream=True, timeout=120) as r:
+        with requests.get(url, stream=True, timeout=120) as r:
             r.raise_for_status()
             total = int(r.headers.get("content-length", 0))
             downloaded = 0
@@ -162,6 +211,62 @@ def install_ollama(installer_path: str, progress_cb: Optional[Callable] = None) 
         if progress_cb:
             progress_cb({"type": "error", "message": f"Ollama install error: {e}"})
         return False
+
+
+def _machine_has_amd_gpu() -> bool:
+    try:
+        from carrot.hub import _detect_amd_vram_gb
+        return _detect_amd_vram_gb() >= 2
+    except Exception:
+        return False
+
+
+def install_ollama_unix(progress_cb: Optional[Callable] = None) -> bool:
+    """Install Ollama on macOS/Linux from the official release tarball.
+
+    Extracts into Carrot's data directory — no sudo, no shell pipe to a
+    remote script. On Linux with an AMD GPU the ROCm add-on archive is
+    layered on top so Radeon acceleration works.
+    """
+    urls = [ollama_artifact_url()]
+    rocm = ollama_rocm_addon_url()
+    if rocm and _machine_has_amd_gpu():
+        urls.append(rocm)
+    os.makedirs(MANAGED_OLLAMA_DIR, exist_ok=True)
+    for url in urls:
+        name = url.rsplit("/", 1)[-1]
+        archive = os.path.join(tempfile.gettempdir(), f"carrot_{name}")
+        if progress_cb:
+            progress_cb({"type": "status", "message": f"Downloading {name}…"})
+        if not download_installer(archive, progress_cb, url=url):
+            # The ROCm add-on is an enhancement; the base archive is not.
+            if url == urls[0]:
+                return False
+            continue
+        try:
+            with tarfile.open(archive, "r:gz") as tf:
+                try:
+                    tf.extractall(MANAGED_OLLAMA_DIR, filter="data")
+                except TypeError:  # Python < 3.10.12: no filter parameter
+                    tf.extractall(MANAGED_OLLAMA_DIR)
+        except Exception as e:
+            if progress_cb:
+                progress_cb({"type": "error", "message": f"Could not extract {name}: {e}"})
+            if url == urls[0]:
+                return False
+        finally:
+            try:
+                os.remove(archive)
+            except OSError:
+                pass
+    for candidate in (os.path.join(MANAGED_OLLAMA_DIR, "bin", "ollama"),
+                      os.path.join(MANAGED_OLLAMA_DIR, "ollama")):
+        if os.path.exists(candidate):
+            os.chmod(candidate, 0o755)
+            return True
+    if progress_cb:
+        progress_cb({"type": "error", "message": "Ollama binary missing after extraction"})
+    return False
 
 
 def pull_model(model: str = DEFAULT_MODEL, progress_cb: Optional[Callable] = None) -> bool:
@@ -220,17 +325,22 @@ def run_bootstrap(progress_cb: Optional[Callable] = None, model: Optional[str] =
         progress_cb({"type": "status", "message": "Checking Ollama..."})
 
     if not get_ollama_executable():
-        installer = find_bundled_installer()
-        if not installer:
-            if progress_cb:
-                progress_cb({"type": "status", "message": "Downloading Ollama installer..."})
-            installer = os.path.join(tempfile.gettempdir(), "carrot_ollama_setup.exe")
-            if not download_installer(installer, progress_cb):
-                result["error"] = "Could not download Ollama installer"
+        if platform.system() == "Windows":
+            installer = find_bundled_installer()
+            if not installer:
+                if progress_cb:
+                    progress_cb({"type": "status", "message": "Downloading Ollama installer..."})
+                installer = os.path.join(tempfile.gettempdir(), "carrot_ollama_setup.exe")
+                if not download_installer(installer, progress_cb):
+                    result["error"] = "Could not download Ollama installer"
+                    return result
+            if not install_ollama(installer, progress_cb):
+                result["error"] = "Ollama installation failed"
                 return result
-        if not install_ollama(installer, progress_cb):
-            result["error"] = "Ollama installation failed"
-            return result
+        else:
+            if not install_ollama_unix(progress_cb):
+                result["error"] = "Ollama installation failed"
+                return result
 
     state["ollama_installed"] = True
     result["ollama_installed"] = True

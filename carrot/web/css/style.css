@@ -2368,3 +2368,29 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 }
 .hub-search input:focus { outline: none; border-color: var(--accent); }
 .quant-note { color: var(--accent); font-family: var(--mono); font-size: 11px; }
+
+/* ===== Google Calendar (secret iCal) ===== */
+.cal-howto { margin-bottom: 12px; }
+.cal-howto summary { cursor: pointer; font-size: 12.5px; color: var(--accent); }
+.cal-howto ol { margin: 10px 0 8px 20px; line-height: 1.9; }
+.cal-dot.gcal { background: #9ecbff; margin-left: 2px; }
+.cal-event.gcal .cal-event-date { color: #9ecbff; }
+.cal-connect { margin-top: 8px; }
+.cal-connect a { color: var(--muted); text-decoration: none; }
+.cal-connect a:hover { color: var(--accent); }
+
+/* ===== Storage & cleanup ===== */
+.storage-summary { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; flex-wrap: wrap; }
+.storage-bar {
+  position: relative;
+  width: 260px; height: 8px;
+  background: var(--card2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.storage-bar-other { position: absolute; inset: 0 auto 0 0; background: rgba(255,255,255,0.12); }
+.storage-bar-models { position: absolute; inset: 0 auto 0 0; background: var(--accent); }
+.storage-row { display: flex; align-items: center; gap: 10px; }
+.storage-row strong { flex: 1; font-family: var(--mono); font-size: 12.5px; }
+.storage-del { margin-left: auto; }

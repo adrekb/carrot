@@ -4,7 +4,10 @@ import json
 from datetime import datetime, timezone
 
 
-DBCORE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+# One source of truth for where data lives: carrot.config resolves the
+# checkout dir vs. the per-user dir for installed (frozen) builds.
+from carrot.config import CARROT_DIR as DBCORE_DIR
+
 DB_PATH = os.path.join(DBCORE_DIR, "carrot.db")
 
 SCHEMA = """

@@ -112,6 +112,10 @@ def create_note(title: str, content: str = "", folder: str = None):
 def update_note(note_id: str, content: str, folder: str = None, title: str = None):
     """Replace a note's body (and optionally title) while preserving frontmatter."""
     filepath = get_note_path(note_id)
+    if folder:
+        candidate = os.path.join(NOTES_DIR, folder, f"{note_id}.md")
+        if os.path.exists(candidate):
+            filepath = candidate
     if not os.path.exists(filepath):
         return None
     with open(filepath, "r", encoding="utf-8") as f:

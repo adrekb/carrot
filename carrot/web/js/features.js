@@ -280,6 +280,14 @@ async function loadCodeTab() {
         document.getElementById('code-root-label').textContent = r.root.split(/[\\/]/).pop() || r.root;
         document.getElementById('code-root-label').title = r.root;
     } catch (_) {}
+    // Label the open button for the editor actually installed.
+    try {
+        const ed = await api('/api/files/editors');
+        const btn = document.getElementById('open-editor-btn');
+        if (btn && (ed.editors || []).length) {
+            btn.textContent = ed.editors[0] === 'cursor' ? 'Open in Cursor' : 'Open in VS Code';
+        }
+    } catch (_) {}
     loadCodeTree();
 }
 
@@ -419,6 +427,27 @@ async function saveCurrentFile() {
         setCodeStatus('saved ' + activeFilePath.split('/').pop());
     } catch (e) {
         setCodeStatus('save failed: ' + e.message);
+    }
+}
+
+async function sendNoteToObsidian() {
+    if (!currentNoteId) { alert('Open a note first.'); return; }
+    const status = document.getElementById('note-status');
+    try {
+        await saveNoteNow();
+        const r = await api('/api/interop/obsidian/send', {
+            method: 'POST',
+            body: JSON.stringify({ note_id: currentNoteId }),
+        });
+        if (status) status.textContent = 'saved to your vault ✓';
+    } catch (e) {
+        if (e.message && e.message.includes('vault')) {
+            if (confirm('No Obsidian vault is set yet. Open Settings to point Carrot at your vault folder?')) {
+                switchTab('settings');
+            }
+        } else {
+            alert(e.message);
+        }
     }
 }
 

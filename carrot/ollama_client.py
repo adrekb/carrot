@@ -85,6 +85,19 @@ class OllamaClient:
         except Exception:
             return []
 
+    def delete_model(self, model: str) -> bool:
+        """Remove a locally installed model (frees its disk space)."""
+        try:
+            # Newer Ollama expects "model", older expects "name" — send both.
+            resp = requests.delete(
+                self._url("/api/delete"),
+                json={"model": model, "name": model},
+                timeout=30,
+            )
+            return resp.status_code == 200
+        except Exception:
+            return False
+
     def pull_model(self, model: str) -> Generator[Dict[str, Any], None, None]:
         """Pull a model from the Ollama registry, yielding progress dicts."""
         resp = requests.post(

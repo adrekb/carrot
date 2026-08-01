@@ -12,13 +12,28 @@ let overlayWindow = null;
 let fastapiProcess = null;
 
 // ===== Backend lifecycle =====
-function startFastAPI() {
-  const cwd = path.join(__dirname, '..');
+// Packaged app: launch the frozen backend bundled in resources/ — end
+// users never need Python. Dev checkout: fall back to the system Python.
+function backendCommand() {
+  if (app.isPackaged) {
+    const exeName = process.platform === 'win32' ? 'carrot-backend.exe' : 'carrot-backend';
+    const exe = path.join(process.resourcesPath, 'backend', 'carrot-backend', exeName);
+    if (fs.existsSync(exe)) {
+      return { cmd: exe, args: [], cwd: path.dirname(exe) };
+    }
+    console.error(`Bundled backend not found at ${exe}; falling back to system Python.`);
+  }
   const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
-  fastapiProcess = spawn(pythonCmd, ['-m', 'carrot.app'], {
+  return { cmd: pythonCmd, args: ['-m', 'carrot.app'], cwd: path.join(__dirname, '..') };
+}
+
+function startFastAPI() {
+  const { cmd, args, cwd } = backendCommand();
+  fastapiProcess = spawn(cmd, args, {
     cwd,
     stdio: IS_DEV ? 'inherit' : 'ignore',
     windowsHide: true,
+    env: { ...process.env, CARROT_RESOURCES: process.resourcesPath || '' },
   });
 
   fastapiProcess.on('error', (err) => {

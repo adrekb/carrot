@@ -327,3 +327,20 @@ curl -H "X-Carrot-Token: $(carrot token)" http://127.0.0.1:8181/api/status
 ## The Name
 
 Carrot is named after the carrot and the rabbit — your rabbit assistant keeps you organized and motivated, and the carrot is the reward at the end of the work.
+## Building the Desktop Installers
+
+Carrot ships as a real one-click desktop app on all three platforms. The build
+freezes the Python backend with PyInstaller (end users never need Python) and
+packages it with Electron:
+
+- **Windows** — `build.bat` → one-click NSIS installer (`gui/dist/Carrot Setup 0.3.0.exe`), with the official Ollama installer bundled. NVIDIA (CUDA) and AMD (ROCm) both work out of the box.
+- **macOS** — `./build.sh` → `.dmg` for the architecture of the build machine (Apple Silicon or Intel). Metal acceleration is built into Ollama's universal binary.
+- **Linux** — `./build.sh` → `.AppImage` and `.deb`. CUDA runners come with the Ollama tarball; on AMD machines the ROCm add-on is fetched automatically at first launch.
+
+Tagged releases (`v*`) build all four targets (Windows x64, macOS arm64, macOS
+x64, Linux x64) via GitHub Actions (`.github/workflows/release.yml`) and attach
+the installers to a draft GitHub Release.
+
+On first launch the app installs Ollama for your OS — silently on Windows, into
+Carrot's own data directory (no sudo) on macOS and Linux — then shows the setup
+splash with models matched to your hardware.

@@ -277,6 +277,8 @@ let calCursor = null;   // { y, m }
 let calReminders = [];
 let calWidgetId = null;
 
+let calGcal = { configured: false, events: [] };
+
 async function renderCalendarWidget(w, body) {
     calWidgetId = w.id;
     if (!calCursor) {
@@ -284,6 +286,7 @@ async function renderCalendarWidget(w, body) {
         calCursor = { y: n.getFullYear(), m: n.getMonth() };
     }
     try { calReminders = await api('/api/reminders'); } catch (_) { calReminders = []; }
+    try { calGcal = await api('/api/calendar/events?days=62'); } catch (_) { calGcal = { configured: false, events: [] }; }
     drawCalendar();
 }
 
@@ -304,12 +307,18 @@ function drawCalendar() {
     const { y, m } = calCursor;
     const monthName = new Date(y, m, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
 
-    // Map date (YYYY-MM-DD) -> number of open reminders due that day.
+    // Map date (YYYY-MM-DD) -> number of open reminders due that day,
+    // plus Google Calendar events on their own layer.
     const events = {};
     for (const r of calReminders) {
         if (r.completed) continue;
         const d = (r.due_at || '').slice(0, 10);
         if (d) events[d] = (events[d] || 0) + 1;
+    }
+    const gcalDays = {};
+    for (const e of (calGcal.events || [])) {
+        const d = (e.start || '').slice(0, 10);
+        if (d) gcalDays[d] = (gcalDays[d] || 0) + 1;
     }
 
     const today = new Date();
@@ -322,20 +331,33 @@ function drawCalendar() {
     for (let d = 1; d <= daysInMonth; d++) {
         const ds = `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
         const cls = 'cal-cell' + (ds === todayStr ? ' today' : '') + (events[ds] ? ' has-event' : '');
-        cells += `<div class="${cls}">${d}${events[ds] ? '<span class="cal-dot"></span>' : ''}</div>`;
+        const dots = (events[ds] ? '<span class="cal-dot"></span>' : '')
+            + (gcalDays[ds] ? '<span class="cal-dot gcal"></span>' : '');
+        cells += `<div class="${cls}">${d}${dots}</div>`;
     }
 
+    // Merge reminders and calendar events into one upcoming list.
     const upcoming = calReminders
         .filter(r => !r.completed && r.due_at)
-        .sort((a, b) => (a.due_at > b.due_at ? 1 : -1))
-        .slice(0, 5);
+        .map(r => ({ when: r.due_at, title: r.title, kind: 'rem' }))
+        .concat((calGcal.events || []).map(e => ({
+            when: e.start,
+            title: e.title + (e.all_day ? '' : ` · ${e.start.slice(11, 16)}`),
+            kind: 'gcal',
+        })))
+        .sort((a, b) => (a.when > b.when ? 1 : -1))
+        .slice(0, 6);
     const upHtml = upcoming.length
-        ? upcoming.map(r => `
-            <div class="cal-event">
-              <span class="cal-event-date">${escHtml((r.due_at || '').slice(5, 10))}</span>
-              <span class="cal-event-title">${escHtml(r.title)}</span>
+        ? upcoming.map(u => `
+            <div class="cal-event${u.kind === 'gcal' ? ' gcal' : ''}">
+              <span class="cal-event-date">${escHtml((u.when || '').slice(5, 10))}</span>
+              <span class="cal-event-title">${escHtml(u.title)}</span>
             </div>`).join('')
-        : '<div class="muted small">No upcoming reminders.</div>';
+        : '<div class="muted small">Nothing coming up.</div>';
+    const connectHint = calGcal.configured ? '' :
+        `<div class="muted small cal-connect">
+           <a href="#" onclick="switchTab('settings');return false">Connect Google Calendar in Settings →</a>
+         </div>`;
 
     body.innerHTML = `
         <div class="cal-nav">
@@ -348,7 +370,8 @@ function drawCalendar() {
         </div>
         <div class="cal-grid">${cells}</div>
         <div class="cal-upcoming-head">Upcoming</div>
-        <div class="cal-upcoming">${upHtml}</div>`;
+        <div class="cal-upcoming">${upHtml}</div>
+        ${connectHint}`;
 }
 
 // ===== Weather widget (Open-Meteo, key-less) =====
@@ -682,6 +705,109 @@ function pollGithubStatus(fromCatalog) {
 
 // ===== Settings =====
 
+// ===== Your apps: Obsidian vault + editor detection =====
+
+async function loadInteropSettings() {
+    let s;
+    try { s = await api('/api/interop/status'); } catch (_) { return; }
+    const input = document.getElementById('obsidian-vault');
+    if (input && !input.value) input.value = s.vault_path || '';
+    const bits = [];
+    bits.push(s.vault_ok ? 'Obsidian vault connected'
+        : (s.vault_path ? 'Vault folder not found' : 'No vault set'));
+    if ((s.editors || []).length) {
+        bits.push(`Editor: ${s.editors[0] === 'cursor' ? 'Cursor' : 'VS Code'} detected`);
+    } else {
+        bits.push('No editor CLI found (install VS Code or Cursor)');
+    }
+    const el = document.getElementById('interop-status');
+    if (el) { el.textContent = bits.join(' · '); el.className = 'settings-status' + (s.vault_ok ? ' ok' : ''); }
+}
+
+async function saveVaultPath() {
+    const path = document.getElementById('obsidian-vault').value.trim();
+    try {
+        await api('/api/interop/vault', { method: 'PUT', body: JSON.stringify({ vault_path: path }) });
+        loadInteropSettings();
+    } catch (e) {
+        const el = document.getElementById('interop-status');
+        if (el) { el.textContent = e.message; el.className = 'settings-status err'; }
+    }
+}
+
+async function importObsidian() {
+    const el = document.getElementById('interop-status');
+    if (el) el.textContent = 'Importing your vault…';
+    try {
+        const r = await api('/api/interop/obsidian/import', { method: 'POST' });
+        if (el) {
+            el.textContent = `Imported ${r.imported} new, updated ${r.updated}, unchanged ${r.skipped}.`;
+            el.className = 'settings-status ok';
+        }
+    } catch (e) {
+        if (el) { el.textContent = e.message; el.className = 'settings-status err'; }
+    }
+}
+
+// ===== Google Calendar settings (secret iCal address — no OAuth) =====
+
+function setCalStatus(text, cls) {
+    const el = document.getElementById('cal-status');
+    if (el) { el.textContent = text; el.className = 'settings-status' + (cls ? ' ' + cls : ''); }
+}
+
+async function loadCalendarSettings() {
+    let s;
+    try { s = await api('/api/calendar/status'); } catch (_) { return; }
+    const en = document.getElementById('cal-enabled');
+    const aw = document.getElementById('cal-agent-aware');
+    if (en) en.checked = !!s.enabled;
+    if (aw) aw.checked = !!s.agent_aware;
+    if (s.url_set) {
+        setCalStatus(`Connected (${s.url_hint})` + (s.agent_aware ? ' · assistant can see it' : ''), 'ok');
+    } else {
+        setCalStatus('Not connected');
+    }
+}
+
+async function saveCalendarUrl() {
+    const input = document.getElementById('cal-ics-url');
+    const url = input.value.trim();
+    if (!url) { setCalStatus('Paste the secret address first.', 'err'); return; }
+    setCalStatus('Checking your calendar…');
+    try {
+        await api('/api/calendar/config', { method: 'PUT', body: JSON.stringify({ ics_url: url }) });
+        const test = await api('/api/calendar/refresh', { method: 'POST' });
+        if (!test.ok) { setCalStatus(test.detail || 'Could not read that address.', 'err'); return; }
+        input.value = '';
+        setCalStatus(`Connected — ${test.count} event${test.count === 1 ? '' : 's'} in the next 2 weeks.`, 'ok');
+        loadCalendarSettings();
+        loadDashboard();
+    } catch (e) {
+        setCalStatus(e.message, 'err');
+    }
+}
+
+async function disconnectCalendar() {
+    try {
+        await api('/api/calendar/config', { method: 'PUT', body: JSON.stringify({ ics_url: '', enabled: false }) });
+        setCalStatus('Not connected');
+        loadDashboard();
+    } catch (e) { setCalStatus(e.message, 'err'); }
+}
+
+async function saveCalendarToggles() {
+    const enabled = document.getElementById('cal-enabled').checked;
+    const agentAware = document.getElementById('cal-agent-aware').checked;
+    try {
+        await api('/api/calendar/config', {
+            method: 'PUT',
+            body: JSON.stringify({ enabled, agent_aware: agentAware }),
+        });
+        loadCalendarSettings();
+    } catch (e) { setCalStatus(e.message, 'err'); }
+}
+
 async function loadSettings() {
     let cfg = {};
     try { cfg = await api('/api/config'); } catch (_) {}
@@ -696,6 +822,8 @@ async function loadSettings() {
 
     const cloudToggle = document.getElementById('cloud-enabled');
     if (cloudToggle) cloudToggle.checked = !!cfg.cloud_enabled;
+    loadCalendarSettings();
+    loadInteropSettings();
     if (typeof loadRouting === 'function') loadRouting();
     if (typeof loadBackups === 'function') loadBackups();
 

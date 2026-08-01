@@ -30,6 +30,8 @@ from carrot import (
     leaderboard as lb_mod,
     bootstrap as bootstrap_mod,
     hub as hub_mod,
+    calfeed as calfeed_mod,
+    interop as interop_mod,
     deep_research as dr_mod,
     skills as skills_mod,
     mcp_client as mcp_mod,
@@ -576,6 +578,129 @@ async def pull_model(req: ModelPullRequest):
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
+# ===== Storage & cleanup (installed models eat disk fast) =====
+
+@app.get("/api/hub/storage")
+async def hub_storage():
+    """Disk usage per installed model plus overall disk headroom."""
+    client = ollama_mod.OllamaClient()
+    models = client.list_models() if client.is_available() else []
+    models.sort(key=lambda m: m.get("size", 0), reverse=True)
+    import shutil as _shutil
+    usage = _shutil.disk_usage(os.path.expanduser("~"))
+    active = config.get_config().get("ollama_model", "")
+    return {
+        "models": [{**m, "active": m["name"] == active} for m in models],
+        "models_total_bytes": sum(m.get("size", 0) for m in models),
+        "disk_total_bytes": usage.total,
+        "disk_free_bytes": usage.free,
+        "active_model": active,
+    }
+
+
+@app.post("/api/models/delete")
+async def delete_model(req: ModelSelectRequest):
+    """One-click purge of an installed model."""
+    active = config.get_config().get("ollama_model", "")
+    if req.model == active:
+        raise HTTPException(status_code=400,
+                            detail="That's the active model — switch to another model first.")
+    client = ollama_mod.OllamaClient()
+    if not client.is_available():
+        raise HTTPException(status_code=503, detail="Ollama is not available")
+    if not client.delete_model(req.model):
+        raise HTTPException(status_code=500, detail=f"Could not delete {req.model}")
+    return {"deleted": req.model}
+
+
+# ===== Interop: Obsidian and VS Code / Cursor =====
+
+class VaultRequest(BaseModel):
+    vault_path: str
+
+
+class NoteIdRequest(BaseModel):
+    note_id: str
+
+
+@app.get("/api/interop/status")
+async def interop_status():
+    return interop_mod.status()
+
+
+@app.put("/api/interop/vault")
+async def interop_set_vault(req: VaultRequest):
+    path = os.path.abspath(os.path.expanduser(req.vault_path.strip())) if req.vault_path.strip() else ""
+    if path and not os.path.isdir(path):
+        raise HTTPException(status_code=400, detail="That folder doesn't exist — paste your vault's full path.")
+    config.set_config("obsidian_vault_path", path)
+    return interop_mod.status()
+
+
+@app.post("/api/interop/obsidian/send")
+async def interop_send_note(req: NoteIdRequest):
+    try:
+        return interop_mod.send_note_to_obsidian(req.note_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/interop/obsidian/import")
+async def interop_import_vault():
+    try:
+        return interop_mod.import_from_obsidian()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ===== Calendar (secret iCal URL — no OAuth, no keys) =====
+
+class CalendarConfigRequest(BaseModel):
+    ics_url: str | None = None      # empty string disconnects
+    enabled: bool | None = None
+    agent_aware: bool | None = None
+
+
+@app.get("/api/calendar/status")
+async def calendar_status():
+    return calfeed_mod.status()
+
+
+@app.put("/api/calendar/config")
+async def calendar_config(req: CalendarConfigRequest):
+    if req.ics_url is not None:
+        url = req.ics_url.strip()
+        if url and not url.lower().startswith(("http://", "https://")):
+            raise HTTPException(status_code=400, detail="The calendar address must start with https://")
+        config.set_config("calendar_ics_url", url)
+        if url:
+            config.set_config("calendar_enabled", True)
+    if req.enabled is not None:
+        config.set_config("calendar_enabled", req.enabled)
+    if req.agent_aware is not None:
+        config.set_config("calendar_agent_aware", req.agent_aware)
+    return calfeed_mod.status()
+
+
+@app.get("/api/calendar/events")
+async def calendar_events(days: int = 14):
+    if not config.get_config().get("calendar_enabled", False):
+        return {"configured": False, "events": []}
+    events = calfeed_mod.upcoming_events(days=max(1, min(days, 90)))
+    if events is None:
+        return {"configured": bool(config.get_config().get("calendar_ics_url")), "events": [],
+                "detail": "Calendar not configured or unreachable."}
+    return {"configured": True, "events": events}
+
+
+@app.post("/api/calendar/refresh")
+async def calendar_refresh():
+    events = calfeed_mod.upcoming_events(days=14, force=True)
+    if events is None:
+        return {"ok": False, "detail": "Could not fetch the calendar — check the secret address."}
+    return {"ok": True, "count": len(events)}
+
+
 # ===== Chat =====
 
 def _prepare_history(conv, message, skill_slug, extra_system=None, mode=None):
@@ -604,6 +729,15 @@ def _prepare_history(conv, message, skill_slug, extra_system=None, mode=None):
 
     if extra_system:
         history.append({"role": "system", "content": extra_system})
+
+    # Calendar awareness is an explicit opt-in; when on, the assistant sees
+    # the next few days so "what does my week look like" just works.
+    try:
+        cal_block = calfeed_mod.agent_context()
+        if cal_block:
+            history.append({"role": "system", "content": cal_block})
+    except Exception:
+        pass
 
     if config.get_config().get("memory_enabled", True):
         try:
