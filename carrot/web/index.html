@@ -250,8 +250,11 @@
           <input type="text" id="note-title" class="title-input" placeholder="Untitled note" oninput="scheduleNoteSave()">
           <span id="note-status" class="editor-status"></span>
           <span id="note-words" class="editor-words"></span>
-          <button class="btn btn-primary" onclick="sendDocToAgent()"
-                  title="Send this note (or the selected text) to the agent">Send to agent</button>
+          <select id="doc-destination" class="doc-destination"
+                  title="Where this note goes. A @/to line in the note sets this for you."
+                  onchange="destinationChanged()"></select>
+          <button class="btn btn-primary" id="doc-send-btn" onclick="sendDocToAgent()"
+                  title="Send this note (or the selected text)">Send</button>
           <button class="btn btn-ghost" onclick="deleteCurrentNote()">Delete</button>
         </div>
         <div id="doc-refs" class="doc-refs hidden"></div>
@@ -460,6 +463,16 @@
     <div class="page">
       <div class="page-head"><h2>Extensions</h2></div>
       <p class="muted">Customize Carrot with reusable skills and external tools over MCP.</p>
+
+      <div class="ext-section">
+        <div class="ext-head"><h3>Packs</h3></div>
+        <p class="muted small">
+          A bundle of tools, skills and settings you turn on as one switch. A pack can want a
+          program you do not have — Carrot probes for each one and says what works on this
+          machine rather than failing halfway through a task.
+        </p>
+        <div id="packs-list" class="list"></div>
+      </div>
 
       <div class="ext-section">
         <div class="ext-head">
@@ -794,6 +807,17 @@
         <div id="pull-label" class="pull-label"></div>
         <div class="pull-track"><div id="pull-bar" class="pull-bar"></div></div>
       </div>
+    </div>
+  </div>
+  <div id="search-picker">
+    <button id="search-btn" onclick="toggleSearchPop()" title="How much Carrot may search the web">
+      <svg class="ico"><use href="#i-search"/></svg>
+      <span id="search-label">Search</span>
+      <svg class="ico chev"><use href="#i-chevron"/></svg>
+    </button>
+    <div id="search-pop" class="hidden">
+      <div class="pop-section">Web search</div>
+      <div id="search-mode-list"></div>
     </div>
   </div>
   <input type="text" id="cmd-input" placeholder="Ask anything — Ctrl+K to focus, / for skills" onkeydown="cmdKeydown(event)" oninput="cmdInputChanged()">

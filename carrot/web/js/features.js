@@ -142,6 +142,11 @@ async function openNote(noteId) {
     await mountEditor(note.body || '');
     updateWordCount(note.body || '');
     setNoteStatus('');
+    // Read the note's own @/to and @/file lines now rather than waiting for a
+    // keystroke — opening a note you wrote last week should already show where
+    // it goes, which is the whole point of writing the destination into it.
+    if (typeof resetDocDestination === 'function') resetDocDestination();
+    if (typeof refreshDocReferences === 'function') refreshDocReferences();
 }
 
 async function mountEditor(markdown) {
@@ -453,6 +458,7 @@ function setCodeStatus(msg) {
 let editingSkillSlug = null;
 
 async function loadExtensions() {
+    loadPacks();
     loadSkillsList();
     loadMcpList();
 }

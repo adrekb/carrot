@@ -1921,3 +1921,139 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   accent-color: var(--accent);
   cursor: pointer;
 }
+
+/* Search-mode picker — same shape as the model picker beside it, because it is
+   the same kind of choice: what this turn runs against. */
+#search-picker { position: relative; }
+
+#search-btn {
+  display: flex; align-items: center; gap: 7px;
+  background: var(--card2);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 12.5px;
+  padding: 8px 11px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.15s;
+}
+#search-btn:hover { border-color: var(--border-hi); }
+#search-btn .ico { color: var(--accent); width: 13px; height: 13px; }
+/* Search being off is a state worth seeing without opening the menu. */
+#search-btn.search-off { color: var(--muted); }
+#search-btn.search-off .ico { color: var(--faint); }
+
+#search-pop {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 0;
+  width: 320px;
+  background: #17171c;
+  border: 1px solid var(--border-hi);
+  border-radius: 12px;
+  box-shadow: 0 16px 50px rgba(0, 0, 0, 0.6);
+  padding: 8px;
+}
+
+.pop-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 8px;
+  padding: 9px 10px;
+  cursor: pointer;
+  color: var(--text);
+  font-family: var(--sans);
+  transition: background 0.12s;
+}
+.pop-item:hover { background: rgba(255, 255, 255, 0.04); }
+.pop-item.active { background: var(--accent-soft); }
+.pop-item-name { display: block; font-size: 12.5px; margin-bottom: 3px; }
+.pop-item-sub { display: block; font-size: 11.5px; color: var(--muted); line-height: 1.45; }
+
+/* The note's destination picker sits in the editor toolbar next to Send, so it
+   reads as part of the same action rather than as a separate setting. */
+.doc-destination {
+  font-size: 12.5px;
+  padding: 7px 9px;
+  max-width: 190px;
+}
+
+/* ===== Extension packs ===== */
+
+.pack-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 10px;
+  overflow: hidden;
+}
+.pack-card.on { border-color: rgba(255, 92, 31, 0.35); }
+
+.pack-head { display: flex; align-items: flex-start; gap: 14px; padding: 14px 16px; }
+.pack-main { flex: 1; cursor: pointer; min-width: 0; }
+.pack-name { font-size: 14px; font-weight: 600; display: flex; align-items: baseline; gap: 8px; }
+.pack-version { font-family: var(--mono); font-size: 11px; color: var(--faint); font-weight: 400; }
+.pack-desc { color: var(--muted); font-size: 12.5px; margin: 4px 0 6px; line-height: 1.5; }
+.pack-counts { color: var(--faint); font-size: 11.5px; font-family: var(--mono); }
+
+.pack-detail { border-top: 1px solid var(--border); padding: 4px 16px 16px; }
+.pack-section {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin: 16px 0 8px;
+}
+
+/* Whether the program a tool needs is actually here. Green and red rather than
+   prose, because "can this run on my machine" is a yes/no question. */
+.cap-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+}
+.cap-dot { width: 8px; height: 8px; border-radius: 50%; }
+.cap-row.ok .cap-dot { background: var(--green); }
+.cap-row.missing .cap-dot { background: var(--red); }
+.cap-name { font-weight: 500; }
+.cap-state { font-family: var(--mono); font-size: 11px; color: var(--faint); justify-self: end; }
+.cap-row.missing .cap-state { color: var(--red); }
+.cap-purpose { grid-column: 2 / -1; color: var(--muted); font-size: 11.5px; line-height: 1.5; }
+.cap-purpose em { color: var(--yellow); font-style: normal; }
+
+.pack-setting { margin-bottom: 12px; }
+.pack-setting label { display: block; font-size: 12.5px; margin-bottom: 5px; }
+.pack-setting input[type="text"], .pack-setting select { width: 100%; max-width: 340px; }
+.pack-setting-help { color: var(--faint); font-size: 11.5px; margin-top: 4px; line-height: 1.5; }
+
+.pack-tool { padding: 7px 0; border-bottom: 1px solid var(--border); font-size: 12px; }
+.pack-tool .mono { font-family: var(--mono); color: var(--accent-hi); }
+.pack-tool-desc { color: var(--muted); font-size: 11.5px; margin-top: 3px; line-height: 1.5; }
+.pack-tag {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: 1px solid var(--border-hi);
+  border-radius: 999px;
+  padding: 1px 7px;
+  margin-left: 6px;
+  color: var(--muted);
+}
+.pack-tag.risky { color: var(--yellow); border-color: rgba(245, 196, 81, 0.4); }
+
+/* Pack setting checkboxes pick up the accent like every other toggle. */
+.pack-setting input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}

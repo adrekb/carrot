@@ -38,6 +38,89 @@ function noteSelectionOrBody() {
     return { text: getEditorMarkdown(), partial: false };
 }
 
+// ---------- Destinations ----------
+// A note can be a chat turn, a research question, or a task for the agent. The
+// picker and the note's own `@/to` line are the same setting: parsing the note
+// moves the picker, and moving the picker overrides the note for this send.
+
+let docDestinations = [];
+let docDestination = 'chat';
+let docOption = '';
+let docDestinationPinned = false;   // the user touched the picker themselves
+
+async function loadDocDestinations() {
+    if (docDestinations.length) return docDestinations;
+    try {
+        docDestinations = (await api('/api/doc/destinations')).destinations || [];
+    } catch (_) {
+        docDestinations = [];
+    }
+    renderDestinationPicker();
+    return docDestinations;
+}
+
+function destinationOptions() {
+    const options = [];
+    for (const spec of docDestinations) {
+        if (!spec.options || !spec.options.length) {
+            options.push({ value: spec.id, label: spec.label, help: spec.help });
+            continue;
+        }
+        for (const option of spec.options) {
+            options.push({
+                value: `${spec.id}/${option}`,
+                label: `${spec.label} · ${option}`,
+                help: spec.help,
+            });
+        }
+    }
+    return options;
+}
+
+function renderDestinationPicker() {
+    const select = document.getElementById('doc-destination');
+    if (!select) return;
+    const current = docOption ? `${docDestination}/${docOption}` : docDestination;
+    select.innerHTML = destinationOptions().map(option => `
+        <option value="${escHtml(option.value)}" title="${escHtml(option.help)}"
+                ${option.value === current ? 'selected' : ''}>${escHtml(option.label)}</option>`).join('');
+
+    const button = document.getElementById('doc-send-btn');
+    if (button) {
+        const spec = docDestinations.find(d => d.id === docDestination);
+        button.textContent = spec ? `Send to ${spec.label}` : 'Send';
+    }
+}
+
+function destinationChanged() {
+    const select = document.getElementById('doc-destination');
+    if (!select) return;
+    const [destination, option] = select.value.split('/');
+    docDestination = destination;
+    docOption = option || '';
+    docDestinationPinned = true;
+    renderDestinationPicker();
+}
+
+// Switching notes drops the manual override and the parse cache: the pin
+// belongs to the note being edited, not to the session.
+function resetDocDestination() {
+    docDestinationPinned = false;
+    docDestination = 'chat';
+    docOption = '';
+    lastParsedText = '';
+    renderDestinationPicker();
+}
+
+// Called from the reference preview: the note said where it goes, so follow it
+// unless the user has already overridden the picker by hand.
+function applyParsedDestination(parsed) {
+    if (docDestinationPinned || !parsed || !parsed.destination) return;
+    docDestination = parsed.destination;
+    docOption = parsed.option || '';
+    renderDestinationPicker();
+}
+
 async function sendDocToAgent() {
     if (!currentNoteId) return;
     const { text, partial } = noteSelectionOrBody();
@@ -50,19 +133,36 @@ async function sendDocToAgent() {
     await saveNoteNow();
 
     const title = document.getElementById('note-title').value.trim() || 'Untitled note';
+    const label = partial ? `${title} (selection)` : title;
+    const payload = {
+        text,
+        note_id: currentNoteId,
+        title: label,
+        conversation_id: currentConversationId,
+        destination: docDestination,
+        option: docOption,
+    };
+
+    if (docDestination === 'research') {
+        switchTab('research');
+        prepareResearchPanes(label);
+        await streamResearchInto(payload);
+        return;
+    }
+    if (docDestination === 'agent') {
+        switchTab('agent');
+        prepareAgentPanes();
+        await streamAgentInto(payload);
+        return;
+    }
+
     switchTab('workspace');
     clearChatEmpty();
     appendMessage('user', text);
     if (!currentConversationId) {
-        document.getElementById('chat-title').textContent =
-            (partial ? `${title} (selection)` : title).slice(0, 42);
+        document.getElementById('chat-title').textContent = label.slice(0, 42);
     }
-    await streamTurn('/api/doc/send', {
-        text,
-        note_id: currentNoteId,
-        title: partial ? `${title} (selection)` : title,
-        conversation_id: currentConversationId,
-    }, null);
+    await streamTurn('/api/doc/send', payload, null);
 }
 
 // ---------- Reference preview ----------
@@ -95,6 +195,7 @@ async function refreshDocReferences() {
             method: 'POST', body: JSON.stringify({ text }),
         });
         renderDocReferences(parsed);
+        applyParsedDestination(parsed);
     } catch (_) {
         bar.classList.add('hidden');
     }
@@ -144,8 +245,11 @@ function describeMention(match) {
     const rest = match[2];
 
     if (rest === undefined) return { stage: 'kind', kind: '', query: kind };
-    if (kind !== 'file' && kind !== 'model') return null;
+    if (kind !== 'file' && kind !== 'model' && kind !== 'to') return null;
     if (kind === 'file') return { stage: 'file', kind, query: rest };
+    // A destination is one segment or two ('research' or 'research/deep'), and
+    // the server offers both forms, so there is no second stage to walk.
+    if (kind === 'to') return { stage: 'to', kind, query: rest };
 
     const slash = rest.indexOf('/');
     if (slash === -1) return { stage: 'provider', kind, provider: '', query: rest };
@@ -235,6 +339,7 @@ async function updateMentionMenu() {
         const kinds = [
             { value: 'file', hint: 'cite a file as context' },
             { value: 'model', hint: 'pick the model for this note' },
+            { value: 'to', hint: 'send this note to chat, research or the agent' },
         ].filter(k => !state.query || k.value.startsWith(state.query.toLowerCase()));
         if (!kinds.length) {
             hideMentionMenu();
@@ -250,7 +355,7 @@ async function updateMentionMenu() {
     // provider chosen first, so the server hands back the provider list until
     // one is named and only then the models that key can reach.
     const params = new URLSearchParams({
-        kind: state.stage === 'file' ? 'file' : 'model',
+        kind: state.stage === 'file' ? 'file' : (state.stage === 'to' ? 'to' : 'model'),
         q: state.query || '',
     });
     if (state.stage === 'model') params.set('provider', state.provider);
@@ -305,7 +410,8 @@ function chooseMention(item) {
     else if (item.stage === 'provider') replacement = `@/model/${item.value}/`;
     else if (state.stage === 'file') {
         replacement = `@/file/${/\s/.test(item.value) ? `"${item.value}"` : item.value} `;
-    } else replacement = `@/model/${item.value} `;
+    } else if (state.stage === 'to') replacement = `@/to/${item.value} `;
+    else replacement = `@/model/${item.value} `;
 
     if (state.isTextarea) {
         const element = state.node;
@@ -372,6 +478,8 @@ function initDocAgent() {
     document.addEventListener('click', (event) => {
         if (mentionMenu && !mentionMenu.contains(event.target)) hideMentionMenu();
     });
+
+    loadDocDestinations();
 }
 
 document.addEventListener('DOMContentLoaded', initDocAgent);

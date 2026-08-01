@@ -51,9 +51,6 @@ from carrot import (
     policy as policy_mod,
     research as research_mod,
     agent as carrot_agent,
-    browser as browser_mod,
-    desktop as desktop_mod,
-    websearch as websearch_mod,
 )
 from carrot.speech import whisper_stt, kokoro_tts
 from carrot.recap import DUCKDUCKGO_QUERY
@@ -106,6 +103,8 @@ class ChatRequest(BaseModel):
     task: Optional[str] = None
     provider: Optional[str] = None
     cloud: Optional[bool] = False
+    # off | single | multi. Omitted means the saved default.
+    search_mode: Optional[str] = None
 
 
 class AddMessageRequest(BaseModel):
@@ -280,6 +279,10 @@ class DocSendRequest(BaseModel):
     conversation_id: Optional[str] = None
     task: Optional[str] = None
     skill: Optional[str] = None
+    # An explicit choice from the picker, overriding the note's own @/to.
+    destination: Optional[str] = None
+    option: Optional[str] = None
+    search_mode: Optional[str] = None
 
 
 class LatexRequest(BaseModel):
@@ -492,17 +495,19 @@ async def pull_model(req: ModelPullRequest):
 
 # ===== Chat =====
 
-def _prepare_history(conv, message, skill_slug, extra_system=None):
+def _prepare_history(conv, message, skill_slug, extra_system=None, mode=None):
     """Build the model message list for a turn.
 
-    Order matters: skill instructions, then any caller-supplied context (a
-    document's cited files, say), then what Carrot remembers about the user,
-    then the rolling summary of everything older than the recent window, then
-    the recent turns verbatim. Long conversations therefore keep their early
-    context instead of falling off a fixed-size slice.
+    Order matters: the search directive, then skill instructions, then any
+    caller-supplied context (a document's cited files, say), then what Carrot
+    remembers about the user, then the rolling summary of everything older than
+    the recent window, then the recent turns verbatim. Long conversations
+    therefore keep their early context instead of falling off a fixed-size slice.
     """
     history = []
     skill = None
+    if mode:
+        history.append({"role": "system", "content": search_directive(mode)})
     if skill_slug:
         skill = skills_mod.get_skill(skill_slug)
         if skill and skill.get("instructions"):
@@ -531,11 +536,92 @@ def _prepare_history(conv, message, skill_slug, extra_system=None):
 
 
 MAX_TOOL_ROUNDS = 8
+# Multi-turn search needs room to search, read, notice a gap, and search again.
+# Eight rounds is one pass; a real follow-up loop runs out halfway through.
+MAX_TOOL_ROUNDS_MULTI = 16
+
+# ===== Chat search modes =====
+#
+# Whether a chat turn may reach the web at all, and how hard it should try.
+# Off is a real setting, not a formality: a question about your own notes gets
+# worse, not better, when the model decides to search the web first.
+
+SEARCH_OFF = "off"
+SEARCH_SINGLE = "single"
+SEARCH_MULTI = "multi"
+
+SEARCH_MODES = {
+    SEARCH_OFF: {
+        "label": "No search",
+        "help": "Carrot answers from the conversation, your files and its memory. It never reaches the web.",
+        "tools": set(),
+    },
+    SEARCH_SINGLE: {
+        "label": "Search",
+        "help": "Carrot may search the web and read a page when the question needs something current.",
+        "tools": {"web_search", "read_url"},
+    },
+    SEARCH_MULTI: {
+        "label": "Multi-turn search",
+        "help": "Carrot searches, reads, works out what is still missing, and searches again — "
+                "and can hand the whole question to Carrot Research.",
+        "tools": {"web_search", "read_url", "start_research"},
+    },
+}
+
+ALL_SEARCH_TOOLS = set().union(*(mode["tools"] for mode in SEARCH_MODES.values()))
+
+MULTI_SEARCH_DIRECTIVE = (
+    "Search mode: multi-turn. Do not stop at the first set of results.\n"
+    "- Search, read the pages that look most likely to answer the question, then ask "
+    "yourself what you still cannot answer, and search again for exactly that.\n"
+    "- Two or three focused rounds beat one broad one. Use the words a source would "
+    "use, not the words of the question.\n"
+    "- Cite the URL for anything you learned from a page, and say plainly when the "
+    "sources disagree or when you could not find something.\n"
+    "- If the question is big enough to deserve a written report with checked "
+    "citations, call start_research instead of doing it by hand."
+)
+
+SINGLE_SEARCH_DIRECTIVE = (
+    "Search mode: single-pass. You may search the web and read a page when the "
+    "question needs current information or a source you do not already have. "
+    "Cite the URL for anything you take from a page. Do not search for things you "
+    "already know or that are in the conversation."
+)
+
+NO_SEARCH_DIRECTIVE = (
+    "Search mode: off. You have no web access this turn. Answer from the "
+    "conversation, the user's indexed files, and what you remember about them. "
+    "If the answer genuinely needs something from the web, say so rather than "
+    "guessing — the user can switch search on."
+)
 
 
-def _available_tools():
-    """Built-in tools, enabled extension packs, and every enabled MCP server."""
-    tools = list(agent_mod.ollama_tools())
+def search_mode(requested: Optional[str] = None) -> str:
+    """The mode for this turn: the request's choice, else the saved default."""
+    mode = (requested or config.get_config().get("chat_search_mode", SEARCH_SINGLE) or "").lower()
+    return mode if mode in SEARCH_MODES else SEARCH_SINGLE
+
+
+def search_directive(mode: str) -> str:
+    return {
+        SEARCH_OFF: NO_SEARCH_DIRECTIVE,
+        SEARCH_SINGLE: SINGLE_SEARCH_DIRECTIVE,
+        SEARCH_MULTI: MULTI_SEARCH_DIRECTIVE,
+    }[mode]
+
+
+def _available_tools(mode: str = SEARCH_SINGLE):
+    """Built-in tools, enabled extension packs, and every enabled MCP server.
+
+    The search mode subtracts rather than adds: every non-web tool is always
+    offered, and the web ones are filtered to what this mode allows. Removing
+    the tool is what makes "off" mean off — an instruction not to search is a
+    request, but a tool that is not in the list cannot be called.
+    """
+    allowed = set(agent_mod.TOOLS) - ALL_SEARCH_TOOLS | SEARCH_MODES[mode]["tools"]
+    tools = list(agent_mod.ollama_tools(enabled=sorted(allowed)))
     try:
         tools += extensions_mod.ollama_tools()
     except Exception:
@@ -580,22 +666,26 @@ def _run_tool(name, args, conversation_id):
     yield {"_tool_result": outcome.get("result", "")}
 
 
-def _agentic_chat_events(history, resolved, skill=None, conversation_id=None):
+def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mode=SEARCH_SINGLE):
     """Yield SSE dicts for one chat turn, running the tool-calling loop.
 
     Tool calls are dispatched to built-in tools or MCP by name prefix, surfaced
-    to the UI as they happen, and fed back to the model for up to
-    MAX_TOOL_ROUNDS rounds before the final answer streams as `chunk` events.
+    to the UI as they happen, and fed back to the model for a bounded number of
+    rounds before the final answer streams as `chunk` events. Multi-turn search
+    gets a larger round budget because searching, reading and re-searching is
+    several rounds on its own.
     """
     if skill:
         yield {"skill": {"slug": skill["slug"], "name": skill["name"]}}
     yield {"route": resolved.as_dict()}
+    yield {"search_mode": mode}
 
-    tools = _available_tools()
+    tools = _available_tools(mode)
+    rounds = MAX_TOOL_ROUNDS_MULTI if mode == SEARCH_MULTI else MAX_TOOL_ROUNDS
     working = list(history)
     final_text = []
 
-    for _ in range(MAX_TOOL_ROUNDS):
+    for _ in range(rounds):
         content_parts = []
         tool_calls = []
         for event in router_mod.stream_events(resolved, working, tools=tools or None):
@@ -696,7 +786,7 @@ def _resolve_chat_route(req):
     return resolved
 
 
-def _chat_stream_response(req, conv, history, skill, resolved, prelude=None):
+def _chat_stream_response(req, conv, history, skill, resolved, prelude=None, mode=SEARCH_SINGLE):
     """Shared SSE body for the chat and doc-send endpoints.
 
     ``prelude`` is emitted as the first event, which is how a doc send reports
@@ -706,7 +796,7 @@ def _chat_stream_response(req, conv, history, skill, resolved, prelude=None):
         final_text = ""
         if prelude:
             yield f"data: {json.dumps({'document': prelude})}\n\n"
-        for event in _agentic_chat_events(history, resolved, skill, req.conversation_id):
+        for event in _agentic_chat_events(history, resolved, skill, req.conversation_id, mode):
             if "_final_text" in event:
                 final_text = event["_final_text"]
                 continue
@@ -725,11 +815,12 @@ def _chat_stream_response(req, conv, history, skill, resolved, prelude=None):
 async def chat(req: ChatRequest):
     conv = _open_conversation(req)
     resolved = _resolve_chat_route(req)
-    history, skill = _prepare_history(conv, req.message, req.skill)
+    mode = search_mode(req.search_mode)
+    history, skill = _prepare_history(conv, req.message, req.skill, mode=mode)
     conv_mod.add_message(req.conversation_id, "user", req.message)
 
     if req.stream:
-        return _chat_stream_response(req, conv, history, skill, resolved)
+        return _chat_stream_response(req, conv, history, skill, resolved, mode=mode)
 
     response = router_mod.complete(resolved, history)
     stored = conv_mod.add_message(req.conversation_id, "assistant", response)
@@ -744,14 +835,28 @@ async def chat(req: ChatRequest):
     }
 
 
+@app.get("/api/chat/search-modes")
+async def list_search_modes():
+    """The three search postures and which one is currently the default."""
+    return {
+        "modes": [
+            {"id": name, "label": spec["label"], "help": spec["help"],
+             "tools": sorted(spec["tools"])}
+            for name, spec in SEARCH_MODES.items()
+        ],
+        "current": search_mode(),
+    }
+
+
 @app.post("/api/chat/stream")
 async def chat_stream(req: ChatRequest):
     """Dedicated SSE streaming endpoint."""
     conv = _open_conversation(req)
     resolved = _resolve_chat_route(req)
-    history, skill = _prepare_history(conv, req.message, req.skill)
+    mode = search_mode(req.search_mode)
+    history, skill = _prepare_history(conv, req.message, req.skill, mode=mode)
     conv_mod.add_message(req.conversation_id, "user", req.message)
-    return _chat_stream_response(req, conv, history, skill, resolved)
+    return _chat_stream_response(req, conv, history, skill, resolved, mode=mode)
 
 
 # ===== Conversations =====
@@ -1767,6 +1872,17 @@ async def latex_bibliography(req: BibliographyRequest):
 
 # ===== Doc to agent =====
 
+@app.get("/api/doc/destinations")
+async def doc_destinations():
+    """The places a note can be sent, for the picker beside the Send button."""
+    return {
+        "destinations": [
+            {"id": name, **{k: v for k, v in spec.items()}}
+            for name, spec in doc_agent.DESTINATIONS.items()
+        ]
+    }
+
+
 @app.get("/api/doc/candidates")
 async def doc_candidates(kind: str = "file", q: str = "", provider: str = "", limit: int = 40):
     """Completions for the editor's '@' menu.
@@ -1774,6 +1890,8 @@ async def doc_candidates(kind: str = "file", q: str = "", provider: str = "", li
     ``model`` needs a provider first — the list is whatever that provider
     reports for the key on file, not a hardcoded set.
     """
+    if kind == "to":
+        return {"kind": "to", "candidates": doc_agent.destination_candidates(q)}
     if kind == "provider":
         return {"kind": "provider", "candidates": doc_agent.provider_candidates(q)}
     if kind == "model":
@@ -1797,16 +1915,51 @@ async def doc_parse(req: DocSendRequest):
 
 @app.post("/api/doc/send")
 async def doc_send(req: DocSendRequest):
-    """Send a note straight to the agent, cited files and chosen model included.
+    """Send a note to wherever it says it goes.
 
-    Deliberately reuses the ordinary chat turn: the note's text becomes the user
-    message, its cited files become a system context block, and everything else
-    — memory, tools, summaries, approvals — behaves exactly as it does in chat.
+    Three destinations, one document format. Chat reuses the ordinary turn: the
+    note's text becomes the user message, its cited files a system context
+    block, and memory, tools, summaries and approvals behave exactly as they do
+    in chat. Research and Agent take the same note and hand it to their own
+    pipeline — the citations follow it either way, as evidence or as background.
+
+    An explicit ``destination`` on the request wins over the note's own
+    ``@/to``: the picker in the UI is an override, not a second source of truth.
     """
     if not (req.text or "").strip():
         raise HTTPException(status_code=400, detail="Nothing to send")
 
     resolved = doc_agent.resolve(req.text, task=req.task or router_mod.TASK_CHAT)
+    destination = (req.destination or resolved.destination or doc_agent.DESTINATION_CHAT).lower()
+    if destination not in doc_agent.DESTINATIONS:
+        raise HTTPException(status_code=400, detail=f"Unknown destination '{destination}'")
+    option = req.option or (
+        resolved.option if destination == resolved.destination
+        else doc_agent.DESTINATIONS[destination]["default"]
+    )
+
+    if destination == doc_agent.DESTINATION_RESEARCH:
+        # The note is the question. Its citations become numbered evidence, so
+        # a claim drawn from a paper the user supplied is verified against that
+        # paper's text rather than taken on trust.
+        return _sse(research_mod.run_research_stream(
+            resolved.prompt,
+            depth=option or research_mod.DEFAULT_DEPTH,
+            conversation_id=req.conversation_id,
+            seed_sources=resolved.seed_sources(),
+        ))
+
+    if destination == doc_agent.DESTINATION_AGENT:
+        # The note is the task. Citations are background rather than evidence —
+        # the agent's evidence is the page in front of it.
+        task_text = resolved.prompt
+        if resolved.context:
+            task_text += "\n\n" + resolved.context
+        return _sse(carrot_agent.run_agent_stream(
+            task_text,
+            surface=option or carrot_agent.SURFACE_BROWSER,
+            conversation_id=req.conversation_id,
+        ))
 
     chat_req = ChatRequest(
         message=resolved.prompt,
@@ -1828,11 +1981,15 @@ async def doc_send(req: DocSendRequest):
     elif route.local and not ollama_mod.OllamaClient().is_available():
         raise HTTPException(status_code=503, detail="Ollama is not available")
 
+    mode = search_mode(req.search_mode)
     history, skill = _prepare_history(
-        conv, resolved.prompt, chat_req.skill, extra_system=resolved.context or None
+        conv, resolved.prompt, chat_req.skill,
+        extra_system=resolved.context or None, mode=mode,
     )
     conv_mod.add_message(chat_req.conversation_id, "user", resolved.prompt)
-    return _chat_stream_response(chat_req, conv, history, skill, route, prelude=resolved.as_dict())
+    return _chat_stream_response(
+        chat_req, conv, history, skill, route, prelude=resolved.as_dict(), mode=mode
+    )
 
 
 # ===== Providers (BYOK) =====

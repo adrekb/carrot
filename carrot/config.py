@@ -58,6 +58,8 @@ DEFAULTS = {
     "terminal_confirm_destructive": True,
     "terminal_restrict_cwd": False,
     "terminal_extra_roots": [],
+    # Chat. Whether a chat turn may reach the web: off | single | multi.
+    "chat_search_mode": "single",
     # Carrot Research
     "research_default_depth": "standard",
     "research_max_seconds": 1800,

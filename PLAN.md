@@ -81,6 +81,40 @@ documents and past conversations. Two safety properties hold for all of them:
 
 All paths resolve against a workspace root and refuse to escape it.
 
+## Doc to Agent
+
+`doc_agent.py` turns a note into a send. Three inline reference kinds make the note
+self-describing — `@/file/` (read at send time), `@/model/provider/id` (the route), and
+`@/to/destination[/option]` (where it goes).
+
+Destinations are the newer half. `@/to` resolves to one of three pipelines, and the
+picker beside the Send button is an *override* rather than a second source of truth:
+parsing a note moves the picker, and touching the picker pins it for that note until
+another is opened. An unknown option is reported rather than silently corrected —
+someone who wrote `@/to/research/exhaustive` had an expectation, and quietly running a
+"standard" depth meets none of it.
+
+The destination also picks the routing task, so an unpinned research note lands on
+whatever model the user assigned to `research` rather than on their chat model.
+
+Citations follow the note wherever it goes. To Research they are *seeded evidence*:
+added to the run's `SourceStore` before planning, so they take `S1`, `S2` …, every
+sub-question researcher reads them in its first round, and claims drawn from them go
+through the same verification pass as anything fetched from the web. To the Agent they
+are appended as background context.
+
+## Chat Search Modes
+
+`chat_search_mode` (off | single | multi) governs whether a chat turn can reach the web.
+The mode both filters the tool list and injects a directive, and the filtering is the
+part that matters: removing `web_search` and `read_url` from the schema is what makes
+"off" mean off, because an instruction not to search is a request while an absent tool
+is a fact. Non-web tools are unaffected in every mode — turning search off must not cost
+the user their file and memory tools.
+
+Multi-turn additionally offers `start_research` and doubles the tool-round budget, since
+search → read → notice a gap → search again is several rounds on its own.
+
 ## Carrot Research
 
 `research.py` is a multi-agent pipeline whose organising idea is that a research answer
