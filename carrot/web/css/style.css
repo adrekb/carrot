@@ -2368,3 +2368,13 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 }
 .hub-search input:focus { outline: none; border-color: var(--accent); }
 .quant-note { color: var(--accent); font-family: var(--mono); font-size: 11px; }
+
+/* ===== Google Calendar (secret iCal) ===== */
+.cal-howto { margin-bottom: 12px; }
+.cal-howto summary { cursor: pointer; font-size: 12.5px; color: var(--accent); }
+.cal-howto ol { margin: 10px 0 8px 20px; line-height: 1.9; }
+.cal-dot.gcal { background: #9ecbff; margin-left: 2px; }
+.cal-event.gcal .cal-event-date { color: #9ecbff; }
+.cal-connect { margin-top: 8px; }
+.cal-connect a { color: var(--muted); text-decoration: none; }
+.cal-connect a:hover { color: var(--accent); }

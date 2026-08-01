@@ -757,6 +757,45 @@
 
       <div class="settings-card">
         <div class="settings-head">
+          <svg class="ico"><use href="#i-calendar"/></svg>
+          <h3>Google Calendar</h3>
+        </div>
+        <p class="muted small">
+          Carrot can show your calendar on the dashboard — and, if you allow it, your assistant
+          can see your upcoming events so you can ask things like <em>"what does my week look like?"</em>.
+          No Google sign-in, no API keys — it uses your calendar's private feed address. Free.
+        </p>
+        <details class="cal-howto">
+          <summary>How to get your calendar address (about 1 minute)</summary>
+          <ol class="muted small">
+            <li>Open <b>Google Calendar</b> in your browser (on a computer, not the phone app).</li>
+            <li>Click the <b>gear icon</b> (top right) → <b>Settings</b>.</li>
+            <li>On the left, under <b>Settings for my calendars</b>, click your calendar (usually your name).</li>
+            <li>Scroll all the way down to <b>"Secret address in iCal format"</b>.</li>
+            <li>Click the <b>copy</b> button next to that long address, and paste it below.</li>
+          </ol>
+          <p class="muted small">
+            Treat that address like a password — anyone who has it can read your calendar.
+            Carrot stores it on this computer only and never shows it again after saving.
+            (Outlook, Proton and most other calendars have the same kind of ".ics" address and work too.)
+          </p>
+        </details>
+        <div class="settings-row">
+          <input type="password" id="cal-ics-url" placeholder="Paste your secret calendar address here (https://…ics)" spellcheck="false" autocomplete="off">
+          <button class="btn btn-primary" onclick="saveCalendarUrl()">Connect</button>
+          <button class="btn btn-ghost" onclick="disconnectCalendar()">Disconnect</button>
+        </div>
+        <div class="settings-row">
+          <label class="inline-check"><input type="checkbox" id="cal-enabled" onchange="saveCalendarToggles()"> Show calendar in Carrot</label>
+          <label class="inline-check"><input type="checkbox" id="cal-agent-aware" onchange="saveCalendarToggles()"> Let the assistant see my calendar</label>
+        </div>
+        <div class="settings-row">
+          <span class="settings-status" id="cal-status">Not connected</span>
+        </div>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-head">
           <svg class="ico"><use href="#i-github"/></svg>
           <h3>GitHub Contributions</h3>
         </div>

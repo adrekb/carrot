@@ -30,6 +30,7 @@ from carrot import (
     leaderboard as lb_mod,
     bootstrap as bootstrap_mod,
     hub as hub_mod,
+    calfeed as calfeed_mod,
     deep_research as dr_mod,
     skills as skills_mod,
     mcp_client as mcp_mod,
@@ -576,6 +577,54 @@ async def pull_model(req: ModelPullRequest):
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
+# ===== Calendar (secret iCal URL — no OAuth, no keys) =====
+
+class CalendarConfigRequest(BaseModel):
+    ics_url: str | None = None      # empty string disconnects
+    enabled: bool | None = None
+    agent_aware: bool | None = None
+
+
+@app.get("/api/calendar/status")
+async def calendar_status():
+    return calfeed_mod.status()
+
+
+@app.put("/api/calendar/config")
+async def calendar_config(req: CalendarConfigRequest):
+    if req.ics_url is not None:
+        url = req.ics_url.strip()
+        if url and not url.lower().startswith(("http://", "https://")):
+            raise HTTPException(status_code=400, detail="The calendar address must start with https://")
+        config.set_config("calendar_ics_url", url)
+        if url:
+            config.set_config("calendar_enabled", True)
+    if req.enabled is not None:
+        config.set_config("calendar_enabled", req.enabled)
+    if req.agent_aware is not None:
+        config.set_config("calendar_agent_aware", req.agent_aware)
+    return calfeed_mod.status()
+
+
+@app.get("/api/calendar/events")
+async def calendar_events(days: int = 14):
+    if not config.get_config().get("calendar_enabled", False):
+        return {"configured": False, "events": []}
+    events = calfeed_mod.upcoming_events(days=max(1, min(days, 90)))
+    if events is None:
+        return {"configured": bool(config.get_config().get("calendar_ics_url")), "events": [],
+                "detail": "Calendar not configured or unreachable."}
+    return {"configured": True, "events": events}
+
+
+@app.post("/api/calendar/refresh")
+async def calendar_refresh():
+    events = calfeed_mod.upcoming_events(days=14, force=True)
+    if events is None:
+        return {"ok": False, "detail": "Could not fetch the calendar — check the secret address."}
+    return {"ok": True, "count": len(events)}
+
+
 # ===== Chat =====
 
 def _prepare_history(conv, message, skill_slug, extra_system=None, mode=None):
@@ -604,6 +653,15 @@ def _prepare_history(conv, message, skill_slug, extra_system=None, mode=None):
 
     if extra_system:
         history.append({"role": "system", "content": extra_system})
+
+    # Calendar awareness is an explicit opt-in; when on, the assistant sees
+    # the next few days so "what does my week look like" just works.
+    try:
+        cal_block = calfeed_mod.agent_context()
+        if cal_block:
+            history.append({"role": "system", "content": cal_block})
+    except Exception:
+        pass
 
     if config.get_config().get("memory_enabled", True):
         try:

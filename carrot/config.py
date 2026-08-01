@@ -77,6 +77,11 @@ DEFAULTS = {
     "cloud_model": "claude-opus-5",
     "cloud_effort": "high",
     "cloud_tasks": ["reasoning", "code"],
+    # Calendar via secret iCal URL (Google Calendar etc.) — no OAuth, no keys.
+    "calendar_ics_url": "",
+    "calendar_enabled": False,
+    # Whether the chat assistant may see upcoming events as context.
+    "calendar_agent_aware": False,
     # Carrot Hub — hardware-aware model catalog. The catalog URL is derived
     # from hub_url unless overridden (self-hosted hub, corporate mirror).
     "hub_url": "https://hub.carrotai.app",
@@ -115,7 +120,9 @@ DEFAULTS = {
 # Keys that must never be returned by the read-only config endpoint. A dict
 # value is reduced to a map of booleans, so the UI can still tell which
 # providers have a key without any key leaving the process.
-SECRET_KEYS = {"cloud_api_key", "provider_keys", "agent_secrets"}
+# calendar_ics_url is a capability URL: anyone holding it can read the
+# whole calendar, so it is redacted like an API key.
+SECRET_KEYS = {"cloud_api_key", "provider_keys", "agent_secrets", "calendar_ics_url"}
 
 
 def redact(settings):
