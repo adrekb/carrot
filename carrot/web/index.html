@@ -281,6 +281,7 @@
                   onchange="destinationChanged()"></select>
           <button class="btn btn-primary" id="doc-send-btn" onclick="sendDocToAgent()"
                   title="Send this note (or the selected text)">Send</button>
+          <button class="btn btn-ghost" onclick="sendNoteToObsidian()" title="Save this note into your Obsidian vault as a Markdown file">→ Obsidian</button>
           <button class="btn btn-ghost" onclick="deleteCurrentNote()">Delete</button>
         </div>
         <div id="doc-refs" class="doc-refs hidden"></div>
@@ -307,7 +308,7 @@
           <div id="code-tabs" class="code-tabs"></div>
           <span id="code-status" class="editor-status"></span>
           <button class="btn btn-ghost" onclick="saveCurrentFile()">Save</button>
-          <button class="btn btn-ghost" onclick="openInVSCode()">Open in VS Code</button>
+          <button class="btn btn-ghost" id="open-editor-btn" onclick="openInVSCode()">Open in VS Code</button>
         </div>
         <div id="code-editor-host" class="monaco-host"></div>
         <div id="code-empty" class="editor-empty">Open a file from the tree to start editing.</div>
@@ -589,6 +590,13 @@
       <div class="hub-toolbar"><div id="hub-usecase-chips" class="chip-row"></div></div>
       <div id="hub-recs" class="hub-recs"></div>
       <div id="hub-grid" class="hub-grid"><div class="empty">Loading catalog…</div></div>
+
+      <div class="ext-head" style="margin-top:26px"><h3>Storage &amp; cleanup</h3></div>
+      <p class="muted small">
+        Models add up fast — an 8B here, a 14B there, and the disk is gone. Everything installed
+        is listed with its real size; one click removes it (models can always be re-downloaded).
+      </p>
+      <div id="hub-storage"><div class="empty">Loading…</div></div>
     </div>
   </section>
 
@@ -791,6 +799,28 @@
         </div>
         <div class="settings-row">
           <span class="settings-status" id="cal-status">Not connected</span>
+        </div>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-note"/></svg>
+          <h3>Your apps — Obsidian &amp; your code editor</h3>
+        </div>
+        <p class="muted small">
+          Keep using the tools you love. Point Carrot at your <b>Obsidian vault</b> folder and
+          notes flow both ways: "→ Obsidian" in the Notes tab drops any Carrot note into your
+          vault as a normal Markdown file, and <b>Import</b> brings your vault notes into Carrot
+          so search and chat can see them (re-importing updates, never duplicates). The Code tab's
+          open button launches <b>Cursor</b> or <b>VS Code</b> — whichever you have.
+        </p>
+        <div class="settings-row">
+          <input type="text" id="obsidian-vault" placeholder="Full path to your vault folder, e.g. C:\Users\you\Documents\MyVault" spellcheck="false">
+          <button class="btn btn-primary" onclick="saveVaultPath()">Save</button>
+          <button class="btn btn-ghost" onclick="importObsidian()">Import vault → Carrot</button>
+        </div>
+        <div class="settings-row">
+          <span class="settings-status" id="interop-status">Checking…</span>
         </div>
       </div>
 

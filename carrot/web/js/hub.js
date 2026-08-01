@@ -34,6 +34,7 @@ async function loadHub() {
     renderHubMeta();
     await renderHubModels();
     runHubSearch(); // live HF results load alongside the curated picks
+    renderHubStorage();
 }
 
 // ===== Live thin-client search =====
@@ -279,5 +280,59 @@ async function refreshHubCatalog() {
         await loadHub();
     } catch (e) {
         meta.textContent = 'Refresh failed: ' + e.message;
+    }
+}
+
+// ===== Storage & cleanup =====
+
+async function renderHubStorage() {
+    const wrap = document.getElementById('hub-storage');
+    let s;
+    try { s = await api('/api/hub/storage'); } catch (e) {
+        wrap.innerHTML = `<div class="empty">${escHtml(e.message)}</div>`;
+        return;
+    }
+    if (!(s.models || []).length) {
+        wrap.innerHTML = '<div class="empty">No models installed yet.</div>';
+        return;
+    }
+    const usedPct = Math.min(100, Math.round((s.disk_total_bytes - s.disk_free_bytes) / s.disk_total_bytes * 100));
+    const modelsPct = Math.min(100, Math.round(s.models_total_bytes / s.disk_total_bytes * 100));
+    wrap.innerHTML = `
+        <div class="storage-summary">
+          <div class="storage-bar" title="Orange: your models · Grey: everything else on disk">
+            <div class="storage-bar-other" style="width:${usedPct}%"></div>
+            <div class="storage-bar-models" style="width:${Math.max(modelsPct, 1)}%"></div>
+          </div>
+          <span class="muted small">
+            Models: <b>${fmtBytes(s.models_total_bytes)}</b> · Disk free: <b>${fmtBytes(s.disk_free_bytes)}</b> of ${fmtBytes(s.disk_total_bytes)}
+          </span>
+        </div>
+        <div id="storage-rows" class="list"></div>`;
+    const rows = wrap.querySelector('#storage-rows');
+    for (const m of s.models) {
+        const row = document.createElement('div');
+        row.className = 'list-item storage-row';
+        row.innerHTML = `
+            <strong>${escHtml(m.name)}</strong>
+            ${m.active ? '<span class="tag active-tag">Active</span>' : ''}
+            <span class="tag">${fmtBytes(m.size)}</span>
+            <span class="muted small">${escHtml((m.modified_at || '').slice(0, 10))}</span>`;
+        const btn = document.createElement('button');
+        btn.className = 'btn btn-ghost small storage-del';
+        btn.textContent = m.active ? 'In use' : 'Delete';
+        btn.disabled = !!m.active;
+        btn.title = m.active ? 'Switch to another model first' : `Free ${fmtBytes(m.size)}`;
+        btn.onclick = async () => {
+            if (!confirm(`Delete ${m.name}? This frees ${fmtBytes(m.size)}. You can re-download it anytime.`)) return;
+            btn.disabled = true; btn.textContent = 'Deleting…';
+            try {
+                await api('/api/models/delete', { method: 'POST', body: JSON.stringify({ model: m.name }) });
+                renderHubStorage();
+                loadModels();
+            } catch (e) { alert(e.message); btn.disabled = false; btn.textContent = 'Delete'; }
+        };
+        row.appendChild(btn);
+        rows.appendChild(row);
     }
 }

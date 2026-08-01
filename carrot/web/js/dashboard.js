@@ -705,6 +705,50 @@ function pollGithubStatus(fromCatalog) {
 
 // ===== Settings =====
 
+// ===== Your apps: Obsidian vault + editor detection =====
+
+async function loadInteropSettings() {
+    let s;
+    try { s = await api('/api/interop/status'); } catch (_) { return; }
+    const input = document.getElementById('obsidian-vault');
+    if (input && !input.value) input.value = s.vault_path || '';
+    const bits = [];
+    bits.push(s.vault_ok ? 'Obsidian vault connected'
+        : (s.vault_path ? 'Vault folder not found' : 'No vault set'));
+    if ((s.editors || []).length) {
+        bits.push(`Editor: ${s.editors[0] === 'cursor' ? 'Cursor' : 'VS Code'} detected`);
+    } else {
+        bits.push('No editor CLI found (install VS Code or Cursor)');
+    }
+    const el = document.getElementById('interop-status');
+    if (el) { el.textContent = bits.join(' · '); el.className = 'settings-status' + (s.vault_ok ? ' ok' : ''); }
+}
+
+async function saveVaultPath() {
+    const path = document.getElementById('obsidian-vault').value.trim();
+    try {
+        await api('/api/interop/vault', { method: 'PUT', body: JSON.stringify({ vault_path: path }) });
+        loadInteropSettings();
+    } catch (e) {
+        const el = document.getElementById('interop-status');
+        if (el) { el.textContent = e.message; el.className = 'settings-status err'; }
+    }
+}
+
+async function importObsidian() {
+    const el = document.getElementById('interop-status');
+    if (el) el.textContent = 'Importing your vault…';
+    try {
+        const r = await api('/api/interop/obsidian/import', { method: 'POST' });
+        if (el) {
+            el.textContent = `Imported ${r.imported} new, updated ${r.updated}, unchanged ${r.skipped}.`;
+            el.className = 'settings-status ok';
+        }
+    } catch (e) {
+        if (el) { el.textContent = e.message; el.className = 'settings-status err'; }
+    }
+}
+
 // ===== Google Calendar settings (secret iCal address — no OAuth) =====
 
 function setCalStatus(text, cls) {
@@ -779,6 +823,7 @@ async function loadSettings() {
     const cloudToggle = document.getElementById('cloud-enabled');
     if (cloudToggle) cloudToggle.checked = !!cfg.cloud_enabled;
     loadCalendarSettings();
+    loadInteropSettings();
     if (typeof loadRouting === 'function') loadRouting();
     if (typeof loadBackups === 'function') loadBackups();
 

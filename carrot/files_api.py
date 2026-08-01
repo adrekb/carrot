@@ -107,20 +107,31 @@ async def files_write(req: WriteRequest):
     return {"path": req.path, "size": len(req.content)}
 
 
+@router.get("/editors")
+async def list_editors():
+    """Which editor CLIs are installed (cursor preferred over vscode)."""
+    from carrot import interop
+    return {"editors": interop.available_editors()}
+
+
 @router.post("/open-vscode")
 async def open_vscode(req: PathRequest):
+    """Open the file/workspace in the user's editor — Cursor if installed,
+    else VS Code. The endpoint keeps its historical name."""
+    from carrot import interop
     target = resolve(req.path or "")
-    code = shutil.which("code") or shutil.which("code.cmd")
-    if not code:
+    editor = interop.editor_command()
+    if not editor:
         raise HTTPException(
             status_code=404,
-            detail="VS Code CLI not found — install VS Code and enable the 'code' shell command",
+            detail="No editor CLI found — install VS Code (enable the 'code' shell command) or Cursor",
         )
+    name, exe = editor
     try:
         subprocess.Popen(
-            [code, target],
+            [exe, target],
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except OSError as e:
-        raise HTTPException(status_code=500, detail=f"failed to launch VS Code: {e}")
-    return {"opened": target}
+        raise HTTPException(status_code=500, detail=f"failed to launch {name}: {e}")
+    return {"opened": target, "editor": name}

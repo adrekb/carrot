@@ -77,6 +77,8 @@ DEFAULTS = {
     "cloud_model": "claude-opus-5",
     "cloud_effort": "high",
     "cloud_tasks": ["reasoning", "code"],
+    # Interop with apps the user already lives in.
+    "obsidian_vault_path": "",
     # Calendar via secret iCal URL (Google Calendar etc.) — no OAuth, no keys.
     "calendar_ics_url": "",
     "calendar_enabled": False,
