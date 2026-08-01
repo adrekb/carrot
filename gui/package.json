@@ -1,12 +1,12 @@
 {
   "name": "carrot-desktop",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Carrot - A local-first AI assistant with speech, hybrid search, notes, and planning",
   "main": "main.js",
   "scripts": {
     "start": "electron . --dev",
-    "package": "electron-builder --win --dir",
-    "dist": "electron-builder --win --x64 --publish=never"
+    "package": "electron-builder --dir",
+    "dist": "electron-builder --publish=never"
   },
   "keywords": ["carrot", "ai", "assistant", "local", "ollama", "speech"],
   "author": "Carrot Community",
@@ -18,10 +18,6 @@
   "build": {
     "appId": "com.carrot.ai",
     "productName": "Carrot",
-    "win": {
-      "target": "nsis",
-      "icon": "public/icon.ico"
-    },
     "directories": {
       "output": "dist"
     },
@@ -30,11 +26,38 @@
       "preload.js",
       "public/**/*"
     ],
-    "extraFiles": [
+    "extraResources": [
       {
-        "from": "../assets/ollama-setup.exe",
-        "to": "assets/ollama-setup.exe"
+        "from": "../dist/backend/carrot-backend",
+        "to": "backend/carrot-backend"
       }
-    ]
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "public/icon.ico",
+      "extraResources": [
+        {
+          "from": "../assets/ollama-setup.exe",
+          "to": "assets/ollama-setup.exe"
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false
+    },
+    "mac": {
+      "target": ["dmg", "zip"],
+      "icon": "public/icon.png",
+      "category": "public.app-category.productivity"
+    },
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "icon": "public/icon.png",
+      "category": "Utility",
+      "maintainer": "Carrot Community <carrot@users.noreply.github.com>"
+    }
   }
 }

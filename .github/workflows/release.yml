@@ -1,0 +1,78 @@
+# Build one-click installers for every platform and attach them to a
+# GitHub Release. GPU support needs no per-vendor builds: Ollama's own
+# artifacts carry CUDA + ROCm on Windows/Linux and Metal on macOS, and
+# Carrot's runtime bootstrap fetches the right one per machine.
+name: Build installers
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest   # Windows x64 (NVIDIA + AMD via OllamaSetup.exe)
+            artifact: windows-x64
+          - os: macos-latest     # Apple Silicon
+            artifact: mac-arm64
+          - os: macos-13         # Intel Mac
+            artifact: mac-x64
+          - os: ubuntu-latest    # Linux x64 (CUDA bundled, ROCm add-on at runtime)
+            artifact: linux-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pyinstaller
+
+      - name: Build installer
+        run: python scripts/build_installer.py
+
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          mkdir -p out
+          find gui/dist -maxdepth 1 -type f \
+            \( -name "*.exe" -o -name "*.dmg" -o -name "*.AppImage" -o -name "*.deb" -o -name "*.zip" \) \
+            -exec cp {} out/ \;
+          ls -la out/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: carrot-${{ matrix.artifact }}
+          path: out/*
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          draft: true
+          generate_release_notes: true

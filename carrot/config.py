@@ -1,9 +1,33 @@
 import os
+import sys
 import json
 import sqlite3
 
 
-CARROT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+def _default_data_dir() -> str:
+    """Where Carrot keeps its database, config and caches.
+
+    Running from a checkout: ``carrot/data`` next to the code, as always.
+    Running as an installed app (frozen backend), the install dir is
+    read-only, so use the platform's per-user data directory instead.
+    ``CARROT_DATA_DIR`` overrides everything (tests, portable installs).
+    """
+    env = os.environ.get("CARROT_DATA_DIR")
+    if env:
+        return os.path.abspath(env)
+    if getattr(sys, "frozen", False):
+        home = os.path.expanduser("~")
+        if sys.platform == "win32":
+            base = os.environ.get("APPDATA") or os.path.join(home, "AppData", "Roaming")
+            return os.path.join(base, "Carrot")
+        if sys.platform == "darwin":
+            return os.path.join(home, "Library", "Application Support", "Carrot")
+        base = os.environ.get("XDG_DATA_HOME") or os.path.join(home, ".local", "share")
+        return os.path.join(base, "carrot")
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+
+
+CARROT_DIR = _default_data_dir()
 CONFIG_DB_KEY = "config"
 DEFAULTS = {
     "ollama_host": "http://localhost:11434",
