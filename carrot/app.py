@@ -51,9 +51,8 @@ from carrot import (
     policy as policy_mod,
     research as research_mod,
     agent as carrot_agent,
-    browser as browser_mod,
-    desktop as desktop_mod,
-    websearch as websearch_mod,
+    workspaces as workspaces_mod,
+    help as help_mod,
 )
 from carrot.speech import whisper_stt, kokoro_tts
 from carrot.recap import DUCKDUCKGO_QUERY
@@ -78,6 +77,8 @@ app.include_router(files_api.router)
 # ===== Pydantic request models =====
 
 class SearchQuery(BaseModel):
+    # None means "the active workspace"; "all" means every workspace.
+    workspace: Optional[str] = None
     query: str
     limit: Optional[int] = 20
     hybrid_weight: Optional[float] = 0.5
@@ -106,6 +107,8 @@ class ChatRequest(BaseModel):
     task: Optional[str] = None
     provider: Optional[str] = None
     cloud: Optional[bool] = False
+    # off | single | multi. Omitted means the saved default.
+    search_mode: Optional[str] = None
 
 
 class AddMessageRequest(BaseModel):
@@ -259,6 +262,32 @@ class DomainRequest(BaseModel):
     domain: str
 
 
+class WorkspaceRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    folder_id: Optional[str] = None
+    color: Optional[str] = None
+    archived: Optional[bool] = None
+
+
+class FolderNodeRequest(BaseModel):
+    name: Optional[str] = None
+    parent_id: Optional[str] = None
+
+
+class WorkspaceItem(BaseModel):
+    kind: str
+    item_id: str
+
+
+class WorkspaceItemsRequest(BaseModel):
+    items: List[WorkspaceItem] = []
+
+
+class ActiveWorkspaceRequest(BaseModel):
+    workspace_id: Optional[str] = ""
+
+
 class SecretRequest(BaseModel):
     name: str
     value: str
@@ -280,6 +309,10 @@ class DocSendRequest(BaseModel):
     conversation_id: Optional[str] = None
     task: Optional[str] = None
     skill: Optional[str] = None
+    # An explicit choice from the picker, overriding the note's own @/to.
+    destination: Optional[str] = None
+    option: Optional[str] = None
+    search_mode: Optional[str] = None
 
 
 class LatexRequest(BaseModel):
@@ -492,17 +525,19 @@ async def pull_model(req: ModelPullRequest):
 
 # ===== Chat =====
 
-def _prepare_history(conv, message, skill_slug, extra_system=None):
+def _prepare_history(conv, message, skill_slug, extra_system=None, mode=None):
     """Build the model message list for a turn.
 
-    Order matters: skill instructions, then any caller-supplied context (a
-    document's cited files, say), then what Carrot remembers about the user,
-    then the rolling summary of everything older than the recent window, then
-    the recent turns verbatim. Long conversations therefore keep their early
-    context instead of falling off a fixed-size slice.
+    Order matters: the search directive, then skill instructions, then any
+    caller-supplied context (a document's cited files, say), then what Carrot
+    remembers about the user, then the rolling summary of everything older than
+    the recent window, then the recent turns verbatim. Long conversations
+    therefore keep their early context instead of falling off a fixed-size slice.
     """
     history = []
     skill = None
+    if mode:
+        history.append({"role": "system", "content": search_directive(mode)})
     if skill_slug:
         skill = skills_mod.get_skill(skill_slug)
         if skill and skill.get("instructions"):
@@ -519,7 +554,15 @@ def _prepare_history(conv, message, skill_slug, extra_system=None):
 
     if config.get_config().get("memory_enabled", True):
         try:
-            block = memory_mod.as_prompt_block(memory_mod.recall(message))
+            # Recall is scoped to the workspace the conversation lives in, not
+            # the one that happens to be active — re-opening an old chat should
+            # bring back its own context, not today's.
+            block = memory_mod.as_prompt_block(memory_mod.recall(
+                message,
+                workspace_id=workspaces_mod.workspace_of(
+                    workspaces_mod.KIND_CONVERSATION, conv.get("id", "")
+                ) or "",
+            ))
             if block:
                 history.append({"role": "system", "content": block})
         except Exception:
@@ -531,11 +574,92 @@ def _prepare_history(conv, message, skill_slug, extra_system=None):
 
 
 MAX_TOOL_ROUNDS = 8
+# Multi-turn search needs room to search, read, notice a gap, and search again.
+# Eight rounds is one pass; a real follow-up loop runs out halfway through.
+MAX_TOOL_ROUNDS_MULTI = 16
+
+# ===== Chat search modes =====
+#
+# Whether a chat turn may reach the web at all, and how hard it should try.
+# Off is a real setting, not a formality: a question about your own notes gets
+# worse, not better, when the model decides to search the web first.
+
+SEARCH_OFF = "off"
+SEARCH_SINGLE = "single"
+SEARCH_MULTI = "multi"
+
+SEARCH_MODES = {
+    SEARCH_OFF: {
+        "label": "No search",
+        "help": "Carrot answers from the conversation, your files and its memory. It never reaches the web.",
+        "tools": set(),
+    },
+    SEARCH_SINGLE: {
+        "label": "Search",
+        "help": "Carrot may search the web and read a page when the question needs something current.",
+        "tools": {"web_search", "read_url"},
+    },
+    SEARCH_MULTI: {
+        "label": "Multi-turn search",
+        "help": "Carrot searches, reads, works out what is still missing, and searches again — "
+                "and can hand the whole question to Carrot Research.",
+        "tools": {"web_search", "read_url", "start_research"},
+    },
+}
+
+ALL_SEARCH_TOOLS = set().union(*(mode["tools"] for mode in SEARCH_MODES.values()))
+
+MULTI_SEARCH_DIRECTIVE = (
+    "Search mode: multi-turn. Do not stop at the first set of results.\n"
+    "- Search, read the pages that look most likely to answer the question, then ask "
+    "yourself what you still cannot answer, and search again for exactly that.\n"
+    "- Two or three focused rounds beat one broad one. Use the words a source would "
+    "use, not the words of the question.\n"
+    "- Cite the URL for anything you learned from a page, and say plainly when the "
+    "sources disagree or when you could not find something.\n"
+    "- If the question is big enough to deserve a written report with checked "
+    "citations, call start_research instead of doing it by hand."
+)
+
+SINGLE_SEARCH_DIRECTIVE = (
+    "Search mode: single-pass. You may search the web and read a page when the "
+    "question needs current information or a source you do not already have. "
+    "Cite the URL for anything you take from a page. Do not search for things you "
+    "already know or that are in the conversation."
+)
+
+NO_SEARCH_DIRECTIVE = (
+    "Search mode: off. You have no web access this turn. Answer from the "
+    "conversation, the user's indexed files, and what you remember about them. "
+    "If the answer genuinely needs something from the web, say so rather than "
+    "guessing — the user can switch search on."
+)
 
 
-def _available_tools():
-    """Built-in tools, enabled extension packs, and every enabled MCP server."""
-    tools = list(agent_mod.ollama_tools())
+def search_mode(requested: Optional[str] = None) -> str:
+    """The mode for this turn: the request's choice, else the saved default."""
+    mode = (requested or config.get_config().get("chat_search_mode", SEARCH_SINGLE) or "").lower()
+    return mode if mode in SEARCH_MODES else SEARCH_SINGLE
+
+
+def search_directive(mode: str) -> str:
+    return {
+        SEARCH_OFF: NO_SEARCH_DIRECTIVE,
+        SEARCH_SINGLE: SINGLE_SEARCH_DIRECTIVE,
+        SEARCH_MULTI: MULTI_SEARCH_DIRECTIVE,
+    }[mode]
+
+
+def _available_tools(mode: str = SEARCH_SINGLE):
+    """Built-in tools, enabled extension packs, and every enabled MCP server.
+
+    The search mode subtracts rather than adds: every non-web tool is always
+    offered, and the web ones are filtered to what this mode allows. Removing
+    the tool is what makes "off" mean off — an instruction not to search is a
+    request, but a tool that is not in the list cannot be called.
+    """
+    allowed = set(agent_mod.TOOLS) - ALL_SEARCH_TOOLS | SEARCH_MODES[mode]["tools"]
+    tools = list(agent_mod.ollama_tools(enabled=sorted(allowed)))
     try:
         tools += extensions_mod.ollama_tools()
     except Exception:
@@ -580,22 +704,26 @@ def _run_tool(name, args, conversation_id):
     yield {"_tool_result": outcome.get("result", "")}
 
 
-def _agentic_chat_events(history, resolved, skill=None, conversation_id=None):
+def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mode=SEARCH_SINGLE):
     """Yield SSE dicts for one chat turn, running the tool-calling loop.
 
     Tool calls are dispatched to built-in tools or MCP by name prefix, surfaced
-    to the UI as they happen, and fed back to the model for up to
-    MAX_TOOL_ROUNDS rounds before the final answer streams as `chunk` events.
+    to the UI as they happen, and fed back to the model for a bounded number of
+    rounds before the final answer streams as `chunk` events. Multi-turn search
+    gets a larger round budget because searching, reading and re-searching is
+    several rounds on its own.
     """
     if skill:
         yield {"skill": {"slug": skill["slug"], "name": skill["name"]}}
     yield {"route": resolved.as_dict()}
+    yield {"search_mode": mode}
 
-    tools = _available_tools()
+    tools = _available_tools(mode)
+    rounds = MAX_TOOL_ROUNDS_MULTI if mode == SEARCH_MULTI else MAX_TOOL_ROUNDS
     working = list(history)
     final_text = []
 
-    for _ in range(MAX_TOOL_ROUNDS):
+    for _ in range(rounds):
         content_parts = []
         tool_calls = []
         for event in router_mod.stream_events(resolved, working, tools=tools or None):
@@ -696,7 +824,7 @@ def _resolve_chat_route(req):
     return resolved
 
 
-def _chat_stream_response(req, conv, history, skill, resolved, prelude=None):
+def _chat_stream_response(req, conv, history, skill, resolved, prelude=None, mode=SEARCH_SINGLE):
     """Shared SSE body for the chat and doc-send endpoints.
 
     ``prelude`` is emitted as the first event, which is how a doc send reports
@@ -706,7 +834,7 @@ def _chat_stream_response(req, conv, history, skill, resolved, prelude=None):
         final_text = ""
         if prelude:
             yield f"data: {json.dumps({'document': prelude})}\n\n"
-        for event in _agentic_chat_events(history, resolved, skill, req.conversation_id):
+        for event in _agentic_chat_events(history, resolved, skill, req.conversation_id, mode):
             if "_final_text" in event:
                 final_text = event["_final_text"]
                 continue
@@ -725,11 +853,12 @@ def _chat_stream_response(req, conv, history, skill, resolved, prelude=None):
 async def chat(req: ChatRequest):
     conv = _open_conversation(req)
     resolved = _resolve_chat_route(req)
-    history, skill = _prepare_history(conv, req.message, req.skill)
+    mode = search_mode(req.search_mode)
+    history, skill = _prepare_history(conv, req.message, req.skill, mode=mode)
     conv_mod.add_message(req.conversation_id, "user", req.message)
 
     if req.stream:
-        return _chat_stream_response(req, conv, history, skill, resolved)
+        return _chat_stream_response(req, conv, history, skill, resolved, mode=mode)
 
     response = router_mod.complete(resolved, history)
     stored = conv_mod.add_message(req.conversation_id, "assistant", response)
@@ -744,21 +873,42 @@ async def chat(req: ChatRequest):
     }
 
 
+@app.get("/api/chat/search-modes")
+async def list_search_modes():
+    """The three search postures and which one is currently the default."""
+    return {
+        "modes": [
+            {"id": name, "label": spec["label"], "help": spec["help"],
+             "tools": sorted(spec["tools"])}
+            for name, spec in SEARCH_MODES.items()
+        ],
+        "current": search_mode(),
+    }
+
+
 @app.post("/api/chat/stream")
 async def chat_stream(req: ChatRequest):
     """Dedicated SSE streaming endpoint."""
     conv = _open_conversation(req)
     resolved = _resolve_chat_route(req)
-    history, skill = _prepare_history(conv, req.message, req.skill)
+    mode = search_mode(req.search_mode)
+    history, skill = _prepare_history(conv, req.message, req.skill, mode=mode)
     conv_mod.add_message(req.conversation_id, "user", req.message)
-    return _chat_stream_response(req, conv, history, skill, resolved)
+    return _chat_stream_response(req, conv, history, skill, resolved, mode=mode)
 
 
 # ===== Conversations =====
 
 @app.get("/api/conversations")
-async def list_conversations(limit: int = 50):
-    return conv_mod.list_conversations(limit=limit)
+async def list_conversations(limit: int = 50, workspace: Optional[str] = None):
+    """Recent conversations, scoped to the active workspace unless told otherwise.
+
+    Returns a bare list rather than an envelope — three callers already expect
+    that shape, and the UI knows the active workspace without being told again.
+    """
+    return conv_mod.list_conversations(
+        limit=limit, workspace_id=workspaces_mod.resolve_scope(workspace)
+    )
 
 
 @app.get("/api/conversations/{conv_id}")
@@ -828,13 +978,28 @@ async def delete_chat_folder(folder_id: str):
 # ===== Search =====
 
 @app.get("/api/search")
-async def search_get(q: str, limit: int = 20, hybrid_weight: float = 0.5):
-    return search.search_conversations(q, limit=limit, hybrid_weight=hybrid_weight)
+async def search_get(q: str, limit: int = 20, hybrid_weight: float = 0.5,
+                     workspace: Optional[str] = None):
+    """Search conversations, scoped to the active workspace unless told otherwise.
+
+    ``workspace`` omitted means "whatever is active" — that default is what
+    makes a workspace behave like a mode rather than a filter you re-apply on
+    every screen. Pass ``workspace=all`` to search everything regardless.
+    """
+    scope = workspaces_mod.resolve_scope(workspace)
+    result = search.search_conversations(
+        q, limit=limit, hybrid_weight=hybrid_weight, workspace_id=scope
+    )
+    return {**result, "workspace_id": scope}
 
 
 @app.post("/api/search")
 async def search_post(req: SearchQuery):
-    return search.search_conversations(req.query, limit=req.limit, hybrid_weight=req.hybrid_weight)
+    scope = workspaces_mod.resolve_scope(req.workspace)
+    result = search.search_conversations(
+        req.query, limit=req.limit, hybrid_weight=req.hybrid_weight, workspace_id=scope
+    )
+    return {**result, "workspace_id": scope}
 
 
 @app.post("/api/search/classify")
@@ -852,7 +1017,9 @@ async def get_assignments():
 
 @app.get("/api/computer_use/scan")
 async def scan_computer():
-    count = cpu_mod.index_computer_use()
+    # `index_computer_use` never existed; this endpoint has been raising
+    # AttributeError since it was written. The scan itself is computer_use_scan.
+    count = cpu_mod.computer_use_scan()
     return {"indexed": count}
 
 
@@ -1461,19 +1628,25 @@ async def start_index_scan(req: IndexScanRequest = IndexScanRequest()):
 
 
 @app.get("/api/index/search")
-async def search_index(q: str, limit: int = 10, hybrid_weight: float = 0.5):
-    return indexer_mod.search_documents(q, limit=limit, hybrid_weight=hybrid_weight)
+async def search_index(q: str, limit: int = 10, hybrid_weight: float = 0.5,
+                       workspace: Optional[str] = None):
+    return indexer_mod.search_documents(
+        q, limit=limit, hybrid_weight=hybrid_weight,
+        workspace_id=workspaces_mod.resolve_scope(workspace),
+    )
 
 
 @app.get("/api/search/all")
-async def search_everything(q: str, limit: int = 10):
-    """One query across conversations, documents and memory."""
-    conversations = search.search_conversations(q, limit=limit)
+async def search_everything(q: str, limit: int = 10, workspace: Optional[str] = None):
+    """One query across conversations, documents and memory, in one scope."""
+    scope = workspaces_mod.resolve_scope(workspace)
+    conversations = search.search_conversations(q, limit=limit, workspace_id=scope)
     return {
         "query": q,
+        "workspace_id": scope,
         "conversations": conversations["results"],
-        "documents": indexer_mod.search_documents(q, limit=limit)["results"],
-        "memories": memory_mod.search(q, limit=limit),
+        "documents": indexer_mod.search_documents(q, limit=limit, workspace_id=scope)["results"],
+        "memories": memory_mod.search(q, limit=limit, workspace_id=scope),
     }
 
 
@@ -1527,6 +1700,145 @@ async def revert_journal(entry_id: str):
     if not result["success"]:
         raise HTTPException(status_code=400, detail=result["error"])
     return result
+
+
+# ===== Workspaces and folders =====
+
+@app.get("/api/workspaces")
+async def workspace_tree(include_archived: bool = False):
+    """Folders, workspaces and which one is active — the sidebar's whole state."""
+    return workspaces_mod.tree(include_archived=include_archived)
+
+
+@app.get("/api/workspaces/status")
+async def workspace_status():
+    return workspaces_mod.status()
+
+
+@app.post("/api/workspaces/active")
+async def set_active_workspace(req: ActiveWorkspaceRequest):
+    """Switch context. An empty id means all workspaces."""
+    try:
+        return {"active": workspaces_mod.set_active_workspace(req.workspace_id or "")}
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.post("/api/workspaces")
+async def create_workspace(req: WorkspaceRequest):
+    try:
+        return workspaces_mod.create_workspace(
+            name=req.name, description=req.description or "",
+            folder_id=req.folder_id or None, color=req.color or "",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/workspaces/{workspace_id}")
+async def get_workspace(workspace_id: str):
+    workspace = workspaces_mod.get_workspace(workspace_id)
+    if workspace is None:
+        raise HTTPException(status_code=404, detail="No such workspace")
+    return workspace
+
+
+@app.get("/api/workspaces/{workspace_id}/contents")
+async def workspace_contents(workspace_id: str, limit: int = 50):
+    """What is filed here, resolved to titles."""
+    contents = workspaces_mod.contents(workspace_id, limit=limit)
+    if not contents:
+        raise HTTPException(status_code=404, detail="No such workspace")
+    return contents
+
+
+@app.patch("/api/workspaces/{workspace_id}")
+async def update_workspace(workspace_id: str, req: WorkspaceRequest):
+    try:
+        workspace = workspaces_mod.update_workspace(
+            workspace_id, name=req.name, description=req.description,
+            folder_id=req.folder_id, color=req.color, archived=req.archived,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if workspace is None:
+        raise HTTPException(status_code=404, detail="No such workspace")
+    return workspace
+
+
+@app.delete("/api/workspaces/{workspace_id}")
+async def delete_workspace(workspace_id: str):
+    """Delete the grouping. Its chats, memories and files are unfiled, not deleted."""
+    if not workspaces_mod.delete_workspace(workspace_id):
+        raise HTTPException(status_code=404, detail="No such workspace")
+    return {"deleted": True}
+
+
+@app.post("/api/workspaces/{workspace_id}/items")
+async def file_workspace_items(workspace_id: str, req: WorkspaceItemsRequest):
+    """File items here. An empty workspace id in the path is not accepted; use DELETE."""
+    if workspaces_mod.get_workspace(workspace_id) is None:
+        raise HTTPException(status_code=404, detail="No such workspace")
+    filed = workspaces_mod.move_items(workspace_id, [i.model_dump() for i in req.items])
+    return {"filed": filed, "counts": workspaces_mod.item_counts(workspace_id)}
+
+
+@app.delete("/api/workspaces/items/{kind}/{item_id}")
+async def unfile_workspace_item(kind: str, item_id: str):
+    return {"unfiled": workspaces_mod.unfile_item(kind, item_id)}
+
+
+@app.post("/api/folders")
+async def create_folder(req: FolderNodeRequest):
+    try:
+        return workspaces_mod.create_folder(req.name, req.parent_id or None)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.patch("/api/folders/{folder_id}")
+async def update_folder(folder_id: str, req: FolderNodeRequest):
+    try:
+        folder = workspaces_mod.update_folder(folder_id, name=req.name, parent_id=req.parent_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if folder is None:
+        raise HTTPException(status_code=404, detail="No such folder")
+    return folder
+
+
+@app.delete("/api/folders/{folder_id}")
+async def delete_workspace_folder(folder_id: str):
+    """Delete a folder. Its workspaces move to the top level rather than vanishing."""
+    if not workspaces_mod.delete_folder(folder_id):
+        raise HTTPException(status_code=404, detail="No such folder")
+    return {"deleted": True}
+
+
+# ===== Help and tutorial =====
+
+@app.get("/api/help")
+async def help_index(q: str = ""):
+    """Every help topic, or the ones matching a query."""
+    return {
+        "topics": help_mod.search_topics(q) if q else help_mod.topics(),
+        "sections": help_mod.SECTIONS,
+        "query": q,
+    }
+
+
+@app.get("/api/help/tutorial")
+async def help_tutorial():
+    """Getting-started steps, each checked against the live install."""
+    return help_mod.tutorial()
+
+
+@app.get("/api/help/{topic_id}")
+async def help_topic(topic_id: str):
+    topic = help_mod.get_topic(topic_id)
+    if topic is None:
+        raise HTTPException(status_code=404, detail="No such help topic")
+    return topic
 
 
 # ===== Carrot Research =====
@@ -1767,6 +2079,17 @@ async def latex_bibliography(req: BibliographyRequest):
 
 # ===== Doc to agent =====
 
+@app.get("/api/doc/destinations")
+async def doc_destinations():
+    """The places a note can be sent, for the picker beside the Send button."""
+    return {
+        "destinations": [
+            {"id": name, **{k: v for k, v in spec.items()}}
+            for name, spec in doc_agent.DESTINATIONS.items()
+        ]
+    }
+
+
 @app.get("/api/doc/candidates")
 async def doc_candidates(kind: str = "file", q: str = "", provider: str = "", limit: int = 40):
     """Completions for the editor's '@' menu.
@@ -1774,6 +2097,8 @@ async def doc_candidates(kind: str = "file", q: str = "", provider: str = "", li
     ``model`` needs a provider first — the list is whatever that provider
     reports for the key on file, not a hardcoded set.
     """
+    if kind == "to":
+        return {"kind": "to", "candidates": doc_agent.destination_candidates(q)}
     if kind == "provider":
         return {"kind": "provider", "candidates": doc_agent.provider_candidates(q)}
     if kind == "model":
@@ -1797,16 +2122,51 @@ async def doc_parse(req: DocSendRequest):
 
 @app.post("/api/doc/send")
 async def doc_send(req: DocSendRequest):
-    """Send a note straight to the agent, cited files and chosen model included.
+    """Send a note to wherever it says it goes.
 
-    Deliberately reuses the ordinary chat turn: the note's text becomes the user
-    message, its cited files become a system context block, and everything else
-    — memory, tools, summaries, approvals — behaves exactly as it does in chat.
+    Three destinations, one document format. Chat reuses the ordinary turn: the
+    note's text becomes the user message, its cited files a system context
+    block, and memory, tools, summaries and approvals behave exactly as they do
+    in chat. Research and Agent take the same note and hand it to their own
+    pipeline — the citations follow it either way, as evidence or as background.
+
+    An explicit ``destination`` on the request wins over the note's own
+    ``@/to``: the picker in the UI is an override, not a second source of truth.
     """
     if not (req.text or "").strip():
         raise HTTPException(status_code=400, detail="Nothing to send")
 
     resolved = doc_agent.resolve(req.text, task=req.task or router_mod.TASK_CHAT)
+    destination = (req.destination or resolved.destination or doc_agent.DESTINATION_CHAT).lower()
+    if destination not in doc_agent.DESTINATIONS:
+        raise HTTPException(status_code=400, detail=f"Unknown destination '{destination}'")
+    option = req.option or (
+        resolved.option if destination == resolved.destination
+        else doc_agent.DESTINATIONS[destination]["default"]
+    )
+
+    if destination == doc_agent.DESTINATION_RESEARCH:
+        # The note is the question. Its citations become numbered evidence, so
+        # a claim drawn from a paper the user supplied is verified against that
+        # paper's text rather than taken on trust.
+        return _sse(research_mod.run_research_stream(
+            resolved.prompt,
+            depth=option or research_mod.DEFAULT_DEPTH,
+            conversation_id=req.conversation_id,
+            seed_sources=resolved.seed_sources(),
+        ))
+
+    if destination == doc_agent.DESTINATION_AGENT:
+        # The note is the task. Citations are background rather than evidence —
+        # the agent's evidence is the page in front of it.
+        task_text = resolved.prompt
+        if resolved.context:
+            task_text += "\n\n" + resolved.context
+        return _sse(carrot_agent.run_agent_stream(
+            task_text,
+            surface=option or carrot_agent.SURFACE_BROWSER,
+            conversation_id=req.conversation_id,
+        ))
 
     chat_req = ChatRequest(
         message=resolved.prompt,
@@ -1828,11 +2188,15 @@ async def doc_send(req: DocSendRequest):
     elif route.local and not ollama_mod.OllamaClient().is_available():
         raise HTTPException(status_code=503, detail="Ollama is not available")
 
+    mode = search_mode(req.search_mode)
     history, skill = _prepare_history(
-        conv, resolved.prompt, chat_req.skill, extra_system=resolved.context or None
+        conv, resolved.prompt, chat_req.skill,
+        extra_system=resolved.context or None, mode=mode,
     )
     conv_mod.add_message(chat_req.conversation_id, "user", resolved.prompt)
-    return _chat_stream_response(chat_req, conv, history, skill, route, prelude=resolved.as_dict())
+    return _chat_stream_response(
+        chat_req, conv, history, skill, route, prelude=resolved.as_dict(), mode=mode
+    )
 
 
 # ===== Providers (BYOK) =====

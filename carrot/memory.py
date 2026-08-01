@@ -141,6 +141,22 @@ def create(
     conn.close()
 
     vectors.enqueue(vectors.NS_MEMORY, memory_id, content)
+
+    # A memory belongs where the conversation that produced it belongs, which
+    # keeps an extraction running in the background from landing in whatever
+    # workspace happens to be active when it finishes.
+    try:
+        from . import workspaces as workspaces_mod
+
+        target = None
+        if source_conversation_id:
+            target = workspaces_mod.workspace_of(
+                workspaces_mod.KIND_CONVERSATION, source_conversation_id
+            )
+        workspaces_mod.file_item(workspaces_mod.KIND_MEMORY, memory_id, target)
+    except Exception:
+        pass
+
     return get(memory_id)
 
 
@@ -234,14 +250,20 @@ def history(subject: str, kind: Optional[str] = None) -> List[Dict[str, Any]]:
 
 # ===== Search & recall =====
 
-def search(query: str, limit: int = 10, include_superseded: bool = False) -> List[Dict[str, Any]]:
-    """Hybrid memory search: FTS candidates reranked by embedding similarity."""
-    candidates = _fts_candidates(query, limit * 4, include_superseded)
+def search(query: str, limit: int = 10, include_superseded: bool = False,
+           workspace_id: str = "") -> List[Dict[str, Any]]:
+    """Hybrid memory search: FTS candidates reranked by embedding similarity.
+
+    Scoped to a workspace, this is what stops a question about your thesis from
+    recalling what you decided about a side project in March.
+    """
+    candidates = _fts_candidates(query, limit * 4, include_superseded, workspace_id)
     if not candidates:
         candidates = {
             m["id"]: m
             for m in list_memories(status=None if include_superseded else STATUS_ACTIVE, limit=limit * 4)
         }
+        candidates = _keep_in_workspace(candidates, workspace_id)
         if not candidates:
             return []
 
@@ -257,10 +279,30 @@ def search(query: str, limit: int = 10, include_superseded: bool = False) -> Lis
     return results
 
 
-def _fts_candidates(query: str, limit: int, include_superseded: bool) -> Dict[str, Dict[str, Any]]:
+def _keep_in_workspace(candidates: Dict[str, Dict[str, Any]], workspace_id: str) -> Dict[str, Dict[str, Any]]:
+    """Drop memories filed outside the active workspace.
+
+    Used on the fallback path, where the candidates did not come from a query
+    that could carry the scope in SQL.
+    """
+    if not workspace_id or not candidates:
+        return candidates
+    from . import workspaces as workspaces_mod
+
+    allowed = set(workspaces_mod.item_ids(workspace_id, workspaces_mod.KIND_MEMORY))
+    return {mid: memory for mid, memory in candidates.items() if mid in allowed}
+
+
+def _fts_candidates(query: str, limit: int, include_superseded: bool,
+                    workspace_id: str = "") -> Dict[str, Dict[str, Any]]:
     match = _fts_query(query)
     if not match:
         return {}
+    from . import workspaces as workspaces_mod
+
+    scope_sql, scope_params = workspaces_mod.scope_clause(
+        workspaces_mod.KIND_MEMORY, workspace_id, "m.id"
+    )
     sql = """SELECT m.* FROM memories_fts f
              JOIN memories m ON m.id = f.memory_id
              WHERE memories_fts MATCH ?"""
@@ -268,6 +310,8 @@ def _fts_candidates(query: str, limit: int, include_superseded: bool) -> Dict[st
     if not include_superseded:
         sql += " AND m.status = ?"
         params.append(STATUS_ACTIVE)
+    sql += scope_sql
+    params.extend(scope_params)
     sql += " ORDER BY rank LIMIT ?"
     params.append(limit)
 
@@ -292,13 +336,23 @@ def _fts_query(query: str) -> str:
     return " OR ".join(f'"{t}"' for t in terms)
 
 
-def recall(query: str, limit: int = 8) -> List[Dict[str, Any]]:
+def recall(query: str, limit: int = 8, workspace_id: str = "") -> List[Dict[str, Any]]:
     """Memories relevant to a query, with pinned ones always included.
 
-    This is what gets injected into the chat prompt.
+    This is what gets injected into the chat prompt. A pinned memory survives
+    the workspace scope only if it is filed there or unfiled — pinning means
+    "always relevant", but a pin inside one project should not follow you into
+    another.
     """
     pinned = [m for m in list_memories(limit=limit) if m["pinned"]]
-    relevant = search(query, limit=limit)
+    if workspace_id:
+        from . import workspaces as workspaces_mod
+
+        pinned = [
+            m for m in pinned
+            if workspaces_mod.workspace_of(workspaces_mod.KIND_MEMORY, m["id"]) in (workspace_id, None)
+        ]
+    relevant = search(query, limit=limit, workspace_id=workspace_id)
     combined: Dict[str, Dict[str, Any]] = {m["id"]: m for m in pinned}
     for memory in relevant:
         combined.setdefault(memory["id"], memory)

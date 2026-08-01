@@ -47,6 +47,7 @@ from typing import Any, Dict, Generator, List, Optional
 
 from . import browser as browser_mod, desktop as desktop_mod, policy
 from . import research as research_mod, router as router_mod, websearch
+from . import workspaces as workspaces_mod
 from .config import get_config
 from .database import get_db
 
@@ -148,6 +149,7 @@ def create_run(task: str, surface: str, budget: policy.Budget,
     )
     conn.commit()
     conn.close()
+    workspaces_mod.file_item(workspaces_mod.KIND_AGENT, run_id)
     return run_id
 
 

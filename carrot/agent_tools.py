@@ -379,18 +379,25 @@ def _tool_run_command(command: str, **_) -> str:
 
 
 def _tool_search_memory(query: str, **_) -> str:
-    from . import memory as memory_mod
+    """Search memory, in whatever workspace the user is currently in.
 
-    results = memory_mod.search(query, limit=8)
+    The agent's recall follows the same scope the UI shows, so it never answers
+    from a project the user has stepped out of.
+    """
+    from . import memory as memory_mod, workspaces as workspaces_mod
+
+    results = memory_mod.search(query, limit=8, workspace_id=workspaces_mod.active_workspace_id())
     if not results:
         return "no memories matched"
     return "\n".join(f"- ({m['kind']}/{m['subject']}) {m['content']}" for m in results)
 
 
 def _tool_search_documents(query: str, **_) -> str:
-    from . import indexer as indexer_mod
+    from . import indexer as indexer_mod, workspaces as workspaces_mod
 
-    results = indexer_mod.search_documents(query, limit=5)["results"]
+    results = indexer_mod.search_documents(
+        query, limit=5, workspace_id=workspaces_mod.active_workspace_id()
+    )["results"]
     if not results:
         return "no indexed documents matched"
     return "\n\n".join(
@@ -399,9 +406,11 @@ def _tool_search_documents(query: str, **_) -> str:
 
 
 def _tool_search_conversations(query: str, **_) -> str:
-    from . import search as search_mod
+    from . import search as search_mod, workspaces as workspaces_mod
 
-    results = search_mod.search_conversations(query, limit=5)["results"]
+    results = search_mod.search_conversations(
+        query, limit=5, workspace_id=workspaces_mod.active_workspace_id()
+    )["results"]
     if not results:
         return "no conversations matched"
     return "\n".join(

@@ -66,6 +66,20 @@
     <input type="text" id="top-search-input" placeholder="Search conversations…" onkeydown="if(event.key==='Enter')topSearch()">
   </div>
   <div class="menubar-right">
+    <div id="ws-switcher">
+      <button id="ws-btn" onclick="toggleWorkspacePop()" title="Which project Carrot is working in">
+        <svg class="ico"><use href="#i-folder"/></svg>
+        <span id="ws-label">All workspaces</span>
+        <svg class="ico chev"><use href="#i-chevron"/></svg>
+      </button>
+      <div id="ws-pop" class="hidden">
+        <div class="pop-section">Workspace</div>
+        <div id="ws-pop-list"></div>
+        <div class="pop-foot">
+          <button class="btn btn-ghost small" onclick="switchTab('workspaces');toggleWorkspacePop()">Manage…</button>
+        </div>
+      </div>
+    </div>
     <span id="engine-status">
       <span id="engine-dot" class="dot"></span>
       <span id="engine-label">Connecting</span>
@@ -99,6 +113,8 @@
     <button class="nav-item sub" data-tab="code" onclick="switchTab('code')"><svg class="ico"><use href="#i-terminal"/></svg><span class="nav-label">Code</span></button>
     <button class="nav-item sub" data-tab="goals" onclick="switchTab('goals')"><svg class="ico"><use href="#i-cap"/></svg><span class="nav-label">Goals</span></button>
     <button class="nav-item sub" data-tab="reminders" onclick="switchTab('reminders')"><svg class="ico"><use href="#i-pulse"/></svg><span class="nav-label">Reminders</span></button>
+    <button class="nav-item sub" data-tab="workspaces" onclick="switchTab('workspaces')"><svg class="ico"><use href="#i-folder"/></svg><span class="nav-label">Workspaces</span></button>
+    <button class="nav-item sub" data-tab="help" onclick="switchTab('help')"><svg class="ico"><use href="#i-cap"/></svg><span class="nav-label">Help</span></button>
     <button class="nav-item sub" data-tab="research" onclick="switchTab('research')"><svg class="ico"><use href="#i-search"/></svg><span class="nav-label">Research</span></button>
     <button class="nav-item sub" data-tab="agent" onclick="switchTab('agent')"><svg class="ico"><use href="#i-chip"/></svg><span class="nav-label">Agent</span></button>
     <button class="nav-item sub" data-tab="assignments" onclick="switchTab('assignments')"><svg class="ico"><use href="#i-news"/></svg><span class="nav-label">Assignments</span></button>
@@ -250,8 +266,11 @@
           <input type="text" id="note-title" class="title-input" placeholder="Untitled note" oninput="scheduleNoteSave()">
           <span id="note-status" class="editor-status"></span>
           <span id="note-words" class="editor-words"></span>
-          <button class="btn btn-primary" onclick="sendDocToAgent()"
-                  title="Send this note (or the selected text) to the agent">Send to agent</button>
+          <select id="doc-destination" class="doc-destination"
+                  title="Where this note goes. A @/to line in the note sets this for you."
+                  onchange="destinationChanged()"></select>
+          <button class="btn btn-primary" id="doc-send-btn" onclick="sendDocToAgent()"
+                  title="Send this note (or the selected text)">Send</button>
           <button class="btn btn-ghost" onclick="deleteCurrentNote()">Delete</button>
         </div>
         <div id="doc-refs" class="doc-refs hidden"></div>
@@ -324,6 +343,72 @@
   </section>
 
   <!-- Extensions -->
+  <!-- Workspaces -->
+  <section id="view-workspaces" class="view">
+    <div class="page">
+      <div class="page-head"><h2>Workspaces</h2></div>
+      <p class="muted">
+        A workspace holds one project's chats, memories, files and runs. While it is active,
+        new work is filed there and search only looks inside it — nothing is moved on disk,
+        and switching to <em>All workspaces</em> shows everything again.
+      </p>
+
+      <div class="composer">
+        <input type="text" id="ws-new-name" placeholder="New workspace name">
+        <select id="ws-new-folder"></select>
+        <button class="btn btn-primary" onclick="createWorkspace()">Add workspace</button>
+        <input type="text" id="folder-new-name" placeholder="New folder name">
+        <select id="folder-new-parent"></select>
+        <button class="btn btn-ghost" onclick="createFolder()">Add folder</button>
+      </div>
+
+      <div class="ws-grid">
+        <div class="ws-tree-pane">
+          <h3 class="small-head">Folders and workspaces</h3>
+          <div id="ws-tree" class="ws-tree"></div>
+        </div>
+        <div class="ws-detail-pane">
+          <h3 class="small-head">Contents</h3>
+          <div id="ws-detail" class="ws-detail">
+            <div class="empty">Pick a workspace to see what is filed in it.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Help -->
+  <section id="view-help" class="view">
+    <div class="page">
+      <div class="page-head"><h2>Help</h2></div>
+
+      <div class="tutorial" id="tutorial">
+        <div class="tutorial-head">
+          <h3>Getting started</h3>
+          <div class="tutorial-progress">
+            <span id="tutorial-count" class="muted small"></span>
+            <div class="tutorial-track"><div id="tutorial-bar" class="tutorial-bar"></div></div>
+          </div>
+        </div>
+        <p class="muted small">
+          Each step checks your actual install, not whether you clicked past it — so this
+          stays honest, and un-ticks itself if you undo something.
+        </p>
+        <div id="tutorial-steps"></div>
+      </div>
+
+      <div class="composer">
+        <input type="text" id="help-search" placeholder="Search help — e.g. &quot;credentials&quot;, &quot;what leaves my machine&quot;"
+               oninput="searchHelp()">
+      </div>
+
+      <div class="help-grid">
+        <div class="help-list-pane"><div id="help-list" class="help-list"></div></div>
+        <div class="help-body-pane"><div id="help-body" class="md report"></div></div>
+      </div>
+    </div>
+  </section>
+
   <!-- Carrot Research -->
   <section id="view-research" class="view">
     <div class="page">
@@ -460,6 +545,16 @@
     <div class="page">
       <div class="page-head"><h2>Extensions</h2></div>
       <p class="muted">Customize Carrot with reusable skills and external tools over MCP.</p>
+
+      <div class="ext-section">
+        <div class="ext-head"><h3>Packs</h3></div>
+        <p class="muted small">
+          A bundle of tools, skills and settings you turn on as one switch. A pack can want a
+          program you do not have — Carrot probes for each one and says what works on this
+          machine rather than failing halfway through a task.
+        </p>
+        <div id="packs-list" class="list"></div>
+      </div>
 
       <div class="ext-section">
         <div class="ext-head">
@@ -796,6 +891,17 @@
       </div>
     </div>
   </div>
+  <div id="search-picker">
+    <button id="search-btn" onclick="toggleSearchPop()" title="How much Carrot may search the web">
+      <svg class="ico"><use href="#i-search"/></svg>
+      <span id="search-label">Search</span>
+      <svg class="ico chev"><use href="#i-chevron"/></svg>
+    </button>
+    <div id="search-pop" class="hidden">
+      <div class="pop-section">Web search</div>
+      <div id="search-mode-list"></div>
+    </div>
+  </div>
   <input type="text" id="cmd-input" placeholder="Ask anything — Ctrl+K to focus, / for skills" onkeydown="cmdKeydown(event)" oninput="cmdInputChanged()">
   <button class="icon-btn" id="mic-btn" title="Voice input" onclick="toggleVoiceInput()"><svg class="ico"><use href="#i-mic"/></svg></button>
   <button class="icon-btn" id="speak-toggle" title="Read replies aloud" onclick="toggleSpeak()"><svg class="ico"><use href="#i-speaker-off"/></svg></button>
@@ -808,6 +914,7 @@
 <script src="/js/dashboard.js"></script>
 <script src="/js/app.js"></script>
 <script src="/js/agentops.js"></script>
+<script src="/js/workspaces.js"></script>
 <script src="/js/agents.js"></script>
 <script src="/js/docagent.js"></script>
 </body>

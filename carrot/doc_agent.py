@@ -4,8 +4,8 @@ The workflow this replaces is copy-and-paste: you think something through in a
 note, then re-type or paste it into the chat box, losing the note's structure
 and any sense of which files it was about. Here the note *is* the prompt.
 
-Two inline references make a note self-describing. Everything after ``@/`` is
-slash-delimited, and both forms are plain text so they survive a round trip
+Three inline references make a note self-describing. Everything after ``@/`` is
+slash-delimited, and every form is plain text so it survives a round trip
 through the markdown editor untouched:
 
 * ``@/file/src/router.py`` — cite a file. Its contents are read at send time and
@@ -13,10 +13,22 @@ through the markdown editor untouched:
   of it. Quote paths with spaces: ``@/file/"my paper.pdf"``.
 * ``@/model/openai/some-model`` — pick the provider and model for this note. A
   research note can name a frontier model while a scratch note stays on-device.
+* ``@/to/research/deep`` — say where the note goes. A note is not always a chat
+  turn: a question you have been circling for a week wants Carrot Research, and
+  a checklist of things to do on a website wants Carrot Agent. Writing the
+  destination into the note means the note stays the whole instruction, which
+  is the point of the feature — you should not have to remember which button to
+  press for a document you wrote three days ago.
 
 Naming the provider is mandatory rather than inferred, which is what makes the
 model form unambiguous: the segment after ``model/`` is always the provider, so
 everything left over is the model id no matter how many slashes it contains.
+
+Cited files follow the note to wherever it goes. Sent to Research they are
+*seeded as evidence*, so the papers you already have are read against every
+sub-question and cited by number alongside anything found on the web — which is
+the difference between "research this" and "research this, starting from what I
+have already collected".
 
 Citations may only reach two places, both of which the user already pointed
 Carrot at deliberately: the agent workspace, and the indexed document folders.
@@ -34,7 +46,49 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from . import agent_tools, indexer, providers as providers_mod, router as router_mod
 
-REFERENCE_PATTERN = re.compile(r'@/(file|model)/(?:"([^"\n]+)"|([^\s]+))')
+REFERENCE_PATTERN = re.compile(r'@/(file|model|to)/(?:"([^"\n]+)"|([^\s]+))')
+
+# ===== Destinations =====
+#
+# Each destination names the pipeline a note is sent to and what its optional
+# second segment means there. `default` is used when the note names a
+# destination but not an option — `@/to/research` is a complete instruction.
+
+DESTINATION_CHAT = "chat"
+DESTINATION_RESEARCH = "research"
+DESTINATION_AGENT = "agent"
+
+DESTINATIONS: Dict[str, Dict[str, Any]] = {
+    DESTINATION_CHAT: {
+        "label": "Chat",
+        "option_label": "",
+        "options": [],
+        "default": "",
+        "help": "An ordinary chat turn, with the note as the message.",
+    },
+    DESTINATION_RESEARCH: {
+        "label": "Research",
+        "option_label": "depth",
+        "options": ["quick", "standard", "deep"],
+        "default": "standard",
+        "help": "Carrot Research. The note becomes the question; cited files become evidence.",
+    },
+    DESTINATION_AGENT: {
+        "label": "Agent",
+        "option_label": "surface",
+        "options": ["browser", "desktop", "both"],
+        "default": "browser",
+        "help": "Carrot Agent. The note becomes the task; cited files become background.",
+    },
+}
+
+# Which routing task a destination implies, so an unpinned note lands on the
+# model the user assigned to that kind of work.
+DESTINATION_TASKS = {
+    DESTINATION_CHAT: router_mod.TASK_CHAT,
+    DESTINATION_RESEARCH: router_mod.TASK_RESEARCH,
+    DESTINATION_AGENT: router_mod.TASK_AGENT,
+}
 
 # "local" reads better than the daemon's name in a document, and is what the
 # picker offers, but the underlying provider id is still ollama.
@@ -77,13 +131,36 @@ class Reference:
 
 @dataclass
 class ResolvedDoc:
-    """A document turned into everything one chat turn needs."""
+    """A document turned into everything one send needs, wherever it goes."""
 
     prompt: str
     context: str = ""
     route: Optional[router_mod.Route] = None
     references: List[Reference] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
+    destination: str = DESTINATION_CHAT
+    option: str = ""
+
+    @property
+    def files(self) -> List[Reference]:
+        """The citations that actually resolved, in the order they appeared."""
+        return [r for r in self.references if r.kind == "file" and r.ok and r.path]
+
+    def seed_sources(self) -> List[Dict[str, str]]:
+        """Cited files as evidence rows Carrot Research can cite by number."""
+        seeds = []
+        for reference in self.files:
+            try:
+                seeds.append({
+                    "kind": "document",
+                    "locator": reference.path,
+                    "title": os.path.basename(reference.path) or reference.value,
+                    "snippet": "",
+                    "content": read_citation(reference.path),
+                })
+            except Exception:
+                continue
+        return seeds
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -92,6 +169,8 @@ class ResolvedDoc:
             "route": self.route.as_dict() if self.route else None,
             "references": [r.as_dict() for r in self.references],
             "warnings": self.warnings,
+            "destination": self.destination,
+            "option": self.option,
         }
 
 
@@ -179,6 +258,31 @@ def resolve_model_reference(value: str) -> Tuple[str, str]:
 
 # ===== Resolution =====
 
+def resolve_destination(value: str) -> Tuple[str, str, str]:
+    """Split ``kind[/option]`` into ``(destination, option, problem)``.
+
+    An unknown option is reported rather than silently corrected: a note that
+    says ``@/to/research/exhaustive`` was written by someone with a specific
+    expectation, and quietly running a "standard" depth would meet none of it.
+    """
+    head, _, tail = (value or "").strip().strip("/").partition("/")
+    head = head.lower()
+    if head not in DESTINATIONS:
+        known = ", ".join(DESTINATIONS)
+        return "", "", f"unknown destination '{head or value}' — try one of: {known}"
+
+    spec = DESTINATIONS[head]
+    if not tail:
+        return head, spec["default"], ""
+    tail = tail.lower()
+    if spec["options"] and tail not in spec["options"]:
+        return head, spec["default"], (
+            f"'{tail}' is not a {spec['option_label']} for {head} — "
+            f"using '{spec['default']}' (options: {', '.join(spec['options'])})"
+        )
+    return head, tail, ""
+
+
 def resolve(text: str, task: str = router_mod.TASK_CHAT) -> ResolvedDoc:
     """Turn a document (or a selection from one) into a ready-to-send turn."""
     resolved = ResolvedDoc(prompt=(text or "").strip())
@@ -187,6 +291,30 @@ def resolve(text: str, task: str = router_mod.TASK_CHAT) -> ResolvedDoc:
 
     model_refs = [r for r in references if r.kind == "model"]
     file_refs = [r for r in references if r.kind == "file"]
+    to_refs = [r for r in references if r.kind == "to"]
+
+    # --- destination ---
+    if len(to_refs) > 1:
+        resolved.warnings.append(
+            f"{len(to_refs)} @/to references — using the last one, '{to_refs[-1].value}'"
+        )
+        for other in to_refs[:-1]:
+            other.detail = "overridden by a later @/to"
+    if to_refs:
+        chosen = to_refs[-1]
+        destination, option, problem = resolve_destination(chosen.value)
+        if not destination:
+            chosen.detail = problem
+            resolved.warnings.append(f"@/to/{chosen.value} — {problem}")
+        else:
+            resolved.destination, resolved.option = destination, option
+            chosen.ok = not problem
+            spec = DESTINATIONS[destination]
+            chosen.detail = problem or (
+                f"{spec['label']} · {option}" if option else spec["label"]
+            )
+            if problem:
+                resolved.warnings.append(f"@/to/{chosen.value} — {problem}")
 
     # --- model ---
     if len(model_refs) > 1:
@@ -216,7 +344,13 @@ def resolve(text: str, task: str = router_mod.TASK_CHAT) -> ResolvedDoc:
                 "falling back to the usual route"
             )
         else:
-            resolved.route = router_mod.route(task=task, model=model, provider=provider_id)
+            # A note bound for Research is routed as a research task, so an
+            # unpinned note still lands on whatever model the user assigned to
+            # research rather than on their chat model.
+            resolved.route = router_mod.route(
+                task=DESTINATION_TASKS.get(resolved.destination, task),
+                model=model, provider=provider_id,
+            )
             chosen.ok = True
             chosen.detail = f"{resolved.route.provider} · {resolved.route.model}"
         for other in model_refs[:-1]:
@@ -323,6 +457,30 @@ def file_candidates(query: str = "", limit: int = 40) -> List[Dict[str, str]]:
             if len(results) >= limit:
                 break
     return results
+
+
+def destination_candidates(query: str = "") -> List[Dict[str, str]]:
+    """Where a note can be sent, offered before the option.
+
+    Both the bare destination and each of its options are listed, so a note can
+    be finished in one pick (``@/to/research``) or two (``@/to/research/deep``)
+    without the menu insisting on the longer path.
+    """
+    query = (query or "").lower()
+    offered: List[Dict[str, str]] = []
+    for name, spec in DESTINATIONS.items():
+        if not query or name.startswith(query):
+            offered.append({"value": name, "label": spec["label"], "source": spec["help"]})
+        for option in spec["options"]:
+            value = f"{name}/{option}"
+            if query and not value.startswith(query):
+                continue
+            offered.append({
+                "value": value,
+                "label": f"{spec['label']} — {option}",
+                "source": f"{spec['option_label']}: {option}",
+            })
+    return offered
 
 
 def provider_candidates(query: str = "") -> List[Dict[str, str]]:

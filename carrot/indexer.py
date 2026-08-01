@@ -304,6 +304,7 @@ def index_file(path: str, force: bool = False) -> Dict[str, Any]:
             stat.st_size, stat.st_mtime, digest, len(chunks), len(text), _now(),
         ),
     )
+
     chunk_ids = []
     for ordinal, chunk in enumerate(chunks):
         cursor = conn.execute(
@@ -314,6 +315,17 @@ def index_file(path: str, force: bool = False) -> Dict[str, Any]:
         chunk_ids.append((cursor.lastrowid, chunk))
     conn.commit()
     conn.close()
+
+    # Filed after the commit, never inside it: `file_item` opens its own
+    # connection, and doing that while this one still holds the write lock
+    # deadlocks until SQLite's busy timeout. Filed only on first index, so a
+    # rescan cannot move a document the user has since put somewhere else.
+    try:
+        from . import workspaces as workspaces_mod
+
+        workspaces_mod.file_item(workspaces_mod.KIND_DOCUMENT, document_id)
+    except Exception:
+        pass
 
     for chunk_id, chunk in chunk_ids:
         vectors.enqueue(vectors.NS_CHUNK, str(chunk_id), chunk)
@@ -413,11 +425,23 @@ def _fts_query(query: str) -> str:
     return " OR ".join(f'"{t}"' for t in terms)
 
 
-def search_documents(query: str, limit: int = 10, hybrid_weight: float = 0.5) -> Dict[str, Any]:
-    """Hybrid search over indexed chunks: FTS candidates reranked by embedding."""
+def search_documents(query: str, limit: int = 10, hybrid_weight: float = 0.5,
+                     workspace_id: str = "") -> Dict[str, Any]:
+    """Hybrid search over indexed chunks: FTS candidates reranked by embedding.
+
+    ``workspace_id`` restricts the search to documents filed in one workspace,
+    applied to the document id inside the FTS query so the candidate window is
+    spent on documents the caller can actually see.
+    """
     match = _fts_query(query)
     if not match:
         return {"results": [], "count": 0, "mode": "empty_query"}
+
+    from . import workspaces as workspaces_mod
+
+    scope_sql, scope_params = workspaces_mod.scope_clause(
+        workspaces_mod.KIND_DOCUMENT, workspace_id, "d.id"
+    )
 
     conn = get_db()
     try:
@@ -426,8 +450,8 @@ def search_documents(query: str, limit: int = 10, hybrid_weight: float = 0.5) ->
                FROM chunks_fts f
                JOIN document_chunks c ON c.id = f.chunk_id
                JOIN documents d ON d.id = c.document_id
-               WHERE chunks_fts MATCH ? ORDER BY rank LIMIT ?""",
-            (match, limit * 4),
+               WHERE chunks_fts MATCH ?""" + scope_sql + """ ORDER BY rank LIMIT ?""",
+            (match, *scope_params, limit * 4),
         ).fetchall()
     except sqlite3.OperationalError:
         rows = []

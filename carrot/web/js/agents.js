@@ -121,59 +121,66 @@ function renderResearchSources(sources) {
         </div>`).join('');
 }
 
-async function startResearch() {
-    const question = document.getElementById('research-question').value.trim();
-    if (!question) return;
+// A run can start from the question box or from a note sent here. Both produce
+// the same trace, so the panes, the handler and the teardown are shared and
+// only the endpoint differs.
 
-    const depth = document.getElementById('research-depth').value;
+function prepareResearchPanes(heading) {
     document.getElementById('research-trace').innerHTML = '';
     document.getElementById('research-sources').innerHTML = '';
     document.getElementById('research-report').innerHTML = '';
     document.getElementById('research-run-btn').classList.add('hidden');
     document.getElementById('research-stop-btn').classList.remove('hidden');
+    if (heading) traceLine('research-trace', 'from note: ' + heading, 'intent');
+}
 
+function makeResearchHandler() {
     const sources = [];
     let report = '';
 
+    return event => {
+        if (event.run_id) researchRunId = event.run_id;
+        if (event.stage) traceLine('research-trace', `${event.stage}: ${event.detail || ''}`, 'stage');
+        if (event.plan) {
+            event.plan.forEach(item =>
+                traceLine('research-trace', 'sub-question: ' + item.question, 'intent'));
+        }
+        if (event.source) {
+            sources.push(event.source);
+            renderResearchSources(sources);
+            traceLine('research-trace', `read [${event.source.id}] ${event.source.title}`, 'search');
+        }
+        if (event.finding) {
+            traceLine('research-trace',
+                `finding ${event.finding.sources.join('')} ${event.finding.claim}`, 'finding');
+        }
+        if (event.verdict) {
+            traceLine('research-trace',
+                `${event.verdict.verdict}: ${event.verdict.claim}`,
+                event.verdict.verdict === 'supported' ? 'ok' : 'warn');
+        }
+        if (event.injection_warning) {
+            traceLine('research-trace',
+                `a source tried to give Carrot instructions (${event.injection_warning.origin}) — it was not obeyed`,
+                'err');
+        }
+        if (event.token) {
+            report += event.token;
+            document.getElementById('research-report').innerHTML = mdToHtml(report);
+        }
+        if (event.error) traceLine('research-trace', event.error, 'err');
+        if (event.done) {
+            traceLine('research-trace',
+                `done — ${event.sources} sources, ${event.findings} findings, ${event.rejected} rejected`,
+                'ok');
+            document.getElementById('research-report').innerHTML = mdToHtml(event.report);
+        }
+    };
+}
+
+async function runResearchStream(url, payload) {
     try {
-        await streamTrace('/api/research/run', { question, depth }, event => {
-            if (event.run_id) researchRunId = event.run_id;
-            if (event.stage) traceLine('research-trace', `${event.stage}: ${event.detail || ''}`, 'stage');
-            if (event.plan) {
-                event.plan.forEach(item =>
-                    traceLine('research-trace', 'sub-question: ' + item.question, 'intent'));
-            }
-            if (event.source) {
-                sources.push(event.source);
-                renderResearchSources(sources);
-                traceLine('research-trace', `read [${event.source.id}] ${event.source.title}`, 'search');
-            }
-            if (event.finding) {
-                traceLine('research-trace',
-                    `finding ${event.finding.sources.join('')} ${event.finding.claim}`, 'finding');
-            }
-            if (event.verdict) {
-                traceLine('research-trace',
-                    `${event.verdict.verdict}: ${event.verdict.claim}`,
-                    event.verdict.verdict === 'supported' ? 'ok' : 'warn');
-            }
-            if (event.injection_warning) {
-                traceLine('research-trace',
-                    `a source tried to give Carrot instructions (${event.injection_warning.origin}) — it was not obeyed`,
-                    'err');
-            }
-            if (event.token) {
-                report += event.token;
-                document.getElementById('research-report').innerHTML = mdToHtml(report);
-            }
-            if (event.error) traceLine('research-trace', event.error, 'err');
-            if (event.done) {
-                traceLine('research-trace',
-                    `done — ${event.sources} sources, ${event.findings} findings, ${event.rejected} rejected`,
-                    'ok');
-                document.getElementById('research-report').innerHTML = mdToHtml(event.report);
-            }
-        });
+        await streamTrace(url, payload, makeResearchHandler());
     } catch (e) {
         traceLine('research-trace', 'failed: ' + e.message, 'err');
     } finally {
@@ -182,6 +189,20 @@ async function startResearch() {
         document.getElementById('research-stop-btn').classList.add('hidden');
         loadResearch();
     }
+}
+
+async function startResearch() {
+    const question = document.getElementById('research-question').value.trim();
+    if (!question) return;
+    const depth = document.getElementById('research-depth').value;
+    prepareResearchPanes('');
+    await runResearchStream('/api/research/run', { question, depth });
+}
+
+// Entry point for a note whose @/to says research. The note is the question and
+// its cited files arrive as evidence, so the trace opens with them already read.
+async function streamResearchInto(payload) {
+    await runResearchStream('/api/doc/send', payload);
 }
 
 async function stopResearch() {
@@ -310,22 +331,17 @@ function agentStep(html, kind) {
     step.scrollIntoView({ block: 'nearest' });
 }
 
-async function startAgentRun() {
-    const task = document.getElementById('agent-task').value.trim();
-    if (!task) return;
-
-    const surface = document.getElementById('agent-surface').value;
-    const requirePlanApproval = document.getElementById('agent-approve-plan').checked;
-
+function prepareAgentPanes() {
     document.getElementById('agent-steps').innerHTML = '';
     document.getElementById('agent-plan').classList.add('hidden');
     document.getElementById('agent-result').classList.add('hidden');
     document.getElementById('agent-run-btn').classList.add('hidden');
     document.getElementById('agent-stop-btn').classList.remove('hidden');
+}
 
+async function runAgentStream(url, payload) {
     try {
-        await streamTrace('/api/agent/run',
-            { task, surface, require_plan_approval: requirePlanApproval },
+        await streamTrace(url, payload,
             event => {
                 if (event.run_id) agentRunId = event.run_id;
                 if (event.plan) {
@@ -382,6 +398,23 @@ async function startAgentRun() {
     }
 }
 
+async function startAgentRun() {
+    const task = document.getElementById('agent-task').value.trim();
+    if (!task) return;
+    prepareAgentPanes();
+    await runAgentStream('/api/agent/run', {
+        task,
+        surface: document.getElementById('agent-surface').value,
+        require_plan_approval: document.getElementById('agent-approve-plan').checked,
+    });
+}
+
+// Entry point for a note whose @/to says agent: the note is the task, and its
+// cited files ride along as background.
+async function streamAgentInto(payload) {
+    await runAgentStream('/api/doc/send', payload);
+}
+
 async function stopAgentRun() {
     if (!agentRunId) return;
     await api(`/api/agent/runs/${agentRunId}/stop`, { method: 'POST' });
@@ -433,4 +466,167 @@ async function openAgentRun(runId) {
     result.innerHTML =
         `<h4>${escHtml(String(run.status).replace('_', ' '))}</h4>` +
         `<div>${escHtml(run.result || run.error || '')}</div>`;
+}
+
+// ===== Extension packs =====
+// A pack ships tools, skills, settings and a list of external programs it would
+// like to have. The last of those is the honest part: the pack is listed
+// whether or not LaTeX is installed, and says which is which, so a tool that
+// cannot run says so here rather than failing partway through a task.
+
+let packsExpanded = {};
+
+async function loadPacks() {
+    try {
+        renderPacks((await api('/api/extensions')).extensions || []);
+    } catch (e) {
+        console.warn('packs failed', e);
+    }
+}
+
+function renderPacks(packs) {
+    const host = document.getElementById('packs-list');
+    if (!host) return;
+    if (!packs.length) {
+        host.innerHTML = '<div class="empty">No packs are bundled with this build.</div>';
+        return;
+    }
+    host.innerHTML = packs.map(pack => `
+        <div class="pack-card${pack.enabled ? ' on' : ''}">
+            <div class="pack-head">
+                <div class="pack-main" onclick="togglePackDetail('${escHtml(pack.id)}')">
+                    <div class="pack-name">
+                        ${escHtml(pack.name)}
+                        <span class="pack-version">v${escHtml(pack.version)}</span>
+                    </div>
+                    <div class="pack-desc">${escHtml(pack.description)}</div>
+                    <div class="pack-counts">
+                        ${pack.tool_count} tool${pack.tool_count === 1 ? '' : 's'} ·
+                        ${pack.skill_count} skill${pack.skill_count === 1 ? '' : 's'}
+                    </div>
+                </div>
+                <label class="switch-row">
+                    <input type="checkbox" ${pack.enabled ? 'checked' : ''}
+                           onchange="setPackEnabled('${escHtml(pack.id)}', this.checked)">
+                    <span>${pack.enabled ? 'On' : 'Off'}</span>
+                </label>
+            </div>
+            <div id="pack-detail-${escHtml(pack.id)}" class="pack-detail hidden"></div>
+        </div>`).join('');
+
+    // Re-open whatever was open before the refresh, so toggling a setting does
+    // not collapse the panel the user is working in.
+    Object.keys(packsExpanded).forEach(id => {
+        if (packsExpanded[id]) loadPackDetail(id);
+    });
+}
+
+async function togglePackDetail(packId) {
+    const detail = document.getElementById(`pack-detail-${packId}`);
+    if (!detail) return;
+    if (packsExpanded[packId]) {
+        packsExpanded[packId] = false;
+        detail.classList.add('hidden');
+        return;
+    }
+    packsExpanded[packId] = true;
+    await loadPackDetail(packId);
+}
+
+async function loadPackDetail(packId) {
+    const detail = document.getElementById(`pack-detail-${packId}`);
+    if (!detail) return;
+    try {
+        renderPackDetail(detail, await api(`/api/extensions/${packId}`));
+    } catch (e) {
+        detail.innerHTML = `<div class="empty error">${escHtml(e.message)}</div>`;
+        detail.classList.remove('hidden');
+    }
+}
+
+function renderPackDetail(host, pack) {
+    const capabilities = (pack.capabilities || []).map(cap => `
+        <div class="cap-row ${cap.available ? 'ok' : 'missing'}">
+            <span class="cap-dot"></span>
+            <span class="cap-name">${escHtml(cap.label)}</span>
+            <span class="cap-state">${cap.available ? escHtml(cap.path) : 'not installed'}</span>
+            <div class="cap-purpose">
+                ${escHtml(cap.purpose)}
+                ${cap.available ? '' : ` <em>${escHtml(cap.install_hint)}</em>`}
+            </div>
+        </div>`).join('');
+
+    const settings = (pack.settings || []).map(setting => {
+        const id = `pack-setting-${pack.id}-${setting.key}`;
+        let field;
+        if (setting.type === 'boolean') {
+            field = `<input type="checkbox" id="${id}" ${setting.value ? 'checked' : ''}
+                            onchange="savePackSetting('${escHtml(pack.id)}', '${escHtml(setting.key)}', this.checked)">`;
+        } else if (setting.type === 'select') {
+            field = `<select id="${id}"
+                             onchange="savePackSetting('${escHtml(pack.id)}', '${escHtml(setting.key)}', this.value)">
+                ${(setting.options || []).map(option => `
+                    <option ${option === setting.value ? 'selected' : ''}>${escHtml(option)}</option>`).join('')}
+            </select>`;
+        } else {
+            field = `<input type="text" id="${id}" value="${escHtml(setting.value || '')}"
+                            placeholder="${escHtml(setting.default || '')}"
+                            onchange="savePackSetting('${escHtml(pack.id)}', '${escHtml(setting.key)}', this.value)">`;
+        }
+        return `
+            <div class="pack-setting">
+                <label for="${id}">${escHtml(setting.label)}</label>
+                ${field}
+                <div class="pack-setting-help">${escHtml(setting.help || '')}</div>
+            </div>`;
+    }).join('');
+
+    const tools = (pack.tools || []).map(tool => `
+        <div class="pack-tool">
+            <span class="mono">${escHtml(tool.name)}</span>
+            ${tool.mutating ? '<span class="pack-tag risky">asks first</span>' : ''}
+            ${tool.requires ? `<span class="pack-tag">needs ${escHtml(tool.requires)}</span>` : ''}
+            <div class="pack-tool-desc">${escHtml(tool.description)}</div>
+        </div>`).join('');
+
+    const skills = (pack.skills || []).map(skill => `
+        <div class="pack-tool">
+            <span class="mono">/${escHtml(skill.slug)}</span>
+            <div class="pack-tool-desc">${escHtml(skill.description)}</div>
+        </div>`).join('');
+
+    host.innerHTML = `
+        ${capabilities ? `<h4 class="pack-section">On this machine</h4>${capabilities}` : ''}
+        ${settings ? `<h4 class="pack-section">Settings</h4>
+            <p class="muted small">Changing these rewrites the pack's skills, so the
+            instructions always name your current venue and style.</p>${settings}` : ''}
+        ${tools ? `<h4 class="pack-section">Tools</h4>${tools}` : ''}
+        ${skills ? `<h4 class="pack-section">Skills</h4>
+            <p class="muted small">Installed into your skills when the pack is on, and
+            reachable with <code>/</code> in the command bar.</p>${skills}` : ''}`;
+    host.classList.remove('hidden');
+}
+
+async function setPackEnabled(packId, enabled) {
+    try {
+        await api(`/api/extensions/${packId}/enabled`, {
+            method: 'PUT', body: JSON.stringify({ enabled }),
+        });
+    } catch (e) {
+        alert(e.message);
+    }
+    await loadPacks();
+    // A pack's skills land in the ordinary skills list, so refresh that too.
+    if (typeof loadSkillsList === 'function') loadSkillsList();
+    if (typeof loadSkillCatalog === 'function') loadSkillCatalog();
+}
+
+async function savePackSetting(packId, key, value) {
+    try {
+        await api(`/api/extensions/${packId}/settings/${key}`, {
+            method: 'PUT', body: JSON.stringify(value),
+        });
+    } catch (e) {
+        alert(e.message);
+    }
 }

@@ -103,6 +103,8 @@ function switchTab(tab) {
         extensions: loadExtensions,
         research: () => loadResearch(),
         agent: () => loadAgent(),
+        workspaces: () => loadWorkspaces(),
+        help: () => loadHelp(),
         leaderboard: loadLeaderboard,
         memory: () => loadMemory(),
         files: () => loadIndex(),
@@ -419,7 +421,69 @@ async function sendChat() {
         conversation_id: currentConversationId,
         model: currentModel,
         skill: activeSkill ? activeSkill.slug : null,
+        search_mode: currentSearchMode,
     }, activeSkill);
+}
+
+// ===== Search mode =====
+// Three postures for one question: never reach the web, reach it once, or keep
+// going until the gaps are closed. The choice is sent with the turn and also
+// saved, so it is both a per-message override and a default.
+
+let currentSearchMode = null;
+let searchModes = [];
+
+async function loadSearchModes() {
+    try {
+        const body = await api('/api/chat/search-modes');
+        searchModes = body.modes || [];
+        currentSearchMode = currentSearchMode || body.current;
+        renderSearchModes();
+    } catch (e) {
+        console.warn('search modes failed', e);
+    }
+}
+
+function searchModeLabel(id) {
+    const mode = searchModes.find(m => m.id === id);
+    return mode ? mode.label : 'Search';
+}
+
+function renderSearchModes() {
+    const label = document.getElementById('search-label');
+    if (label) label.textContent = searchModeLabel(currentSearchMode);
+
+    const button = document.getElementById('search-btn');
+    if (button) button.classList.toggle('search-off', currentSearchMode === 'off');
+
+    const list = document.getElementById('search-mode-list');
+    if (!list) return;
+    list.innerHTML = searchModes.map(mode => `
+        <button class="pop-item${mode.id === currentSearchMode ? ' active' : ''}"
+                onclick="setSearchMode('${escHtml(mode.id)}')">
+            <span class="pop-item-name">${escHtml(mode.label)}</span>
+            <span class="pop-item-sub">${escHtml(mode.help)}</span>
+        </button>`).join('');
+}
+
+function toggleSearchPop() {
+    const pop = document.getElementById('search-pop');
+    if (pop) pop.classList.toggle('hidden');
+}
+
+async function setSearchMode(id) {
+    currentSearchMode = id;
+    renderSearchModes();
+    document.getElementById('search-pop').classList.add('hidden');
+    // Persist as the default too — a user who turns search off for a private
+    // conversation means it, and should not have to turn it off again.
+    try {
+        await api('/api/config/chat_search_mode', {
+            method: 'PUT', body: JSON.stringify(id),
+        });
+    } catch (e) {
+        console.warn('could not save search mode', e);
+    }
 }
 
 // Renders one streamed turn into the chat view. Shared by the chat box and by
@@ -1311,6 +1375,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     await refreshStatus();
     loadModels();
     loadSkillCatalog();
+    loadSearchModes();
+    loadWorkspaces();
     checkBootstrap();
     switchTab('dashboard');
     loadTerminalHistory();

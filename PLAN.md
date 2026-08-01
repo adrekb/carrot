@@ -81,6 +81,89 @@ documents and past conversations. Two safety properties hold for all of them:
 
 All paths resolve against a workspace root and refuse to escape it.
 
+## Workspaces
+
+`workspaces.py`. Folder → Workspace → content, where "content" is chats,
+memories, documents, notes, research runs and agent runs.
+
+Two structural decisions:
+
+**Membership lives in one table**, `workspace_items(kind, item_id, workspace_id)`,
+rather than a `workspace_id` column on six others. Adding a new kind of thing to
+a workspace is then a string constant plus one `file_item` call at its creation
+site, not a migration. It also means the scoping predicate is written once —
+`scope_clause()` returns a SQL fragment and its params, or `("", [])` when there
+is nothing to scope to, so every call site is the same two lines whether or not
+a workspace is active.
+
+**One home per item**, enforced by the primary key on `(kind, item_id)`. A
+many-to-many would be more expressive and much worse to use: "which workspace is
+this in" needs a single answer for the UI to be comprehensible, and moving an
+item should be one upsert rather than a set difference.
+
+A workspace *scopes*, it does not contain. Filing changes what
+`search_conversations`, `search_documents` and `memory.search` return, and
+nothing else — no file moves, no copies. `resolve_scope(None)` means "whatever
+is active", which is what makes a workspace behave like a mode rather than a
+filter that has to be re-applied on every screen; `"all"` opts out explicitly.
+
+Auto-filing happens at the creation sites (`create_conversation`,
+`memory.create`, `create_note`, both `create_run`s, the indexer's first insert)
+rather than at the API layer, so every path that opens a conversation gets it.
+Memories inherit their source conversation's workspace rather than the active
+one — extraction runs on a background thread and would otherwise land wherever
+the user drifted to while it ran. Documents are filed only on first index, so a
+rescan cannot move a document the user has since put somewhere else.
+
+Deletion is never destructive: `delete_workspace` cascades the membership rows
+only, and `delete_folder` re-parents its workspaces to the top level. Folder
+re-parenting walks up from the proposed parent and refuses a cycle, because a
+cycle here hangs every tree render.
+
+## Help and tutorial
+
+`help.py` holds topics (markdown, searchable with title > summary > body
+weighting) and a tutorial whose steps each carry a *check* run against the live
+install — Ollama reachable, a workspace existing, documents indexed, a site
+allowed. `done` is derived on every request and never stored, so a step
+un-ticks itself when the thing is undone. A check that raises returns
+`done: None` — rendered as "unknown" — rather than failing the step; a red cross
+for something that could not be measured is worse than admitting it.
+
+## Doc to Agent
+
+`doc_agent.py` turns a note into a send. Three inline reference kinds make the note
+self-describing — `@/file/` (read at send time), `@/model/provider/id` (the route), and
+`@/to/destination[/option]` (where it goes).
+
+Destinations are the newer half. `@/to` resolves to one of three pipelines, and the
+picker beside the Send button is an *override* rather than a second source of truth:
+parsing a note moves the picker, and touching the picker pins it for that note until
+another is opened. An unknown option is reported rather than silently corrected —
+someone who wrote `@/to/research/exhaustive` had an expectation, and quietly running a
+"standard" depth meets none of it.
+
+The destination also picks the routing task, so an unpinned research note lands on
+whatever model the user assigned to `research` rather than on their chat model.
+
+Citations follow the note wherever it goes. To Research they are *seeded evidence*:
+added to the run's `SourceStore` before planning, so they take `S1`, `S2` …, every
+sub-question researcher reads them in its first round, and claims drawn from them go
+through the same verification pass as anything fetched from the web. To the Agent they
+are appended as background context.
+
+## Chat Search Modes
+
+`chat_search_mode` (off | single | multi) governs whether a chat turn can reach the web.
+The mode both filters the tool list and injects a directive, and the filtering is the
+part that matters: removing `web_search` and `read_url` from the schema is what makes
+"off" mean off, because an instruction not to search is a request while an absent tool
+is a fact. Non-web tools are unaffected in every mode — turning search off must not cost
+the user their file and memory tools.
+
+Multi-turn additionally offers `start_research` and doubles the tool-round budget, since
+search → read → notice a gap → search again is several rounds on its own.
+
 ## Carrot Research
 
 `research.py` is a multi-agent pipeline whose organising idea is that a research answer
@@ -528,6 +611,38 @@ CREATE TABLE agent_steps (
     screenshot TEXT,
     tainted INTEGER DEFAULT 0,
     created_at TEXT
+);
+
+-- Workspaces. `folders` groups workspaces and is distinct from `chat_folders`,
+-- which tidies conversations *inside* one.
+CREATE TABLE folders (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    parent_id TEXT REFERENCES folders(id) ON DELETE SET NULL,
+    position INTEGER DEFAULT 0,
+    created_at TEXT
+);
+
+CREATE TABLE workspaces (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    folder_id TEXT REFERENCES folders(id) ON DELETE SET NULL,
+    color TEXT,
+    position INTEGER DEFAULT 0,
+    archived INTEGER DEFAULT 0,
+    created_at TEXT
+);
+
+-- Membership for every content type, keyed so an item has exactly one home.
+-- Deleting a workspace cascades these rows and nothing else, which is what
+-- makes "delete the grouping, keep the content" true rather than aspirational.
+CREATE TABLE workspace_items (
+    kind TEXT NOT NULL,        -- conversation | memory | document | note | research | agent
+    item_id TEXT NOT NULL,
+    workspace_id TEXT REFERENCES workspaces(id) ON DELETE CASCADE,
+    added_at TEXT,
+    PRIMARY KEY (kind, item_id)
 );
 ```
 

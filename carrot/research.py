@@ -49,7 +49,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Generator, List, Optional
 
-from . import policy, router as router_mod, websearch
+from . import policy, router as router_mod, websearch, workspaces
 from .config import get_config
 from .database import get_db
 
@@ -414,7 +414,8 @@ class Researcher:
     """
 
     def __init__(self, run_id: str, subquestion: Dict[str, Any], depth: str,
-                 store: SourceStore, context: policy.RunContext, emit: Callable):
+                 store: SourceStore, context: policy.RunContext, emit: Callable,
+                 seeds: Optional[List[Dict[str, Any]]] = None):
         self.run_id = run_id
         self.subquestion = subquestion["question"]
         self.wants = subquestion.get("sources", ["web", "local"])
@@ -423,6 +424,11 @@ class Researcher:
         self.store = store
         self.context = context
         self.emit = emit
+        # Sources the user supplied up front — the papers a note cited. Every
+        # researcher reads them against its own sub-question, because a paper
+        # handed over deliberately is more likely to be relevant than the
+        # fourth search result, and it costs no fetch.
+        self.seeds = seeds or []
         self.findings: List[Dict[str, Any]] = []
         self.mine: List[Dict[str, Any]] = []
 
@@ -519,6 +525,8 @@ class Researcher:
             self.context.check_alive()
             queries = derive_queries(self.subquestion, self.depth, gaps)
             sources: List[Dict[str, Any]] = []
+            if round_index == 0 and self.seeds:
+                sources += self.seeds
             if "web" in self.wants:
                 sources += self._gather_web(queries)
             if "local" in self.wants:
@@ -689,6 +697,7 @@ def create_run(question: str, depth: str, conversation_id: Optional[str] = None)
     )
     conn.commit()
     conn.close()
+    workspaces.file_item(workspaces.KIND_RESEARCH, run_id)
     return run_id
 
 
@@ -707,12 +716,18 @@ def run_research_stream(
     depth: str = DEFAULT_DEPTH,
     conversation_id: Optional[str] = None,
     run_id: Optional[str] = None,
+    seed_sources: Optional[List[Dict[str, Any]]] = None,
 ) -> Generator[Dict[str, Any], None, None]:
     """The whole pipeline as a stream of trace events.
 
     Yields ``{"stage"|"plan"|"source"|"finding"|"verdict"|"token"|"done"|"error": ...}``.
     Subagents run in parallel and their events are interleaved through a queue,
     so the trace reflects real concurrency rather than a serialized replay.
+
+    ``seed_sources`` are documents the caller already has — the files a note
+    cited. They enter the evidence store before planning, so they take the
+    first citation numbers, every researcher reads them, and they are verified
+    against exactly like anything found on the web.
     """
     depth = depth if depth in DEPTHS else DEFAULT_DEPTH
     question = (question or "").strip()
@@ -730,6 +745,23 @@ def run_research_stream(
     store = SourceStore(run_id)
 
     try:
+        # Seeds first: they take S1, S2 … so a report's lowest citation numbers
+        # are the documents the user brought, which is the reading order a
+        # person expects when they supplied them.
+        seeds: List[Dict[str, Any]] = []
+        for seed in seed_sources or []:
+            stored = store.add(
+                kind=seed.get("kind", "document"),
+                locator=seed.get("locator", ""),
+                title=seed.get("title", ""),
+                snippet=seed.get("snippet", ""),
+                content=seed.get("content", ""),
+            )
+            seeds.append(stored)
+            yield {"source": {k: stored[k] for k in ("id", "kind", "title", "locator", "tainted")}}
+        if seeds:
+            yield {"stage": "plan", "detail": f"starting from {len(seeds)} cited document(s)"}
+
         yield {"stage": "plan", "detail": "decomposing the question"}
         subquestions = plan_subquestions(question, depth, emit)
         yield {"plan": subquestions}
@@ -739,7 +771,7 @@ def run_research_stream(
         errors: List[str] = []
 
         def work(subquestion: Dict[str, Any]):
-            researcher = Researcher(run_id, subquestion, depth, store, context, emit)
+            researcher = Researcher(run_id, subquestion, depth, store, context, emit, seeds=seeds)
             try:
                 return researcher.run()
             except policy.Cancelled:
@@ -836,10 +868,11 @@ def source_appendix(store: SourceStore) -> str:
 
 
 def run_research(question: str, depth: str = DEFAULT_DEPTH,
-                 conversation_id: Optional[str] = None) -> Dict[str, Any]:
+                 conversation_id: Optional[str] = None,
+                 seed_sources: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """Blocking wrapper for callers that want the report and nothing else."""
     last: Dict[str, Any] = {}
-    for event in run_research_stream(question, depth, conversation_id):
+    for event in run_research_stream(question, depth, conversation_id, seed_sources=seed_sources):
         last = event
     if last.get("done"):
         return {"success": True, **last}

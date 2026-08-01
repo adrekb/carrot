@@ -24,7 +24,7 @@ It searches through all your past conversations, notes, and even old goals to fi
 
 **You want to start your day informed without doom-scrolling Twitter.** When your PC is plugged in and idle in the morning, Carrot fetches the day's tech and science news, summarizes it with AI, and saves it for you. You can ask "what's in today's recap?" anytime.
 
-**You think in documents, not in chat boxes.** Write the plan in a note — with `@/file/` references to the code it's about and an `@/model/` line picking which model should do it — then hit Send to agent. The note *is* the prompt. No copy-and-paste, and the cited files are read fresh at send time.
+**You think in documents, not in chat boxes.** Write the plan in a note — with `@/file/` references to the code it's about, an `@/model/` line picking which model should do it, and a `@/to/` line saying where it goes — then hit Send. The note *is* the prompt. No copy-and-paste, and the cited files are read fresh at send time. `@/to/research/deep` sends the note to Carrot Research with your cited papers already loaded as evidence; `@/to/agent/browser` hands it to Carrot Agent as a task.
 
 **You need to remember things.** Carrot has reminders that work like any to-do app, but because everything is connected, you can search across them, link them to conversations, and never lose track of what matters.
 
@@ -45,6 +45,7 @@ It searches through all your past conversations, notes, and even old goals to fi
 - **Powered by Ollama.** The AI runs on your own hardware using the `gemma4:e4b` model. You don't need an API key — and if you don't have Ollama, Carrot installs it for you on first launch.
 - **Your keys, your choice of model.** If you do want a hosted model for some things, bring a key for Anthropic, OpenAI, or anything OpenAI-compatible, and assign it per task — a frontier model for hard reasoning, something cheap for classification, everything else on-device.
 - **One-click setup.** On first run Carrot detects whether Ollama is present, silently installs it if not, and pulls `gemma4:e4b` — all with a progress splash screen. No manual terminal steps required.
+- **It knows which part of your life you're in.** Group a project's chats, memories and files into a workspace, and search and recall stop reaching into everything else. An assistant that remembers everything is only useful if it can also tell what's relevant.
 - **Research that shows its evidence.** Every claim in a report is traced back to text that was actually read, and re-checked against it before the report is written. A citation can be wrong; it cannot be invented.
 - **It can act, and it can be stopped.** Carrot Agent drives a real browser to finish real tasks — but nothing irreversible happens without you, credentials never reach the model, and a hostile page costs the agent its privileges rather than gaining it new ones.
 - **Search-first design.** Every conversation, note, goal entry, and reminder is indexed and searchable. If you've ever typed something that Carrot heard, you can find it again.
@@ -79,8 +80,48 @@ It searches through all your past conversations, notes, and even old goals to fi
 - **Write the plan, then send it** (`carrot/doc_agent.py`): think something through in a note and hand it straight to the model — no copy-and-paste, no losing the structure. Select part of a note to send only that.
 - **`@/file/` citations**: type `@` in the editor, pick `file`, and choose from your workspace and indexed folders. The file is read *at send time* and attached as context, so the model sees the actual file rather than your description of it.
 - **`@/model/` selection**: a three-step picker — `@` → `model` → provider (`openai`, `google`, `anthropic`, `local`, or anything you added) → a scrollable list of the models *that provider serves for your key*, fetched live rather than hardcoded. A research note can name a frontier model while a scratch note stays on-device.
-- **Shown before it runs**: chips under the note say which citations resolved, how large they are, and which model will serve it. A citation that cannot be read is reported, never silently dropped.
+- **`@/to/` destinations**: a note is not always a chat turn. `@/to/research/deep` sends it to Carrot Research, `@/to/agent/browser` hands it to Carrot Agent, and the picker beside the Send button follows whatever the note says. Writing the destination into the note means the note stays the whole instruction — you don't have to remember which button a document you wrote three days ago was meant for.
+- **Citations follow the note**: sent to Research, cited files are *seeded as evidence* — they take the first citation numbers, every sub-question researcher reads them, and claims drawn from them are verified against their text like anything found on the web. That's the difference between "research this" and "research this, starting from what I already collected." Sent to the Agent, they ride along as background.
+- **Shown before it runs**: chips under the note say which citations resolved, how large they are, where it's going, and which model will serve it. A citation that cannot be read is reported, never silently dropped.
 - **Confined to what you opted into**: citations reach the agent workspace and your indexed folders, and nothing else.
+
+### Workspaces and Folders
+A **workspace** is one project's context — its chats, memories, files, notes and runs. A **folder** groups workspaces, and folders nest.
+
+```
+School/
+  Thesis        ← chats, memories, files, notes, runs
+  CS 3110
+Personal/
+  Fitness
+```
+
+- **A workspace is a scope, not a container.** Nothing moves on disk and nothing is copied. While one is active, new chats, notes, research and agent runs are filed into it, and search, memory recall and document lookup are restricted to what lives there.
+- **That restriction is the point.** Without it, a question about your thesis can recall a decision you made about a side project in March. Memories inherit the workspace of the conversation that produced them, so a background extraction lands where the chat was — not wherever you drifted to while it ran.
+- **Re-opening an old chat brings back its own context**, not today's: recall is scoped to the conversation's workspace rather than the active one.
+- **A pin does not follow you between projects.** Pinned means "always relevant here"; something never filed belongs to no project, so it stays visible everywhere.
+- **All workspaces is the default and stays the default.** A fresh install has none and behaves exactly as before.
+- **Deleting is never destructive.** Deleting a workspace unfiles its contents; deleting a folder moves its workspaces to the top level. Neither loses a chat.
+
+### Help and the Tutorial
+- A **Help** tab with a topic per feature — including a plain account of what the agent may do and what leaves your machine — searchable across titles and body text.
+- A **getting-started tutorial whose steps check the live install**: is Ollama up, does a workspace exist, has a folder been indexed, is a site allowed. A tour that ticks because you pressed Next teaches nothing; these stay unticked until the thing is actually true, and un-tick if you undo it.
+- A check that cannot run reports **unknown** rather than failing the step — a red cross for something unmeasurable is worse than admitting the measurement failed.
+
+### Chat Search Modes
+How much a chat turn may reach the web is a setting in the composer, next to the model picker:
+
+- **No search** — Carrot answers from the conversation, your indexed files and its memory. The web tools are *removed from the tool list*, not just discouraged: an instruction not to search is a request, but a tool that isn't there cannot be called. A question about your own notes gets worse, not better, when the model decides to search first.
+- **Search** — a single pass. It may search and read a page when the question needs something current, and cites the URL for anything it takes.
+- **Multi-turn search** — it searches, reads, works out what it still cannot answer, and searches again, with double the tool-round budget to do it in. If the question deserves a written report with checked citations, it can hand the whole thing to Carrot Research.
+
+Your choice is sent with the turn *and* saved as the default, so turning search off for a private conversation stays off.
+
+### Extension Packs
+- **One switch for a whole kind of work** (`carrot/extensions.py`). A pack ships tools, skills, settings, and a list of the external programs its tools would like to have.
+- **Honest about what your machine can do**: every capability is probed, and the Extensions tab shows what is present. A tool whose program is missing refuses up front with the reason and how to install it, rather than failing halfway through a task.
+- **The Academia Pack** is the first one: LaTeX authoring with validation and compilation, BibTeX and citation checking, MATLAB/Octave, CAD figure rendering, image-to-LaTeX transcription for photographed tables and formulas, and venue-specific formatting rules. Set your target venue and citation style and the pack's skills are rewritten to name them.
+- **Its skills become ordinary skills**, written to your skills directory and reachable with `/` in the command bar — so you can edit the wording if the house style isn't quite right.
 
 ### Carrot Research
 - **A real multi-agent pipeline** (`carrot/research.py`): plan → parallel researchers → gap reflection → verification → cited synthesis. Sub-questions are researched by independent agents on their own budgets, so one dead end costs one thread rather than the run.

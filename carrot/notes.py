@@ -98,6 +98,14 @@ def create_note(title: str, content: str = "", folder: str = None):
     full_content = frontmatter + content
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(full_content)
+
+    try:
+        from . import workspaces as workspaces_mod
+
+        workspaces_mod.file_item(workspaces_mod.KIND_NOTE, note_id)
+    except Exception:
+        pass
+
     return {"id": note_id, "title": title, "folder": folder or "", "path": filepath}
 
 
