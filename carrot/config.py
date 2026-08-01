@@ -53,6 +53,10 @@ DEFAULTS = {
     "cloud_model": "claude-opus-5",
     "cloud_effort": "high",
     "cloud_tasks": ["reasoning", "code"],
+    # Carrot Hub — hardware-aware model catalog. The catalog URL is derived
+    # from hub_url unless overridden (self-hosted hub, corporate mirror).
+    "hub_url": "https://hub.carrotai.app",
+    "hub_catalog_url": "",
     # Security
     "auth_enabled": True,
     "terminal_confirm_destructive": True,

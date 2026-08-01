@@ -193,10 +193,28 @@ def pull_model(model: str = DEFAULT_MODEL, progress_cb: Optional[Callable] = Non
         return False
 
 
-def run_bootstrap(progress_cb: Optional[Callable] = None) -> dict:
-    """Run the full bootstrap flow and return final status."""
+def get_target_model() -> str:
+    """The model bootstrap should ensure: the user's choice, else the default.
+
+    Bootstrap can run before the config database exists on a first launch,
+    so a missing/uninitialized config means the stock default.
+    """
+    try:
+        return get_config().get("ollama_model") or DEFAULT_MODEL
+    except Exception:
+        return DEFAULT_MODEL
+
+
+def run_bootstrap(progress_cb: Optional[Callable] = None, model: Optional[str] = None) -> dict:
+    """Run the full bootstrap flow and return final status.
+
+    ``model`` is the tag chosen on the setup splash (from the Hub's
+    hardware-based recommendations); omitted, it falls back to whatever
+    is configured and finally to DEFAULT_MODEL.
+    """
     state = load_bootstrap_state()
-    result = {"ollama_installed": False, "model_pulled": False, "model": DEFAULT_MODEL, "error": None}
+    target = model or get_target_model()
+    result = {"ollama_installed": False, "model_pulled": False, "model": target, "error": None}
 
     if progress_cb:
         progress_cb({"type": "status", "message": "Checking Ollama..."})
@@ -225,13 +243,13 @@ def run_bootstrap(progress_cb: Optional[Callable] = None) -> dict:
             result["error"] = "Ollama service did not start"
             return result
 
-    if not is_model_available(DEFAULT_MODEL):
+    if not is_model_available(target):
         state["model_pulling"] = True
         save_bootstrap_state(state)
-        if pull_model(DEFAULT_MODEL, progress_cb):
+        if pull_model(target, progress_cb):
             state["model_pulled"] = True
         else:
-            result["error"] = f"Failed to pull {DEFAULT_MODEL}"
+            result["error"] = f"Failed to pull {target}"
     else:
         state["model_pulled"] = True
 
@@ -239,10 +257,10 @@ def run_bootstrap(progress_cb: Optional[Callable] = None) -> dict:
     save_bootstrap_state(state)
     result["model_pulled"] = state["model_pulled"]
 
-    # Persist default model in config
-    set_config("ollama_model", DEFAULT_MODEL)
-    set_config("ollama_model_recap", DEFAULT_MODEL)
-    set_config("ollama_model_search", DEFAULT_MODEL)
+    # Persist the chosen model in config
+    set_config("ollama_model", target)
+    set_config("ollama_model_recap", target)
+    set_config("ollama_model_search", target)
 
     return result
 
@@ -250,14 +268,15 @@ def run_bootstrap(progress_cb: Optional[Callable] = None) -> dict:
 def bootstrap_status() -> dict:
     """Return the current bootstrap/Ollama state for the UI splash screen."""
     state = load_bootstrap_state()
+    target = get_target_model()
     ollama_installed = get_ollama_executable() is not None
-    model_pulled = is_model_available(DEFAULT_MODEL)
+    model_pulled = is_model_available(target)
     return {
         "ollama_installed": ollama_installed,
         "ollama_running": is_ollama_running(),
         "model_pulled": model_pulled,
         "model_pulling": state.get("model_pulling", False),
-        "default_model": DEFAULT_MODEL,
+        "default_model": target,
         # Complete when Ollama and the model are actually present, regardless of
         # whether Carrot's bootstrap ran (e.g. Ollama installed externally).
         "bootstrap_complete": ollama_installed and model_pulled,
