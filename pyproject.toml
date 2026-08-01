@@ -34,6 +34,13 @@ cloud = ["anthropic>=0.69.0"]
 # which is fine well past 100k vectors.
 vectors = ["sqlite-vec>=0.1.6"]
 speech = ["kokoro-onnx>=0.4.0", "sounddevice>=0.4.6"]
+# Browser control for Carrot Agent. Needs a one-time browser download after
+# install: `python -m playwright install chromium`. Without it the Agent tab
+# says so instead of failing mid-task.
+browser = ["playwright>=1.49.0"]
+# Direct mouse and keyboard control. Off by default even once installed — it
+# has to be switched on in Settings before the policy kernel will allow it.
+desktop = ["pyautogui>=0.9.54"]
 
 [tool.setuptools.packages.find]
 include = ["carrot*"]

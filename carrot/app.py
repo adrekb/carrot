@@ -48,6 +48,12 @@ from carrot import (
     security as security_mod,
     proactive as proactive_mod,
     backup as backup_mod,
+    policy as policy_mod,
+    research as research_mod,
+    agent as carrot_agent,
+    browser as browser_mod,
+    desktop as desktop_mod,
+    websearch as websearch_mod,
 )
 from carrot.speech import whisper_stt, kokoro_tts
 from carrot.recap import DUCKDUCKGO_QUERY
@@ -229,6 +235,33 @@ class IndexScanRequest(BaseModel):
 class ApprovalRequest(BaseModel):
     decision: str
     remember: Optional[bool] = False
+    # Typed back by the user for the handful of actions that move money or
+    # destroy something. An allow without the right phrase is treated as a deny.
+    confirmation: Optional[str] = ""
+
+
+class ResearchRequest(BaseModel):
+    question: str
+    depth: Optional[str] = None
+    conversation_id: Optional[str] = None
+
+
+class AgentRunRequest(BaseModel):
+    task: str
+    surface: Optional[str] = "browser"
+    conversation_id: Optional[str] = None
+    max_steps: Optional[int] = None
+    max_seconds: Optional[int] = None
+    require_plan_approval: Optional[bool] = None
+
+
+class DomainRequest(BaseModel):
+    domain: str
+
+
+class SecretRequest(BaseModel):
+    name: str
+    value: str
 
 
 class RouteRequest(BaseModel):
@@ -1050,6 +1083,17 @@ async def get_app_config():
 
 @app.put("/api/config/{key}")
 async def set_config_value(key: str, value: Any = Body(...)):
+    """Set one config key.
+
+    Secrets are refused here. They have dedicated endpoints that validate the
+    name and never read the value back, and leaving a second write path open
+    would mean a value could be stored in a shape the vault does not expect.
+    """
+    if key in config.SECRET_KEYS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"'{key}' holds secrets and cannot be set here — use its own endpoint",
+        )
     config.set_config(key, value)
     return {"key": key, "value": value}
 
@@ -1455,7 +1499,18 @@ async def list_approvals():
 
 @app.post("/api/agent/approvals/{approval_id}")
 async def resolve_approval(approval_id: str, req: ApprovalRequest):
-    if not agent_mod.resolve_approval(approval_id, req.decision, remember=bool(req.remember)):
+    """Answer a pending prompt.
+
+    ``remember`` is honoured only for prompts the policy marked rememberable,
+    and an allow on a prompt carrying a confirmation phrase becomes a deny
+    unless the phrase was typed back — both enforced in ``agent_tools``, not
+    here, so every caller gets the same treatment.
+    """
+    if not agent_mod.resolve_approval(
+        approval_id, req.decision,
+        remember=bool(req.remember),
+        confirmation=req.confirmation or "",
+    ):
         raise HTTPException(status_code=404, detail="No such pending approval")
     return {"resolved": True, "decision": req.decision}
 
@@ -1472,6 +1527,148 @@ async def revert_journal(entry_id: str):
     if not result["success"]:
         raise HTTPException(status_code=400, detail=result["error"])
     return result
+
+
+# ===== Carrot Research =====
+
+def _sse(generator):
+    """Wrap a trace generator as an SSE response.
+
+    Every research and agent event goes out the same way, so the UI has one
+    parser for both and a new event type never needs a transport change.
+    """
+    async def stream():
+        for event in generator:
+            yield f"data: {json.dumps(event)}\n\n"
+
+    return StreamingResponse(stream(), media_type="text/event-stream")
+
+
+@app.get("/api/research")
+async def list_research_runs(limit: int = 30):
+    return {"runs": research_mod.list_runs(limit=limit)}
+
+
+@app.get("/api/research/{run_id}")
+async def get_research_run(run_id: str):
+    run = research_mod.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="No such research run")
+    return run
+
+
+@app.delete("/api/research/{run_id}")
+async def delete_research_run(run_id: str):
+    if not research_mod.delete_run(run_id):
+        raise HTTPException(status_code=404, detail="No such research run")
+    return {"deleted": True}
+
+
+@app.post("/api/research/run")
+async def start_research(req: ResearchRequest):
+    """Run the research pipeline, streaming its trace."""
+    if not (req.question or "").strip():
+        raise HTTPException(status_code=400, detail="A research question is required")
+    depth = req.depth or config.get_config().get("research_default_depth", research_mod.DEFAULT_DEPTH)
+    return _sse(research_mod.run_research_stream(
+        req.question, depth=depth, conversation_id=req.conversation_id,
+    ))
+
+
+@app.post("/api/research/{run_id}/cancel")
+async def cancel_research(run_id: str):
+    return {"cancelled": policy_mod.cancel_run(run_id)}
+
+
+# ===== Carrot Agent =====
+
+@app.get("/api/agent/status")
+async def agent_status():
+    """What the agent can reach right now, and under which limits."""
+    return carrot_agent.status()
+
+
+@app.get("/api/agent/runs")
+async def list_agent_runs(limit: int = 30):
+    return {"runs": carrot_agent.list_runs(limit=limit)}
+
+
+@app.get("/api/agent/runs/{run_id}")
+async def get_agent_run(run_id: str):
+    """A run with its full audit trail: every action, decision, and result."""
+    run = carrot_agent.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="No such agent run")
+    return run
+
+
+@app.post("/api/agent/run")
+async def start_agent_run(req: AgentRunRequest):
+    if not (req.task or "").strip():
+        raise HTTPException(status_code=400, detail="A task is required")
+    overrides = {}
+    if req.max_steps:
+        overrides["max_steps"] = int(req.max_steps)
+    if req.max_seconds:
+        overrides["max_seconds"] = int(req.max_seconds)
+    return _sse(carrot_agent.run_agent_stream(
+        req.task,
+        surface=req.surface or carrot_agent.SURFACE_BROWSER,
+        conversation_id=req.conversation_id,
+        budget_overrides=overrides,
+        require_plan_approval=req.require_plan_approval,
+    ))
+
+
+@app.post("/api/agent/runs/{run_id}/stop")
+async def stop_agent_run(run_id: str):
+    """The kill switch. Takes effect before the run's next action."""
+    return {"stopped": policy_mod.cancel_run(run_id)}
+
+
+# ===== Agent policy: what Carrot is allowed to touch =====
+
+@app.get("/api/policy")
+async def get_policy():
+    return policy_mod.status()
+
+
+@app.post("/api/policy/domains")
+async def add_allowed_domain(req: DomainRequest):
+    try:
+        return {"allowed_domains": policy_mod.allow_domain(req.domain)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.delete("/api/policy/domains/{domain}")
+async def remove_allowed_domain(domain: str):
+    return {"allowed_domains": policy_mod.revoke_domain(domain)}
+
+
+@app.get("/api/policy/secrets")
+async def list_secrets():
+    """Names only. There is no endpoint that returns a stored value."""
+    return {"secrets": policy_mod.secret_names()}
+
+
+@app.post("/api/policy/secrets")
+async def store_secret(req: SecretRequest):
+    try:
+        return {"secrets": policy_mod.set_secret(req.name, req.value)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.delete("/api/policy/secrets/{name}")
+async def remove_secret(name: str):
+    return {"secrets": policy_mod.delete_secret(name)}
+
+
+@app.get("/api/policy/check-url")
+async def check_url(url: str):
+    """What the kernel would say about a URL — used by the UI to explain a block."""
+    return policy_mod.check_url(url).as_dict()
 
 
 # ===== Model routing =====

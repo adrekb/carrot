@@ -501,7 +501,8 @@ body {
 .tag.hot { color: var(--accent); background: var(--accent-soft); border-color: rgba(255, 92, 31, 0.25); }
 
 /* Inputs & buttons */
-input[type="text"], input[type="datetime-local"], textarea, select {
+input[type="text"], input[type="password"], input[type="search"],
+input[type="datetime-local"], textarea, select {
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -1673,3 +1674,250 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 .mention-label { font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mention-source { color: var(--muted); font-size: 11px; flex-shrink: 0; }
 .mention-empty { padding: 8px 10px; color: var(--muted); font-size: 12px; }
+
+/* ===== Carrot Research and Carrot Agent ===== */
+
+/* The critical-action prompt has to look different from an ordinary one — it is
+   the only prompt that cannot be answered by clicking. */
+.approval-card.risk-critical {
+  border-left-color: var(--red);
+  box-shadow: 0 14px 44px rgba(255, 93, 93, 0.28);
+}
+.approval-detail {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: pre-wrap;
+  max-height: 160px;
+  overflow-y: auto;
+  margin-bottom: 8px;
+  padding-left: 8px;
+  border-left: 2px solid var(--border-hi);
+}
+.approval-confirm { margin-bottom: 12px; }
+.approval-confirm-note { font-size: 12px; color: var(--yellow); margin-bottom: 6px; }
+.approval-confirm-input {
+  width: 100%;
+  font-family: var(--mono);
+  text-transform: uppercase;
+}
+
+/* --- Research --- */
+
+.research-composer textarea { width: 100%; resize: vertical; }
+
+.research-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 2fr) minmax(320px, 3fr);
+  gap: 18px;
+  margin: 18px 0;
+}
+@media (max-width: 900px) {
+  .research-grid { grid-template-columns: 1fr; }
+}
+
+.small-head {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin: 0 0 8px;
+}
+
+.trace {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.65;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  min-height: 120px;
+  max-height: 320px;
+  overflow-y: auto;
+  margin-bottom: 18px;
+}
+.trace-line { color: var(--muted); word-break: break-word; }
+.trace-line.intent { color: var(--accent-hi); }
+.trace-line.search { color: var(--text); }
+.trace-line.finding { color: var(--text); padding-left: 10px; }
+.trace-line.ok { color: var(--green); }
+.trace-line.warn { color: var(--yellow); }
+.trace-line.err { color: var(--red); }
+
+.report {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  min-height: 200px;
+  max-height: 620px;
+  overflow-y: auto;
+}
+
+.list.compact { max-height: 240px; overflow-y: auto; }
+
+.source-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.source-item.tainted { background: rgba(255, 93, 93, 0.07); }
+.source-id { font-family: var(--mono); color: var(--accent); flex: none; }
+.source-kind { color: var(--faint); flex: none; }
+.source-title { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.source-flag {
+  margin-left: auto;
+  flex: none;
+  color: var(--red);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* --- Agent --- */
+
+.notice {
+  background: rgba(245, 196, 81, 0.08);
+  border: 1px solid var(--yellow);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin-bottom: 14px;
+  font-size: 13px;
+}
+.notice pre {
+  margin: 8px 0 0;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: pre-wrap;
+}
+
+.inline-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.agent-plan {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  margin: 16px 0;
+}
+.agent-plan h4 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; color: var(--muted); }
+.agent-plan pre { margin: 0; white-space: pre-wrap; font-size: 12.5px; }
+
+.agent-steps { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
+
+.agent-step {
+  font-size: 12.5px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--card);
+  border-left: 2px solid var(--border-hi);
+  word-break: break-word;
+}
+.agent-step.thought { background: transparent; color: var(--muted); font-style: italic; padding: 2px 12px; }
+.agent-step.action { border-left-color: var(--accent); }
+.agent-step.observation { border-left-color: var(--border-hi); color: var(--muted); font-family: var(--mono); font-size: 11.5px; }
+.agent-step.denied { border-left-color: var(--red); background: rgba(255, 93, 93, 0.07); }
+.agent-step.question { border-left-color: var(--yellow); background: rgba(245, 196, 81, 0.07); }
+/* An injection attempt is the one event the user must not be able to scroll
+   past without noticing. */
+.agent-step.injection {
+  border-left-color: var(--red);
+  background: rgba(255, 93, 93, 0.12);
+  border: 1px solid var(--red);
+}
+
+.agent-action { font-family: var(--mono); color: var(--accent-hi); margin-right: 8px; }
+.agent-args { color: var(--muted); font-family: var(--mono); font-size: 11.5px; }
+.agent-verdict { color: var(--faint); font-size: 11px; margin-top: 4px; }
+.agent-observation { display: block; margin-top: 4px; white-space: pre-wrap; }
+
+.agent-result {
+  border-radius: var(--radius);
+  border: 1px solid var(--border-hi);
+  padding: 14px 16px;
+  margin-bottom: 18px;
+}
+.agent-result h4 { margin: 0 0 6px; text-transform: capitalize; }
+.agent-result.status-complete { border-color: var(--green); }
+.agent-result.status-needs_input { border-color: var(--yellow); }
+.agent-result.status-cancelled,
+.agent-result.status-budget_exceeded,
+.agent-result.status-failed { border-color: var(--red); }
+
+.policy-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 14px;
+}
+.policy-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+}
+.policy-card h4 { margin: 0 0 8px; font-size: 13px; }
+.policy-card .composer.inline { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.policy-card .inline-check { margin-top: 10px; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-family: var(--mono);
+  background: var(--accent-soft);
+  border: 1px solid var(--border-hi);
+  border-radius: 999px;
+  padding: 3px 6px 3px 10px;
+}
+.chip button {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 4px;
+}
+.chip button:hover { color: var(--red); }
+
+.btn.btn-danger { background: var(--red); color: #fff; border-color: var(--red); }
+.btn.small { padding: 4px 10px; font-size: 12px; }
+
+/* A textarea in a composer is the primary field, not one control among several,
+   so it takes the full row rather than being squeezed by the flex siblings. */
+.composer textarea {
+  flex: 1 1 100%;
+  width: 100%;
+  resize: vertical;
+  font-family: var(--sans);
+  line-height: 1.55;
+}
+
+#view-agent .row,
+#view-research .row { align-items: center; flex-wrap: wrap; }
+
+/* `.composer input` gives every input flex:1 and a 160px floor, which is right
+   for text fields and wrong for a checkbox — it stretches the hit area across
+   the row and leaves the label stranded. */
+.inline-check input[type="checkbox"],
+.policy-card input[type="checkbox"] {
+  flex: 0 0 auto;
+  min-width: 0;
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}

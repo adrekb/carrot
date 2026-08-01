@@ -45,10 +45,12 @@ TASK_CLASSIFY = "classify"
 TASK_SUMMARIZE = "summarize"
 TASK_EXTRACT = "extract"
 TASK_RECAP = "recap"
+TASK_RESEARCH = "research"
+TASK_AGENT = "agent"
 
 TASKS = (
     TASK_CHAT, TASK_CODE, TASK_REASONING, TASK_CLASSIFY,
-    TASK_SUMMARIZE, TASK_EXTRACT, TASK_RECAP,
+    TASK_SUMMARIZE, TASK_EXTRACT, TASK_RECAP, TASK_RESEARCH, TASK_AGENT,
 )
 
 # Cheap, high-volume tasks that should never escalate *automatically* — they run
@@ -65,6 +67,8 @@ BUILTIN_TASK_SPECS: Dict[str, Dict[str, Any]] = {
     TASK_SUMMARIZE: {"label": "Summarize", "description": "Rolling conversation summaries."},
     TASK_EXTRACT: {"label": "Extract", "description": "Pulling durable facts out of a turn."},
     TASK_RECAP: {"label": "Recap", "description": "The morning briefing."},
+    TASK_RESEARCH: {"label": "Research", "description": "Carrot Research: planning, reading sources, and writing cited reports."},
+    TASK_AGENT: {"label": "Agent", "description": "Carrot Agent: deciding the next action while driving the browser or the desktop."},
 }
 
 DEFAULT_CLOUD_MODEL = "claude-opus-5"

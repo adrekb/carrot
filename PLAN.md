@@ -81,6 +81,80 @@ documents and past conversations. Two safety properties hold for all of them:
 
 All paths resolve against a workspace root and refuse to escape it.
 
+## Carrot Research
+
+`research.py` is a multi-agent pipeline whose organising idea is that a research answer
+is worth exactly as much as the evidence you can put your finger on:
+
+```
+plan ──▶ researcher × N (parallel) ──▶ verify ──▶ synthesize
+          │                              │
+          └── search → read → extract    └── every claim re-checked
+              → reflect on gaps → repeat     against the stored source text
+```
+
+- **Evidence is stored before it is used.** Pages land in `research_sources` with their
+  full text; findings reference sources by id, and a claim citing an id that was never
+  stored is dropped rather than repaired. The writer only ever sees findings that carry
+  a real id, so a citation can be wrong but cannot be invented.
+- **Sub-questions are independent agents.** Each owns its search budget and reads its own
+  pages on a worker thread, interleaving trace events through a shared queue. One dead end
+  costs one thread.
+- **Reflection is a real loop.** After extraction a researcher is asked what it still
+  cannot answer; the gaps become the next round's queries.
+- **Verification is a separate pass.** The model sees the claim and the cited source text
+  and nothing else — no question, no narrative to defend. `unsupported` and `contradicted`
+  claims never reach synthesis.
+- **Local corpus is a first-class source.** Indexed documents, past conversations and
+  memories are searched alongside the web and cited identically.
+
+Every structured call has a deterministic fallback, because a 4B local model returns
+imperfect JSON often enough that a run has to degrade to a shallower result rather than
+crash.
+
+## Carrot Agent
+
+`agent.py` runs `plan → observe → decide one action → policy → execute → observe`. One
+action per iteration, always re-observed, with no path from the model to the mouse that
+skips the gate — the executor takes an already-approved decision as an argument rather
+than deciding for itself.
+
+`browser.py` is the surface it drives. It never emits a coordinate: every observation is
+a numbered map of the visible interactive elements, built from the DOM and accessibility
+attributes, and every action names one of those numbers. That buys three things a
+screenshot-and-coordinates agent cannot offer — an approval prompt that describes what
+will actually be clicked, a risk judgement made against the real button caption before
+the click, and credential fields that are structurally identifiable and therefore
+maskable. Playwright's sync API is thread-confined, so the session owns a dedicated
+thread and every operation is a closure posted to it, which also serialises actions.
+
+`desktop.py` separates two things that are usually conflated: *asking the OS to open
+something* is a bounded request the OS validates, and is on by default behind an
+approval; *taking the mouse* is unbounded and is off until switched on.
+
+## The Policy Kernel
+
+`policy.py` is the one component that never asks the model what it thinks. Every action
+from either agent returns allow, approve, or deny.
+
+- **Irreversible actions always ask.** `remember_allowed=False` travels with the prompt
+  and is re-checked server-side, so a client cannot record a "don't ask again" for one.
+- **Critical intent needs a typed phrase.** Purchase, transfer and deletion patterns are
+  matched against the *label of the thing being acted on* — a button's caption, not the
+  model's description of its own intent.
+- **Secrets are name-only to the model.** `reveal()` is the single function returning a
+  value, called one call deep inside the keyboard layer; `redact()` scrubs any value that
+  leaked into text as defence in depth.
+- **Taint tracking.** Reading flagged content clears the run's remembered approvals and
+  forces individual confirmation thereafter. Untrusted text cannot expand permissions.
+- **SSRF containment.** Every resolved address must be public, checked on each redirect
+  hop — a name returning one routable and one loopback address is rebinding, not a site.
+- **Budgets and a kill switch** live on the per-run `RunContext`, not globally, so
+  allowing something in one task does not carry into the next.
+
+`agent_steps` is the audit trail: action, decision, reason, observation — secrets stripped
+before the row is written.
+
 ## Model Routing
 
 `router.py` maps a *task* to a model rather than hardcoding one. Small local models
@@ -379,6 +453,80 @@ CREATE TABLE file_journal (
     after_content TEXT,
     reverted INTEGER DEFAULT 0,
     conversation_id TEXT,
+    created_at TEXT
+);
+
+-- Carrot Research. Sources hold the full text that was read, so verification is
+-- a lookup against stored evidence rather than a second guess.
+CREATE TABLE research_runs (
+    id TEXT PRIMARY KEY,
+    question TEXT NOT NULL,
+    status TEXT,                   -- running | complete | failed | cancelled
+    depth TEXT,                    -- quick | standard | deep
+    plan TEXT,                     -- JSON array of sub-questions
+    report TEXT,
+    error TEXT,
+    conversation_id TEXT,
+    created_at TEXT,
+    finished_at TEXT
+);
+
+CREATE TABLE research_sources (
+    id TEXT PRIMARY KEY,
+    run_id TEXT REFERENCES research_runs(id) ON DELETE CASCADE,
+    ordinal INTEGER,               -- the number behind its [S3] citation label
+    kind TEXT,                     -- web | document | conversation | memory
+    title TEXT,
+    locator TEXT,                  -- URL, or path#chunk, or memory:id
+    snippet TEXT,
+    content TEXT,
+    tainted INTEGER DEFAULT 0,     -- this page attempted prompt injection
+    created_at TEXT
+);
+
+CREATE TABLE research_findings (
+    id TEXT PRIMARY KEY,
+    run_id TEXT REFERENCES research_runs(id) ON DELETE CASCADE,
+    subquestion TEXT,
+    claim TEXT,
+    source_ids TEXT,               -- JSON array into research_sources
+    confidence REAL,
+    verdict TEXT,                  -- unchecked | supported | partial | unsupported | contradicted
+    created_at TEXT
+);
+
+-- Carrot Agent. Budgets are stored with the run so an inspected run shows the
+-- limits it actually operated under, not today's config.
+CREATE TABLE agent_runs (
+    id TEXT PRIMARY KEY,
+    task TEXT NOT NULL,
+    status TEXT,                   -- running | complete | needs_input | cancelled | budget_exceeded | failed
+    surface TEXT,                  -- browser | desktop | both
+    plan TEXT,
+    result TEXT,
+    error TEXT,
+    budget TEXT,                   -- JSON snapshot
+    steps_used INTEGER,
+    conversation_id TEXT,
+    created_at TEXT,
+    finished_at TEXT
+);
+
+-- The audit trail. Arguments are stored post-redaction: a secret value is never
+-- written here, only the name of the vault entry that was used.
+CREATE TABLE agent_steps (
+    id TEXT PRIMARY KEY,
+    run_id TEXT REFERENCES agent_runs(id) ON DELETE CASCADE,
+    ordinal INTEGER,
+    action TEXT,
+    arguments TEXT,                -- JSON, redacted
+    rationale TEXT,
+    risk TEXT,                     -- none | low | medium | high | critical
+    decision TEXT,                 -- allow | approve | deny
+    decision_reason TEXT,
+    observation TEXT,
+    screenshot TEXT,
+    tainted INTEGER DEFAULT 0,
     created_at TEXT
 );
 ```
