@@ -30,6 +30,10 @@ It searches through all your past conversations, notes, and even old goals to fi
 
 **You want an assistant that actually knows you.** Carrot doesn't just search what you typed — it builds a structured memory of what's true about you. Preferences, decisions, projects, commitments. Every belief is traceable back to the message it came from, and you can read, edit, pin, or delete any of it from the Memory tab. Get something wrong once and mark it wrong; Carrot won't record that subject again.
 
+**You have a question that deserves more than a search box.** Ask Carrot Research. It breaks your question into sub-questions, sends a researcher after each one in parallel, reads the actual pages — plus your own indexed files and past conversations — and then does the part nobody else does: it re-checks every claim against the source text it came from before writing a word. Claims the sources don't support get dropped, not softened. What you get back is a report where every sentence carries a citation you can click.
+
+**You have a form to fill out and a browser tab you've been avoiding.** Tell Carrot Agent. It opens a real browser and works through the task — finding the page, filling the fields, pulling up your assignment — showing you its plan first and asking before anything that can't be undone. It never types your password itself: credentials live in a local vault, and Carrot enters them without the model ever seeing the value.
+
 **You have folders full of things you'll never re-read.** Point Carrot at them — papers, notes, code, saved pages — and it indexes them locally into the same search that covers your conversations. "What did that paper say about attention?" works against a PDF you downloaded six months ago and never opened again. Nothing is uploaded anywhere.
 
 ## What Makes It Different
@@ -41,6 +45,8 @@ It searches through all your past conversations, notes, and even old goals to fi
 - **Powered by Ollama.** The AI runs on your own hardware using the `gemma4:e4b` model. You don't need an API key — and if you don't have Ollama, Carrot installs it for you on first launch.
 - **Your keys, your choice of model.** If you do want a hosted model for some things, bring a key for Anthropic, OpenAI, or anything OpenAI-compatible, and assign it per task — a frontier model for hard reasoning, something cheap for classification, everything else on-device.
 - **One-click setup.** On first run Carrot detects whether Ollama is present, silently installs it if not, and pulls `gemma4:e4b` — all with a progress splash screen. No manual terminal steps required.
+- **Research that shows its evidence.** Every claim in a report is traced back to text that was actually read, and re-checked against it before the report is written. A citation can be wrong; it cannot be invented.
+- **It can act, and it can be stopped.** Carrot Agent drives a real browser to finish real tasks — but nothing irreversible happens without you, credentials never reach the model, and a hostile page costs the agent its privileges rather than gaining it new ones.
 - **Search-first design.** Every conversation, note, goal entry, and reminder is indexed and searchable. If you've ever typed something that Carrot heard, you can find it again.
 - **One app instead of five.** Code editor + notes + reminders + goal tracker + search + AI chat, all in one place with one interface.
 - **GUI-first desktop app.** Runs as a native desktop window with a polished multi-pane dashboard, not just a browser tab.
@@ -75,6 +81,32 @@ It searches through all your past conversations, notes, and even old goals to fi
 - **`@/model/` selection**: a three-step picker — `@` → `model` → provider (`openai`, `google`, `anthropic`, `local`, or anything you added) → a scrollable list of the models *that provider serves for your key*, fetched live rather than hardcoded. A research note can name a frontier model while a scratch note stays on-device.
 - **Shown before it runs**: chips under the note say which citations resolved, how large they are, and which model will serve it. A citation that cannot be read is reported, never silently dropped.
 - **Confined to what you opted into**: citations reach the agent workspace and your indexed folders, and nothing else.
+
+### Carrot Research
+- **A real multi-agent pipeline** (`carrot/research.py`): plan → parallel researchers → gap reflection → verification → cited synthesis. Sub-questions are researched by independent agents on their own budgets, so one dead end costs one thread rather than the run.
+- **Reflection is a loop, not a flourish**: after extracting findings a researcher is asked what it still cannot answer, and those gaps become the next round's queries. Depth comes from reading the *right* second page, not from reading more first pages.
+- **Evidence is stored before it is used**: every page read lands in `research_sources` with its full text. Findings cite sources by id, and a claim citing an id that does not exist is dropped rather than repaired.
+- **Every claim is re-checked** against the source text by a separate pass that sees the claim and the evidence and nothing else — no question, no narrative to protect. `unsupported` and `contradicted` claims never reach the writer.
+- **Your files are a first-class source**: indexed documents, past conversations and stored memories are searched alongside the web and cited the same way.
+- **Three depths** — quick, standard, deep — and a full trace in the UI showing each researcher working in parallel.
+
+### Carrot Agent
+- **Drives a real browser** (`carrot/browser.py`) through the accessibility tree, not pixels. Every observation is a numbered list of the visible interactive elements, and every action names a number — so what the approval prompt says ("Click *Submit assignment*") is exactly what gets clicked.
+- **One action per turn, always re-observed**: element numbers are re-derived after every action, so a page that changed underneath the agent produces a loud miss rather than a quiet wrong click.
+- **Plan first**: the agent says what it intends to do and you approve *that*, not just a series of clicks whose shape becomes clear halfway through.
+- **Two desktop tiers** (`carrot/desktop.py`): opening a file with its normal application is a bounded request the OS validates, and it is on by default behind an approval. Taking the mouse is unbounded, and it is off until you switch it on.
+- **Failure is information**: a denial comes back to the model with its reason attached, so the agent routes around it instead of hammering the same button.
+
+### The Policy Kernel
+Everything both agents do passes through `carrot/policy.py`, which answers allow, ask, or refuse. It is the one component that never asks the model what it thinks.
+
+- **Irreversible actions always ask.** Submit, upload, launch, run — "don't ask again" is not offered for any of them, and the server refuses to record one even if a client sends it.
+- **Money and destruction need a typed phrase.** Anything that reads as a purchase, transfer, or account deletion is refused outright unless you have enabled it, and then the prompt requires typing `CONFIRM` rather than clicking a button. The button's own caption is what trips this — a model cannot describe its way past it.
+- **The model never sees a credential.** Secrets live in a local vault keyed by name. The agent asks to type `secret:canvas`; the value is substituted at the keyboard layer and appears in no transcript, no audit row, and no screenshot. Typing one into a site that is not on your allowed list is refused, which is a phishing check as much as a policy one.
+- **Untrusted text cannot escalate.** Page content is enveloped and screened for injection. A run that reads flagged content is *tainted*: it loses its remembered approvals, every subsequent action is confirmed individually, and the offending text is shown to you. The agent does not get to decide whether the attempt was serious.
+- **The network boundary is real.** A URL that resolves to loopback, a private range, or link-local is refused, and every redirect hop is re-checked — an agent that can be talked into fetching `192.168.1.1/admin` is a router exploit with a chat interface.
+- **Nothing runs forever.** Steps, wall-clock seconds, navigations and distinct domains are all capped, with a kill switch that takes effect before the next action.
+- **Everything is on the record.** `agent_steps` holds every action proposed, what the policy decided and why, and what came back — secrets stripped before the row is written.
 
 ### Agent Tools
 - **Built-in tools** (`carrot/agent_tools.py`) alongside MCP: read/write files, list directories, regex search, run commands, and search memory, documents and past conversations
@@ -160,6 +192,7 @@ python -m carrot.app   # then open http://127.0.0.1:8181
 - [Ollama](https://ollama.com/) — **optional**: Carrot installs it automatically on first launch and pulls `gemma4:e4b`
 - Node.js 18+ (only for building the Electron desktop app)
 - For speech: `pip install kokoro-onnx sounddevice numpy` (optional; voice features degrade gracefully without them)
+- For Carrot Agent's browser control: `pip install playwright && python -m playwright install chromium` (optional; the Agent tab says what is missing rather than failing mid-task)
 
 ## CLI Quick Start
 
@@ -211,7 +244,35 @@ DeepSeek, Mistral, LM Studio, vLLM — works with the base install.
 pip install 'carrot[cloud]'    # the Anthropic SDK, for the Anthropic provider
 pip install 'carrot[vectors]'  # sqlite-vec ANN backend (numpy fallback otherwise)
 pip install 'carrot[speech]'   # Kokoro TTS voice output
+pip install 'carrot[browser]'  # Playwright, for Carrot Agent's browser control
+pip install 'carrot[desktop]'  # pyautogui, for direct mouse and keyboard control
 ```
+
+Browser control needs a one-time browser download after installing the extra:
+
+```bash
+python -m playwright install chromium
+```
+
+Without it, Carrot Research still works (it reads pages over HTTP) and the
+Agent tab tells you what to install rather than failing partway through a task.
+
+## What Carrot Agent Is Allowed To Do
+
+Nothing, until you say so. The defaults are the cautious ones, and they are
+changed in Settings — never by a prompt, and never by the agent itself.
+
+| Setting | Default | What it controls |
+| --- | --- | --- |
+| Allowed sites | empty | Sites Carrot may visit without asking. It still asks for anything else, per run — an approval never writes to this list. |
+| Stored credentials | empty | Values Carrot can type without the model seeing them. Only usable on allowed sites. |
+| Desktop control | **off** | Whether Carrot may move the mouse and type directly. Every action asks, every time. |
+| High-consequence actions | **off** | Whether purchases, transfers and deletions are possible at all. Even on, each one needs a typed `CONFIRM`. |
+| Apps Carrot may launch | empty | Programs it can start. A name that is not listed is refused before anything is resolved on disk. |
+| Budgets | 40 steps / 15 min / 30 navigations / 10 sites | Hard caps per run, with a kill switch that lands before the next action. |
+
+Two things are refused outright and cannot be enabled: working around a CAPTCHA
+or human-verification step, and downloading an executable.
 
 ## API Access
 

@@ -58,6 +58,24 @@ DEFAULTS = {
     "terminal_confirm_destructive": True,
     "terminal_restrict_cwd": False,
     "terminal_extra_roots": [],
+    # Carrot Research
+    "research_default_depth": "standard",
+    "research_max_seconds": 1800,
+    # Carrot Agent. The defaults are the cautious ones on purpose: nothing is
+    # allowed to touch the machine or a website until the user says which.
+    "agent_allowed_domains": [],
+    "agent_blocked_domains": [],
+    "agent_secrets": {},
+    "agent_app_allowlist": [],
+    "agent_open_roots": [],
+    "agent_desktop_control_enabled": False,
+    "agent_allow_critical_actions": False,
+    "agent_require_plan_approval": True,
+    "agent_browser_headless": False,
+    "agent_max_steps": 40,
+    "agent_max_seconds": 900,
+    "agent_max_navigations": 30,
+    "agent_max_domains": 10,
     # Proactive notifications
     "proactive_enabled": True,
     "proactive_interval_seconds": 300,
@@ -67,7 +85,7 @@ DEFAULTS = {
 # Keys that must never be returned by the read-only config endpoint. A dict
 # value is reduced to a map of booleans, so the UI can still tell which
 # providers have a key without any key leaving the process.
-SECRET_KEYS = {"cloud_api_key", "provider_keys"}
+SECRET_KEYS = {"cloud_api_key", "provider_keys", "agent_secrets"}
 
 
 def redact(settings):

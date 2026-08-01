@@ -99,6 +99,8 @@
     <button class="nav-item sub" data-tab="code" onclick="switchTab('code')"><svg class="ico"><use href="#i-terminal"/></svg><span class="nav-label">Code</span></button>
     <button class="nav-item sub" data-tab="goals" onclick="switchTab('goals')"><svg class="ico"><use href="#i-cap"/></svg><span class="nav-label">Goals</span></button>
     <button class="nav-item sub" data-tab="reminders" onclick="switchTab('reminders')"><svg class="ico"><use href="#i-pulse"/></svg><span class="nav-label">Reminders</span></button>
+    <button class="nav-item sub" data-tab="research" onclick="switchTab('research')"><svg class="ico"><use href="#i-search"/></svg><span class="nav-label">Research</span></button>
+    <button class="nav-item sub" data-tab="agent" onclick="switchTab('agent')"><svg class="ico"><use href="#i-chip"/></svg><span class="nav-label">Agent</span></button>
     <button class="nav-item sub" data-tab="assignments" onclick="switchTab('assignments')"><svg class="ico"><use href="#i-news"/></svg><span class="nav-label">Assignments</span></button>
     <button class="nav-item sub" data-tab="extensions" onclick="switchTab('extensions')"><svg class="ico"><use href="#i-chip"/></svg><span class="nav-label">Extensions</span></button>
     <button class="nav-item sub" data-tab="memory" onclick="switchTab('memory')"><svg class="ico"><use href="#i-cap"/></svg><span class="nav-label">Memory</span></button>
@@ -322,6 +324,138 @@
   </section>
 
   <!-- Extensions -->
+  <!-- Carrot Research -->
+  <section id="view-research" class="view">
+    <div class="page">
+      <div class="page-head"><h2>Research</h2></div>
+      <p class="muted">
+        Ask a real question. Carrot breaks it into sub-questions, researches each one across the web
+        and your own indexed files, checks every claim against the source it came from, and writes a
+        report you can trace line by line.
+      </p>
+
+      <div class="composer research-composer">
+        <textarea id="research-question" rows="3"
+                  placeholder="What would you like researched? e.g. &quot;How do the current open-weight coding models compare on long-context refactoring, and which fits 32GB of RAM?&quot;"></textarea>
+        <div class="row">
+          <select id="research-depth">
+            <option value="quick">Quick — 2 threads, one round</option>
+            <option value="standard" selected>Standard — 4 threads, two rounds</option>
+            <option value="deep">Deep — 6 threads, three rounds</option>
+          </select>
+          <button class="btn btn-primary" id="research-run-btn" onclick="startResearch()">Research</button>
+          <button class="btn btn-ghost hidden" id="research-stop-btn" onclick="stopResearch()">Stop</button>
+        </div>
+      </div>
+
+      <div class="research-grid">
+        <div class="research-trace-pane">
+          <h3 class="small-head">Trace</h3>
+          <div id="research-trace" class="trace"><div class="trace-line">Each researcher reports here as it searches, reads and checks.</div></div>
+          <h3 class="small-head">Sources</h3>
+          <div id="research-sources" class="list compact"><div class="empty">Sources appear here as they are read, each with the number it is cited by.</div></div>
+        </div>
+        <div class="research-report-pane">
+          <h3 class="small-head">Report</h3>
+          <div id="research-report" class="md report"></div>
+        </div>
+      </div>
+
+      <div class="ext-section">
+        <div class="ext-head"><h3>Past research</h3></div>
+        <div id="research-runs" class="list"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Carrot Agent -->
+  <section id="view-agent" class="view">
+    <div class="page">
+      <div class="page-head"><h2>Agent</h2></div>
+      <p class="muted">
+        Give Carrot a task and it will carry it out in a real browser — finding a page, filling a form,
+        pulling up your assignments. It shows you its plan before it starts, asks before anything that
+        cannot be undone, and stops the moment you tell it to.
+      </p>
+
+      <div id="agent-availability" class="notice hidden"></div>
+
+      <div class="composer">
+        <textarea id="agent-task" rows="3"
+                  placeholder="What should Carrot do? e.g. &quot;Open my CS 3110 Canvas page, find assignment 4, and tell me what it asks for and when it's due&quot;"></textarea>
+        <div class="row">
+          <select id="agent-surface">
+            <option value="browser" selected>Browser only</option>
+            <option value="desktop">Desktop only</option>
+            <option value="both">Browser and desktop</option>
+          </select>
+          <label class="inline-check">
+            <input type="checkbox" id="agent-approve-plan" checked>
+            Approve the plan before it starts
+          </label>
+          <button class="btn btn-primary" id="agent-run-btn" onclick="startAgentRun()">Run task</button>
+          <button class="btn btn-danger hidden" id="agent-stop-btn" onclick="stopAgentRun()">Stop</button>
+        </div>
+      </div>
+
+      <div id="agent-plan" class="agent-plan hidden"></div>
+      <div id="agent-steps" class="agent-steps"></div>
+      <div id="agent-result" class="agent-result hidden"></div>
+
+      <div class="ext-section">
+        <div class="ext-head"><h3>What Carrot may touch</h3></div>
+        <p class="muted small">
+          Nothing here is on by default. The agent asks before visiting a site that is not listed,
+          and refuses outright to type a stored credential into one that is not.
+        </p>
+
+        <div class="policy-grid">
+          <div class="policy-card">
+            <h4>Allowed sites</h4>
+            <div class="composer inline">
+              <input type="text" id="policy-domain" placeholder="canvas.university.edu or *.university.edu">
+              <button class="btn btn-ghost" onclick="addAllowedDomain()">Allow</button>
+            </div>
+            <div id="policy-domains" class="chips"></div>
+          </div>
+
+          <div class="policy-card">
+            <h4>Stored credentials</h4>
+            <p class="muted small">
+              Carrot types these into sites you have allowed. The model never sees the value —
+              not in its context, not in the log.
+            </p>
+            <div class="composer inline">
+              <input type="text" id="policy-secret-name" placeholder="name, e.g. canvas">
+              <input type="password" id="policy-secret-value" placeholder="value">
+              <button class="btn btn-ghost" onclick="addSecret()">Store</button>
+            </div>
+            <div id="policy-secrets" class="chips"></div>
+          </div>
+
+          <div class="policy-card">
+            <h4>Limits</h4>
+            <div id="policy-budget" class="muted small"></div>
+            <label class="inline-check">
+              <input type="checkbox" id="policy-desktop-control" onchange="setPolicyFlag('agent_desktop_control_enabled', this.checked)">
+              Let Carrot control the mouse and keyboard directly
+            </label>
+            <label class="inline-check">
+              <input type="checkbox" id="policy-critical" onchange="setPolicyFlag('agent_allow_critical_actions', this.checked)">
+              Allow high-consequence actions (payments, deletions) with a typed confirmation
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="ext-section">
+        <div class="ext-head"><h3>Past runs</h3></div>
+        <p class="muted small">Every action the agent took, what the policy decided, and what came back.</p>
+        <div id="agent-runs" class="list"></div>
+      </div>
+    </div>
+  </section>
+
   <section id="view-extensions" class="view">
     <div class="page">
       <div class="page-head"><h2>Extensions</h2></div>
@@ -674,6 +808,7 @@
 <script src="/js/dashboard.js"></script>
 <script src="/js/app.js"></script>
 <script src="/js/agentops.js"></script>
+<script src="/js/agents.js"></script>
 <script src="/js/docagent.js"></script>
 </body>
 </html>

@@ -16,18 +16,42 @@ function approvalHost() {
     return host;
 }
 
+// The server decides what a prompt may offer, and this renders exactly that:
+// `remember_allowed` false means no "don't ask again" checkbox at all, and a
+// `confirm_phrase` means Allow stays disabled until the phrase is typed. Both
+// are re-checked server-side — the UI is a convenience, not the control.
+
 function showApprovalPrompt(request) {
     const card = document.createElement('div');
     card.className = 'approval-card risk-' + escHtml(request.risk || 'low');
     card.id = 'approval-' + request.id;
-    card.innerHTML = `
-        <div class="approval-head">Carrot wants to run a tool</div>
-        <div class="approval-summary">${escHtml(request.summary)}</div>
-        <div class="approval-tool">${escHtml(request.tool)} · ${escHtml(request.risk)} risk</div>
+
+    const rememberRow = request.remember_allowed === false ? '' : `
         <label class="approval-remember">
             <input type="checkbox" id="approval-remember-${escHtml(request.id)}">
-            Don't ask again for this tool this session
-        </label>
+            Don't ask again for this action this session
+        </label>`;
+
+    const confirmRow = request.confirm_phrase ? `
+        <div class="approval-confirm">
+            <div class="approval-confirm-note">
+                This is a high-consequence action. Type
+                <strong>${escHtml(request.confirm_phrase)}</strong> to allow it.
+            </div>
+            <input type="text" id="approval-confirm-${escHtml(request.id)}"
+                   class="approval-confirm-input" autocomplete="off" spellcheck="false">
+        </div>` : '';
+
+    const detail = request.detail ? `
+        <div class="approval-detail">${escHtml(String(request.detail).slice(0, 600))}</div>` : '';
+
+    card.innerHTML = `
+        <div class="approval-head">Carrot wants to ${escHtml(request.tool === 'start_task' ? 'start a task' : 'take an action')}</div>
+        <div class="approval-summary">${escHtml(request.summary)}</div>
+        ${detail}
+        <div class="approval-tool">${escHtml(request.tool)} · ${escHtml(request.risk)} risk</div>
+        ${rememberRow}
+        ${confirmRow}
         <div class="approval-actions">
             <button class="btn ghost" data-decision="deny">Deny</button>
             <button class="btn primary" data-decision="allow">Allow</button>
@@ -36,10 +60,19 @@ function showApprovalPrompt(request) {
     card.querySelectorAll('button[data-decision]').forEach(button => {
         button.onclick = () => {
             const remember = document.getElementById('approval-remember-' + request.id);
-            resolveApproval(request.id, button.dataset.decision, remember && remember.checked);
+            const confirmation = document.getElementById('approval-confirm-' + request.id);
+            resolveApproval(
+                request.id,
+                button.dataset.decision,
+                remember && remember.checked,
+                confirmation ? confirmation.value : '',
+            );
         };
     });
     approvalHost().appendChild(card);
+
+    const confirmation = document.getElementById('approval-confirm-' + request.id);
+    if (confirmation) confirmation.focus();
 }
 
 function dismissApprovalPrompt(approvalId) {
@@ -47,12 +80,16 @@ function dismissApprovalPrompt(approvalId) {
     if (card) card.remove();
 }
 
-async function resolveApproval(approvalId, decision, remember) {
+async function resolveApproval(approvalId, decision, remember, confirmation) {
     dismissApprovalPrompt(approvalId);
     try {
         await api(`/api/agent/approvals/${approvalId}`, {
             method: 'POST',
-            body: JSON.stringify({ decision, remember: !!remember }),
+            body: JSON.stringify({
+                decision,
+                remember: !!remember,
+                confirmation: confirmation || '',
+            }),
         });
     } catch (e) {
         console.warn('approval failed', e);

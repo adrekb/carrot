@@ -205,6 +205,102 @@ CREATE TABLE IF NOT EXISTS file_journal (
 );
 
 CREATE INDEX IF NOT EXISTS idx_file_journal_created ON file_journal(created_at DESC);
+
+-- ===== Carrot Research =====
+
+-- One research run. `question` is what was asked, `report` the final cited
+-- markdown. Sub-questions and their findings hang off this row, so a finished
+-- run can be re-opened and audited claim by claim.
+CREATE TABLE IF NOT EXISTS research_runs (
+    id TEXT PRIMARY KEY,
+    question TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'running',
+    depth TEXT NOT NULL DEFAULT 'standard',
+    plan TEXT DEFAULT '[]',
+    report TEXT DEFAULT '',
+    error TEXT DEFAULT '',
+    conversation_id TEXT,
+    created_at TEXT NOT NULL,
+    finished_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_research_runs_created ON research_runs(created_at DESC);
+
+-- Every source a run actually read, web or local, deduplicated per run by
+-- locator. Findings cite these by id, which is what makes verification a
+-- lookup rather than a second guess.
+CREATE TABLE IF NOT EXISTS research_sources (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES research_runs(id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    title TEXT DEFAULT '',
+    locator TEXT NOT NULL,
+    snippet TEXT DEFAULT '',
+    content TEXT DEFAULT '',
+    tainted INTEGER DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_research_sources_run ON research_sources(run_id, ordinal);
+
+-- A single supported statement produced by a sub-question researcher.
+-- `source_ids` is a JSON array into research_sources; `verdict` is what the
+-- verification pass concluded about that support.
+CREATE TABLE IF NOT EXISTS research_findings (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES research_runs(id) ON DELETE CASCADE,
+    subquestion TEXT NOT NULL,
+    claim TEXT NOT NULL,
+    source_ids TEXT DEFAULT '[]',
+    confidence REAL DEFAULT 0.5,
+    verdict TEXT DEFAULT 'unchecked',
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_research_findings_run ON research_findings(run_id);
+
+-- ===== Carrot Agent =====
+
+-- One agent task. Budgets are stored with the run so a resumed or inspected
+-- run shows the limits it actually operated under, not today's config.
+CREATE TABLE IF NOT EXISTS agent_runs (
+    id TEXT PRIMARY KEY,
+    task TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'running',
+    surface TEXT NOT NULL DEFAULT 'browser',
+    plan TEXT DEFAULT '',
+    result TEXT DEFAULT '',
+    error TEXT DEFAULT '',
+    budget TEXT DEFAULT '{}',
+    steps_used INTEGER DEFAULT 0,
+    conversation_id TEXT,
+    created_at TEXT NOT NULL,
+    finished_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_runs_created ON agent_runs(created_at DESC);
+
+-- The audit trail: every action the agent proposed, what the policy decided,
+-- and what came back. Arguments are stored post-redaction — a secret value is
+-- never written here, only the name of the vault entry that was used.
+CREATE TABLE IF NOT EXISTS agent_steps (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL,
+    action TEXT NOT NULL,
+    arguments TEXT DEFAULT '{}',
+    rationale TEXT DEFAULT '',
+    risk TEXT DEFAULT 'low',
+    decision TEXT DEFAULT 'allow',
+    decision_reason TEXT DEFAULT '',
+    observation TEXT DEFAULT '',
+    screenshot TEXT DEFAULT '',
+    tainted INTEGER DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_steps_run ON agent_steps(run_id, ordinal);
 """
 
 # Content-storing FTS5 index. Kept separate from SCHEMA so it can be re-applied

@@ -101,6 +101,8 @@ function switchTab(tab) {
         reminders: loadReminders,
         assignments: loadAssignments,
         extensions: loadExtensions,
+        research: () => loadResearch(),
+        agent: () => loadAgent(),
         leaderboard: loadLeaderboard,
         memory: () => loadMemory(),
         files: () => loadIndex(),
