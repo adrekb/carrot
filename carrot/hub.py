@@ -24,6 +24,7 @@ bundle, so the app never depends on the network being up.
 """
 import os
 import json
+import math
 import platform
 import re
 import subprocess
@@ -305,6 +306,205 @@ def get_catalog(refresh: bool = False) -> dict:
     return {"models": BUNDLED_CATALOG, "source": "bundled", "fetched_at": None}
 
 
+# ===== Quantization descent =====
+#
+# Locking every model to one quant leaves performance on the table: a
+# 24 GB card should run an 8B model at Q8_0, not Q4_K_M. Like llmfit,
+# we walk the ladder from highest quality down and take the best quant
+# whose running footprint fits the machine's budget.
+
+QUANT_LADDER = [
+    # (name, GB of weights per B params, quality note)
+    ("Q8_0", 1.07),
+    ("Q6_K", 0.82),
+    ("Q5_K_M", 0.71),
+    ("Q4_K_M", 0.60),
+    ("Q3_K_M", 0.49),
+    ("Q2_K", 0.35),
+]
+# Running footprint = weights + KV cache + runtime, roughly:
+_MEM_OVERHEAD_FACTOR = 1.15
+_MEM_OVERHEAD_FLAT_GB = 1.2
+
+
+def quant_plan(params_b: float, budget_gb: float) -> dict:
+    """Best-quality quant that fits the budget, or the smallest one marked
+    tight/too_big when nothing does."""
+    chosen = None
+    for name, gb_per_b in QUANT_LADDER:
+        download = params_b * gb_per_b
+        min_mem = download * _MEM_OVERHEAD_FACTOR + _MEM_OVERHEAD_FLAT_GB
+        if min_mem <= budget_gb:
+            chosen = (name, download, min_mem)
+            break
+    if chosen is None:
+        name, gb_per_b = QUANT_LADDER[-1]
+        download = params_b * gb_per_b
+        min_mem = download * _MEM_OVERHEAD_FACTOR + _MEM_OVERHEAD_FLAT_GB
+        chosen = (name, download, min_mem)
+    name, download, min_mem = chosen
+    return {
+        "quant": name,
+        "download_gb": round(download, 1),
+        "min_mem_gb": round(min_mem, 1),
+        "fit": fit_level(min_mem, budget_gb),
+        "quant_reason": f"best quality that fits this machine: {name}",
+    }
+
+
+def apply_quant_plan(entry: dict, budget_gb: float) -> dict:
+    """Re-plan an HF entry's quant for this machine and retag its pull id."""
+    params_b = float(entry.get("params_b") or 0)
+    if params_b <= 0:
+        return entry
+    plan = quant_plan(params_b, budget_gb)
+    out = {**entry, **plan}
+    base_id = entry["id"].rsplit(":", 1)[0]
+    out["id"] = f"{base_id}:{plan['quant']}"
+    return out
+
+
+# ===== Workload understanding =====
+#
+# The user types what they want to do ("long conversations", "daily
+# updates", "goal tracking") — plain words, not ML vocabulary. This maps
+# that text to the use cases and modalities the ranking engine speaks.
+
+WORKLOAD_KEYWORDS = {
+    "coding": ["code", "coding", "program", "debug", "script", "develop", "refactor"],
+    "reasoning": ["reason", "math", "research", "analy", "plan", "study", "homework", "think"],
+    "chat": ["chat", "conversation", "talk", "journal", "assistant", "goal", "reminder",
+             "daily", "note", "track", "diary", "update", "recap"],
+    "fast": ["fast", "quick", "instant", "light", "snappy"],
+    "vision": ["image", "photo", "screenshot", "diagram", "vision", "picture", "chart"],
+}
+MODALITY_KEYWORDS = {
+    "image": ["image", "photo", "screenshot", "picture", "diagram", "vision", "chart"],
+    "audio": ["audio", "voice", "speech", "sound", "transcri", "listen"],
+    "video": ["video", "clip", "footage", "recording"],
+}
+
+
+def workload_to_profile(text: str) -> dict:
+    """Free-text workload -> {use_cases, modalities}. Empty text means no
+    preference, which ranks purely on fit and popularity."""
+    lowered = (text or "").lower()
+    use_cases = [uc for uc, kws in WORKLOAD_KEYWORDS.items() if any(k in lowered for k in kws)]
+    modalities = [m for m, kws in MODALITY_KEYWORDS.items() if any(k in lowered for k in kws)]
+    return {"use_cases": use_cases, "modalities": modalities, "text": text or ""}
+
+
+# ===== Live Hugging Face search (the thin-client path) =====
+#
+# The GUI is a thin client: hardware read locally, models fetched live
+# from the public HF API (so the list is as fresh as HF itself), then a
+# local logic engine plans quants, drops what can't run here, and ranks
+# by the user's workload. Responses are cached briefly for snappiness
+# and served stale when offline.
+
+HF_SORT_MODES = {
+    # UI label -> HF API sort field. "recent" gets a popularity floor so
+    # brand-new-but-bad uploads don't reach the user.
+    "trending": "trendingScore",
+    "popular": "downloads",
+    "recent": "createdAt",
+}
+# Modality -> HF pipeline tag for multimodal GGUF models.
+HF_PIPELINE_FOR_MODALITY = {
+    "image": "image-text-to-text",
+    "video": "video-text-to-text",
+    "audio": "audio-text-to-text",
+}
+HF_SEARCH_CACHE_PATH = os.path.join(CARROT_DIR, "config", "hub_hf_search.json")
+HF_SEARCH_CACHE_HOURS = 1
+_RECENT_MIN_DOWNLOADS = 200
+
+
+def _hf_api_get(params: dict, cache_key: str) -> Optional[list]:
+    """GET the HF models API with a short cache and the shared fail memo."""
+    cache = {}
+    try:
+        with open(HF_SEARCH_CACHE_PATH, "r", encoding="utf-8") as f:
+            cache = json.load(f)
+        hit = cache.get(cache_key)
+        if hit and _cache_age_hours(hit) <= HF_SEARCH_CACHE_HOURS:
+            return hit["rows"]
+    except (OSError, json.JSONDecodeError):
+        cache = {}
+    if _recently_failed("hf"):
+        hit = cache.get(cache_key)
+        return hit["rows"] if hit else None
+    try:
+        resp = requests.get(HF_TRENDING_URL, params=params, timeout=10)
+        resp.raise_for_status()
+        rows = resp.json()
+        if not isinstance(rows, list):
+            raise ValueError("unexpected HF response")
+        _fail_memo.pop("hf", None)
+        cache[cache_key] = {"fetched_at": datetime.now(timezone.utc).isoformat(), "rows": rows}
+        os.makedirs(os.path.dirname(HF_SEARCH_CACHE_PATH), exist_ok=True)
+        with open(HF_SEARCH_CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump(cache, f)
+        return rows
+    except Exception:
+        _note_failure("hf")
+        hit = cache.get(cache_key)
+        return hit["rows"] if hit else None
+
+
+def _rank_key(m: dict, profile: dict):
+    # The user's stated workload dominates: a model that matches what they
+    # want to do outranks a better-fitting but unrelated one. Fit still
+    # separates comfortable from tight, and popularity breaks ties.
+    fit_score = {"great": 3, "good": 2.5, "tight": 0.5}.get(m.get("fit"), 0)
+    match = sum(1 for uc in profile.get("use_cases", []) if uc in (m.get("use_cases") or []))
+    popularity = math.log10(max(m.get("downloads", 0), 1))
+    return (fit_score * 10 + match * 8 + popularity, float(m.get("params_b") or 0))
+
+
+def live_search(workload: str = "", sort: str = "trending",
+                modalities: Optional[list] = None, limit: int = 20) -> dict:
+    """The full thin-client flow: specs + workload -> live HF fetch ->
+    local quant planning and fit filtering -> ranked results."""
+    specs = detect_specs()
+    budget = specs.get("model_budget_gb") or 0
+    profile = workload_to_profile(workload)
+    wanted_modalities = sorted(set(profile["modalities"]) | set(modalities or []))
+    profile["modalities"] = wanted_modalities
+
+    params = {"filter": "gguf", "limit": 50,
+              "sort": HF_SORT_MODES.get(sort, "trendingScore"), "direction": "-1"}
+    # One pipeline tag per query; extra required modalities filter locally.
+    if wanted_modalities:
+        params["pipeline_tag"] = HF_PIPELINE_FOR_MODALITY[wanted_modalities[0]]
+    if "coding" in profile["use_cases"]:
+        params["search"] = "coder"
+    cache_key = json.dumps(params, sort_keys=True)
+    rows = _hf_api_get(params, cache_key)
+    if rows is None:
+        return {"specs": specs, "profile": profile, "sort": sort, "results": [],
+                "source": "offline", "detail": "Hugging Face unreachable — showing the offline catalog below."}
+
+    results = []
+    for repo in rows:
+        if sort == "recent" and repo.get("downloads", 0) < _RECENT_MIN_DOWNLOADS:
+            continue
+        entry = _hf_repo_to_entry(repo)
+        if not entry or not _valid_hf_id(entry["id"]):
+            continue
+        entry = apply_quant_plan(entry, budget)
+        if entry["fit"] == "too_big":
+            continue  # step 3: drop what can't run here, even at Q2_K
+        entry["est_tps"] = estimate_tokens_per_sec(
+            entry["download_gb"], specs.get("backend", "cpu"), entry["fit"])
+        entry["modalities"] = wanted_modalities if params.get("pipeline_tag") else []
+        results.append(entry)
+
+    results.sort(key=lambda m: _rank_key(m, profile), reverse=True)
+    return {"specs": specs, "profile": profile, "sort": sort,
+            "results": results[:limit], "source": "huggingface"}
+
+
 # ===== Trending on Hugging Face =====
 #
 # Besides the curated daily catalog, the Hub shows what the community is
@@ -331,8 +531,17 @@ def _hf_repo_to_entry(repo: dict) -> Optional[dict]:
     if params_b <= 0 or params_b > 500:
         return None
     # Q4_K_M weights are ~0.6 GB per B params; running needs headroom for
-    # the KV cache and runtime on top.
+    # the KV cache and runtime on top. (Callers on the live path re-plan
+    # the quant per machine with apply_quant_plan.)
     download_gb = round(params_b * 0.6, 1)
+    name_lower = repo_id.lower()
+    use_cases = []
+    if any(k in name_lower for k in ("coder", "code", "codellama")):
+        use_cases.append("coding")
+    if any(k in name_lower for k in ("-r1", "reason", "think", "qwq", "math")):
+        use_cases.append("reasoning")
+    if any(k in name_lower for k in ("instruct", "chat", "assistant")):
+        use_cases.append("chat")
     return {
         "id": f"hf.co/{repo_id}:Q4_K_M",
         "label": repo_id.split("/")[-1],
@@ -342,7 +551,7 @@ def _hf_repo_to_entry(repo: dict) -> Optional[dict]:
         "download_gb": download_gb,
         "min_mem_gb": round(params_b * 0.75 + 1.5, 1),
         "tier": "power" if params_b >= 12 else ("balanced" if params_b >= 4 else "light"),
-        "use_cases": [],
+        "use_cases": use_cases,
         "modalities": [],
         "blurb": f"{repo.get('downloads', 0):,} downloads on Hugging Face.",
         "hf_url": f"https://huggingface.co/{repo_id}",

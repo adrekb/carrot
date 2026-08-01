@@ -561,28 +561,34 @@
         </div>
       </div>
       <p class="muted">
-        Models matched to <em>this</em> machine. Carrot reads your RAM, GPU and VRAM, then marks
-        which models and quantizations run well here — no guesswork. The catalog updates daily
-        from the Carrot Hub website.
+        Models matched to <em>this</em> machine, live from Hugging Face. Carrot reads your RAM,
+        GPU and VRAM locally, fetches the newest and most popular models as you search, picks the
+        best quantization that fits your hardware, and drops anything that can't run here.
       </p>
 
       <div id="hub-specs" class="hub-specs"></div>
 
+      <div class="hub-search">
+        <input type="text" id="hub-workload" placeholder="What will you use it for? e.g. long conversations, goal tracking, coding, daily updates…"
+               onkeydown="if(event.key==='Enter')runHubSearch()">
+        <button class="btn btn-primary" onclick="runHubSearch()">Search</button>
+      </div>
       <div class="hub-toolbar">
-        <div id="hub-usecase-chips" class="chip-row"></div>
+        <div id="hub-sort-chips" class="chip-row"></div>
         <div id="hub-modality-toggles" class="chip-row" title="Only show models that accept these inputs"></div>
-        <span id="hub-catalog-meta" class="muted small"></span>
+        <span id="hub-live-meta" class="muted small"></span>
       </div>
 
+      <div id="hub-live-grid" class="hub-grid"><div class="empty">Searching Hugging Face…</div></div>
+
+      <div class="ext-head" style="margin-top:26px"><h3>Curated picks for this machine</h3></div>
+      <p class="muted small">
+        Carrot's own catalog — refreshed daily from the Carrot Hub website when reachable, with a
+        bundled offline fallback. <span id="hub-catalog-meta"></span>
+      </p>
+      <div class="hub-toolbar"><div id="hub-usecase-chips" class="chip-row"></div></div>
       <div id="hub-recs" class="hub-recs"></div>
       <div id="hub-grid" class="hub-grid"><div class="empty">Loading catalog…</div></div>
-
-      <div class="ext-head" style="margin-top:22px"><h3>Trending on Hugging Face</h3></div>
-      <p class="muted small">
-        The most-downloaded GGUF models right now, straight from the public Hugging Face API —
-        this list updates itself. Installs go through Ollama's <code>hf.co/…</code> support.
-      </p>
-      <div id="hub-trending" class="hub-grid"></div>
     </div>
   </section>
 

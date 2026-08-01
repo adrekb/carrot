@@ -5,6 +5,13 @@
 let hubData = null;
 let hubUseCase = '';
 let hubModalities = new Set(); // required input modalities (image/audio/video)
+let hubSort = 'trending';
+
+const HUB_SORTS = [
+    ['trending', 'Top choice'],
+    ['popular', 'Popular'],
+    ['recent', 'Recent releases'],
+];
 
 const FIT_LABEL = {
     great: 'Runs great',
@@ -26,6 +33,42 @@ async function loadHub() {
     renderHubChips();
     renderHubMeta();
     await renderHubModels();
+    runHubSearch(); // live HF results load alongside the curated picks
+}
+
+// ===== Live thin-client search =====
+// specs read locally -> live HF fetch -> local quant planning -> ranked grid.
+
+async function runHubSearch() {
+    const grid = document.getElementById('hub-live-grid');
+    const meta = document.getElementById('hub-live-meta');
+    grid.innerHTML = '<div class="empty">Searching Hugging Face…</div>';
+    const workload = document.getElementById('hub-workload').value.trim();
+    const qs = new URLSearchParams({ workload, sort: hubSort });
+    for (const m of hubModalities) qs.set(m, 'true');
+    let data;
+    try {
+        data = await api('/api/hub/search?' + qs.toString());
+    } catch (e) {
+        grid.innerHTML = `<div class="empty">Search failed: ${escHtml(e.message)}</div>`;
+        return;
+    }
+    if (data.source === 'offline') {
+        meta.textContent = '';
+        grid.innerHTML = `<div class="empty">${escHtml(data.detail || 'Hugging Face unreachable.')}</div>`;
+        return;
+    }
+    const prof = data.profile || {};
+    const understood = [...(prof.use_cases || []), ...(prof.modalities || [])];
+    meta.textContent = 'Live from Hugging Face'
+        + (understood.length ? ` · matching: ${understood.join(', ')}` : '');
+    const { installed, active } = await hubInstalledSet();
+    grid.innerHTML = '';
+    if (!(data.results || []).length) {
+        grid.innerHTML = '<div class="empty">Nothing on Hugging Face fits this machine and filter.</div>';
+        return;
+    }
+    data.results.forEach((m, i) => grid.appendChild(hubCard(m, installed, active, i === 0 ? 'Top match' : null)));
 }
 
 function hubSpecLine(s) {
@@ -57,6 +100,16 @@ function renderHubChips() {
         b.onclick = () => { hubUseCase = uc; renderHubChips(); renderHubModels(); };
         wrap.appendChild(b);
     }
+    // Sort modes for the live search.
+    const swrap = document.getElementById('hub-sort-chips');
+    swrap.innerHTML = '';
+    for (const [key, label] of HUB_SORTS) {
+        const b = document.createElement('button');
+        b.className = 'chip' + (hubSort === key ? ' active' : '');
+        b.textContent = label;
+        b.onclick = () => { hubSort = key; renderHubChips(); runHubSearch(); };
+        swrap.appendChild(b);
+    }
     // Y/N toggles for extra input modalities — on means "must support it".
     const mwrap = document.getElementById('hub-modality-toggles');
     mwrap.innerHTML = '';
@@ -69,6 +122,7 @@ function renderHubChips() {
             if (hubModalities.has(mod)) hubModalities.delete(mod); else hubModalities.add(mod);
             renderHubChips();
             renderHubModels();
+            runHubSearch();
         };
         mwrap.appendChild(b);
     }
@@ -124,19 +178,6 @@ async function renderHubModels() {
         grid.innerHTML = '<div class="empty">No models match this filter.</div>';
     }
     for (const m of models) grid.appendChild(hubCard(m, installed, active, m.id === bestId ? 'Recommended' : null));
-
-    // Trending from the public Hugging Face API — self-updating.
-    const trendEl = document.getElementById('hub-trending');
-    trendEl.innerHTML = '';
-    let trending = hubData.trending || [];
-    if (hubModalities.size) {
-        trending = trending.filter(m =>
-            [...hubModalities].every(mod => (m.modalities || []).includes(mod)));
-    }
-    if (!trending.length) {
-        trendEl.innerHTML = '<div class="empty">Hugging Face not reached yet — check your connection or hit Refresh.</div>';
-    }
-    for (const m of trending) trendEl.appendChild(hubCard(m, installed, active, null));
 }
 
 function hubCard(m, installed, active, role) {
@@ -151,6 +192,7 @@ function hubCard(m, installed, active, role) {
           <span class="fit-badge fit-${m.fit}">${FIT_LABEL[m.fit] || m.fit}</span>
         </div>
         <div class="muted small">${escHtml(m.id)} · ${escHtml(m.quant || '')} · ${m.download_gb} GB download · needs ~${m.min_mem_gb} GB${m.est_tps ? ` · ~${m.est_tps} tok/s` : ''}</div>
+        ${m.quant_reason ? `<div class="muted small quant-note">${escHtml(m.quant_reason)}</div>` : ''}
         <div class="hub-blurb">${escHtml(m.blurb || '')}${m.hf_url ? ` <a href="${escHtml(m.hf_url)}" target="_blank" rel="noopener">View on HF ↗</a>` : ''}</div>
         <div class="hub-tags">${(m.use_cases || []).map(u => `<span class="tag">${escHtml(u)}</span>`).join('')}${(m.modalities || []).map(u => `<span class="tag mod">${escHtml(u)}</span>`).join('')}</div>
         <div class="hub-card-actions"></div>`;

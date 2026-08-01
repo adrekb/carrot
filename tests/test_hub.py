@@ -265,3 +265,106 @@ def test_failed_fetch_is_not_retried_immediately(tmp_path, monkeypatch):
     hub.refresh_catalog(force=True)
     assert calls["n"] == 3
     hub._fail_memo.clear()
+
+
+# ===== Quantization descent =====
+
+def test_quant_descent_uses_best_quality_that_fits():
+    # 8B params: Q8_0 weights ~8.6 GB -> ~11 GB running. Plenty of room on 24 GB.
+    plan = hub.quant_plan(8.0, 24.0)
+    assert plan["quant"] == "Q8_0"
+    assert plan["fit"] in ("great", "good")
+    # Same model on 8 GB budget must step down just enough, not give up.
+    plan_small = hub.quant_plan(8.0, 8.0)
+    assert plan_small["quant"] != "Q8_0"
+    assert plan_small["min_mem_gb"] <= 8.0
+    # Truly hopeless: smallest quant, honestly marked.
+    plan_none = hub.quant_plan(70.0, 4.0)
+    assert plan_none["quant"] == "Q2_K"
+    assert plan_none["fit"] == "too_big"
+
+
+def test_apply_quant_plan_retags_pull_id():
+    entry = {"id": "hf.co/org/Model-8B-GGUF:Q4_K_M", "params_b": 8.0}
+    out = hub.apply_quant_plan(entry, 24.0)
+    assert out["id"] == "hf.co/org/Model-8B-GGUF:Q8_0"
+    assert out["quant_reason"].endswith("Q8_0")
+
+
+# ===== Workload understanding =====
+
+def test_workload_text_maps_to_use_cases_and_modalities():
+    p = hub.workload_to_profile("long conversations and goal tracking, daily updates")
+    assert "chat" in p["use_cases"]
+    p2 = hub.workload_to_profile("help me debug my python scripts")
+    assert "coding" in p2["use_cases"]
+    p3 = hub.workload_to_profile("describe screenshots and transcribe voice memos")
+    assert set(p3["modalities"]) >= {"image", "audio"}
+    assert hub.workload_to_profile("")["use_cases"] == []
+
+
+# ===== Live thin-client search =====
+
+def _fake_hf_rows():
+    return [
+        {"id": "org/Chat-Instruct-8B-GGUF", "downloads": 500000},
+        {"id": "org/BigChat-70B-GGUF", "downloads": 900000},
+        {"id": "org/TinyCoder-3B-GGUF", "downloads": 40000},
+        {"id": "org/Fresh-Junk-7B-GGUF", "downloads": 3},
+    ]
+
+
+def test_live_search_plans_quants_filters_and_ranks(monkeypatch):
+    monkeypatch.setattr(hub, "detect_specs", lambda: {
+        "ram_gb": 16.0, "vram_gb": 0.0, "backend": "cpu", "model_budget_gb": 8.0,
+        "os": "Linux", "cpu": "x", "cpu_cores": 8, "gpu": "none",
+    })
+    monkeypatch.setattr(hub, "_hf_api_get", lambda params, key: _fake_hf_rows())
+    out = hub.live_search(workload="long conversations", sort="trending")
+    ids = [m["id"] for m in out["results"]]
+    # The 70B cannot run on an 8 GB budget even at Q2_K -> dropped entirely.
+    assert not any("70B" in i for i in ids)
+    # The chat model matches the workload and outranks the coder.
+    assert ids[0].startswith("hf.co/org/Chat-Instruct-8B-GGUF")
+    # Every survivor got a machine-specific quant plan and speed estimate.
+    for m in out["results"]:
+        assert m["quant"] in dict((q, g) for q, g in hub.QUANT_LADDER)
+        assert m["id"].endswith(":" + m["quant"])
+        assert m["fit"] != "too_big" and m["est_tps"]
+
+
+def test_live_search_recent_mode_has_popularity_floor(monkeypatch):
+    monkeypatch.setattr(hub, "detect_specs", lambda: {
+        "ram_gb": 16.0, "vram_gb": 0.0, "backend": "cpu", "model_budget_gb": 8.0,
+        "os": "Linux", "cpu": "x", "cpu_cores": 8, "gpu": "none",
+    })
+    monkeypatch.setattr(hub, "_hf_api_get", lambda params, key: _fake_hf_rows())
+    out = hub.live_search(sort="recent")
+    assert not any("Fresh-Junk" in m["id"] for m in out["results"])
+
+
+def test_live_search_offline_degrades_gracefully(monkeypatch):
+    monkeypatch.setattr(hub, "detect_specs", lambda: {
+        "ram_gb": 16.0, "vram_gb": 0.0, "backend": "cpu", "model_budget_gb": 8.0,
+        "os": "Linux", "cpu": "x", "cpu_cores": 8, "gpu": "none",
+    })
+    monkeypatch.setattr(hub, "_hf_api_get", lambda params, key: None)
+    out = hub.live_search(workload="coding")
+    assert out["source"] == "offline" and out["results"] == []
+
+
+def test_hub_search_endpoint(client, monkeypatch):
+    from carrot import hub as hub_mod
+    monkeypatch.setattr(hub_mod, "detect_specs", lambda: {
+        "ram_gb": 32.0, "vram_gb": 24.0, "backend": "cuda", "model_budget_gb": 24.0,
+        "os": "Linux", "cpu": "x", "cpu_cores": 16, "gpu": "RTX 4090",
+    })
+    monkeypatch.setattr(hub_mod, "_hf_api_get", lambda params, key: _fake_hf_rows())
+    resp = client.get("/api/hub/search?workload=coding&sort=popular")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["source"] == "huggingface"
+    assert "coding" in data["profile"]["use_cases"]
+    # 24 GB of VRAM: the 8B should be planned at Q8_0, not stuck at Q4.
+    eight_b = next(m for m in data["results"] if "8B" in m["id"])
+    assert eight_b["quant"] == "Q8_0"

@@ -478,6 +478,20 @@ async def hub_overview(refresh: bool = False):
         raise HTTPException(status_code=500, detail=f"Hub overview failed: {e}")
 
 
+@app.get("/api/hub/search")
+async def hub_search(workload: str = "", sort: str = "trending",
+                     image: bool = False, audio: bool = False, video: bool = False,
+                     limit: int = 20):
+    """Thin-client live search: local specs + workload text, live HF fetch,
+    local quant planning and fit filtering, ranked results."""
+    modalities = [m for m, on in (("image", image), ("audio", audio), ("video", video)) if on]
+    try:
+        return hub_mod.live_search(workload=workload, sort=sort,
+                                   modalities=modalities, limit=limit)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Hub search failed: {e}")
+
+
 @app.post("/api/hub/refresh")
 async def hub_refresh():
     """Force a re-fetch of the daily catalog and the HF trending feed."""
