@@ -11,6 +11,7 @@
   "keywords": ["carrot", "ai", "assistant", "local", "ollama", "speech"],
   "author": "Carrot Community",
   "license": "MIT",
+  "homepage": "https://github.com/ar3116-sketch/carrot",
   "devDependencies": {
     "electron": "^30.0.0",
     "electron-builder": "^24.9.1"
