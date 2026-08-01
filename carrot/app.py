@@ -29,6 +29,7 @@ from carrot import (
     notes as notes_mod,
     leaderboard as lb_mod,
     bootstrap as bootstrap_mod,
+    hub as hub_mod,
     deep_research as dr_mod,
     skills as skills_mod,
     mcp_client as mcp_mod,
@@ -453,12 +454,50 @@ async def bootstrap_status():
     return bootstrap_mod.bootstrap_status()
 
 
+class BootstrapRunRequest(BaseModel):
+    # Model chosen on the setup splash; omitted = configured/default model.
+    model: str | None = None
+
+
 @app.post("/api/bootstrap/run")
-async def bootstrap_run():
+async def bootstrap_run(req: BootstrapRunRequest | None = None):
     try:
-        return bootstrap_mod.run_bootstrap()
+        return bootstrap_mod.run_bootstrap(model=req.model if req else None)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Bootstrap failed: {e}")
+
+
+# ===== Carrot Hub (hardware-aware model recommendations) =====
+
+@app.get("/api/hub")
+async def hub_overview(refresh: bool = False):
+    """Detected specs, the fit-annotated catalog, and per-role picks."""
+    try:
+        return hub_mod.hub_overview(refresh=refresh)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Hub overview failed: {e}")
+
+
+@app.post("/api/hub/refresh")
+async def hub_refresh():
+    """Force a re-fetch of the daily catalog and the HF trending feed."""
+    try:
+        os.remove(hub_mod.HF_CACHE_PATH)
+    except OSError:
+        pass
+    hub_mod.fetch_hf_trending(force=True)
+    models = hub_mod.refresh_catalog(force=True)
+    if models is None:
+        return {"refreshed": False, "detail": "Carrot Hub unreachable — using cached/bundled catalog."}
+    return {"refreshed": True, "count": len(models)}
+
+
+@app.post("/api/hub/choose")
+async def hub_choose(req: ModelSelectRequest):
+    """Make a Hub pick the active model (pull it via /api/models/pull)."""
+    config.set_config("ollama_model", req.model)
+    installed = bootstrap_mod.is_model_available(req.model)
+    return {"active_model": req.model, "installed": installed}
 
 
 # ===== Models =====

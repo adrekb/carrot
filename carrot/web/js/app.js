@@ -101,6 +101,7 @@ function switchTab(tab) {
         reminders: loadReminders,
         assignments: loadAssignments,
         extensions: loadExtensions,
+        hub: loadHub,
         research: () => loadResearch(),
         agent: () => loadAgent(),
         workspaces: () => loadWorkspaces(),
@@ -1336,29 +1337,94 @@ async function checkBootstrap() {
     } catch (_) { hideSplash(); }
 }
 
-function showSplash(s) {
+let splashModel = null; // model picked on the splash; null = stock default
+
+async function showSplash(s) {
     document.getElementById('splash').classList.remove('hidden');
     const status = document.getElementById('splash-status');
     if (!s.ollama_installed) status.textContent = 'Ollama is not installed. Carrot can set it up for you.';
-    else if (!s.model_pulled) status.textContent = `Ollama is ready — now pull ${s.default_model}.`;
+    else if (!s.model_pulled) status.textContent = 'Ollama is ready — pick a model that fits your machine.';
     document.getElementById('splash-btn').classList.remove('hidden');
+    document.getElementById('splash-skip').classList.remove('hidden');
+    // Hardware-based picks from the Hub. New users shouldn't have to know
+    // which model or quantization suits their specs — show what fits, let
+    // experienced users skip, and link the full daily catalog.
+    try {
+        const hub = await api('/api/hub');
+        renderSplashPicks(hub);
+    } catch (_) { /* no picks — the default-model path still works */ }
+}
+
+function renderSplashPicks(hub) {
+    const specsEl = document.getElementById('splash-specs');
+    const picksEl = document.getElementById('splash-picks');
+    const link = document.getElementById('splash-hub-link');
+    const s = hub.specs || {};
+    specsEl.textContent = `Detected: ${hubSpecLine(s)} — ${s.model_budget_gb} GB usable for models`;
+    specsEl.classList.remove('hidden');
+    link.href = hub.hub_url;
+    link.classList.remove('hidden');
+
+    const recs = hub.recommendations || {};
+    if (!recs.best) return;
+    const picks = [{ role: 'Recommended', m: recs.best }];
+    if (recs.light && recs.light.id !== recs.best.id) picks.push({ role: 'Light & fast', m: recs.light });
+    const coding = (recs.by_use_case || {}).coding;
+    if (coding && !picks.some(p => p.m.id === coding.id)) picks.push({ role: 'For coding', m: coding });
+
+    picksEl.innerHTML = '';
+    picksEl.classList.remove('hidden');
+    for (const p of picks) {
+        const card = document.createElement('button');
+        card.type = 'button';
+        card.className = 'splash-pick';
+        card.dataset.model = p.m.id;
+        card.innerHTML = `
+            <span class="splash-pick-role">${escHtml(p.role)}</span>
+            <strong>${escHtml(p.m.label || p.m.id)}</strong>
+            <span class="muted small">${p.m.download_gb} GB · ${escHtml(p.m.quant || '')}${p.m.est_tps ? ` · ~${p.m.est_tps} tok/s` : ''} · ${escHtml(p.m.blurb || '')}</span>`;
+        card.onclick = () => {
+            splashModel = p.m.id;
+            picksEl.querySelectorAll('.splash-pick').forEach(el =>
+                el.classList.toggle('selected', el.dataset.model === splashModel));
+        };
+        picksEl.appendChild(card);
+    }
+    // Preselect the recommendation so plain "Set up now" does the right thing.
+    splashModel = recs.best.id;
+    picksEl.querySelector('.splash-pick').classList.add('selected');
 }
 
 function hideSplash() { document.getElementById('splash').classList.add('hidden'); }
 
+function skipModelChoice() {
+    // Experienced users: no picker, stock default, straight to setup.
+    splashModel = null;
+    runBootstrap();
+}
+
 async function runBootstrap() {
     const btn = document.getElementById('splash-btn');
+    const skip = document.getElementById('splash-skip');
     const status = document.getElementById('splash-status');
     const bar = document.getElementById('splash-bar');
     btn.classList.add('hidden');
-    status.textContent = 'Installing Ollama and pulling the default model… this may take a while.';
+    skip.classList.add('hidden');
+    document.getElementById('splash-picks').classList.add('hidden');
+    const label = splashModel || 'the default model';
+    status.textContent = `Installing Ollama and pulling ${label}… this may take a while.`;
     bar.style.width = '30%';
     try {
-        const result = await api('/api/bootstrap/run', { method: 'POST' });
+        const result = await api('/api/bootstrap/run', {
+            method: 'POST',
+            body: JSON.stringify({ model: splashModel }),
+        });
         bar.style.width = '100%';
         if (result.error) {
             status.textContent = result.error;
             btn.classList.remove('hidden');
+            skip.classList.remove('hidden');
+            document.getElementById('splash-picks').classList.remove('hidden');
         } else {
             status.textContent = 'Setup complete. Launching Carrot…';
             setTimeout(() => { hideSplash(); refreshStatus(); loadModels(); }, 900);
@@ -1366,6 +1432,8 @@ async function runBootstrap() {
     } catch (e) {
         status.textContent = e.message;
         btn.classList.remove('hidden');
+        skip.classList.remove('hidden');
+        document.getElementById('splash-picks').classList.remove('hidden');
     }
 }
 
