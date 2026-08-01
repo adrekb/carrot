@@ -45,6 +45,7 @@ It searches through all your past conversations, notes, and even old goals to fi
 - **Powered by Ollama.** The AI runs on your own hardware using the `gemma4:e4b` model. You don't need an API key — and if you don't have Ollama, Carrot installs it for you on first launch.
 - **Your keys, your choice of model.** If you do want a hosted model for some things, bring a key for Anthropic, OpenAI, or anything OpenAI-compatible, and assign it per task — a frontier model for hard reasoning, something cheap for classification, everything else on-device.
 - **One-click setup.** On first run Carrot detects whether Ollama is present, silently installs it if not, and pulls `gemma4:e4b` — all with a progress splash screen. No manual terminal steps required.
+- **It knows which part of your life you're in.** Group a project's chats, memories and files into a workspace, and search and recall stop reaching into everything else. An assistant that remembers everything is only useful if it can also tell what's relevant.
 - **Research that shows its evidence.** Every claim in a report is traced back to text that was actually read, and re-checked against it before the report is written. A citation can be wrong; it cannot be invented.
 - **It can act, and it can be stopped.** Carrot Agent drives a real browser to finish real tasks — but nothing irreversible happens without you, credentials never reach the model, and a hostile page costs the agent its privileges rather than gaining it new ones.
 - **Search-first design.** Every conversation, note, goal entry, and reminder is indexed and searchable. If you've ever typed something that Carrot heard, you can find it again.
@@ -83,6 +84,29 @@ It searches through all your past conversations, notes, and even old goals to fi
 - **Citations follow the note**: sent to Research, cited files are *seeded as evidence* — they take the first citation numbers, every sub-question researcher reads them, and claims drawn from them are verified against their text like anything found on the web. That's the difference between "research this" and "research this, starting from what I already collected." Sent to the Agent, they ride along as background.
 - **Shown before it runs**: chips under the note say which citations resolved, how large they are, where it's going, and which model will serve it. A citation that cannot be read is reported, never silently dropped.
 - **Confined to what you opted into**: citations reach the agent workspace and your indexed folders, and nothing else.
+
+### Workspaces and Folders
+A **workspace** is one project's context — its chats, memories, files, notes and runs. A **folder** groups workspaces, and folders nest.
+
+```
+School/
+  Thesis        ← chats, memories, files, notes, runs
+  CS 3110
+Personal/
+  Fitness
+```
+
+- **A workspace is a scope, not a container.** Nothing moves on disk and nothing is copied. While one is active, new chats, notes, research and agent runs are filed into it, and search, memory recall and document lookup are restricted to what lives there.
+- **That restriction is the point.** Without it, a question about your thesis can recall a decision you made about a side project in March. Memories inherit the workspace of the conversation that produced them, so a background extraction lands where the chat was — not wherever you drifted to while it ran.
+- **Re-opening an old chat brings back its own context**, not today's: recall is scoped to the conversation's workspace rather than the active one.
+- **A pin does not follow you between projects.** Pinned means "always relevant here"; something never filed belongs to no project, so it stays visible everywhere.
+- **All workspaces is the default and stays the default.** A fresh install has none and behaves exactly as before.
+- **Deleting is never destructive.** Deleting a workspace unfiles its contents; deleting a folder moves its workspaces to the top level. Neither loses a chat.
+
+### Help and the Tutorial
+- A **Help** tab with a topic per feature — including a plain account of what the agent may do and what leaves your machine — searchable across titles and body text.
+- A **getting-started tutorial whose steps check the live install**: is Ollama up, does a workspace exist, has a folder been indexed, is a site allowed. A tour that ticks because you pressed Next teaches nothing; these stay unticked until the thing is actually true, and un-tick if you undo it.
+- A check that cannot run reports **unknown** rather than failing the step — a red cross for something unmeasurable is worse than admitting the measurement failed.
 
 ### Chat Search Modes
 How much a chat turn may reach the web is a setting in the composer, next to the model picker:

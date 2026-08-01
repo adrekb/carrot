@@ -103,6 +103,8 @@ function switchTab(tab) {
         extensions: loadExtensions,
         research: () => loadResearch(),
         agent: () => loadAgent(),
+        workspaces: () => loadWorkspaces(),
+        help: () => loadHelp(),
         leaderboard: loadLeaderboard,
         memory: () => loadMemory(),
         files: () => loadIndex(),
@@ -1374,6 +1376,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     loadModels();
     loadSkillCatalog();
     loadSearchModes();
+    loadWorkspaces();
     checkBootstrap();
     switchTab('dashboard');
     loadTerminalHistory();

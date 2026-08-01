@@ -301,6 +301,49 @@ CREATE TABLE IF NOT EXISTS agent_steps (
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_steps_run ON agent_steps(run_id, ordinal);
+
+-- ===== Workspaces =====
+
+-- A folder holds workspaces, and may hold other folders. Distinct from
+-- `chat_folders`, which tidies conversations *inside* a workspace — this one
+-- is a level above, grouping whole projects.
+CREATE TABLE IF NOT EXISTS folders (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    parent_id TEXT REFERENCES folders(id) ON DELETE SET NULL,
+    position INTEGER DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_folders_parent ON folders(parent_id, position);
+
+-- One project's context: the chats, memories, files and runs that belong to it.
+CREATE TABLE IF NOT EXISTS workspaces (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    folder_id TEXT REFERENCES folders(id) ON DELETE SET NULL,
+    color TEXT DEFAULT '',
+    position INTEGER DEFAULT 0,
+    archived INTEGER DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspaces_folder ON workspaces(folder_id, position);
+
+-- Membership, kept in one table rather than a column on six others. An item
+-- has exactly one home — that is what the primary key enforces — so "which
+-- workspace is this in" always has a single answer, and moving something is
+-- one upsert rather than a migration per content type.
+CREATE TABLE IF NOT EXISTS workspace_items (
+    kind TEXT NOT NULL,
+    item_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    added_at TEXT NOT NULL,
+    PRIMARY KEY (kind, item_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_items_ws ON workspace_items(workspace_id, kind);
 """
 
 # Content-storing FTS5 index. Kept separate from SCHEMA so it can be re-applied

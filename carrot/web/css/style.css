@@ -2057,3 +2057,168 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   accent-color: var(--accent);
   cursor: pointer;
 }
+
+/* ===== Workspaces ===== */
+
+#ws-switcher { position: relative; margin-right: 14px; }
+
+#ws-btn {
+  display: flex; align-items: center; gap: 7px;
+  background: var(--card2);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--muted);
+  font-family: var(--sans);
+  font-size: 12.5px;
+  padding: 6px 10px;
+  cursor: pointer;
+  max-width: 220px;
+  transition: border-color 0.15s;
+}
+#ws-btn:hover { border-color: var(--border-hi); }
+#ws-btn .ico { width: 13px; height: 13px; }
+/* Being scoped to one project is a state you should never be unaware of. */
+#ws-btn.ws-scoped { color: var(--text); border-color: rgba(255, 92, 31, 0.4); }
+#ws-btn.ws-scoped .ico { color: var(--accent); }
+#ws-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+#ws-pop {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 320px;
+  background: #17171c;
+  border: 1px solid var(--border-hi);
+  border-radius: 12px;
+  box-shadow: 0 16px 50px rgba(0, 0, 0, 0.6);
+  padding: 8px;
+  max-height: 420px;
+  overflow-y: auto;
+  z-index: 800;
+}
+.pop-foot { border-top: 1px solid var(--border); margin-top: 6px; padding-top: 6px; }
+
+.ws-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) minmax(300px, 1fr);
+  gap: 18px;
+  margin-top: 18px;
+}
+@media (max-width: 900px) { .ws-grid { grid-template-columns: 1fr; } }
+
+.ws-tree, .ws-detail {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  min-height: 220px;
+}
+
+.ws-folder { margin-bottom: 8px; }
+/* A nested folder needs to read as *inside* its parent, not as a peer of the
+   workspaces above it — the indent alone is too subtle at one level. */
+.ws-folder .ws-folder { border-left: 1px solid var(--border); padding-left: 8px; }
+.ws-folder-head {
+  display: flex; align-items: center; gap: 7px;
+  padding: 6px 4px;
+  font-size: 12.5px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+}
+.ws-folder-head .ico { width: 13px; height: 13px; color: var(--muted); }
+.ws-folder-name { flex: 1; }
+
+.ws-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 7px 4px 7px 20px;
+  border-radius: 7px;
+  font-size: 12.5px;
+}
+.ws-row:hover { background: rgba(255, 255, 255, 0.03); }
+.ws-row.active { background: var(--accent-soft); }
+.ws-row-main { flex: 1; cursor: pointer; display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.ws-row-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-row-meta { color: var(--faint); font-size: 11px; font-family: var(--mono); flex: none; }
+
+.ws-detail-head { border-bottom: 1px solid var(--border); padding-bottom: 8px; margin-bottom: 4px; }
+.ws-detail-head h3 { margin: 0 0 3px; font-size: 14px; }
+
+.ws-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.ws-item-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+
+/* ===== Help and tutorial ===== */
+
+.tutorial {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  margin-bottom: 18px;
+}
+.tutorial-head { display: flex; align-items: center; gap: 16px; justify-content: space-between; }
+.tutorial-head h3 { margin: 0; font-size: 15px; }
+.tutorial-progress { display: flex; align-items: center; gap: 10px; flex: 1; max-width: 320px; }
+.tutorial-track { flex: 1; height: 5px; background: var(--border); border-radius: 3px; overflow: hidden; }
+.tutorial-bar { height: 100%; width: 0; background: var(--accent); transition: width 0.3s; }
+
+.tut-step {
+  display: flex; gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+}
+.tut-mark {
+  flex: none;
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border-hi);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px;
+  margin-top: 1px;
+}
+.tut-step.done .tut-mark { background: var(--green); border-color: var(--green); color: #0a0a0c; }
+/* An unmeasurable check is its own state — not a failure, not a pass. */
+.tut-step.unknown .tut-mark { border-color: var(--yellow); color: var(--yellow); }
+.tut-step.next .tut-mark { border-color: var(--accent); }
+.tut-step.done .tut-title { color: var(--muted); }
+
+.tut-body { flex: 1; min-width: 0; }
+.tut-title { font-size: 13px; font-weight: 600; margin-bottom: 3px; }
+.tut-text { color: var(--muted); font-size: 12.5px; line-height: 1.55; }
+.tut-detail { color: var(--faint); font-size: 11.5px; font-family: var(--mono); margin-top: 5px; }
+.tut-actions { display: flex; gap: 6px; margin-top: 8px; }
+
+.help-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(340px, 2fr);
+  gap: 18px;
+}
+@media (max-width: 900px) { .help-grid { grid-template-columns: 1fr; } }
+
+.help-list {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px;
+  max-height: 620px;
+  overflow-y: auto;
+}
+.help-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  color: var(--text);
+  font-family: var(--sans);
+}
+.help-item:hover { background: rgba(255, 255, 255, 0.04); }
+.help-item-title { display: block; font-size: 12.5px; margin-bottom: 2px; }
+.help-item-sub { display: block; font-size: 11.5px; color: var(--muted); line-height: 1.45; }

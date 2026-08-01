@@ -49,7 +49,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Generator, List, Optional
 
-from . import policy, router as router_mod, websearch
+from . import policy, router as router_mod, websearch, workspaces
 from .config import get_config
 from .database import get_db
 
@@ -697,6 +697,7 @@ def create_run(question: str, depth: str, conversation_id: Optional[str] = None)
     )
     conn.commit()
     conn.close()
+    workspaces.file_item(workspaces.KIND_RESEARCH, run_id)
     return run_id
 
 

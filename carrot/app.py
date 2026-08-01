@@ -51,6 +51,8 @@ from carrot import (
     policy as policy_mod,
     research as research_mod,
     agent as carrot_agent,
+    workspaces as workspaces_mod,
+    help as help_mod,
 )
 from carrot.speech import whisper_stt, kokoro_tts
 from carrot.recap import DUCKDUCKGO_QUERY
@@ -75,6 +77,8 @@ app.include_router(files_api.router)
 # ===== Pydantic request models =====
 
 class SearchQuery(BaseModel):
+    # None means "the active workspace"; "all" means every workspace.
+    workspace: Optional[str] = None
     query: str
     limit: Optional[int] = 20
     hybrid_weight: Optional[float] = 0.5
@@ -256,6 +260,32 @@ class AgentRunRequest(BaseModel):
 
 class DomainRequest(BaseModel):
     domain: str
+
+
+class WorkspaceRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    folder_id: Optional[str] = None
+    color: Optional[str] = None
+    archived: Optional[bool] = None
+
+
+class FolderNodeRequest(BaseModel):
+    name: Optional[str] = None
+    parent_id: Optional[str] = None
+
+
+class WorkspaceItem(BaseModel):
+    kind: str
+    item_id: str
+
+
+class WorkspaceItemsRequest(BaseModel):
+    items: List[WorkspaceItem] = []
+
+
+class ActiveWorkspaceRequest(BaseModel):
+    workspace_id: Optional[str] = ""
 
 
 class SecretRequest(BaseModel):
@@ -524,7 +554,15 @@ def _prepare_history(conv, message, skill_slug, extra_system=None, mode=None):
 
     if config.get_config().get("memory_enabled", True):
         try:
-            block = memory_mod.as_prompt_block(memory_mod.recall(message))
+            # Recall is scoped to the workspace the conversation lives in, not
+            # the one that happens to be active — re-opening an old chat should
+            # bring back its own context, not today's.
+            block = memory_mod.as_prompt_block(memory_mod.recall(
+                message,
+                workspace_id=workspaces_mod.workspace_of(
+                    workspaces_mod.KIND_CONVERSATION, conv.get("id", "")
+                ) or "",
+            ))
             if block:
                 history.append({"role": "system", "content": block})
         except Exception:
@@ -862,8 +900,15 @@ async def chat_stream(req: ChatRequest):
 # ===== Conversations =====
 
 @app.get("/api/conversations")
-async def list_conversations(limit: int = 50):
-    return conv_mod.list_conversations(limit=limit)
+async def list_conversations(limit: int = 50, workspace: Optional[str] = None):
+    """Recent conversations, scoped to the active workspace unless told otherwise.
+
+    Returns a bare list rather than an envelope — three callers already expect
+    that shape, and the UI knows the active workspace without being told again.
+    """
+    return conv_mod.list_conversations(
+        limit=limit, workspace_id=workspaces_mod.resolve_scope(workspace)
+    )
 
 
 @app.get("/api/conversations/{conv_id}")
@@ -933,13 +978,28 @@ async def delete_chat_folder(folder_id: str):
 # ===== Search =====
 
 @app.get("/api/search")
-async def search_get(q: str, limit: int = 20, hybrid_weight: float = 0.5):
-    return search.search_conversations(q, limit=limit, hybrid_weight=hybrid_weight)
+async def search_get(q: str, limit: int = 20, hybrid_weight: float = 0.5,
+                     workspace: Optional[str] = None):
+    """Search conversations, scoped to the active workspace unless told otherwise.
+
+    ``workspace`` omitted means "whatever is active" — that default is what
+    makes a workspace behave like a mode rather than a filter you re-apply on
+    every screen. Pass ``workspace=all`` to search everything regardless.
+    """
+    scope = workspaces_mod.resolve_scope(workspace)
+    result = search.search_conversations(
+        q, limit=limit, hybrid_weight=hybrid_weight, workspace_id=scope
+    )
+    return {**result, "workspace_id": scope}
 
 
 @app.post("/api/search")
 async def search_post(req: SearchQuery):
-    return search.search_conversations(req.query, limit=req.limit, hybrid_weight=req.hybrid_weight)
+    scope = workspaces_mod.resolve_scope(req.workspace)
+    result = search.search_conversations(
+        req.query, limit=req.limit, hybrid_weight=req.hybrid_weight, workspace_id=scope
+    )
+    return {**result, "workspace_id": scope}
 
 
 @app.post("/api/search/classify")
@@ -957,7 +1017,9 @@ async def get_assignments():
 
 @app.get("/api/computer_use/scan")
 async def scan_computer():
-    count = cpu_mod.index_computer_use()
+    # `index_computer_use` never existed; this endpoint has been raising
+    # AttributeError since it was written. The scan itself is computer_use_scan.
+    count = cpu_mod.computer_use_scan()
     return {"indexed": count}
 
 
@@ -1566,19 +1628,25 @@ async def start_index_scan(req: IndexScanRequest = IndexScanRequest()):
 
 
 @app.get("/api/index/search")
-async def search_index(q: str, limit: int = 10, hybrid_weight: float = 0.5):
-    return indexer_mod.search_documents(q, limit=limit, hybrid_weight=hybrid_weight)
+async def search_index(q: str, limit: int = 10, hybrid_weight: float = 0.5,
+                       workspace: Optional[str] = None):
+    return indexer_mod.search_documents(
+        q, limit=limit, hybrid_weight=hybrid_weight,
+        workspace_id=workspaces_mod.resolve_scope(workspace),
+    )
 
 
 @app.get("/api/search/all")
-async def search_everything(q: str, limit: int = 10):
-    """One query across conversations, documents and memory."""
-    conversations = search.search_conversations(q, limit=limit)
+async def search_everything(q: str, limit: int = 10, workspace: Optional[str] = None):
+    """One query across conversations, documents and memory, in one scope."""
+    scope = workspaces_mod.resolve_scope(workspace)
+    conversations = search.search_conversations(q, limit=limit, workspace_id=scope)
     return {
         "query": q,
+        "workspace_id": scope,
         "conversations": conversations["results"],
-        "documents": indexer_mod.search_documents(q, limit=limit)["results"],
-        "memories": memory_mod.search(q, limit=limit),
+        "documents": indexer_mod.search_documents(q, limit=limit, workspace_id=scope)["results"],
+        "memories": memory_mod.search(q, limit=limit, workspace_id=scope),
     }
 
 
@@ -1632,6 +1700,145 @@ async def revert_journal(entry_id: str):
     if not result["success"]:
         raise HTTPException(status_code=400, detail=result["error"])
     return result
+
+
+# ===== Workspaces and folders =====
+
+@app.get("/api/workspaces")
+async def workspace_tree(include_archived: bool = False):
+    """Folders, workspaces and which one is active — the sidebar's whole state."""
+    return workspaces_mod.tree(include_archived=include_archived)
+
+
+@app.get("/api/workspaces/status")
+async def workspace_status():
+    return workspaces_mod.status()
+
+
+@app.post("/api/workspaces/active")
+async def set_active_workspace(req: ActiveWorkspaceRequest):
+    """Switch context. An empty id means all workspaces."""
+    try:
+        return {"active": workspaces_mod.set_active_workspace(req.workspace_id or "")}
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.post("/api/workspaces")
+async def create_workspace(req: WorkspaceRequest):
+    try:
+        return workspaces_mod.create_workspace(
+            name=req.name, description=req.description or "",
+            folder_id=req.folder_id or None, color=req.color or "",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/workspaces/{workspace_id}")
+async def get_workspace(workspace_id: str):
+    workspace = workspaces_mod.get_workspace(workspace_id)
+    if workspace is None:
+        raise HTTPException(status_code=404, detail="No such workspace")
+    return workspace
+
+
+@app.get("/api/workspaces/{workspace_id}/contents")
+async def workspace_contents(workspace_id: str, limit: int = 50):
+    """What is filed here, resolved to titles."""
+    contents = workspaces_mod.contents(workspace_id, limit=limit)
+    if not contents:
+        raise HTTPException(status_code=404, detail="No such workspace")
+    return contents
+
+
+@app.patch("/api/workspaces/{workspace_id}")
+async def update_workspace(workspace_id: str, req: WorkspaceRequest):
+    try:
+        workspace = workspaces_mod.update_workspace(
+            workspace_id, name=req.name, description=req.description,
+            folder_id=req.folder_id, color=req.color, archived=req.archived,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if workspace is None:
+        raise HTTPException(status_code=404, detail="No such workspace")
+    return workspace
+
+
+@app.delete("/api/workspaces/{workspace_id}")
+async def delete_workspace(workspace_id: str):
+    """Delete the grouping. Its chats, memories and files are unfiled, not deleted."""
+    if not workspaces_mod.delete_workspace(workspace_id):
+        raise HTTPException(status_code=404, detail="No such workspace")
+    return {"deleted": True}
+
+
+@app.post("/api/workspaces/{workspace_id}/items")
+async def file_workspace_items(workspace_id: str, req: WorkspaceItemsRequest):
+    """File items here. An empty workspace id in the path is not accepted; use DELETE."""
+    if workspaces_mod.get_workspace(workspace_id) is None:
+        raise HTTPException(status_code=404, detail="No such workspace")
+    filed = workspaces_mod.move_items(workspace_id, [i.model_dump() for i in req.items])
+    return {"filed": filed, "counts": workspaces_mod.item_counts(workspace_id)}
+
+
+@app.delete("/api/workspaces/items/{kind}/{item_id}")
+async def unfile_workspace_item(kind: str, item_id: str):
+    return {"unfiled": workspaces_mod.unfile_item(kind, item_id)}
+
+
+@app.post("/api/folders")
+async def create_folder(req: FolderNodeRequest):
+    try:
+        return workspaces_mod.create_folder(req.name, req.parent_id or None)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.patch("/api/folders/{folder_id}")
+async def update_folder(folder_id: str, req: FolderNodeRequest):
+    try:
+        folder = workspaces_mod.update_folder(folder_id, name=req.name, parent_id=req.parent_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if folder is None:
+        raise HTTPException(status_code=404, detail="No such folder")
+    return folder
+
+
+@app.delete("/api/folders/{folder_id}")
+async def delete_workspace_folder(folder_id: str):
+    """Delete a folder. Its workspaces move to the top level rather than vanishing."""
+    if not workspaces_mod.delete_folder(folder_id):
+        raise HTTPException(status_code=404, detail="No such folder")
+    return {"deleted": True}
+
+
+# ===== Help and tutorial =====
+
+@app.get("/api/help")
+async def help_index(q: str = ""):
+    """Every help topic, or the ones matching a query."""
+    return {
+        "topics": help_mod.search_topics(q) if q else help_mod.topics(),
+        "sections": help_mod.SECTIONS,
+        "query": q,
+    }
+
+
+@app.get("/api/help/tutorial")
+async def help_tutorial():
+    """Getting-started steps, each checked against the live install."""
+    return help_mod.tutorial()
+
+
+@app.get("/api/help/{topic_id}")
+async def help_topic(topic_id: str):
+    topic = help_mod.get_topic(topic_id)
+    if topic is None:
+        raise HTTPException(status_code=404, detail="No such help topic")
+    return topic
 
 
 # ===== Carrot Research =====

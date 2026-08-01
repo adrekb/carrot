@@ -20,6 +20,17 @@ def create_conversation(title: str = "", metadata: dict = None):
     )
     conn.commit()
     conn.close()
+
+    # A new chat belongs to whatever you are working on. Filing it here rather
+    # than at the API layer means every path that opens a conversation — chat,
+    # doc send, an agent run — gets it without remembering to.
+    try:
+        from . import workspaces as workspaces_mod
+
+        workspaces_mod.file_item(workspaces_mod.KIND_CONVERSATION, conv_id)
+    except Exception:
+        pass
+
     return {"id": conv_id, "title": title, "created_at": ts, "metadata": metadata or {}}
 
 
@@ -55,11 +66,22 @@ def get_conversation(conv_id: str):
     }
 
 
-def list_conversations(limit: int = 50):
+def list_conversations(limit: int = 50, workspace_id: str = ""):
+    """Recent conversations, optionally only those in one workspace.
+
+    The Chats list has to honour the same scope search does, or the sidebar
+    contradicts the search box on the same screen.
+    """
+    from . import workspaces as workspaces_mod
+
+    scope_sql, scope_params = workspaces_mod.scope_clause(
+        workspaces_mod.KIND_CONVERSATION, workspace_id, "id"
+    )
     conn = get_db()
     rows = conn.execute(
-        "SELECT * FROM conversations ORDER BY updated_at DESC LIMIT ?",
-        (limit,),
+        "SELECT * FROM conversations WHERE 1=1" + scope_sql
+        + " ORDER BY updated_at DESC LIMIT ?",
+        (*scope_params, limit),
     ).fetchall()
     conn.close()
     return [
