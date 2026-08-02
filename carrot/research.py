@@ -70,9 +70,35 @@ DEPTHS: Dict[str, Dict[str, int]] = {
         "subquestions": 6, "queries_per_round": 3, "results_per_query": 8,
         "reads_per_round": 4, "rounds": 3, "workers": 4, "chars_per_page": 8000,
     },
+    # Only offered when research is routed to a hosted model. On-device
+    # models are the bottleneck at these volumes — a 1B would spend an hour
+    # producing something worse. A frontier model has the context window and
+    # the throughput to actually use this much evidence.
+    "exhaustive": {
+        "subquestions": 10, "queries_per_round": 4, "results_per_query": 10,
+        "reads_per_round": 7, "rounds": 5, "workers": 8, "chars_per_page": 14000,
+    },
 }
 
+# Depths that are wasted on a local model.
+CLOUD_ONLY_DEPTHS = {"exhaustive"}
+
 DEFAULT_DEPTH = "standard"
+
+
+def available_depths() -> Dict[str, Any]:
+    """Which depths the current research route can actually sustain."""
+    try:
+        from carrot import router as router_mod
+        route = router_mod.route("research")
+        local = bool(route.local)
+        model = route.model
+    except Exception:
+        local, model = True, ""
+    names = [d for d in DEPTHS if not (local and d in CLOUD_ONLY_DEPTHS)]
+    return {"depths": names, "local": local, "model": model,
+            "default": DEFAULT_DEPTH,
+            "cloud_only": sorted(CLOUD_ONLY_DEPTHS)}
 
 RESEARCH_SYSTEM = (
     "You are a research agent inside Carrot, a local-first assistant. You are "
@@ -438,7 +464,12 @@ class Researcher:
         candidates: List[Dict[str, str]] = []
         for query in queries:
             self.emit({"stage": "search", "subquestion": self.subquestion, "detail": query})
-            for hit in websearch.search(query, max_results=self.profile["results_per_query"]):
+            hits = websearch.search(query, max_results=self.profile["results_per_query"])
+            self.context.note_search(bool(hits))
+            for hit in hits:
+                # Homepages and sign-in pages cost a fetch and answer nothing.
+                if not websearch.is_content_url(hit["url"]):
+                    continue
                 if not any(hit["url"] == existing["url"] for existing in candidates):
                     candidates.append(hit)
 
@@ -533,8 +564,14 @@ class Researcher:
                 sources += self._gather_local(queries)
 
             if not sources:
-                self.emit({"stage": "read", "subquestion": self.subquestion,
-                           "detail": "no readable sources this round"})
+                # Distinguish "the web gave us nothing" from "we read pages
+                # that turned out to be useless" — they need different fixes.
+                if self.context.search_is_broken:
+                    self.emit({"stage": "read", "subquestion": self.subquestion,
+                               "detail": "web search is returning nothing — stopping early"})
+                else:
+                    self.emit({"stage": "read", "subquestion": self.subquestion,
+                               "detail": "no usable sources this round"})
                 break
 
             new_findings = self._extract(sources)
@@ -730,6 +767,10 @@ def run_research_stream(
     against exactly like anything found on the web.
     """
     depth = depth if depth in DEPTHS else DEFAULT_DEPTH
+    if depth in CLOUD_ONLY_DEPTHS and available_depths()["local"]:
+        # Asked for more than an on-device model can sustain — fall back
+        # rather than grinding for an hour on a worse answer.
+        depth = "deep"
     question = (question or "").strip()
     if not question:
         yield {"error": "a research question is required"}
@@ -806,7 +847,14 @@ def run_research_stream(
 
         if not findings:
             finish_run(run_id, "failed", error="no supported findings", plan=subquestions)
-            yield {"error": "no sources could be read — check your connection, or try a narrower question"}
+            if context.search_is_broken:
+                yield {"error": (
+                    "Web search returned nothing for any query. Carrot uses DuckDuckGo; "
+                    "check your connection or a firewall/VPN blocking it. Research needs "
+                    "the web — chat and your indexed files still work offline.")}
+            else:
+                yield {"error": ("Found pages but none were readable or on-topic. "
+                                 "Try a narrower, more specific question.")}
             return
 
         # --- verify ---

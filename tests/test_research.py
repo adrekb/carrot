@@ -380,3 +380,68 @@ def test_raw_search_prefers_the_maintained_client(monkeypatch):
     monkeypatch.setitem(sys.modules, "ddgs", types.SimpleNamespace(DDGS=FakeDDGS))
     websearch_mod._raw_search("q", 3, "wt-wt")
     assert used == ["ddgs"]
+
+
+# ===== Junk URLs =====
+
+def test_homepages_and_signin_pages_are_not_content():
+    """A run that 'reads github.com' has read a marketing page."""
+    for url in ["https://github.com", "https://github.com/", "https://nvidia.com/",
+                "https://github.com/login", "https://example.com/signup",
+                "https://site.com/pricing", "https://x.com/about"]:
+        assert not websearch_mod.is_content_url(url), url
+
+
+def test_real_pages_are_content():
+    for url in ["https://github.com/ollama/ollama",
+                "https://example.com/blog/rtx-4090-benchmarks",
+                "https://site.org/?article=42"]:
+        assert websearch_mod.is_content_url(url), url
+
+
+# ===== Search-health reporting =====
+
+def test_run_context_flags_a_dead_search_backend():
+    from carrot import policy
+    ctx = policy.RunContext("run1", budget=policy.Budget())
+    for _ in range(5):
+        ctx.note_search(False)
+    assert ctx.search_is_broken is False      # not enough evidence yet
+    ctx.note_search(False)
+    assert ctx.search_is_broken is True
+
+
+def test_one_good_search_means_the_backend_works():
+    from carrot import policy
+    ctx = policy.RunContext("run2", budget=policy.Budget())
+    for _ in range(9):
+        ctx.note_search(False)
+    ctx.note_search(True)
+    assert ctx.search_is_broken is False
+
+
+# ===== Depth gating =====
+
+def test_exhaustive_depth_is_cloud_only(monkeypatch):
+    from carrot import research
+
+    class LocalRoute:
+        local, model = True, "llama3.2:1b"
+    monkeypatch.setattr(research.router_mod, "route", lambda *a, **k: LocalRoute())
+    info = research.available_depths()
+    assert "exhaustive" not in info["depths"]
+    assert info["local"] is True
+
+    class CloudRoute:
+        local, model = False, "claude-opus-5"
+    monkeypatch.setattr(research.router_mod, "route", lambda *a, **k: CloudRoute())
+    info = research.available_depths()
+    assert "exhaustive" in info["depths"]
+    assert info["local"] is False
+
+
+def test_exhaustive_profile_is_actually_bigger():
+    from carrot import research
+    deep, exhaustive = research.DEPTHS["deep"], research.DEPTHS["exhaustive"]
+    for key in ("subquestions", "rounds", "workers", "reads_per_round", "chars_per_page"):
+        assert exhaustive[key] > deep[key], key

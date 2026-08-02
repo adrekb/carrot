@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="dark">
 <title>Carrot AI</title>
 <link rel="icon" type="image/png" href="/assets/logo.png">
 <link rel="stylesheet" href="/css/style.css">
@@ -461,12 +462,11 @@
                   placeholder="What would you like researched? e.g. &quot;How do the current open-weight coding models compare on long-context refactoring, and which fits 32GB of RAM?&quot;"></textarea>
         <div class="row">
           <select id="research-depth">
-            <option value="quick">Quick — 2 threads, one round</option>
-            <option value="standard" selected>Standard — 4 threads, two rounds</option>
-            <option value="deep">Deep — 6 threads, three rounds</option>
+            <option value="standard">Standard — 4 threads, two rounds</option>
           </select>
           <button class="btn btn-primary" id="research-run-btn" onclick="startResearch()">Research</button>
           <button class="btn btn-ghost hidden" id="research-stop-btn" onclick="stopResearch()">Stop</button>
+          <span id="research-depth-note" class="muted small"></span>
         </div>
       </div>
 
@@ -1024,11 +1024,13 @@
       <svg class="ico chev"><use href="#i-chevron"/></svg>
     </button>
     <div id="model-pop" class="hidden">
-      <div class="pop-section">On this machine</div>
-      <div id="model-installed"></div>
-      <div id="model-remote"></div>
-      <div class="pop-section">Available to install</div>
-      <div id="model-suggested"></div>
+      <div class="pop-scroll">
+        <div class="pop-section">On this machine</div>
+        <div id="model-installed"></div>
+        <div id="model-remote"></div>
+        <div class="pop-section">Available to install</div>
+        <div id="model-suggested"></div>
+      </div>
       <div class="pop-custom">
         <input type="text" id="model-custom" placeholder="any ollama model, e.g. llama3.2:1b" onkeydown="if(event.key==='Enter')pullCustomModel()">
         <button class="btn btn-ghost" onclick="pullCustomModel()">Pull</button>

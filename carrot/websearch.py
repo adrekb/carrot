@@ -77,6 +77,36 @@ def _is_relevant(query: str, title: str, snippet: str) -> bool:
     return overlap >= (2 if len(wanted) >= 4 else 1)
 
 
+# Paths that never contain an answer, only a door to one.
+_NON_CONTENT_PATHS = re.compile(
+    r"^/(login|signin|sign-in|signup|sign-up|register|account|auth|cart|checkout|"
+    r"pricing|download|downloads|contact|about|careers|jobs|legal|privacy|terms|"
+    r"cookie|subscribe|newsletter)(/|$)", re.I)
+
+
+def is_content_url(url: str) -> bool:
+    """Reject links that cannot answer a specific question.
+
+    A research run that "reads github.com" has read the GitHub homepage —
+    a marketing page with no bearing on the question. Bare domains and
+    sign-in/marketing paths are doors, not documents.
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    if parsed.scheme not in ("http", "https"):
+        return False
+    path = parsed.path or "/"
+    # A bare domain is a homepage. Allow it only when a query string carries
+    # the actual request (some sites put article ids there).
+    if path in ("", "/") and not parsed.query:
+        return False
+    if _NON_CONTENT_PATHS.match(path):
+        return False
+    return True
+
+
 def _raw_search(query: str, max_results: int, region: str) -> List[Dict[str, Any]]:
     """Query DDG through whichever client library is installed.
 

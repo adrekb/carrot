@@ -334,9 +334,33 @@ function renderModelPop(data) {
     }
 }
 
-function toggleModelPop() {
-    document.getElementById('model-pop').classList.toggle('hidden');
+// Popovers above the command bar are clamped to the space that actually
+// exists. A fixed max-height ran off the top of the screen on short
+// windows, leaving options you could see but never scroll to.
+function fitPopoverAbove(popId, anchorId, gap = 10, floor = 170) {
+    const pop = document.getElementById(popId);
+    const anchor = document.getElementById(anchorId);
+    if (!pop || !anchor) return;
+    const room = anchor.getBoundingClientRect().top - gap - 14;
+    pop.style.maxHeight = Math.max(floor, Math.min(460, room)) + 'px';
 }
+
+function toggleModelPop() {
+    const pop = document.getElementById('model-pop');
+    const opening = pop.classList.contains('hidden');
+    pop.classList.toggle('hidden');
+    if (opening) fitPopoverAbove('model-pop', 'model-btn');
+}
+
+// Re-clamp on resize so a popover left open stays reachable.
+window.addEventListener('resize', () => {
+    if (!document.getElementById('model-pop')?.classList.contains('hidden')) {
+        fitPopoverAbove('model-pop', 'model-btn');
+    }
+    if (!document.getElementById('search-pop')?.classList.contains('hidden')) {
+        fitPopoverAbove('search-pop', 'search-btn');
+    }
+});
 
 // Picking a cloud model pins the 'chat' task to that provider — the same
 // mechanism the Task Routing table uses, so the two never disagree.
@@ -608,7 +632,10 @@ function renderSearchModes() {
 
 function toggleSearchPop() {
     const pop = document.getElementById('search-pop');
-    if (pop) pop.classList.toggle('hidden');
+    if (!pop) return;
+    const opening = pop.classList.contains('hidden');
+    pop.classList.toggle('hidden');
+    if (opening) fitPopoverAbove('search-pop', 'search-btn');
 }
 
 async function setSearchMode(id) {

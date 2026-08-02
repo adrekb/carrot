@@ -75,6 +75,24 @@ VENDOR_DIR = os.path.join(WEB_DIR, "vendor")
 os.makedirs(VENDOR_DIR, exist_ok=True)
 app.mount("/vendor", StaticFiles(directory=VENDOR_DIR), name="vendor")
 
+
+@app.middleware("http")
+async def _revalidate_app_assets(request, call_next):
+    """Make the app's own JS/CSS revalidate on every load.
+
+    StaticFiles serves far-future-cacheable responses, and the Electron
+    renderer honours that — so after an update the shell kept running the
+    previous build's JavaScript against the new backend. Fonts and vendor
+    bundles are content-addressed and huge, so they stay cacheable.
+    """
+    response = await call_next(request)
+    path = request.url.path
+    if path.startswith(("/js/", "/css/")) or path == "/":
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    elif path.startswith(("/assets/fonts/", "/vendor/")):
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return response
+
 app.include_router(files_api.router)
 
 
@@ -2170,6 +2188,12 @@ def _sse(generator):
             yield f"data: {json.dumps(event)}\n\n"
 
     return StreamingResponse(stream(), media_type="text/event-stream")
+
+
+@app.get("/api/research/depths")
+async def research_depths():
+    """Which depths the current research route can sustain."""
+    return research_mod.available_depths()
 
 
 @app.get("/api/research")

@@ -520,6 +520,10 @@ class RunContext:
         self.tainted = False
         self.taint_signals: List[Dict[str, str]] = []
         self.cancel_event = threading.Event()
+        # Search health: a run whose every query comes back empty is not
+        # researching, it is grinding. Track it so callers can say so.
+        self.searches = 0
+        self.searches_with_hits = 0
 
     # --- lifecycle ---
 
@@ -533,6 +537,17 @@ class RunContext:
     @property
     def elapsed(self) -> float:
         return time.monotonic() - self.started_at
+
+    def note_search(self, had_hits: bool):
+        """Record whether a web search produced anything usable."""
+        self.searches += 1
+        if had_hits:
+            self.searches_with_hits += 1
+
+    @property
+    def search_is_broken(self) -> bool:
+        """True once enough searches have run to conclude none of them work."""
+        return self.searches >= 6 and self.searches_with_hits == 0
 
     def check_alive(self):
         """Raise if the run should stop. Called before every action."""
