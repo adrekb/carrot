@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "carrot"
-version = "0.3.0"
+version = "0.3.1"
 description = "Carrot - On-device AI assistant with structured memory, local document search, agent tools, and hybrid model routing"
 requires-python = ">=3.10"
 dependencies = [

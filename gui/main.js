@@ -1,4 +1,4 @@
-const { app, BrowserWindow, globalShortcut, ipcMain, Notification, screen, shell } = require('electron');
+const { app, BrowserWindow, globalShortcut, ipcMain, Notification, screen, session, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
@@ -75,7 +75,7 @@ function createMainWindow() {
     minWidth: 1024,
     minHeight: 700,
     title: 'Carrot AI',
-    backgroundColor: '#0b0e1a',
+    backgroundColor: '#131419',  // matches --bg; avoids a wrong-colour flash
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -174,7 +174,29 @@ function toggleOverlay() {
 }
 
 // ===== App lifecycle =====
+// Clear the renderer's HTTP cache when the installed version changes.
+// Cache headers cannot retroactively fix entries a previous build already
+// stored with a long expiry, so an update would otherwise keep running the
+// old JavaScript until those entries aged out.
+async function clearCacheOnUpgrade() {
+  try {
+    const stampPath = path.join(app.getPath('userData'), 'asset-cache-version');
+    const current = app.getVersion();
+    let previous = null;
+    try { previous = fs.readFileSync(stampPath, 'utf8').trim(); } catch (e) { /* first run */ }
+    if (previous !== current) {
+      await session.defaultSession.clearCache();
+      await session.defaultSession.clearStorageData({ storages: ['cachestorage'] });
+      fs.writeFileSync(stampPath, current);
+      console.log(`Cleared renderer cache for ${previous || 'first run'} -> ${current}`);
+    }
+  } catch (e) {
+    console.error('Could not clear renderer cache:', e);
+  }
+}
+
 app.whenReady().then(async () => {
+  await clearCacheOnUpgrade();
   startFastAPI();
   const ready = await waitForBackend();
   if (!ready) {

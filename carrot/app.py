@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import os
+import re
 import json
 import queue
 import threading
@@ -430,12 +431,39 @@ async def require_session_token(request: Request, call_next):
 
 # ===== Index / static =====
 
+def _asset_fingerprint() -> str:
+    """A short hash of every JS/CSS file's size and mtime.
+
+    Appended to asset URLs so an update changes the URL itself. Setting
+    cache headers alone cannot fix an *already* cached response — the
+    browser will not revalidate until the old entry expires — but a new
+    URL is a new cache key, so the new build always wins.
+    """
+    import hashlib
+    digest = hashlib.sha1()
+    for folder in ("js", "css"):
+        directory = os.path.join(WEB_DIR, folder)
+        for name in sorted(os.listdir(directory)) if os.path.isdir(directory) else []:
+            try:
+                stat = os.stat(os.path.join(directory, name))
+            except OSError:
+                continue
+            digest.update(f"{name}:{stat.st_size}:{int(stat.st_mtime)}".encode())
+    return digest.hexdigest()[:10]
+
+
+_ASSET_RE = re.compile(r'(src|href)="(/(?:js|css)/[^"?]+)"')
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
     index_path = os.path.join(WEB_DIR, "index.html")
     if os.path.exists(index_path):
         with open(index_path, "r", encoding="utf-8") as handle:
-            return HTMLResponse(security_mod.inject_token(handle.read()))
+            html = handle.read()
+        version = _asset_fingerprint()
+        html = _ASSET_RE.sub(lambda m: f'{m.group(1)}="{m.group(2)}?v={version}"', html)
+        return HTMLResponse(security_mod.inject_token(html))
     return HTMLResponse("<h1>Carrot</h1><p>Frontend not found. Run from project root.</p>")
 
 
