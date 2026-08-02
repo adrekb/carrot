@@ -270,32 +270,55 @@ def install_ollama_unix(progress_cb: Optional[Callable] = None) -> bool:
 
 
 def pull_model(model: str = DEFAULT_MODEL, progress_cb: Optional[Callable] = None) -> bool:
-    """Pull the given model via Ollama and stream progress."""
-    exe = get_ollama_executable()
-    if not exe:
-        if progress_cb:
-            progress_cb({"type": "error", "message": "Ollama CLI not found after install"})
-        return False
+    """Pull a model, reporting real byte-level progress.
+
+    Uses Ollama's HTTP API rather than the CLI. The CLI renders progress
+    with carriage returns (so line-buffered reads stall) and has to be
+    found on PATH, which a frozen app launched before Ollama was
+    installed may not see. The HTTP endpoint has neither problem and
+    reports exact completed/total bytes for the progress bar.
+    """
     try:
-        if progress_cb:
-            progress_cb({"type": "pull", "message": f"Pulling {model}..."})
-        proc = subprocess.Popen(
-            [exe, "pull", model],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
-        )
-        for line in proc.stdout:
-            line = line.strip()
-            if line and progress_cb:
-                progress_cb({"type": "pull", "message": line})
-        proc.wait(timeout=1800)
-        return proc.returncode == 0
+        with requests.post(
+            f"http://127.0.0.1:{OLLAMA_PORT}/api/pull",
+            json={"model": model, "name": model, "stream": True},
+            stream=True,
+            timeout=(10, 1800),
+        ) as resp:
+            if resp.status_code != 200:
+                detail = resp.text[:300].strip() or f"HTTP {resp.status_code}"
+                if progress_cb:
+                    progress_cb({"type": "error", "message": f"Ollama refused the pull: {detail}"})
+                return False
+            last_error = None
+            for raw in resp.iter_lines(decode_unicode=True):
+                if not raw:
+                    continue
+                try:
+                    update = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if update.get("error"):
+                    last_error = update["error"]
+                    if progress_cb:
+                        progress_cb({"type": "error", "message": last_error})
+                    continue
+                if progress_cb:
+                    progress_cb({
+                        "type": "pull",
+                        "model": model,
+                        "status": update.get("status", ""),
+                        "completed": update.get("completed"),
+                        "total": update.get("total"),
+                    })
+            if last_error:
+                return False
     except Exception as e:
         if progress_cb:
-            progress_cb({"type": "error", "message": f"Model pull error: {e}"})
+            progress_cb({"type": "error", "message": f"Could not reach Ollama to pull {model}: {e}"})
         return False
+    # Trust the tag list rather than the stream ending politely.
+    return is_model_available(model)
 
 
 def get_target_model() -> str:
@@ -321,15 +344,26 @@ def run_bootstrap(progress_cb: Optional[Callable] = None, model: Optional[str] =
     target = model or get_target_model()
     result = {"ollama_installed": False, "model_pulled": False, "model": target, "error": None}
 
-    if progress_cb:
-        progress_cb({"type": "status", "message": "Checking Ollama..."})
+    # Keep the last real error so a failure reports *why*, not just "failed".
+    last_error = {"message": None}
+    caller_cb = progress_cb
 
-    if not get_ollama_executable():
+    def emit(event):
+        if event.get("type") == "error" and event.get("message"):
+            last_error["message"] = event["message"]
+        if caller_cb:
+            caller_cb(event)
+
+    progress_cb = emit
+    progress_cb({"type": "status", "message": "Checking Ollama..."})
+
+    # The service answering on the port is what actually matters; the CLI
+    # may be installed but invisible to a frozen app's PATH.
+    if not get_ollama_executable() and not is_ollama_running():
         if platform.system() == "Windows":
             installer = find_bundled_installer()
             if not installer:
-                if progress_cb:
-                    progress_cb({"type": "status", "message": "Downloading Ollama installer..."})
+                progress_cb({"type": "status", "message": "Downloading Ollama installer..."})
                 installer = os.path.join(tempfile.gettempdir(), "carrot_ollama_setup.exe")
                 if not download_installer(installer, progress_cb):
                     result["error"] = "Could not download Ollama installer"
@@ -347,19 +381,20 @@ def run_bootstrap(progress_cb: Optional[Callable] = None, model: Optional[str] =
     save_bootstrap_state(state)
 
     if not is_ollama_running():
-        if progress_cb:
-            progress_cb({"type": "status", "message": "Starting Ollama service..."})
-        if not ensure_ollama_running(timeout=60):
-            result["error"] = "Ollama service did not start"
+        progress_cb({"type": "status", "message": "Starting Ollama service..."})
+        if not ensure_ollama_running(timeout=90):
+            result["error"] = ("Ollama installed but its service did not start. "
+                               "Open the Ollama app once, then press Retry.")
             return result
 
     if not is_model_available(target):
         state["model_pulling"] = True
         save_bootstrap_state(state)
+        progress_cb({"type": "status", "message": f"Downloading {target}…"})
         if pull_model(target, progress_cb):
             state["model_pulled"] = True
         else:
-            result["error"] = f"Failed to pull {target}"
+            result["error"] = last_error["message"] or f"Failed to pull {target}"
     else:
         state["model_pulled"] = True
 

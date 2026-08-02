@@ -51,12 +51,14 @@
     <div id="splash-status" class="splash-status">Checking Ollama…</div>
     <div id="splash-specs" class="splash-specs hidden"></div>
     <div id="splash-picks" class="splash-picks hidden"></div>
+    <div id="splash-catalog" class="splash-catalog hidden"></div>
     <div class="splash-progress"><div id="splash-bar" class="splash-bar"></div></div>
+    <div id="splash-detail" class="splash-detail"></div>
     <div class="splash-actions">
       <button id="splash-btn" class="btn btn-primary hidden" onclick="runBootstrap()">Set up now</button>
       <button id="splash-skip" class="btn btn-ghost hidden" onclick="skipModelChoice()" title="For experienced users — keep the stock default and move on">Skip — use default</button>
     </div>
-    <a id="splash-hub-link" class="splash-hub-link hidden" href="#" target="_blank" rel="noopener">Browse Carrot Hub — the full catalog, updated daily →</a>
+    <a id="splash-hub-link" class="splash-hub-link hidden" href="#" onclick="toggleSplashCatalog();return false">See every model and why some won't run here →</a>
   </div>
 </div>
 

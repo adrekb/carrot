@@ -469,6 +469,43 @@ async def bootstrap_run(req: BootstrapRunRequest | None = None):
         raise HTTPException(status_code=500, detail=f"Bootstrap failed: {e}")
 
 
+@app.get("/api/bootstrap/stream")
+async def bootstrap_stream(model: str = ""):
+    """Run bootstrap, streaming install and download progress as SSE.
+
+    The setup splash needs a real progress bar: pulling a model is a
+    multi-gigabyte download and a bar that jumps 30% -> 100% tells the
+    user nothing. Bootstrap runs on a worker thread and pushes events
+    through a queue so the response can stream while it works.
+    """
+    import queue as _queue
+    import threading as _threading
+
+    events: _queue.Queue = _queue.Queue()
+    DONE = object()
+
+    def worker():
+        try:
+            result = bootstrap_mod.run_bootstrap(
+                progress_cb=events.put, model=model or None)
+            events.put({"type": "done", **result})
+        except Exception as e:
+            events.put({"type": "done", "error": f"Bootstrap failed: {e}"})
+        finally:
+            events.put(DONE)
+
+    _threading.Thread(target=worker, daemon=True).start()
+
+    def event_stream():
+        while True:
+            event = events.get()
+            if event is DONE:
+                break
+            yield f"data: {json.dumps(event)}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
 # ===== Carrot Hub (hardware-aware model recommendations) =====
 
 @app.get("/api/hub")

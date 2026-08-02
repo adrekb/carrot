@@ -1338,6 +1338,7 @@ async function checkBootstrap() {
 }
 
 let splashModel = null; // model picked on the splash; null = stock default
+let splashHub = null;   // /api/hub payload, reused by the in-splash catalog
 
 async function showSplash(s) {
     document.getElementById('splash').classList.remove('hidden');
@@ -1356,13 +1357,13 @@ async function showSplash(s) {
 }
 
 function renderSplashPicks(hub) {
+    splashHub = hub;
     const specsEl = document.getElementById('splash-specs');
     const picksEl = document.getElementById('splash-picks');
     const link = document.getElementById('splash-hub-link');
     const s = hub.specs || {};
     specsEl.textContent = `Detected: ${hubSpecLine(s)} — ${s.model_budget_gb} GB usable for models`;
     specsEl.classList.remove('hidden');
-    link.href = hub.hub_url;
     link.classList.remove('hidden');
 
     const recs = hub.recommendations || {};
@@ -1397,44 +1398,131 @@ function renderSplashPicks(hub) {
 
 function hideSplash() { document.getElementById('splash').classList.add('hidden'); }
 
+// The full catalog, right on the setup screen — including the models that
+// do NOT fit, each saying why. Seeing "needs 12 GB, you have 3.9" is more
+// reassuring than a short list with no explanation.
+function toggleSplashCatalog() {
+    const el = document.getElementById('splash-catalog');
+    const link = document.getElementById('splash-hub-link');
+    if (!el.classList.contains('hidden')) {
+        el.classList.add('hidden');
+        link.textContent = 'See every model and why some won\'t run here →';
+        return;
+    }
+    if (!splashHub) return;
+    const budget = (splashHub.specs || {}).model_budget_gb || 0;
+    const fitOrder = { great: 0, good: 1, tight: 2, too_big: 3 };
+    const models = [...(splashHub.models || [])].sort((a, b) =>
+        (fitOrder[a.fit] - fitOrder[b.fit]) || (a.min_mem_gb - b.min_mem_gb));
+    // Compact badge text — the full wording would squeeze out model names.
+    const SHORT_FIT = { great: 'Great', good: 'Good', tight: 'Tight', too_big: 'Too big' };
+    el.innerHTML = models.map(m => {
+        const why = m.fit === 'too_big'
+            ? `needs ${m.min_mem_gb} GB, you have ${budget}`
+            : (m.fit === 'tight'
+                ? `needs ${m.min_mem_gb} GB — slow`
+                : `${m.download_gb} GB${m.est_tps ? ` · ~${m.est_tps} tok/s` : ''}`);
+        return `
+          <button type="button" class="splash-cat-row fit-${m.fit}"
+                  ${m.fit === 'too_big' ? 'disabled' : `onclick="pickSplashModel('${escHtml(m.id)}')"`}>
+            <span class="splash-cat-name">${escHtml(m.label || m.id)}</span>
+            <span class="fit-badge fit-${m.fit}">${SHORT_FIT[m.fit] || m.fit}</span>
+            <span class="splash-cat-why">${escHtml(why)}</span>
+          </button>`;
+    }).join('');
+    el.classList.remove('hidden');
+    link.textContent = 'Hide the full catalog ←';
+}
+
+function pickSplashModel(id) {
+    splashModel = id;
+    // Reflect the choice in both the picks row and the catalog list.
+    document.querySelectorAll('#splash-picks .splash-pick').forEach(el =>
+        el.classList.toggle('selected', el.dataset.model === id));
+    document.querySelectorAll('#splash-catalog .splash-cat-row').forEach(el =>
+        el.classList.toggle('selected', el.textContent.trim().startsWith(
+            (splashHub.models.find(m => m.id === id) || {}).label || id)));
+    const status = document.getElementById('splash-status');
+    if (status) status.textContent = `${id} selected — press Set up now.`;
+}
+
 function skipModelChoice() {
     // Experienced users: no picker, stock default, straight to setup.
     splashModel = null;
     runBootstrap();
 }
 
-async function runBootstrap() {
+function splashFailed(message) {
     const btn = document.getElementById('splash-btn');
-    const skip = document.getElementById('splash-skip');
+    document.getElementById('splash-status').textContent = message;
+    document.getElementById('splash-detail').textContent = '';
+    btn.textContent = 'Retry';
+    btn.classList.remove('hidden');
+    document.getElementById('splash-skip').classList.remove('hidden');
+    document.getElementById('splash-picks').classList.remove('hidden');
+    document.getElementById('splash-hub-link').classList.remove('hidden');
+}
+
+// Setup streams over SSE so the bar tracks the actual download. A model
+// is gigabytes; a bar that jumps 30% -> 100% just looks frozen.
+function runBootstrap() {
+    const btn = document.getElementById('splash-btn');
     const status = document.getElementById('splash-status');
+    const detail = document.getElementById('splash-detail');
     const bar = document.getElementById('splash-bar');
     btn.classList.add('hidden');
-    skip.classList.add('hidden');
+    document.getElementById('splash-skip').classList.add('hidden');
     document.getElementById('splash-picks').classList.add('hidden');
-    const label = splashModel || 'the default model';
-    status.textContent = `Installing Ollama and pulling ${label}… this may take a while.`;
-    bar.style.width = '30%';
-    try {
-        const result = await api('/api/bootstrap/run', {
-            method: 'POST',
-            body: JSON.stringify({ model: splashModel }),
-        });
-        bar.style.width = '100%';
-        if (result.error) {
-            status.textContent = result.error;
-            btn.classList.remove('hidden');
-            skip.classList.remove('hidden');
-            document.getElementById('splash-picks').classList.remove('hidden');
-        } else {
+    document.getElementById('splash-catalog').classList.add('hidden');
+    document.getElementById('splash-hub-link').classList.add('hidden');
+    status.textContent = 'Setting up…';
+    detail.textContent = '';
+    bar.style.width = '2%';
+
+    const url = tokenUrl('/api/bootstrap/stream'
+        + (splashModel ? `?model=${encodeURIComponent(splashModel)}` : ''));
+    const src = new EventSource(url);
+    let started = Date.now();
+
+    src.onmessage = (ev) => {
+        let p;
+        try { p = JSON.parse(ev.data); } catch (_) { return; }
+
+        if (p.type === 'status' || p.type === 'install') {
+            status.textContent = p.message || '';
+        } else if (p.type === 'download') {
+            // Downloading the Ollama installer itself.
+            const pct = p.total ? Math.round(p.downloaded / p.total * 100) : 0;
+            status.textContent = 'Downloading Ollama…';
+            bar.style.width = Math.max(pct * 0.2, 2) + '%';   // installer = first 20%
+            detail.textContent = `${fmtBytes(p.downloaded)} of ${fmtBytes(p.total)}`;
+        } else if (p.type === 'pull') {
+            status.textContent = `Downloading ${p.model || 'model'}…`;
+            if (p.total && p.completed != null) {
+                const pct = Math.round(p.completed / p.total * 100);
+                bar.style.width = (20 + pct * 0.8) + '%';      // model = remaining 80%
+                const secs = (Date.now() - started) / 1000;
+                const rate = secs > 2 ? ` · ${fmtBytes(p.completed / secs)}/s` : '';
+                detail.textContent = `${fmtBytes(p.completed)} of ${fmtBytes(p.total)} (${pct}%)${rate}`;
+            } else if (p.status) {
+                detail.textContent = p.status;
+            }
+        } else if (p.type === 'error') {
+            detail.textContent = p.message || '';
+        } else if (p.type === 'done') {
+            src.close();
+            if (p.error) { splashFailed(p.error); return; }
+            bar.style.width = '100%';
             status.textContent = 'Setup complete. Launching Carrot…';
+            detail.textContent = '';
             setTimeout(() => { hideSplash(); refreshStatus(); loadModels(); }, 900);
         }
-    } catch (e) {
-        status.textContent = e.message;
-        btn.classList.remove('hidden');
-        skip.classList.remove('hidden');
-        document.getElementById('splash-picks').classList.remove('hidden');
-    }
+    };
+
+    src.onerror = () => {
+        src.close();
+        splashFailed('Lost contact with Carrot during setup. Press Retry.');
+    };
 }
 
 // ===== Init =====
