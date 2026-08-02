@@ -1,39 +1,58 @@
+/* Inter (SIL Open Font License 1.1) — bundled so the UI looks identical on
+   every OS and works with no network. License: /assets/fonts/LICENSE.txt */
+@font-face {
+  font-family: "InterVar";
+  src: url("/assets/fonts/InterVariable.woff2") format("woff2-variations"),
+       url("/assets/fonts/InterVariable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "InterVar";
+  src: url("/assets/fonts/InterVariable-Italic.woff2") format("woff2-variations"),
+       url("/assets/fonts/InterVariable-Italic.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: italic;
+  font-display: swap;
+}
+
 /* ===== Carrot AI — dark workspace theme ===== */
 
 :root {
   /* Warm, lifted charcoals rather than near-black: softer on the eye and
      it lets the orange read as warm instead of neon. Surfaces separate by
      luminance and shadow, not by hard 1px lines. */
-  /* Warm paper-in-low-light greys. Surfaces separate by luminance and
-     shadow rather than hard rules, so nothing has a hard edge. */
-  --bg: #191817;
-  --bg2: #1f1e1c;
-  --card: #252422;
-  --card2: #2e2c2a;
-  --card3: #38352f;
-  --border: rgba(255, 252, 245, 0.055);
-  --border-hi: rgba(255, 252, 245, 0.105);
-  --text: #f3f0e9;
-  --muted: #a8a29a;
-  --faint: #78726a;
-  /* A softer, clay-warm orange. Still unmistakably orange — just not the
-     neon that made every button shout. */
-  --accent: #ec7a4d;
-  --accent-hi: #f5946b;
-  --accent-dim: #c76239;
-  --accent-soft: rgba(236, 122, 77, 0.13);
-  --accent-line: rgba(236, 122, 77, 0.28);
-  --green: #6fc99a;
-  --red: #e8776a;
-  --yellow: #e5bc72;
+  /* Cool slate greys with a faint indigo cast — deliberately not the warm
+     olive-charcoal everyone else uses. Pairing a cool ground with a warm
+     accent is complementary, so the orange reads brighter at lower
+     saturation and the whole thing stays calm. */
+  --bg: #131419;
+  --bg2: #181a20;
+  --card: #1e2027;
+  --card2: #262932;
+  --card3: #30343f;
+  --border: rgba(190, 205, 235, 0.07);
+  --border-hi: rgba(190, 205, 235, 0.13);
+  --text: #eceef4;
+  --muted: #99a0ae;
+  --faint: #69707f;
+  /* Carrot orange proper: warmer and more saturated than a clay
+     terracotta, softer than the neon it replaced. */
+  --accent: #f4813f;
+  --accent-hi: #ff9a5e;
+  --accent-dim: #d0672c;
+  --accent-soft: rgba(244, 129, 63, 0.14);
+  --accent-line: rgba(244, 129, 63, 0.32);
+  --green: #57d1a0;
+  --red: #f2736b;
+  --yellow: #f0c268;
   --mono: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
   /* System stacks on purpose: the app runs offline, so it cannot pull a
      webfont. These resolve to SF Pro on macOS and Segoe UI Variable on
      Windows 11 — both close in spirit to what we're after. */
-  --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text",
-          "Segoe UI", Inter, system-ui, sans-serif;
-  --display: ui-sans-serif, -apple-system, BlinkMacSystemFont,
-             "Segoe UI Variable Display", "Segoe UI", Inter, system-ui, sans-serif;
+  --sans: "InterVar", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --display: "InterVar", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --serif: ui-serif, "Iowan Old Style", Charter, Cambria, "Palatino Linotype", Georgia, serif;
   --radius: 14px;
   --radius-sm: 10px;
@@ -2722,3 +2741,89 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 /* Chips: pill-quiet until chosen. */
 .chip-row .chip { padding: 5px 13px; font-family: var(--sans); font-size: 12px; }
 .chip-row .chip.active { font-weight: 500; }
+
+/* Inter's optical sizing and tabular figures: numbers in tables and metrics
+   line up instead of jittering as they update. */
+body { font-optical-sizing: auto; font-variant-ligatures: contextual; }
+.routing-table, .storage-row, .m-meta, .hub-card .muted.small,
+.splash-detail, .cal-cell, .storage-summary { font-variant-numeric: tabular-nums; }
+
+/* ===== Glass =====
+   Blur only reads if there is something behind it, so the app sits on a
+   quiet ambient wash: two wide, low-opacity warm/cool pools that never
+   move. Floating surfaces then sample it. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: -20%;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(46% 38% at 14% 8%, rgba(244, 129, 63, 0.10), transparent 62%),
+    radial-gradient(42% 40% at 88% 22%, rgba(94, 132, 214, 0.09), transparent 64%),
+    radial-gradient(52% 44% at 62% 96%, rgba(244, 129, 63, 0.055), transparent 66%);
+  filter: saturate(115%);
+}
+
+/* Chrome: translucent, blurred, sitting over the wash. */
+#menubar {
+  background: rgba(24, 26, 32, 0.72);
+  backdrop-filter: blur(22px) saturate(170%);
+  -webkit-backdrop-filter: blur(22px) saturate(170%);
+}
+.app-nav {
+  background: rgba(22, 24, 30, 0.55);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  border-right: 1px solid var(--border);
+}
+.view { background: transparent; }
+
+/* Panels: enough translucency to feel like glass, enough body to read on. */
+.settings-card, .ext-section, .hub-card, .widget-card, .hub-spec-card,
+.list-item, .provider-row {
+  background: rgba(32, 35, 43, 0.62);
+  backdrop-filter: blur(16px) saturate(150%);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  border: 1px solid var(--border);
+}
+.hub-card.pick, .settings-card:hover { border-color: var(--border-hi); }
+
+/* Floating layers get the heaviest blur — they overlap real content. */
+#model-pop, #ws-pop, #nav-more-list, .combo-pop, #splash .splash-card,
+.skill-pop, #catalog-modal .modal-card {
+  background: rgba(30, 33, 41, 0.82);
+  backdrop-filter: blur(30px) saturate(180%);
+  -webkit-backdrop-filter: blur(30px) saturate(180%);
+  border: 1px solid var(--border-hi);
+}
+
+/* The command bar floats over the conversation. */
+#cmdbar {
+  background: rgba(30, 33, 41, 0.78);
+  backdrop-filter: blur(26px) saturate(175%);
+  -webkit-backdrop-filter: blur(26px) saturate(175%);
+  border: 1px solid var(--border-hi);
+  box-shadow: var(--shadow);
+}
+
+/* Inputs sit *in* the glass rather than on it. */
+input, select, textarea { background: rgba(255, 255, 255, 0.045); }
+input:focus, select:focus, textarea:focus { background: rgba(255, 255, 255, 0.06); }
+.btn-ghost { background: rgba(255, 255, 255, 0.05); }
+.btn-ghost:hover { background: rgba(255, 255, 255, 0.09); }
+
+/* A hairline of light along the top edge — how real glass catches a room. */
+.settings-card, .hub-card, .splash-card, #model-pop, #cmdbar, .combo-pop {
+  position: relative;
+}
+.settings-card::after, .hub-card::after, .splash-card::after,
+#model-pop::after, #cmdbar::after, .combo-pop::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.13), transparent);
+  pointer-events: none;
+}
