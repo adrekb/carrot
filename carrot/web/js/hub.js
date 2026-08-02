@@ -1,6 +1,6 @@
 // ===== Model Hub — hardware-aware model catalog =====
-// Backed by /api/hub: detected specs, the fit-annotated catalog (bundled,
-// refreshed daily from the Carrot Hub website), and per-role picks.
+// Backed by /api/hub: detected specs, the fit-annotated catalog, and
+// per-role picks. Live results come from the public Hugging Face API.
 
 let hubData = null;
 let hubUseCase = '';
@@ -28,7 +28,7 @@ async function loadHub() {
             `<div class="empty">Could not load the hub: ${escHtml(e.message)}</div>`;
         return;
     }
-    document.getElementById('hub-site-link').href = hubData.hub_url;
+    document.getElementById('hub-site-link').href = hubData.browse_url || hubData.hub_url;
     renderHubSpecs();
     renderHubChips();
     renderHubMeta();
@@ -132,8 +132,8 @@ function renderHubChips() {
 function renderHubMeta() {
     const el = document.getElementById('hub-catalog-meta');
     const src = hubData.catalog_source;
-    if (src === 'bundled') el.textContent = 'Bundled catalog (Carrot Hub not reached yet)';
-    else el.textContent = `Catalog from Carrot Hub · updated ${hubData.catalog_fetched_at ? hubData.catalog_fetched_at.slice(0, 10) : ''}`;
+    if (src === 'bundled') el.textContent = "Carrot's built-in list";
+    else el.textContent = `Custom catalog · updated ${hubData.catalog_fetched_at ? hubData.catalog_fetched_at.slice(0, 10) : ''}`;
 }
 
 async function hubInstalledSet() {

@@ -20,9 +20,12 @@ transport level.
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any, Dict, List
 from urllib.parse import urljoin, urlparse
+
+LOG = logging.getLogger(__name__)
 
 import httpx
 
@@ -41,32 +44,99 @@ _STRIP_TAGS = ["script", "style", "nav", "header", "footer", "aside", "form", "n
 
 # ===== Search =====
 
+# Words that carry no topical signal, so matching on them means nothing.
+_STOPWORDS = {
+    "a", "an", "and", "any", "are", "as", "at", "be", "best", "by", "can", "compare",
+    "comparison", "do", "does", "for", "from", "has", "have", "how", "in", "is", "it",
+    "its", "latest", "list", "most", "new", "of", "on", "or", "other", "run", "running",
+    "that", "the", "their", "there", "these", "this", "to", "top", "use", "using",
+    "what", "when", "which", "who", "why", "with", "you", "your",
+}
+_MIN_TERM_LEN = 3
+
+
+def _terms(text: str) -> set:
+    return {w for w in re.findall(r"[a-z0-9][a-z0-9.+-]*", (text or "").lower())
+            if len(w) >= _MIN_TERM_LEN and w not in _STOPWORDS}
+
+
+def _is_relevant(query: str, title: str, snippet: str) -> bool:
+    """Does this result share any real topic word with the query?
+
+    A search backend that breaks does not fail loudly — it returns a page of
+    unrelated results (an RTX 4090 query coming back with centimetre-to-feet
+    converters). Feeding those into a research report is far worse than
+    returning nothing, so anything with no lexical overlap is dropped.
+    """
+    wanted = _terms(query)
+    if not wanted:
+        return True
+    overlap = len(wanted & _terms(f"{title} {snippet}"))
+    # One shared word is coincidence on a long query — "RTX" alone matches a
+    # motorcycle. Ask for a second term once the query is specific enough.
+    return overlap >= (2 if len(wanted) >= 4 else 1)
+
+
+def _raw_search(query: str, max_results: int, region: str) -> List[Dict[str, Any]]:
+    """Query DDG through whichever client library is installed.
+
+    ``duckduckgo_search`` was renamed to ``ddgs``; the abandoned package
+    still installs but now proxies to Bing and returns junk, so the new
+    one is tried first.
+    """
+    last_error = None
+    try:
+        from ddgs import DDGS
+
+        with DDGS() as client:
+            return list(client.text(query, max_results=max_results, region=region))
+    except ImportError:
+        pass
+    except Exception as exc:
+        last_error = exc
+    try:
+        from duckduckgo_search import DDGS as LegacyDDGS
+
+        with LegacyDDGS() as client:
+            return list(client.text(query, max_results=max_results, region=region))
+    except ImportError:
+        pass
+    except Exception as exc:
+        last_error = exc
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("no DuckDuckGo client installed — pip install ddgs")
+
+
 def search(query: str, max_results: int = 6, region: str = "wt-wt") -> List[Dict[str, str]]:
     """Free web search via DuckDuckGo. Returns [{title, url, snippet}].
 
     Failures return an empty list rather than raising: a research run that
-    loses one query should narrow its scope, not collapse.
+    loses one query should narrow its scope, not collapse. Results with no
+    topical overlap with the query are discarded — see ``_is_relevant``.
     """
     if not (query or "").strip():
         return []
     try:
-        from duckduckgo_search import DDGS
-
-        with DDGS() as ddgs:
-            raw = list(ddgs.text(query, max_results=max_results, region=region))
-    except Exception:
+        raw = _raw_search(query, max_results, region)
+    except Exception as exc:
+        LOG.warning("web search failed for %r: %s", query[:80], exc)
         return []
 
     results = []
+    dropped = 0
     for item in raw:
         url = item.get("href") or item.get("url") or ""
         if not url:
             continue
-        results.append({
-            "title": (item.get("title") or "").strip(),
-            "url": url,
-            "snippet": (item.get("body") or "").strip(),
-        })
+        title = (item.get("title") or "").strip()
+        snippet = (item.get("body") or item.get("description") or "").strip()
+        if not _is_relevant(query, title, snippet):
+            dropped += 1
+            continue
+        results.append({"title": title, "url": url, "snippet": snippet})
+    if dropped:
+        LOG.info("dropped %d off-topic result(s) for %r", dropped, query[:80])
     return results
 
 

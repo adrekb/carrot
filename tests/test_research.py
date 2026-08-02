@@ -308,3 +308,75 @@ def test_runs_can_be_listed_and_deleted(isolated_db):
     assert research.get_run(run_id)["report"] == "# Report"
     assert research.delete_run(run_id) is True
     assert research.get_run(run_id) is None
+
+
+# ===== Search relevance guard =====
+#
+# The abandoned duckduckgo-search package now proxies to Bing and returns
+# unrelated pages: a real "RTX 4090" research run came back with
+# centimetre-to-feet converters, which then got read and cited.
+
+from carrot import websearch as websearch_mod
+
+RTX_QUERY = "RTX 4090 open source LLM inference speed benchmark comparison"
+
+
+def test_off_topic_results_are_dropped():
+    junk = [
+        ("CM to Feet Converter", "Convert centimeters to feet easily"),
+        ("Centimeters to feet (cm to ft) converter", "cm to ft conversion table"),
+        ("TVS Apache RTX: Price, Mileage", "TVS Apache RTX motorcycle specs"),
+    ]
+    for title, snippet in junk:
+        assert not websearch_mod._is_relevant(RTX_QUERY, title, snippet), title
+
+
+def test_on_topic_results_are_kept():
+    good = [
+        ("RTX 4090 LLM inference benchmark", "tokens per second for Llama on a 4090"),
+        ("Open-source models for 24GB VRAM", "RTX 4090 quantization and inference guide"),
+    ]
+    for title, snippet in good:
+        assert websearch_mod._is_relevant(RTX_QUERY, title, snippet), title
+
+
+def test_short_queries_stay_permissive():
+    """A two-word query has little to match on; don't over-filter it."""
+    assert websearch_mod._is_relevant("carrot recipes", "Carrot cake", "the best carrot cake")
+
+
+def test_search_filters_junk_from_the_backend(monkeypatch):
+    monkeypatch.setattr(websearch_mod, "_raw_search", lambda q, n, r: [
+        {"title": "CM to Feet Converter", "href": "https://rapidtables.com/cm",
+         "body": "convert centimeters to feet"},
+        {"title": "RTX 4090 inference benchmark", "href": "https://example.com/bench",
+         "body": "LLM tokens per second on the 4090"},
+    ])
+    results = websearch_mod.search(RTX_QUERY)
+    assert [r["url"] for r in results] == ["https://example.com/bench"]
+
+
+def test_search_returns_empty_when_every_backend_fails(monkeypatch):
+    """Better to report nothing than to hand the model unrelated pages."""
+    def boom(q, n, r):
+        raise RuntimeError("backend down")
+    monkeypatch.setattr(websearch_mod, "_raw_search", boom)
+    assert websearch_mod.search(RTX_QUERY) == []
+
+
+def test_raw_search_prefers_the_maintained_client(monkeypatch):
+    """ddgs replaced duckduckgo_search; the old one returns junk now."""
+    import sys, types
+
+    used = []
+
+    class FakeDDGS:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def text(self, query, **kwargs):
+            used.append("ddgs")
+            return [{"title": "ok", "href": "https://example.com", "body": "body"}]
+
+    monkeypatch.setitem(sys.modules, "ddgs", types.SimpleNamespace(DDGS=FakeDDGS))
+    websearch_mod._raw_search("q", 3, "wt-wt")
+    assert used == ["ddgs"]

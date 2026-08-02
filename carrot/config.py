@@ -86,7 +86,9 @@ DEFAULTS = {
     "calendar_agent_aware": False,
     # Carrot Hub — hardware-aware model catalog. The catalog URL is derived
     # from hub_url unless overridden (self-hosted hub, corporate mirror).
-    "hub_url": "https://hub.carrotai.app",
+    # Empty = use the bundled catalog plus live Hugging Face results.
+    # Set these only to serve your own catalog.json.
+    "hub_url": "",
     "hub_catalog_url": "",
     # Security
     "auth_enabled": True,

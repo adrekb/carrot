@@ -107,6 +107,8 @@ def test_catalog_falls_back_to_bundle_when_hub_unreachable(tmp_path, monkeypatch
 
 def test_refresh_catalog_validates_and_caches(tmp_path, monkeypatch):
     monkeypatch.setattr(hub, "CATALOG_CACHE_PATH", str(tmp_path / "hub_catalog.json"))
+    monkeypatch.setattr(hub, "_catalog_urls",
+                        lambda: ("https://hub.example", "https://hub.example/catalog.json"))
 
     class FakeResp:
         status_code = 200
@@ -159,7 +161,9 @@ def test_hub_endpoint_returns_specs_and_picks(client, monkeypatch):
     assert data["specs"]["model_budget_gb"] == 8.0
     assert data["recommendations"]["best"]["min_mem_gb"] <= 8.0
     assert all("fit" in m for m in data["models"])
-    assert data["hub_url"].startswith("http")
+    # No fake Carrot Hub domain is shipped; browsing goes to the real source.
+    assert data["hub_url"] == ""
+    assert "huggingface.co" in data["browse_url"]
     assert data["modalities"] == ["image", "audio", "video"]
     assert data["trending"][0]["fit"] in ("great", "good", "tight", "too_big")
 
@@ -256,6 +260,8 @@ def test_failed_fetch_is_not_retried_immediately(tmp_path, monkeypatch):
         raise OSError("offline")
     monkeypatch.setattr(hub.requests, "get", fake_get)
 
+    monkeypatch.setattr(hub, "_catalog_urls",
+                        lambda: ("https://hub.example", "https://hub.example/catalog.json"))
     assert hub.refresh_catalog() is None
     assert hub.refresh_catalog() is None  # memoized failure, no second request
     assert hub.fetch_hf_trending() == []
@@ -265,6 +271,24 @@ def test_failed_fetch_is_not_retried_immediately(tmp_path, monkeypatch):
     hub.refresh_catalog(force=True)
     assert calls["n"] == 3
     hub._fail_memo.clear()
+
+
+def test_no_catalog_url_means_no_network_call(tmp_path, monkeypatch):
+    """Shipping a default domain that does not exist made every install
+    fire a doomed DNS lookup. With nothing configured, do not call out."""
+    monkeypatch.setattr(hub, "CATALOG_CACHE_PATH", str(tmp_path / "c.json"))
+    hub._fail_memo.clear()
+    called = {"n": 0}
+
+    def boom(*a, **k):
+        called["n"] += 1
+        raise AssertionError("should not reach the network")
+    monkeypatch.setattr(hub.requests, "get", boom)
+    monkeypatch.setattr(hub, "_catalog_urls", lambda: ("", ""))
+
+    assert hub.refresh_catalog(force=True) is None
+    assert called["n"] == 0
+    assert hub.get_catalog()["source"] == "bundled"
 
 
 # ===== Quantization descent =====
