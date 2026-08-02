@@ -48,8 +48,31 @@ def log(msg):
     print(f"[build] {msg}", flush=True)
 
 
+def write_build_stamp():
+    """Record version and commit so the running app can identify itself."""
+    version = "unknown"
+    try:
+        import tomllib
+        with open(os.path.join(ROOT, "pyproject.toml"), "rb") as handle:
+            version = tomllib.load(handle)["project"]["version"]
+    except Exception:
+        pass
+    commit = ""
+    try:
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], cwd=ROOT,
+            stderr=subprocess.DEVNULL).decode().strip()
+    except Exception:
+        pass
+    path = os.path.join(ROOT, "carrot", "_build.py")
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(f'"""Generated at build time."""\nVERSION = "{version}"\nCOMMIT = "{commit}"\n')
+    log(f"Build stamp: {version}+{commit}")
+
+
 def build_backend():
     """Freeze the FastAPI backend into dist/backend/carrot-backend."""
+    write_build_stamp()
     log("Freezing Python backend with PyInstaller…")
     try:
         import PyInstaller  # noqa: F401

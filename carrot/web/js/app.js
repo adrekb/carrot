@@ -193,6 +193,17 @@ function clearActiveSkill() {
 }
 
 // ===== Status / engine =====
+async function showBuildVersion() {
+    try {
+        const h = await api('/api/health');
+        const el = document.getElementById('brand-sub');
+        if (el && h.version) {
+            el.textContent = `v${h.version}`;
+            el.title = `Carrot ${h.version} · assets ${h.assets || '?'}`;
+        }
+    } catch (_) { /* leave the placeholder */ }
+}
+
 async function refreshStatus() {
     const dot = document.getElementById('engine-dot');
     const label = document.getElementById('engine-label');
@@ -1695,6 +1706,7 @@ function runBootstrap() {
 document.addEventListener('DOMContentLoaded', async () => {
     await loadRecapConfig();
     await refreshStatus();
+    showBuildVersion();
     loadModels();
     loadSkillCatalog();
     loadSearchModes();

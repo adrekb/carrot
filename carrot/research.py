@@ -461,10 +461,12 @@ class Researcher:
     # --- gathering ---
 
     def _gather_web(self, queries: List[str]) -> List[Dict[str, Any]]:
+        if getattr(self.context, "web_disabled", False):
+            return []
         candidates: List[Dict[str, str]] = []
         for query in queries:
             self.emit({"stage": "search", "subquestion": self.subquestion, "detail": query})
-            hits = websearch.search(query, max_results=self.profile["results_per_query"])
+            hits = websearch.search_all(query, max_results=self.profile["results_per_query"])
             self.context.note_search(bool(hits))
             for hit in hits:
                 # Homepages and sign-in pages cost a fetch and answer nothing.
@@ -472,6 +474,18 @@ class Researcher:
                     continue
                 if not any(hit["url"] == existing["url"] for existing in candidates):
                     candidates.append(hit)
+
+        # One site should not supply a whole round. Four recipes from the same
+        # domain is one source's opinion wearing four hats.
+        per_domain: Dict[str, int] = {}
+        diverse: List[Dict[str, str]] = []
+        for hit in candidates:
+            host = websearch.host_label(hit["url"])
+            if per_domain.get(host, 0) >= 2:
+                continue
+            per_domain[host] = per_domain.get(host, 0) + 1
+            diverse.append(hit)
+        candidates = diverse
 
         gathered = []
         for hit in candidates[: self.profile["reads_per_round"]]:
@@ -785,6 +799,18 @@ def run_research_stream(
     context = policy.register_run(policy.RunContext(run_id, budget=budget, emit=emit))
     store = SourceStore(run_id)
 
+    # Probe the search backend once, before planning. A broken client does
+    # not error — it returns confident nonsense, and finding that out after
+    # thirty queries and a page of soup recipes helps nobody. This does not
+    # abort the run: indexed files and past conversations are real sources,
+    # so the run continues over those and says the web is unavailable.
+    web_ok = websearch.search_backend_healthy()
+    if not web_ok:
+        context.web_disabled = True
+        yield {"stage": "plan", "detail":
+               "web search is not returning usable results — researching your "
+               "local files only"}
+
     try:
         # Seeds first: they take S1, S2 … so a report's lowest citation numbers
         # are the documents the user brought, which is the reading order a
@@ -847,7 +873,7 @@ def run_research_stream(
 
         if not findings:
             finish_run(run_id, "failed", error="no supported findings", plan=subquestions)
-            if context.search_is_broken:
+            if getattr(context, "web_disabled", False) or context.search_is_broken:
                 yield {"error": (
                     "Web search returned nothing for any query. Carrot uses DuckDuckGo; "
                     "check your connection or a firewall/VPN blocking it. Research needs "

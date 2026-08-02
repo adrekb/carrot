@@ -14,4 +14,4 @@ dist/
 gui/dist/
 gui/node_modules/
 *.egg-info/
-build/
+build/carrot/_build.py

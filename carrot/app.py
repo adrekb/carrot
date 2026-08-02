@@ -469,9 +469,38 @@ async def index():
 
 # ===== Health / status =====
 
+def app_version() -> str:
+    """The installed version, for the UI and for bug reports.
+
+    The build stamp written by scripts/build_installer.py wins: package
+    metadata goes stale in an editable checkout, and a frozen app has no
+    pyproject.toml to read.
+    """
+    try:
+        from carrot._build import VERSION, COMMIT
+        return f"{VERSION}+{COMMIT}" if COMMIT else VERSION
+    except Exception:
+        pass
+    try:
+        import tomllib
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "pyproject.toml"), "rb") as handle:
+            return tomllib.load(handle)["project"]["version"]
+    except Exception:
+        pass
+    try:
+        from importlib.metadata import version
+        return version("carrot")
+    except Exception:
+        return "unknown"
+
+
 @app.get("/api/health")
 async def health():
-    return {"status": "healthy"}
+    # The build id makes "am I running the update?" answerable at a glance,
+    # which guesswork repeatedly got wrong.
+    return {"status": "healthy", "version": app_version(),
+            "assets": _asset_fingerprint()}
 
 
 @app.get("/api/status")

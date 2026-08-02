@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 import re
 from typing import Any, Dict, List
-from urllib.parse import urljoin, urlparse
+from urllib.parse import quote, urljoin, urlparse
 
 LOG = logging.getLogger(__name__)
 
@@ -283,3 +283,88 @@ def host_label(url: str) -> str:
     """A short, human-readable name for a source: the bare domain."""
     host = (urlparse(url or "").hostname or url or "").lower()
     return host[4:] if host.startswith("www.") else host
+
+
+# ===== Backend health and fallback =====
+#
+# A broken search client does not error — it returns confident nonsense
+# ("dynamic programming" answered with soup recipes and Target). Checking
+# once, up front, turns five minutes of grinding into one clear sentence.
+
+_CANARY_QUERY = "wikipedia dynamic programming algorithm"
+_CANARY_TERMS = {"dynamic", "programming", "algorithm", "wikipedia"}
+_health_cache: dict = {}
+_HEALTH_TTL_SECONDS = 300
+
+
+def search_backend_healthy(force: bool = False) -> bool:
+    """Is web search returning results that relate to the query at all?
+
+    Cached briefly so a research run with many sub-questions pays for one
+    probe, not one per agent.
+    """
+    import time
+    now = time.monotonic()
+    cached = _health_cache.get("value")
+    if cached is not None and not force and now - _health_cache.get("at", 0) < _HEALTH_TTL_SECONDS:
+        return cached
+    try:
+        raw = _raw_search(_CANARY_QUERY, 5, "wt-wt")
+    except Exception as exc:
+        LOG.warning("search backend probe failed: %s", exc)
+        _health_cache.update(value=False, at=now)
+        return False
+    hits = 0
+    for item in raw or []:
+        blob = f"{item.get('title', '')} {item.get('body') or item.get('description') or ''}"
+        if len(_CANARY_TERMS & _terms(blob)) >= 2:
+            hits += 1
+    healthy = hits >= 1
+    if not healthy:
+        LOG.warning("search backend returned %d results, none on-topic for the probe", len(raw or []))
+    _health_cache.update(value=healthy, at=now)
+    return healthy
+
+
+def search_wikipedia(query: str, max_results: int = 5) -> List[Dict[str, str]]:
+    """Wikipedia's own search API — a second opinion that needs no key.
+
+    Not a general web search, but for factual and technical questions it
+    is often better than the fourth blog result, and it keeps research
+    usable when the general backend is down.
+    """
+    try:
+        resp = requests.get(
+            "https://en.wikipedia.org/w/api.php",
+            params={"action": "query", "list": "search", "srsearch": query,
+                    "srlimit": max_results, "format": "json"},
+            headers={"User-Agent": "Carrot/1.0 (local assistant)"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        pages = resp.json().get("query", {}).get("search", [])
+    except Exception as exc:
+        LOG.info("wikipedia search failed for %r: %s", query[:60], exc)
+        return []
+    results = []
+    for page in pages:
+        title = page.get("title", "")
+        snippet = re.sub(r"<[^>]+>", "", page.get("snippet", ""))
+        results.append({
+            "title": title,
+            "url": "https://en.wikipedia.org/wiki/" + quote(title.replace(" ", "_")),
+            "snippet": snippet,
+        })
+    return results
+
+
+def search_all(query: str, max_results: int = 6, region: str = "wt-wt") -> List[Dict[str, str]]:
+    """General web search, topped up from Wikipedia when it comes back thin."""
+    results = search(query, max_results=max_results, region=region)
+    if len(results) >= 2:
+        return results
+    seen = {r["url"] for r in results}
+    for extra in search_wikipedia(query, max_results=max_results):
+        if extra["url"] not in seen:
+            results.append(extra)
+    return results

@@ -225,11 +225,11 @@ def test_full_pipeline_produces_a_cited_report(isolated_db, fake_ollama, monkeyp
     real check in place would test DNS rather than the pipeline.
     """
     monkeypatch.setattr(policy, "_is_public_address", lambda host: (True, ""))
-    monkeypatch.setattr(research.websearch, "search", lambda query, max_results=6: [
+    monkeypatch.setattr(research.websearch, "search", lambda query, **kw: [
         {"title": "Result one", "url": "https://a.test/one", "snippet": "about the topic"},
         {"title": "Result two", "url": "https://b.test/two", "snippet": "more on the topic"},
     ])
-    monkeypatch.setattr(research.websearch, "fetch", lambda url, max_chars=6000: {
+    monkeypatch.setattr(research.websearch, "fetch", lambda url, **kw: {
         "url": url, "final_url": url, "title": "A page", "text": "The answer is 42.",
         "links": [], "error": "", "screening": {"tainted": False, "signals": [], "origin": url},
         "tainted": False, "truncated": False,
@@ -317,6 +317,15 @@ def test_runs_can_be_listed_and_deleted(isolated_db):
 # centimetre-to-feet converters, which then got read and cited.
 
 from carrot import websearch as websearch_mod
+
+
+@pytest.fixture(autouse=True)
+def _assume_search_works(monkeypatch):
+    """The sandbox has no network. Seed the probe's cache rather than
+    replacing the function, so the probe's own tests still exercise it."""
+    import time
+    monkeypatch.setattr(websearch_mod, "_health_cache",
+                        {"value": True, "at": time.monotonic()})
 
 RTX_QUERY = "RTX 4090 open source LLM inference speed benchmark comparison"
 
@@ -445,3 +454,90 @@ def test_exhaustive_profile_is_actually_bigger():
     deep, exhaustive = research.DEPTHS["deep"], research.DEPTHS["exhaustive"]
     for key in ("subquestions", "rounds", "workers", "reads_per_round", "chars_per_page"):
         assert exhaustive[key] > deep[key], key
+
+
+# ===== Backend health probe =====
+
+def test_probe_detects_a_backend_returning_unrelated_results(monkeypatch):
+    """The exact failure seen in the wild: soup recipes for a CS question."""
+    websearch_mod._health_cache.clear()
+    monkeypatch.setattr(websearch_mod, "_raw_search", lambda q, n, r: [
+        {"title": "Provencal Vegetable Soup Recipe", "body": "Ina Garten, Food Network"},
+        {"title": "Target : Expect More. Pay Less.", "body": "shop all categories"},
+    ])
+    assert websearch_mod.search_backend_healthy(force=True) is False
+
+
+def test_probe_accepts_a_working_backend(monkeypatch):
+    websearch_mod._health_cache.clear()
+    monkeypatch.setattr(websearch_mod, "_raw_search", lambda q, n, r: [
+        {"title": "Dynamic programming - Wikipedia",
+         "body": "a method for solving a complex problem by breaking it into subproblems"},
+    ])
+    assert websearch_mod.search_backend_healthy(force=True) is True
+
+
+def test_probe_result_is_cached(monkeypatch):
+    websearch_mod._health_cache.clear()
+    calls = {"n": 0}
+
+    def counted(q, n, r):
+        calls["n"] += 1
+        return [{"title": "Dynamic programming algorithm", "body": "wikipedia"}]
+    monkeypatch.setattr(websearch_mod, "_raw_search", counted)
+    websearch_mod.search_backend_healthy(force=True)
+    websearch_mod.search_backend_healthy()
+    websearch_mod.search_backend_healthy()
+    assert calls["n"] == 1, "one probe should serve a whole run"
+
+
+# ===== Wikipedia fallback =====
+
+def test_search_all_tops_up_from_wikipedia_when_thin(monkeypatch):
+    monkeypatch.setattr(websearch_mod, "search", lambda q, **kw: [
+        {"title": "only one", "url": "https://a.test/1", "snippet": "s"}])
+    monkeypatch.setattr(websearch_mod, "search_wikipedia", lambda q, max_results=5: [
+        {"title": "Dynamic programming", "url": "https://en.wikipedia.org/wiki/Dynamic_programming",
+         "snippet": "method"}])
+    results = websearch_mod.search_all("dynamic programming")
+    assert len(results) == 2
+    assert any("wikipedia.org" in r["url"] for r in results)
+
+
+def test_search_all_leaves_healthy_results_alone(monkeypatch):
+    monkeypatch.setattr(websearch_mod, "search", lambda q, **kw: [
+        {"title": "a", "url": "https://a.test/1", "snippet": "s"},
+        {"title": "b", "url": "https://b.test/2", "snippet": "s"}])
+    called = {"wiki": False}
+
+    def wiki(q, max_results=5):
+        called["wiki"] = True
+        return []
+    monkeypatch.setattr(websearch_mod, "search_wikipedia", wiki)
+    assert len(websearch_mod.search_all("q")) == 2
+    assert called["wiki"] is False
+
+
+# ===== Domain diversity =====
+
+def test_one_domain_cannot_dominate_a_round(isolated_db, monkeypatch):
+    """Four Food Network recipes is one source wearing four hats."""
+    from carrot import policy
+    monkeypatch.setattr(websearch_mod, "search_all", lambda q, **kw: [
+        {"title": f"Recipe {i}", "url": f"https://foodnetwork.com/r{i}", "snippet": "soup"}
+        for i in range(5)
+    ] + [{"title": "Real", "url": "https://other.test/page", "snippet": "topic"}])
+    monkeypatch.setattr(websearch_mod, "fetch", lambda url, **kw: {
+        "url": url, "final_url": url, "title": "t", "text": "body", "links": [],
+        "error": "", "screening": {"tainted": False, "signals": [], "origin": url},
+        "tainted": False, "truncated": False})
+    monkeypatch.setattr(policy, "_is_public_address", lambda host: (True, ""))
+
+    run_id = research.create_run("q", "deep")
+    ctx = policy.register_run(policy.RunContext(run_id, budget=policy.Budget()))
+    store = research.SourceStore(run_id)
+    agent = research.Researcher(
+        run_id, {"question": "q", "sources": ["web"]}, "deep", store, ctx, lambda e: None)
+    gathered = agent._gather_web(["query"])
+    hosts = [websearch_mod.host_label(s["locator"]) for s in gathered]
+    assert hosts.count("foodnetwork.com") <= 2, hosts
