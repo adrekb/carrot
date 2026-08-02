@@ -4,62 +4,161 @@
   /* Warm, lifted charcoals rather than near-black: softer on the eye and
      it lets the orange read as warm instead of neon. Surfaces separate by
      luminance and shadow, not by hard 1px lines. */
-  --bg: #1b1a17;
-  --bg2: #211f1c;
-  --card: #272521;
-  --card2: #302e29;
-  --border: rgba(255, 255, 255, 0.065);
-  --border-hi: rgba(255, 255, 255, 0.115);
-  --text: #f5f3ec;
-  --muted: #a29d91;
-  --faint: #726d63;
-  --accent: #ff6b35;
-  --accent-hi: #ff8b5e;
-  --accent-soft: rgba(255, 107, 53, 0.14);
-  --green: #5fd39b;
-  --red: #f0705f;
-  --yellow: #edc169;
+  /* Warm paper-in-low-light greys. Surfaces separate by luminance and
+     shadow rather than hard rules, so nothing has a hard edge. */
+  --bg: #191817;
+  --bg2: #1f1e1c;
+  --card: #252422;
+  --card2: #2e2c2a;
+  --card3: #38352f;
+  --border: rgba(255, 252, 245, 0.055);
+  --border-hi: rgba(255, 252, 245, 0.105);
+  --text: #f3f0e9;
+  --muted: #a8a29a;
+  --faint: #78726a;
+  /* A softer, clay-warm orange. Still unmistakably orange — just not the
+     neon that made every button shout. */
+  --accent: #ec7a4d;
+  --accent-hi: #f5946b;
+  --accent-dim: #c76239;
+  --accent-soft: rgba(236, 122, 77, 0.13);
+  --accent-line: rgba(236, 122, 77, 0.28);
+  --green: #6fc99a;
+  --red: #e8776a;
+  --yellow: #e5bc72;
   --mono: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
-  --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text",
-          "Segoe UI", system-ui, sans-serif;
-  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
+  /* System stacks on purpose: the app runs offline, so it cannot pull a
+     webfont. These resolve to SF Pro on macOS and Segoe UI Variable on
+     Windows 11 — both close in spirit to what we're after. */
+  --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text",
+          "Segoe UI", Inter, system-ui, sans-serif;
+  --display: ui-sans-serif, -apple-system, BlinkMacSystemFont,
+             "Segoe UI Variable Display", "Segoe UI", Inter, system-ui, sans-serif;
+  --serif: ui-serif, "Iowan Old Style", Charter, Cambria, "Palatino Linotype", Georgia, serif;
   --radius: 14px;
-  --radius-sm: 9px;
+  --radius-sm: 10px;
   --radius-lg: 20px;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.28);
-  --shadow: 0 6px 20px rgba(0, 0, 0, 0.36);
-  --shadow-lg: 0 20px 56px rgba(0, 0, 0, 0.5);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.22);
+  --shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 24px 64px rgba(0, 0, 0, 0.46);
   --ease: cubic-bezier(0.32, 0.72, 0, 1);
 }
 
-/* Softer type rendering, the way native macOS apps look. Page titles use a
-   serif for the warmer, editorial feel Claude's surfaces have. */
+/* ===== Type =====
+   Softer rendering and a quieter hierarchy: headings get size and a serif,
+   not weight and shouting. */
 body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  letter-spacing: -0.005em;
+  letter-spacing: -0.006em;
+  line-height: 1.55;
 }
-.page-head h1, .page-head h2, .splash-card h1, .dash-head h1 {
+.page-head h1, .page-head h2, .splash-card h1, .dash-head h1,
+.settings-head h3, .ext-head h3 {
   font-family: var(--serif);
   font-weight: 500;
-  letter-spacing: -0.015em;
+  letter-spacing: -0.012em;
 }
+.page-head h2 { font-size: 25px; }
+.settings-head h3, .ext-head h3 { font-size: 18px; }
+.dash-head h1, .splash-card h1 { font-size: 27px; }
+.muted, .subtle { line-height: 1.62; }
+p.muted { max-width: 78ch; }   /* long explanations stay readable */
 
-/* Rounder, calmer controls across the app. */
+/* ===== Controls ===== */
 .btn, input, select, textarea {
   border-radius: var(--radius-sm);
   transition: background 0.16s var(--ease), border-color 0.16s var(--ease),
-              box-shadow 0.16s var(--ease), transform 0.16s var(--ease);
+              box-shadow 0.16s var(--ease), transform 0.12s var(--ease),
+              color 0.16s var(--ease);
 }
-.btn:active { transform: scale(0.985); }
-.btn-primary { box-shadow: var(--shadow-sm); }
+.btn {
+  font-weight: 500;              /* 600 read as heavy next to serif titles */
+  letter-spacing: -0.003em;
+  padding: 8px 15px;
+}
+.btn:active { transform: scale(0.98); }
+.btn-primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: #21150f;                /* dark-on-warm reads softer than white */
+  box-shadow: var(--shadow-sm);
+}
+.btn-primary:hover { background: var(--accent-hi); }
+.btn-ghost {
+  background: var(--card2);
+  border-color: var(--border);
+  color: var(--text);
+}
+.btn-ghost:hover { background: var(--card3); border-color: var(--border-hi); }
+input, select, textarea {
+  background: var(--card2);
+  border: 1px solid var(--border);
+  padding: 8px 12px;
+}
 input:focus, select:focus, textarea:focus {
   outline: none;
-  border-color: var(--accent);
+  border-color: var(--accent-line);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
-.settings-card, .hub-card, .widget-card, .splash-card, .hub-spec-card {
+input::placeholder, textarea::placeholder { color: var(--faint); }
+
+/* ===== Surfaces =====
+   Cards float on shadow instead of being fenced in by a bright border. */
+.settings-card, .hub-card, .widget-card, .splash-card, .hub-spec-card,
+.provider-row, .list-item {
+  border-radius: var(--radius);
   box-shadow: var(--shadow-sm);
+}
+.settings-card, .ext-section {
+  background: var(--card);
+  border: 1px solid var(--border);
+  padding: 22px 24px;
+  margin-bottom: 18px;
+}
+.settings-head { gap: 10px; margin-bottom: 6px; }
+.settings-head .ico { color: var(--accent); }
+.settings-row { gap: 9px; margin-top: 12px; }
+
+/* ===== Left navigation ===== */
+.app-nav { padding: 12px 10px; gap: 1px; }
+.nav-item {
+  border-left: none;             /* the active bar was the loudest thing here */
+  border-radius: var(--radius-sm);
+  padding: 8px 11px;
+  gap: 10px;
+  font-weight: 450;
+}
+.nav-item:hover { background: rgba(255, 252, 245, 0.045); color: var(--text); }
+.nav-item.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.nav-item.active .ico { color: var(--accent); }
+.nav-divider { margin: 10px 8px; background: var(--border); }
+
+/* ===== Chrome ===== */
+#menubar {
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  height: 50px;
+}
+.brand-name { font-weight: 600; letter-spacing: 0.02em; }
+.tag {
+  border-radius: 7px;
+  font-weight: 450;
+  border-color: var(--border);
+}
+.pop-section {
+  font-size: 10.5px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--faint);
+  padding: 9px 10px 5px;
+}
+#model-pop, #ws-pop, #nav-more-list, .combo-pop {
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -2560,3 +2659,66 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   background: rgba(255, 255, 255, 0.22);
   background-clip: content-box;
 }
+
+/* ===== Measure =====
+   Full-bleed content reads as a dashboard; a bounded column reads as a
+   document. Wide views (grids, tables) opt out. */
+.page {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 26px 28px 60px;
+}
+#view-hub .page, #view-leaderboard .page { max-width: 1320px; }
+.page-head { margin-bottom: 18px; }
+.view { background: var(--bg); }
+
+/* Roomier, quieter lists. */
+.list-item {
+  background: var(--card);
+  border: 1px solid var(--border);
+  padding: 12px 15px;
+  margin-bottom: 8px;
+}
+.list-item:hover { border-color: var(--border-hi); }
+
+/* Cards breathe more and lean on shadow rather than outline. */
+.hub-card { padding: 16px 18px; gap: 8px; }
+.hub-recs, .hub-grid { gap: 14px; }
+.hub-spec-card { padding: 16px 20px; border-radius: var(--radius); }
+
+/* Table chrome: rules only where they separate meaning. */
+.routing-table th {
+  font-weight: 500;
+  font-size: 11.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--faint);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 9px;
+}
+.routing-table td { border-bottom: 1px solid var(--border); padding: 11px 10px 11px 0; }
+.routing-table tr:last-child td { border-bottom: none; }
+
+/* Buttons that are anchors must not look like links. */
+.btn { text-decoration: none; display: inline-flex; align-items: center; gap: 7px; }
+.btn .ico { width: 15px; height: 15px; }
+
+/* The quant explanation is a footnote, not a headline — it was competing
+   with the model name for attention. */
+.quant-note { color: var(--muted); font-size: 10.5px; letter-spacing: 0.01em; }
+
+/* Card hierarchy: name first, everything else recedes. */
+.hub-card-head { align-items: flex-start; gap: 10px; }
+.hub-card-head strong {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+.hub-card > .muted.small { font-size: 11.5px; line-height: 1.55; }
+.hub-blurb { font-size: 12.5px; }
+.hub-card-actions { margin-top: 6px; }
+
+/* Chips: pill-quiet until chosen. */
+.chip-row .chip { padding: 5px 13px; font-family: var(--sans); font-size: 12px; }
+.chip-row .chip.active { font-weight: 500; }
