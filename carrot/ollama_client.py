@@ -118,19 +118,34 @@ class OllamaClient:
             if data.get("status") == "success" or data.get("error"):
                 break
 
+    def capabilities(self, model: str) -> List[str]:
+        """Capabilities the server reports for a model, e.g. vision, thinking."""
+        if not hasattr(self, "_capabilities"):
+            self._capabilities = {}
+        if model in self._capabilities:
+            return self._capabilities[model]
+        caps: List[str] = []
+        try:
+            resp = requests.post(self._url("/api/show"), json={"model": model}, timeout=10)
+            resp.raise_for_status()
+            caps = list(resp.json().get("capabilities", []) or [])
+        except Exception:
+            caps = []
+        self._capabilities[model] = caps
+        return caps
+
     def supports_thinking(self, model: str) -> bool:
         """Check (and cache) whether a model advertises the thinking capability."""
         if model in self._thinking_support:
             return self._thinking_support[model]
-        supported = False
-        try:
-            resp = requests.post(self._url("/api/show"), json={"model": model}, timeout=10)
-            resp.raise_for_status()
-            supported = "thinking" in resp.json().get("capabilities", [])
-        except Exception:
-            supported = False
+        supported = "thinking" in self.capabilities(model)
         self._thinking_support[model] = supported
         return supported
+
+    def supports_vision(self, model: str) -> bool:
+        """Whether the model can accept images."""
+        from carrot.attachments import model_supports_vision
+        return model_supports_vision(model, self)
 
     def chat_stream_events(
         self,

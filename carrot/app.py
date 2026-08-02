@@ -31,6 +31,7 @@ from carrot import (
     bootstrap as bootstrap_mod,
     hub as hub_mod,
     calfeed as calfeed_mod,
+    attachments as attach_mod,
     interop as interop_mod,
     deep_research as dr_mod,
     skills as skills_mod,
@@ -101,8 +102,15 @@ class VlmScanRequest(BaseModel):
     scan_dirs: Optional[list] = None
 
 
+class ChatAttachment(BaseModel):
+    name: Optional[str] = ""
+    mime: Optional[str] = ""
+    data: str            # base64, with or without a data: URL prefix
+
+
 class ChatRequest(BaseModel):
     message: str
+    attachments: Optional[List[ChatAttachment]] = None
     conversation_id: Optional[str] = None
     model: Optional[str] = None
     stream: Optional[bool] = False
@@ -778,7 +786,8 @@ async def calendar_refresh():
 
 # ===== Chat =====
 
-def _prepare_history(conv, message, skill_slug, extra_system=None, mode=None):
+def _prepare_history(conv, message, skill_slug, extra_system=None, mode=None,
+                     images=None):
     """Build the model message list for a turn.
 
     Order matters: the search directive, then skill instructions, then any
@@ -831,7 +840,11 @@ def _prepare_history(conv, message, skill_slug, extra_system=None, mode=None):
             pass
 
     history += summarize_mod.build_history(conv)
-    history.append({"role": "user", "content": message})
+    user_turn = {"role": "user", "content": message}
+    if images:
+        # Ollama takes base64 images on the message itself.
+        user_turn["images"] = images
+    history.append(user_turn)
     return history, skill
 
 
@@ -1111,13 +1124,51 @@ def _chat_stream_response(req, conv, history, skill, resolved, prelude=None, mod
     return StreamingResponse(stream(), media_type="text/event-stream")
 
 
+
+def _apply_attachments(req, resolved):
+    """Turn a request's attachments into (images, extra_system, note).
+
+    Documents become prompt text and work with any model. Images only go
+    through when the resolved model can actually see — otherwise this
+    raises, because a model that silently ignores your screenshot and
+    answers anyway is worse than a clear error.
+    """
+    raw = [a.model_dump() if hasattr(a, "model_dump") else dict(a)
+           for a in (req.attachments or [])]
+    if not raw:
+        return None, None, ""
+    try:
+        images, documents = attach_mod.process(raw)
+    except attach_mod.AttachmentError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    if images:
+        model = getattr(resolved, "model", "") or ""
+        if getattr(resolved, "local", True):
+            can_see = ollama_mod.OllamaClient().supports_vision(model)
+        else:
+            can_see = attach_mod.model_supports_vision(model)
+        if not can_see:
+            raise HTTPException(
+                status_code=400,
+                detail=(f"{model} cannot read images. Pick a vision model — "
+                        "the Model Hub's 'image: Y' filter lists the ones that fit "
+                        "your machine — or attach a PDF or text file instead."),
+            )
+    return images or None, attach_mod.documents_prompt(documents) or None, \
+        attach_mod.describe(images, documents)
+
+
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
     conv = _open_conversation(req)
     resolved = _resolve_chat_route(req)
     mode = search_mode(req.search_mode)
-    history, skill = _prepare_history(conv, req.message, req.skill, mode=mode)
-    conv_mod.add_message(req.conversation_id, "user", req.message)
+    images, docs_system, note = _apply_attachments(req, resolved)
+    history, skill = _prepare_history(conv, req.message, req.skill,
+                                      extra_system=docs_system, mode=mode, images=images)
+    conv_mod.add_message(req.conversation_id, "user",
+                         f"{req.message}\n\n[{note}]" if note else req.message)
 
     if req.stream:
         return _chat_stream_response(req, conv, history, skill, resolved, mode=mode)
@@ -1154,8 +1205,11 @@ async def chat_stream(req: ChatRequest):
     conv = _open_conversation(req)
     resolved = _resolve_chat_route(req)
     mode = search_mode(req.search_mode)
-    history, skill = _prepare_history(conv, req.message, req.skill, mode=mode)
-    conv_mod.add_message(req.conversation_id, "user", req.message)
+    images, docs_system, note = _apply_attachments(req, resolved)
+    history, skill = _prepare_history(conv, req.message, req.skill,
+                                      extra_system=docs_system, mode=mode, images=images)
+    conv_mod.add_message(req.conversation_id, "user",
+                         f"{req.message}\n\n[{note}]" if note else req.message)
     return _chat_stream_response(req, conv, history, skill, resolved, mode=mode)
 
 

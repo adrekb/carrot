@@ -457,23 +457,113 @@ function appendMessage(role, content) {
 async function sendChat() {
     const input = document.getElementById('cmd-input');
     const msg = input.value.trim();
-    if (!msg) return;
+    // An attachment on its own is a valid turn ("what is this?").
+    if (!msg && !pendingAttachments.length) return;
+    const attachments = pendingAttachments.slice();
     input.value = '';
     hideSkillPop();
     switchTab('workspace');
-    appendMessage('user', msg);
+    appendMessage('user', msg + (attachments.length
+        ? `\n\n_${attachments.map(a => a.name).join(', ')}_` : ''));
+    clearAttachments();
     if (!currentConversationId) {
-        document.getElementById('chat-title').textContent = msg.slice(0, 42);
+        document.getElementById('chat-title').textContent = (msg || attachments[0].name).slice(0, 42);
     }
 
     await streamTurn('/api/chat/stream', {
-        message: msg,
+        message: msg || 'What is in the attached file?',
+        attachments: attachments.map(a => ({ name: a.name, mime: a.mime, data: a.data })),
         conversation_id: currentConversationId,
         model: currentModel,
         skill: activeSkill ? activeSkill.slug : null,
         search_mode: currentSearchMode,
     }, activeSkill);
 }
+
+// ===== Attachments =====
+// Images go to the model as images (vision models only — the server says so
+// plainly rather than dropping them); PDFs and text files are extracted
+// server-side and folded into the prompt, so they work with any model.
+
+let pendingAttachments = [];
+const ATTACH_MAX_BYTES = 20 * 1024 * 1024;
+
+function attachIcon(mime, name) {
+    if ((mime || '').startsWith('image/')) return 'i-image';
+    if ((mime || '') === 'application/pdf' || /\.pdf$/i.test(name || '')) return 'i-file-pdf';
+    return 'i-doc';
+}
+
+function renderAttachTray() {
+    const tray = document.getElementById('attach-tray');
+    if (!tray) return;
+    tray.classList.toggle('hidden', !pendingAttachments.length);
+    tray.innerHTML = pendingAttachments.map((a, i) => `
+        <span class="attach-chip">
+          ${a.thumb
+            ? `<img src="${a.thumb}" alt="">`
+            : `<svg class="ico"><use href="#${attachIcon(a.mime, a.name)}"/></svg>`}
+          <span class="attach-name" title="${escHtml(a.name)}">${escHtml(a.name)}</span>
+          <span class="attach-size">${fmtBytes(a.bytes)}</span>
+          <button class="attach-x" title="Remove" onclick="removeAttachment(${i})">
+            <svg class="ico"><use href="#i-x"/></svg>
+          </button>
+        </span>`).join('');
+}
+
+function removeAttachment(index) {
+    pendingAttachments.splice(index, 1);
+    renderAttachTray();
+}
+
+function clearAttachments() {
+    pendingAttachments = [];
+    renderAttachTray();
+}
+
+async function addAttachments(files) {
+    for (const file of Array.from(files || [])) {
+        if (file.size > ATTACH_MAX_BYTES) {
+            alert(`${file.name} is too large (limit ${fmtBytes(ATTACH_MAX_BYTES)}).`);
+            continue;
+        }
+        const data = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+        });
+        const isImage = (file.type || '').startsWith('image/');
+        pendingAttachments.push({
+            name: file.name, mime: file.type, bytes: file.size, data,
+            thumb: isImage ? `data:${file.type};base64,${data}` : null,
+        });
+    }
+    renderAttachTray();
+}
+
+// Paste a screenshot straight into the composer, and drop files anywhere.
+document.addEventListener('paste', (e) => {
+    if (!e.clipboardData || currentTab !== 'workspace') return;
+    const files = Array.from(e.clipboardData.files || []);
+    if (files.length) { e.preventDefault(); addAttachments(files); }
+});
+document.addEventListener('dragover', (e) => {
+    if (e.dataTransfer && e.dataTransfer.types.includes('Files')) {
+        e.preventDefault();
+        document.body.classList.add('dropping');
+    }
+});
+document.addEventListener('dragleave', (e) => {
+    if (e.relatedTarget === null) document.body.classList.remove('dropping');
+});
+document.addEventListener('drop', (e) => {
+    if (!e.dataTransfer || !e.dataTransfer.files.length) return;
+    e.preventDefault();
+    document.body.classList.remove('dropping');
+    switchTab('workspace');
+    addAttachments(e.dataTransfer.files);
+});
 
 // ===== Search mode =====
 // Three postures for one question: never reach the web, reach it once, or keep

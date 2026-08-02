@@ -1008,6 +1008,7 @@
 
 <!-- ===== Command bar (Conversations view) ===== -->
 <div id="cmdbar" class="hidden">
+  <div id="attach-tray" class="hidden"></div>
   <div id="skill-pop" class="hidden">
     <div class="pop-section">Skills</div>
     <div id="skill-pop-list"></div>
@@ -1050,6 +1051,13 @@
     </div>
   </div>
   <input type="text" id="cmd-input" placeholder="Ask anything — Ctrl+K to focus, / for skills" onkeydown="cmdKeydown(event)" oninput="cmdInputChanged()">
+  <input type="file" id="attach-input" class="hidden" multiple
+         accept="image/*,.pdf,.txt,.md,.csv,.json,.py,.js,.ts,.html,.css,.yaml,.yml,.log"
+         onchange="addAttachments(this.files); this.value='';">
+  <button class="icon-btn" id="attach-btn" title="Attach images, PDFs or text files"
+          onclick="document.getElementById('attach-input').click()">
+    <svg class="ico"><use href="#i-paperclip"/></svg>
+  </button>
   <button class="icon-btn" id="mic-btn" title="Voice input" onclick="toggleVoiceInput()"><svg class="ico"><use href="#i-mic"/></svg></button>
   <button class="icon-btn" id="speak-toggle" title="Read replies aloud" onclick="toggleSpeak()"><svg class="ico"><use href="#i-speaker-off"/></svg></button>
   <button id="send-btn" title="Send" onclick="sendChat()"><svg class="ico"><use href="#i-send"/></svg></button>
