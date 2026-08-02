@@ -74,7 +74,9 @@ function createMainWindow() {
     height: 900,
     minWidth: 1024,
     minHeight: 700,
-    title: 'Carrot AI',
+    // Version in the title bar: it comes from the Electron shell, not the
+    // web assets, so it identifies the build even if the UI fails to load.
+    title: `Carrot AI ${app.getVersion()}`,
     backgroundColor: '#131419',  // matches --bg; avoids a wrong-colour flash
     autoHideMenuBar: true,
     webPreferences: {
