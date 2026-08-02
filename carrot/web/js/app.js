@@ -269,21 +269,49 @@ async function loadModels() {
 function renderModelPop(data) {
     const installedEl = document.getElementById('model-installed');
     const suggestedEl = document.getElementById('model-suggested');
+    const remoteEl = document.getElementById('model-remote');
     installedEl.innerHTML = '';
     suggestedEl.innerHTML = '';
+    if (remoteEl) remoteEl.innerHTML = '';
+
+    // A local model is "current" only when chat isn't pinned to a provider.
+    const localActive = data.chat_local !== false ? data.active_model : null;
 
     if (!data.installed.length) {
         installedEl.innerHTML = '<div class="empty" style="padding:4px 9px">No models installed yet.</div>';
     }
     for (const m of data.installed) {
         const row = document.createElement('div');
-        row.className = 'model-row' + (m.name === data.active_model ? ' active' : '');
+        row.className = 'model-row' + (m.name === localActive ? ' active' : '');
         row.innerHTML = `
             <span class="m-name">${escHtml(m.name)}</span>
             <span class="m-meta">${escHtml(m.parameter_size || '')} ${fmtBytes(m.size)}</span>
-            ${m.name === data.active_model ? '<svg class="ico m-check"><use href="#i-check"/></svg>' : ''}`;
+            ${m.name === localActive ? '<svg class="ico m-check"><use href="#i-check"/></svg>' : ''}`;
         row.onclick = () => selectModel(m.name);
         installedEl.appendChild(row);
+    }
+
+    // Models from providers you've configured — the key is already saved,
+    // so they belong in the same picker as the local ones.
+    if (remoteEl) {
+        for (const group of (data.remote || [])) {
+            const head = document.createElement('div');
+            head.className = 'pop-section';
+            head.textContent = group.label;
+            remoteEl.appendChild(head);
+            for (const name of group.models) {
+                const isActive = data.chat_local === false
+                    && data.chat_provider === group.provider && data.chat_model === name;
+                const row = document.createElement('div');
+                row.className = 'model-row' + (isActive ? ' active' : '');
+                row.innerHTML = `
+                    <span class="m-name">${escHtml(name)}</span>
+                    <span class="m-meta">cloud</span>
+                    ${isActive ? '<svg class="ico m-check"><use href="#i-check"/></svg>' : ''}`;
+                row.onclick = () => selectRemoteModel(group.provider, name);
+                remoteEl.appendChild(row);
+            }
+        }
     }
 
     const notInstalled = data.suggested.filter(m => !m.installed);
@@ -310,8 +338,29 @@ function toggleModelPop() {
     document.getElementById('model-pop').classList.toggle('hidden');
 }
 
+// Picking a cloud model pins the 'chat' task to that provider — the same
+// mechanism the Task Routing table uses, so the two never disagree.
+async function selectRemoteModel(provider, model) {
+    try {
+        await api('/api/router/route', {
+            method: 'PUT',
+            body: JSON.stringify({ task: 'chat', provider, model }),
+        });
+        currentModel = model;
+        document.getElementById('model-label').textContent = model;
+        document.getElementById('model-pop').classList.add('hidden');
+        loadModels();
+        refreshStatus();
+        if (typeof loadRouting === 'function') loadRouting();
+    } catch (e) {
+        alert('Could not switch to that model: ' + e.message);
+    }
+}
+
 async function selectModel(name) {
     try {
+        // Selecting a local model also releases any cloud pin on chat.
+        await api('/api/router/route/chat', { method: 'DELETE' }).catch(() => {});
         await api('/api/models/select', { method: 'POST', body: JSON.stringify({ model: name }) });
         currentModel = name;
         document.getElementById('model-label').textContent = name;

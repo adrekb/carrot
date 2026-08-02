@@ -493,3 +493,66 @@ def test_provider_test_endpoint_reports_a_missing_key(client, monkeypatch):
     body = client.post("/api/router/providers/openai/test").json()
     assert body["ok"] is False
     assert "no API key" in body["error"]
+
+
+# ===== Cloud models must reach the chat model picker =====
+
+def test_models_endpoint_includes_configured_provider_models(client, monkeypatch):
+    """A key you already pasted is useless if the picker only offers Ollama."""
+    from carrot import app as app_mod
+
+    monkeypatch.setattr(app_mod.router_mod, "status", lambda: {"providers": [
+        {"id": "ollama", "label": "Ollama", "enabled": True, "configured": True},
+        {"id": "mistral", "label": "Mistral", "enabled": True, "configured": True},
+        {"id": "openai", "label": "OpenAI", "enabled": True, "configured": False},
+        {"id": "groq", "label": "Groq", "enabled": False, "configured": True},
+    ]})
+    monkeypatch.setattr(app_mod.providers_mod, "list_models",
+                        lambda pid: {"models": [f"{pid}-large", f"{pid}-small"]})
+
+    data = client.get("/api/models").json()
+    groups = {g["provider"]: g for g in data["remote"]}
+    # Configured and enabled -> listed. Ollama is the local section already.
+    assert "mistral" in groups
+    assert groups["mistral"]["models"] == ["mistral-large", "mistral-small"]
+    assert "ollama" not in groups
+    # Unconfigured or disabled providers are not offered.
+    assert "openai" not in groups and "groq" not in groups
+
+
+def test_models_endpoint_reports_which_route_serves_chat(client, monkeypatch):
+    from carrot import app as app_mod
+
+    from carrot import config as config_mod
+    monkeypatch.setattr(app_mod.router_mod, "status", lambda: {"providers": []})
+    # A pin only takes effect for a provider that actually has a key.
+    config_mod.set_config("provider_keys", {"anthropic": "sk-test"})
+    app_mod.router_mod.set_route("chat", provider="anthropic", model="claude-opus-5")
+    data = client.get("/api/models").json()
+    assert data["chat_provider"] == "anthropic"
+    assert data["chat_model"] == "claude-opus-5"
+    assert data["chat_local"] is False
+
+    app_mod.router_mod.clear_route("chat")
+    data = client.get("/api/models").json()
+    assert data["chat_local"] is True
+
+
+def test_models_endpoint_survives_a_broken_provider(client, monkeypatch):
+    """One provider failing to list must not empty the whole picker."""
+    from carrot import app as app_mod
+
+    monkeypatch.setattr(app_mod.router_mod, "status", lambda: {"providers": [
+        {"id": "good", "label": "Good", "enabled": True, "configured": True},
+        {"id": "bad", "label": "Bad", "enabled": True, "configured": True},
+    ]})
+
+    def flaky(pid):
+        if pid == "bad":
+            raise RuntimeError("network down")
+        return {"models": ["good-1"]}
+    monkeypatch.setattr(app_mod.providers_mod, "list_models", flaky)
+
+    data = client.get("/api/models").json()
+    assert [g["provider"] for g in data["remote"]] == ["good"]
+    assert data["installed"] is not None

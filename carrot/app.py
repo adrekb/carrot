@@ -571,16 +571,54 @@ async def list_models():
     client = ollama_mod.OllamaClient()
     installed = client.list_models() if client.is_available() else []
     installed_names = {m["name"] for m in installed}
-    active = config.get_config().get("ollama_model", bootstrap_mod.DEFAULT_MODEL)
+    cfg = config.get_config()
+    active = cfg.get("ollama_model", bootstrap_mod.DEFAULT_MODEL)
     suggested = [
         {**m, "installed": m["name"] in installed_names}
         for m in SUGGESTED_MODELS
     ]
+
+    # Models from configured cloud providers belong in the picker too —
+    # a key you already pasted is useless if the UI only offers Ollama.
+    remote = []
+    try:
+        status = router_mod.status()
+        for provider in status.get("providers", []):
+            if not (provider.get("enabled") and provider.get("configured")):
+                continue
+            if provider.get("id") == "ollama":
+                continue
+            try:
+                names = providers_mod.list_models(provider["id"]).get("models", [])
+            except Exception:
+                names = []
+            if names:
+                remote.append({
+                    "provider": provider["id"],
+                    "label": provider.get("label", provider["id"]),
+                    "models": names,
+                })
+    except Exception:
+        pass
+
+    # Which provider/model currently serves chat (a pinned route wins).
+    chat_provider, chat_model, chat_local = "ollama", active, True
+    try:
+        chat_route = router_mod.route("chat")
+        chat_provider, chat_model = chat_route.provider, chat_route.model
+        chat_local = chat_route.local
+    except Exception:
+        pass
+
     return {
         "installed": installed,
         "active_model": active,
         "default_model": bootstrap_mod.DEFAULT_MODEL,
         "suggested": suggested,
+        "remote": remote,
+        "chat_provider": chat_provider,
+        "chat_model": chat_model,
+        "chat_local": chat_local,
     }
 
 

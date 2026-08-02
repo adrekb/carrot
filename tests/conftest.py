@@ -36,6 +36,10 @@ class FakeOllamaClient:
     def is_available(self):
         return True
 
+    def list_models(self):
+        return [{"name": "gemma4:e4b", "size": 4_200_000_000,
+                 "modified_at": "2026-07-01T00:00:00Z", "parameter_size": "4B"}]
+
     def chat(self, messages, model=None, stream=False):
         if stream:
             return iter(["Hello", " from", " Carrot"])
