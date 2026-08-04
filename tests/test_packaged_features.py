@@ -329,3 +329,66 @@ class TestRunnerLabels:
         for artifact in ("windows-x64", "mac-arm64", "mac-x64", "linux-x64"):
             assert f"artifact: {artifact}" in WORKFLOW_SRC, \
                 f"no build job produces the {artifact} installer"
+
+
+class TestQuickAskOverlay:
+    """The Alt+Space panel. It is a file:// page in its own window, so most of
+    what can go wrong is invisible to the rest of the test suite."""
+
+    @property
+    def main_js(self):
+        return (ROOT / "gui" / "main.js").read_text(encoding="utf-8")
+
+    @property
+    def overlay(self):
+        return (ROOT / "gui" / "public" / "overlay.html").read_text(encoding="utf-8")
+
+    @property
+    def preload(self):
+        return (ROOT / "gui" / "preload.js").read_text(encoding="utf-8")
+
+    def test_the_window_base_colour_is_cleared(self):
+        """transparent:true does not clear Electron's default opaque white —
+        it painted as a grey slab around the panel. Only an explicit
+        fully-transparent backgroundColor removes it."""
+        assert "backgroundColor: '#00000000'" in self.main_js
+
+    def test_the_panel_is_big_enough_to_hold_its_controls(self):
+        """620x92 fits one line of text and nothing else — no attachment
+        chip, no workspace name."""
+        width = int(re.search(r"const OVERLAY_WIDTH = (\d+)", self.main_js).group(1))
+        height = int(re.search(r"const OVERLAY_HEIGHT = (\d+)", self.main_js).group(1))
+        assert width >= 700 and height >= 130
+
+    def test_it_can_grow_beyond_its_collapsed_height(self):
+        max_height = int(re.search(r"const OVERLAY_MAX_HEIGHT = (\d+)", self.main_js).group(1))
+        height = int(re.search(r"const OVERLAY_HEIGHT = (\d+)", self.main_js).group(1))
+        assert max_height > height
+
+    def test_attachments_and_workspaces_are_bridged(self):
+        for call in ("pickAttachments", "readAttachment", "listWorkspaces"):
+            assert call in self.preload, f"the overlay cannot reach {call}"
+            
+    def test_the_handlers_exist_for_every_bridged_call(self):
+        for channel in ("pick-attachments", "read-attachment", "list-workspaces"):
+            assert f"ipcMain.handle('{channel}'" in self.main_js
+
+    def test_send_command_still_accepts_a_bare_string(self):
+        """The overlay now sends an object; other callers still send a string,
+        and a signature change should not silently break them."""
+        assert "typeof command === 'string'" in self.main_js
+
+    def test_a_workspace_choice_reaches_the_chat_api(self):
+        from carrot import app as carrot_app
+
+        assert "workspace_id" in carrot_app.ChatRequest.model_fields
+
+    def test_attachments_are_size_capped_before_being_read(self):
+        """Reading an arbitrary file into base64 in the main process is how a
+        dropped video would freeze the panel."""
+        assert "OVERLAY_MAX_ATTACHMENT_BYTES" in self.main_js
+
+    def test_replies_are_escaped_not_injected(self):
+        """The reply is model output; innerHTML with it would run whatever the
+        model emitted, inside a window that holds the preload bridge."""
+        assert "showReply(esc(" in self.overlay

@@ -140,6 +140,9 @@ class ChatRequest(BaseModel):
     cloud: Optional[bool] = False
     # off | single | multi. Omitted means the saved default.
     search_mode: Optional[str] = None
+    # File a newly created conversation into this workspace. The quick-ask
+    # panel uses it to ask a question "in" a project without opening the app.
+    workspace_id: Optional[str] = None
 
 
 class AddMessageRequest(BaseModel):
@@ -1295,6 +1298,15 @@ def _open_conversation(req):
     if req.conversation_id is None:
         created = conv_mod.create_conversation(title=req.message[:80])
         req.conversation_id = created["id"]
+        # Only on creation: filing an existing conversation elsewhere because
+        # of one message would move it out from under the user.
+        workspace_id = getattr(req, "workspace_id", None)
+        if workspace_id:
+            try:
+                workspaces_mod.file_item(
+                    workspaces_mod.KIND_CONVERSATION, created["id"], workspace_id)
+            except Exception:
+                pass          # a stale workspace id must not lose the message
     conv = conv_mod.get_conversation(req.conversation_id)
     if conv is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
