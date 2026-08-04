@@ -1046,3 +1046,129 @@ document.addEventListener('keydown', (e) => {
         toggleCodeSearch();
     }
 });
+
+// ================================================================
+// Artifacts — charts, diagrams and images shown inside the chat
+// ================================================================
+// The content is markup the *model* wrote. It never touches the app document:
+// it goes into an iframe with `sandbox="allow-scripts"` and deliberately
+// without `allow-same-origin`, which puts it in an opaque origin. Script
+// inside can animate a chart; it cannot read the session token, the
+// conversation, or anything in storage. srcdoc rather than a src URL so the
+// artifact route does not have to be reachable without the session token.
+
+const ARTIFACT_MARKER = /\[\[carrot:artifact:([a-f0-9]{4,32})\]\]/g;
+
+function artifactIdsIn(text) {
+    const ids = [];
+    let match;
+    ARTIFACT_MARKER.lastIndex = 0;
+    while ((match = ARTIFACT_MARKER.exec(String(text || '')))) ids.push(match[1]);
+    return ids;
+}
+
+function stripArtifactMarkers(text) {
+    return String(text || '').replace(ARTIFACT_MARKER, '').trim();
+}
+
+async function renderArtifact(id, host) {
+    let artifact;
+    try {
+        artifact = await api(`/api/artifacts/${id}`);
+    } catch (e) {
+        return;                       // trimmed or deleted; nothing to show
+    }
+    const card = document.createElement('figure');
+    card.className = 'artifact';
+    card.dataset.artifactId = id;
+
+    const head = document.createElement('figcaption');
+    head.className = 'artifact-head';
+    head.innerHTML = `<span class="artifact-title">${escHtml(artifact.title || artifact.kind)}</span>`
+                   + `<span class="artifact-kind">${escHtml(artifact.kind)}</span>`;
+    const expand = document.createElement('button');
+    expand.className = 'artifact-btn';
+    expand.textContent = 'Open';
+    expand.onclick = () => openArtifactFull(artifact);
+    head.appendChild(expand);
+    card.appendChild(head);
+
+    if (artifact.kind === 'markdown') {
+        // Markdown already goes through the sanitizing renderer, and it cannot
+        // carry script, so it can be shown inline and pick up the app's type.
+        const body = document.createElement('div');
+        body.className = 'artifact-body md';
+        body.innerHTML = mdToHtml(artifact.content);
+        card.appendChild(body);
+    } else if (artifact.kind === 'mermaid') {
+        const body = document.createElement('pre');
+        body.className = 'artifact-body artifact-mermaid';
+        body.textContent = artifact.content;
+        card.appendChild(body);
+    } else {
+        card.appendChild(artifactFrame(artifact));
+    }
+    host.appendChild(card);
+}
+
+function artifactFrame(artifact) {
+    const frame = document.createElement('iframe');
+    frame.className = 'artifact-frame';
+    // allow-scripts WITHOUT allow-same-origin. Granting both together would
+    // undo the sandbox entirely — the frame could reach into this document.
+    frame.setAttribute('sandbox', 'allow-scripts');
+    frame.setAttribute('referrerpolicy', 'no-referrer');
+    frame.loading = 'lazy';
+    frame.srcdoc = artifact.document;
+    // Images and charts vary wildly in height; grow to fit rather than
+    // scrolling a 200px window. Cross-origin means asking, not measuring.
+    frame.style.height = artifact.kind === 'image' ? '320px' : '380px';
+    return frame;
+}
+
+function openArtifactFull(artifact) {
+    const host = document.createElement('div');
+    host.className = 'artifact-modal';
+    host.innerHTML = `
+        <div class="artifact-modal-card">
+          <div class="artifact-head">
+            <span class="artifact-title">${escHtml(artifact.title || artifact.kind)}</span>
+            <button class="artifact-btn" data-close>Close</button>
+          </div>
+        </div>`;
+    const card = host.querySelector('.artifact-modal-card');
+    if (artifact.kind === 'markdown') {
+        const body = document.createElement('div');
+        body.className = 'artifact-body md';
+        body.innerHTML = mdToHtml(artifact.content);
+        card.appendChild(body);
+    } else {
+        const frame = artifactFrame(artifact);
+        frame.style.height = '70vh';
+        card.appendChild(frame);
+    }
+    const close = () => host.remove();
+    host.querySelector('[data-close]').onclick = close;
+    host.onclick = (e) => { if (e.target === host) close(); };
+    document.addEventListener('keydown', function esc(e) {
+        if (e.key === 'Escape') { close(); document.removeEventListener('keydown', esc); }
+    });
+    document.body.appendChild(host);
+}
+
+// Called after a message finishes rendering: swap any markers the model's
+// tool results left behind for the rendered thing.
+async function mountArtifacts(messageEl, text) {
+    const ids = artifactIdsIn(text);
+    if (!ids.length) return;
+    let host = messageEl.querySelector('.artifact-host');
+    if (!host) {
+        host = document.createElement('div');
+        host.className = 'artifact-host';
+        messageEl.appendChild(host);
+    }
+    for (const id of ids) {
+        if (host.querySelector(`[data-artifact-id="${id}"]`)) continue;   // already shown
+        await renderArtifact(id, host);
+    }
+}

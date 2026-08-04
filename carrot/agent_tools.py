@@ -429,6 +429,28 @@ def _tool_web_search(query: str, **_) -> str:
     )
 
 
+def _tool_show_artifact(kind: str, content: str = "", title: str = "",
+                        path: str = "", conversation_id: str = "", **_) -> str:
+    """Put something visual in the conversation.
+
+    The conversation_id is injected by the caller, not supplied by the model —
+    an artifact must land in the chat it was made for.
+    """
+    from . import artifacts
+
+    try:
+        artifact = artifacts.create(
+            kind, content, title=title, path=path, conversation_id=conversation_id or "")
+    except artifacts.ArtifactError as exc:
+        return f"error: {exc}"
+    except Exception as exc:                     # a bad path, an unreadable file
+        return f"error: could not show that ({exc})"
+    # The marker is what the UI keys on to swap the line for the rendered
+    # thing; the prose is what the model sees when it reads its own history.
+    label = artifact["title"] or artifact["kind"]
+    return f"[[carrot:artifact:{artifact['id']}]] showed \"{label}\" in the chat"
+
+
 def _tool_read_url(url: str, **_) -> str:
     """Read one web page.
 
@@ -572,6 +594,36 @@ TOOLS: Dict[str, Dict[str, Any]] = {
             "type": "object",
             "properties": {"query": {"type": "string"}},
             "required": ["query"],
+        },
+    },
+    "show_artifact": {
+        "handler": _tool_show_artifact,
+        "mutating": False,
+        "risk": "low",
+        "description": (
+            "Show something visual in the chat: a chart, diagram, table, image or "
+            "small interactive page. Use it whenever the answer is better looked "
+            "at than read. kind=html for a self-contained page (inline any CSS and "
+            "JS; it cannot load anything from the network), kind=svg for a drawn "
+            "figure, kind=mermaid for a flowchart or sequence diagram, "
+            "kind=markdown for a rich table, kind=code to display a file. "
+            "For a matplotlib or similar plot: write a script that saves a PNG into "
+            "the workspace, run it with run_command, then call this with "
+            "kind=image and path set to the file you wrote."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "enum": ["html", "svg", "markdown", "mermaid", "image", "code"],
+                },
+                "content": {"type": "string", "description": "The markup, source or data URI"},
+                "path": {"type": "string",
+                         "description": "For kind=image: a workspace-relative image file"},
+                "title": {"type": "string", "description": "A short caption"},
+            },
+            "required": ["kind"],
         },
     },
     "read_url": {

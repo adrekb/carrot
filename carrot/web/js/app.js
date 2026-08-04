@@ -747,6 +747,7 @@ async function streamTurn(url, payload, skill) {
         const decoder = new TextDecoder();
         let buffer = '';
         let full = '';
+        const pendingArtifacts = [];
         while (true) {
             const { done, value } = await reader.read();
             if (done) break;
@@ -781,7 +782,11 @@ async function streamTurn(url, payload, skill) {
                     toolLine(`tool → ${payload.tool.name}(${JSON.stringify(payload.tool.args)})`, 'search');
                 }
                 if (payload.tool_result) {
-                    toolLine(`  ← ${String(payload.tool_result.result).slice(0, 160)}`, 'stage');
+                    const raw = String(payload.tool_result.result);
+                    // show_artifact answers with a marker the UI swaps for the
+                    // rendered thing; the raw marker is noise in the trace.
+                    for (const id of artifactIdsIn(raw)) pendingArtifacts.push(id);
+                    toolLine(`  ← ${stripArtifactMarkers(raw).slice(0, 160)}`, 'stage');
                 }
                 if (payload.approval_request) {
                     showApprovalPrompt(payload.approval_request);
@@ -809,6 +814,12 @@ async function streamTurn(url, payload, skill) {
         finishThink();
         contentEl.classList.add('md');
         contentEl.innerHTML = full ? mdToHtml(full) : '(no response)';
+        // Charts and diagrams land under the finished answer, in the order the
+        // model produced them.
+        if (pendingArtifacts.length && typeof mountArtifacts === 'function') {
+            mountArtifacts(contentEl.parentElement,
+                           pendingArtifacts.map(id => `[[carrot:artifact:${id}]]`).join(' '));
+        }
         if (speakReplies && full) speakText(full);
     } catch (e) {
         contentEl.textContent = e.message;
@@ -1010,7 +1021,20 @@ async function openConversation(convId) {
     const messagesEl = document.getElementById('chat-messages');
     messagesEl.innerHTML = '';
     document.getElementById('chat-title').textContent = conv.title || 'Untitled';
-    for (const m of conv.messages) appendMessage(m.role, m.content);
+    const rendered = conv.messages.map(m => appendMessage(m.role, m.content));
+    // Charts made earlier in this conversation are part of it — reopening a
+    // chat and finding the figures gone would make them feel disposable.
+    if (typeof mountArtifacts === 'function') {
+        try {
+            const { artifacts } = await api(`/api/conversations/${convId}/artifacts`);
+            const last = rendered[rendered.length - 1];
+            const host = last && last.querySelector('.content');
+            if (host && artifacts && artifacts.length) {
+                mountArtifacts(host.parentElement,
+                    artifacts.map(a => `[[carrot:artifact:${a.id}]]`).join(' '));
+            }
+        } catch (_) { /* older conversation, or none stored */ }
+    }
     switchTab('workspace');
 }
 

@@ -33,6 +33,7 @@ from carrot import (
     hub as hub_mod,
     calfeed as calfeed_mod,
     attachments as attach_mod,
+    artifacts as artifacts_mod,
     interop as interop_mod,
     deep_research as dr_mod,
     skills as skills_mod,
@@ -1793,6 +1794,55 @@ async def set_config_value(key: str, value: Any = Body(...)):
         )
     config.set_config(key, value)
     return {"key": key, "value": value}
+
+
+# ===== Artifacts =====
+# Charts, diagrams and images the assistant made. The content is model-authored
+# markup, so the API hands back a *document* to drop into a sandboxed iframe
+# rather than a fragment to inline — see carrot/artifacts.py.
+
+@app.get("/api/artifacts/{artifact_id}")
+async def get_artifact(artifact_id: str):
+    artifact = artifacts_mod.get(artifact_id)
+    if not artifact:
+        raise HTTPException(status_code=404, detail="artifact not found")
+    return {**artifact, "document": artifacts_mod.html_document(artifact)}
+
+
+@app.get("/api/conversations/{conversation_id}/artifacts")
+async def list_conversation_artifacts(conversation_id: str):
+    items = artifacts_mod.for_conversation(conversation_id)
+    # The list view does not need the payloads, and a conversation with fifty
+    # charts in it would be megabytes of JSON.
+    return {"artifacts": [{k: v for k, v in a.items() if k != "content"} for a in items]}
+
+
+@app.delete("/api/artifacts/{artifact_id}")
+async def delete_artifact(artifact_id: str):
+    if not artifacts_mod.delete(artifact_id):
+        raise HTTPException(status_code=404, detail="artifact not found")
+    return {"status": "deleted"}
+
+
+class ArtifactRequest(BaseModel):
+    kind: str
+    content: str = ""
+    title: str = ""
+    path: str = ""
+    conversation_id: str = ""
+
+
+@app.post("/api/artifacts")
+async def create_artifact(req: ArtifactRequest):
+    """Used by the UI to re-render an artifact in the current theme, and by
+    tests. The model reaches artifacts through the show_artifact tool."""
+    try:
+        artifact = artifacts_mod.create(
+            req.kind, req.content, title=req.title, path=req.path,
+            conversation_id=req.conversation_id)
+    except artifacts_mod.ArtifactError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {**artifact, "document": artifacts_mod.html_document(artifact)}
 
 
 # ===== Widgets =====
