@@ -76,7 +76,9 @@
       ],
       "icon": "public/icon.png",
       "category": "Utility",
-      "maintainer": "Carrot Community <carrot@users.noreply.github.com>",
+      "maintainer": "Carrot Community <carrot@users.noreply.github.com>"
+    },
+    "deb": {
       "depends": [
         "libnotify4",
         "libxtst6",

@@ -237,25 +237,61 @@ class TestLinuxAudio:
         )
 
     def test_deb_declares_portaudio(self):
-        import json
-        cfg = json.loads((ROOT / "gui" / "package.json").read_text(encoding="utf-8"))
-        assert "libportaudio2" in cfg["build"]["linux"]["depends"]
+        assert "libportaudio2" in _deb_depends()
 
     def test_deb_does_not_depend_on_packages_debian_removed(self):
         """electron-builder's default depends list still names gconf2,
         gconf-service and libappindicator1, all long gone from Debian and
         Ubuntu. A .deb that requires them cannot be installed at all."""
-        import json
-        cfg = json.loads((ROOT / "gui" / "package.json").read_text(encoding="utf-8"))
-        depends = cfg["build"]["linux"]["depends"]
         for obsolete in ("gconf2", "gconf-service", "libappindicator1"):
-            assert obsolete not in depends
+            assert obsolete not in _deb_depends()
 
     def test_deb_keeps_the_electron_runtime_libraries(self):
         """depends replaces electron-builder's default rather than extending
         it, so dropping one of these silently ships a broken package."""
-        import json
-        cfg = json.loads((ROOT / "gui" / "package.json").read_text(encoding="utf-8"))
-        depends = set(cfg["build"]["linux"]["depends"])
+        depends = set(_deb_depends())
         for required in ("libnotify4", "libxtst6", "libnss3", "libgtk-3-0"):
             assert required in depends, f"the .deb no longer requires {required}"
+
+    def test_depends_is_on_the_deb_target_not_the_linux_platform(self):
+        """depends is a deb-target option. Putting it under `linux` fails
+        schema validation — and electron-builder validates the whole config
+        whatever it is building, so the misplacement broke the Windows and
+        macOS jobs too, not just Linux."""
+        cfg = _builder_config()
+        assert "depends" not in cfg["linux"], \
+            "depends belongs under build.deb; under build.linux it fails validation"
+        assert "depends" in cfg.get("deb", {})
+
+
+def _builder_config():
+    import json
+    return json.loads((ROOT / "gui" / "package.json").read_text(encoding="utf-8"))["build"]
+
+
+def _deb_depends():
+    return _builder_config().get("deb", {}).get("depends", [])
+
+
+def test_builder_config_uses_only_known_platform_keys():
+    """A stray key anywhere under `build` aborts every platform's packaging
+    before it starts, so the failure never looks Linux-specific."""
+    cfg = _builder_config()
+    known_linux = {
+        "appId", "artifactName", "asar", "asarUnpack", "category", "compression",
+        "cscKeyPassword", "cscLink", "defaultArch", "description", "desktop",
+        "detectUpdateChannel", "electronLanguages", "electronUpdaterCompatibility",
+        "executableArgs", "executableName", "extraFiles", "extraResources",
+        "fileAssociations", "files", "forceCodeSigning",
+        "generateUpdatesFilesForAllChannels", "icon", "maintainer", "mimeTypes",
+        "packageCategory", "protocols", "publish", "releaseInfo", "synopsis",
+        "target", "vendor",
+    }
+    unknown = set(cfg.get("linux", {})) - known_linux
+    assert not unknown, f"unknown keys under build.linux: {sorted(unknown)}"
+
+
+def test_build_skips_the_headless_shell():
+    """The agent runs headful, so the headless shell is a binary nothing can
+    reach — it was 115 MB of download on the first CI run."""
+    assert "--no-shell" in BUILD_SRC

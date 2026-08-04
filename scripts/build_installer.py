@@ -172,8 +172,12 @@ def install_playwright_browser():
     electron-builder copies it in as a resource. carrot/browser.py points
     Playwright back at it at runtime.
 
-    The agent runs headful by default — the user watches it work — so this is
-    the full Chromium, not the headless shell.
+    The agent runs headful by default — the user watches it work — so the
+    headless shell is dead weight. `playwright install` pulls it alongside
+    Chromium unless told not to, and on the first CI run that was 115 MB of
+    download and a few hundred MB in the installer for a binary nothing can
+    reach. --no-shell suppresses it, with a fallback for older Playwright
+    versions that predate the flag.
     """
     try:
         import playwright  # noqa: F401
@@ -188,8 +192,12 @@ def install_playwright_browser():
     os.makedirs(PW_BROWSERS_DIST, exist_ok=True)
     log("Downloading Chromium for the Agent tab (a few hundred MB)…")
     env = dict(os.environ, PLAYWRIGHT_BROWSERS_PATH=PW_BROWSERS_DIST)
-    subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"],
-                   check=True, cwd=ROOT, env=env)
+    base = [sys.executable, "-m", "playwright", "install"]
+    result = subprocess.run(base + ["--no-shell", "chromium"], cwd=ROOT, env=env)
+    if result.returncode != 0:
+        log("--no-shell not supported by this Playwright; "
+            "installing Chromium with the headless shell as well.")
+        subprocess.run(base + ["chromium"], check=True, cwd=ROOT, env=env)
     size_mb = sum(
         os.path.getsize(os.path.join(dirpath, name))
         for dirpath, _, names in os.walk(PW_BROWSERS_DIST) for name in names
