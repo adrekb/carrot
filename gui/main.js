@@ -55,14 +55,57 @@ function startFastAPI() {
 }
 
 function checkHealth() {
+  return backendHealth().then((health) => health !== null);
+}
+
+// The health body carries the build id, which is what makes "is this the
+// version I just installed?" answerable.
+function backendHealth() {
   return new Promise((resolve) => {
     const req = http.get(`${BACKEND_URL}/api/health`, { timeout: 1500 }, (res) => {
-      resolve(res.statusCode === 200);
-      res.resume();
+      if (res.statusCode !== 200) { res.resume(); resolve(null); return; }
+      let body = '';
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => {
+        try { resolve(JSON.parse(body)); } catch (e) { resolve({}); }
+      });
     });
-    req.on('error', () => resolve(false));
-    req.on('timeout', () => { req.destroy(); resolve(false); });
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => { req.destroy(); resolve(null); });
   });
+}
+
+// A backend answering before we have started one is not ours. It is an older
+// Carrot still running — and because it already holds port 8181, the copy we
+// spawn cannot bind, exits, and the new UI ends up talking to the old
+// backend. Every feature added since that build then 404s: the buttons are
+// there, and pressing them reports "Not Found". Detecting it is the whole
+// point; without this it fails silently and looks like broken features.
+async function warnAboutForeignBackend() {
+  const health = await backendHealth();
+  if (!health) return false;
+  const running = health.version || 'an unknown version';
+  const choice = dialog.showMessageBoxSync({
+    type: 'warning',
+    title: 'Another Carrot is already running',
+    message: 'Another copy of Carrot is already running on this computer.',
+    detail:
+      `It is serving version ${running}, and it owns the port this one needs.\n\n` +
+      `This window would show the new interface but talk to the old backend, ` +
+      `so anything added since ${running} would fail with "Not Found".\n\n` +
+      `Quit the other Carrot — check the system tray and Task Manager for ` +
+      `carrot-backend — then press Retry.`,
+    buttons: ['Retry', 'Use the running version anyway', 'Quit'],
+    defaultId: 0,
+    cancelId: 2,
+  });
+  if (choice === 2) { app.quit(); return true; }
+  if (choice === 0) {
+    // Give the other process a moment to actually go away.
+    await new Promise((r) => setTimeout(r, 1500));
+    return warnAboutForeignBackend();
+  }
+  return false;
 }
 
 async function waitForBackend(timeoutMs = 30000) {
@@ -238,6 +281,8 @@ async function clearCacheOnUpgrade() {
 app.whenReady().then(async () => {
   loadAppearance();
   await clearCacheOnUpgrade();
+  // Check before spawning: anything already answering is not ours.
+  await warnAboutForeignBackend();
   startFastAPI();
   const ready = await waitForBackend();
   if (!ready) {

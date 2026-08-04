@@ -415,3 +415,33 @@ class TestPackagingRetries:
 
     def test_the_retry_waits(self):
         assert build_installer.PACKAGE_RETRY_DELAY > 0
+
+
+class TestForeignBackendDetection:
+    """A second Carrot already on port 8181 is the failure that looks like
+    broken features: the new UI loads, the new backend cannot bind and exits,
+    and every endpoint added since the running build 404s. The error the user
+    sees is FastAPI's bare "Not Found" — not any message this code wrote —
+    because the route does not exist at all in the old backend."""
+
+    @property
+    def main_js(self):
+        return (ROOT / "gui" / "main.js").read_text(encoding="utf-8")
+
+    def test_health_is_checked_before_the_backend_is_spawned(self):
+        """Anything answering before we start is not ours."""
+        index_check = self.main_js.index("warnAboutForeignBackend()")
+        index_spawn = self.main_js.index("startFastAPI();")
+        assert index_check < index_spawn
+
+    def test_the_user_is_told_rather_than_left_guessing(self):
+        assert "showMessageBoxSync" in self.main_js
+        assert "Another Carrot is already running" in self.main_js
+
+    def test_the_running_version_is_named(self):
+        """"Some other copy" is not actionable; the build id is."""
+        assert "health.version" in self.main_js
+
+    def test_health_reports_a_version_to_compare(self, client):
+        body = client.get("/api/health").json()
+        assert body["version"]

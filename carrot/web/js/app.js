@@ -42,12 +42,22 @@ async function api(path, options = {}) {
     });
     if (!resp.ok) {
         let detail = resp.statusText;
+        let raw = null;
         try {
             const d = (await resp.json()).detail;
+            raw = d;
             if (typeof d === 'string') detail = d;
+            else if (d && d.message) detail = d.message;
             else if (d) detail = Array.isArray(d) ? (d[0] && d[0].msg ? d.map(x => x.msg).join('; ') : JSON.stringify(d)) : String(d);
         } catch (_) {}
-        throw new Error(detail);
+        // Carry the status and the structured detail: a 428 is the backend
+        // asking for confirmation, not a failure, and the caller needs the
+        // reasons to show. Losing them turned an object detail into
+        // "[object Object]".
+        const err = new Error(detail);
+        err.status = resp.status;
+        err.detail = raw;
+        throw err;
     }
     return resp.json();
 }

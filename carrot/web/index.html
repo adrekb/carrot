@@ -347,11 +347,32 @@
         <div class="editor-toolbar">
           <div id="code-tabs" class="code-tabs"></div>
           <span id="code-status" class="editor-status"></span>
+          <button class="btn btn-primary" id="run-btn" onclick="runCurrentFile()">Run</button>
           <button class="btn btn-ghost" onclick="saveCurrentFile()">Save</button>
+          <button class="btn btn-ghost" onclick="toggleCodePanel()">Terminal</button>
           <button class="btn btn-ghost" id="open-editor-btn" onclick="openInVSCode()">Open in VS Code</button>
         </div>
         <div id="code-editor-host" class="monaco-host"></div>
         <div id="code-empty" class="editor-empty">Open a file from the tree to start editing.</div>
+        <div id="code-panel" class="code-panel hidden">
+          <div class="code-panel-tabs">
+            <button class="panel-tab active" data-panel="output" onclick="showCodePanel('output')">Output</button>
+            <button class="panel-tab" data-panel="terminal" onclick="showCodePanel('terminal')">Terminal</button>
+            <span class="spacer"></span>
+            <span class="editor-status" id="panel-status"></span>
+            <button class="icon-btn" title="Clear" onclick="clearCodePanel()"><svg class="ico"><use href="#i-trash"/></svg></button>
+            <button class="icon-btn" title="Hide" onclick="toggleCodePanel()"><svg class="ico"><use href="#i-x"/></svg></button>
+          </div>
+          <pre id="panel-output" class="panel-body"></pre>
+          <div id="panel-terminal" class="panel-body hidden">
+            <div id="term-log" class="term-log"></div>
+            <div class="term-input-row">
+              <span class="term-prompt">$</span>
+              <input id="term-input" type="text" placeholder="run a command in the workspace…"
+                     spellcheck="false" autocomplete="off">
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </section>

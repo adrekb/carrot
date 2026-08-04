@@ -291,6 +291,28 @@ async def files_search(q: str, case_sensitive: bool = False, max_hits: int = SEA
     return {"query": q, "hits": hits, "truncated": truncated}
 
 
+class RunRequest(BaseModel):
+    path: str
+    timeout: Optional[int] = None
+
+
+@router.post("/run")
+async def files_run(req: RunRequest):
+    """Run the open file. Compiled languages build first; see carrot/runner.py."""
+    from carrot import runner
+
+    timeout = max(1, min(int(req.timeout or runner.DEFAULT_TIMEOUT), 300))
+    return runner.run_file(req.path, timeout=timeout)
+
+
+@router.get("/languages")
+async def files_languages():
+    """What the Run button can do here, and what is missing."""
+    from carrot import runner
+
+    return {"languages": runner.languages()}
+
+
 @router.get("/editors")
 async def list_editors():
     """Which editor CLIs are installed (cursor preferred over vscode)."""

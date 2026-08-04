@@ -288,6 +288,7 @@ async function loadCodeTab() {
             btn.textContent = ed.editors[0] === 'cursor' ? 'Open in Cursor' : 'Open in VS Code';
         }
     } catch (_) {}
+    wireTerminal();
     loadCodeTree();
 }
 
@@ -1171,4 +1172,137 @@ async function mountArtifacts(messageEl, text) {
         if (host.querySelector(`[data-artifact-id="${id}"]`)) continue;   // already shown
         await renderArtifact(id, host);
     }
+}
+
+// ================================================================
+// Code tab — Run and terminal
+// ================================================================
+let codePanelTab = 'output';
+const termHistory = [];
+let termHistoryIndex = -1;
+
+function toggleCodePanel(force) {
+    const panel = document.getElementById('code-panel');
+    if (!panel) return;
+    const show = force === undefined ? panel.classList.contains('hidden') : force;
+    panel.classList.toggle('hidden', !show);
+    if (show && codePanelTab === 'terminal') document.getElementById('term-input')?.focus();
+}
+
+function showCodePanel(which) {
+    codePanelTab = which;
+    document.querySelectorAll('#code-panel .panel-tab').forEach(tab => {
+        tab.classList.toggle('active', tab.dataset.panel === which);
+    });
+    document.getElementById('panel-output').classList.toggle('hidden', which !== 'output');
+    document.getElementById('panel-terminal').classList.toggle('hidden', which !== 'terminal');
+    toggleCodePanel(true);
+    if (which === 'terminal') document.getElementById('term-input')?.focus();
+}
+
+function clearCodePanel() {
+    if (codePanelTab === 'output') document.getElementById('panel-output').textContent = '';
+    else document.getElementById('term-log').innerHTML = '';
+    document.getElementById('panel-status').textContent = '';
+}
+
+// ---------- Run ----------
+
+async function runCurrentFile() {
+    if (!activeFilePath) { setCodeStatus('open a file first'); return; }
+    // Running stale bytes is the classic way to debug the wrong program.
+    if (dirtyFiles.has(activeFilePath)) await saveCurrentFile();
+
+    const out = document.getElementById('panel-output');
+    const status = document.getElementById('panel-status');
+    showCodePanel('output');
+    out.textContent = `running ${activeFilePath}…\n`;
+    status.textContent = 'running';
+    const runBtn = document.getElementById('run-btn');
+    if (runBtn) runBtn.disabled = true;
+
+    try {
+        const r = await api('/api/files/run', {
+            method: 'POST',
+            body: JSON.stringify({ path: activeFilePath }),
+        });
+        // A compiler error is a build-stage failure, and saying which stage
+        // failed is the difference between "my code is wrong" and "my
+        // toolchain is wrong".
+        const stage = r.stage === 'build' ? 'compile failed' : (r.ok ? 'finished' : 'exited non-zero');
+        out.textContent = `${r.language || ''} · ${stage}\n\n${r.output || ''}`;
+        status.textContent = r.missing_tool ? `needs ${r.missing_tool}`
+            : `${r.language || ''} · ${r.ok ? 'ok' : 'failed'}`;
+    } catch (e) {
+        out.textContent = 'Could not run: ' + e.message;
+        status.textContent = 'error';
+    } finally {
+        if (runBtn) runBtn.disabled = false;
+    }
+}
+
+// ---------- terminal ----------
+
+function termLine(text, kind) {
+    const log = document.getElementById('term-log');
+    const line = document.createElement('div');
+    line.className = 'term-line' + (kind ? ' ' + kind : '');
+    line.textContent = text;
+    log.appendChild(line);
+    log.scrollTop = log.scrollHeight;
+    return line;
+}
+
+async function runTerminalCommand(command, confirmed) {
+    const status = document.getElementById('panel-status');
+    status.textContent = 'running';
+    try {
+        const r = await api('/api/terminal/execute', {
+            method: 'POST',
+            body: JSON.stringify({ command, cwd: codeRoot, confirm: !!confirmed }),
+        });
+        termLine(r.output || '(no output)', r.success ? '' : 'bad');
+        status.textContent = r.success ? '' : `exit ${r.returncode}`;
+    } catch (e) {
+        // 428 is the backend asking for a second look at a destructive
+        // command, not a failure — re-send once the user agrees.
+        const detail = e.detail || {};
+        if (e.status === 428 || detail.needs_confirmation) {
+            const why = (detail.reasons || []).join('; ') || detail.message || 'this looks destructive';
+            if (confirm(`${why}\n\nRun anyway?\n\n${command}`)) {
+                return runTerminalCommand(command, true);
+            }
+            termLine('cancelled', 'bad');
+            status.textContent = '';
+            return;
+        }
+        termLine(e.message, 'bad');
+        status.textContent = 'error';
+    }
+}
+
+function wireTerminal() {
+    const input = document.getElementById('term-input');
+    if (!input || input.dataset.wired) return;
+    input.dataset.wired = '1';
+    input.addEventListener('keydown', async (e) => {
+        if (e.key === 'Enter') {
+            const command = input.value.trim();
+            if (!command) return;
+            termHistory.push(command);
+            termHistoryIndex = termHistory.length;
+            input.value = '';
+            termLine('$ ' + command, 'cmd');
+            await runTerminalCommand(command, false);
+        } else if (e.key === 'ArrowUp') {
+            if (!termHistory.length) return;
+            e.preventDefault();
+            termHistoryIndex = Math.max(0, termHistoryIndex - 1);
+            input.value = termHistory[termHistoryIndex] || '';
+        } else if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            termHistoryIndex = Math.min(termHistory.length, termHistoryIndex + 1);
+            input.value = termHistory[termHistoryIndex] || '';
+        }
+    });
 }
