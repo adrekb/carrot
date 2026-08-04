@@ -1,4 +1,4 @@
-const { app, BrowserWindow, globalShortcut, ipcMain, Notification, screen, session, shell } = require('electron');
+const { app, BrowserWindow, dialog, globalShortcut, ipcMain, Notification, screen, session, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
@@ -68,6 +68,30 @@ async function waitForBackend(timeoutMs = 30000) {
 }
 
 // ===== Windows =====
+// The window background is painted by Chromium before the page loads, so it
+// cannot come from the stylesheet — a light-theme user would get a dark
+// flash on every launch. The renderer reports its resolved theme colour
+// after each change and we replay the last one at startup.
+const DEFAULT_APPEARANCE = { background: '#131419', theme: 'dark', accent: 'carrot' };
+let appearance = { ...DEFAULT_APPEARANCE };
+
+function appearancePath() {
+  return path.join(app.getPath('userData'), 'appearance.json');
+}
+
+function loadAppearance() {
+  try {
+    const saved = JSON.parse(fs.readFileSync(appearancePath(), 'utf8'));
+    if (/^#[0-9a-fA-F]{6}$/.test(String(saved.background || ''))) {
+      appearance = {
+        background: saved.background,
+        theme: saved.theme === 'light' ? 'light' : 'dark',
+        accent: /^[a-z]+$/.test(String(saved.accent || '')) ? saved.accent : 'carrot',
+      };
+    }
+  } catch (e) { /* first run, or never set */ }
+}
+
 function createMainWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -77,7 +101,7 @@ function createMainWindow() {
     // Version in the title bar: it comes from the Electron shell, not the
     // web assets, so it identifies the build even if the UI fails to load.
     title: `Carrot AI ${app.getVersion()}`,
-    backgroundColor: '#131419',  // matches --bg; avoids a wrong-colour flash
+    backgroundColor: appearance.background,
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -161,6 +185,9 @@ function showOverlay() {
     overlayWindow.setSize(overlayWindow.getSize()[0], 92);
     overlayWindow.show();
     overlayWindow.focus();
+    // Push the theme before revealing: the overlay is a file:// page and
+    // cannot read the app's stored preference itself.
+    overlayWindow.webContents.send('appearance', appearance);
     overlayWindow.webContents.send('overlay-shown');
   };
   if (overlayWindow.webContents.isLoading()) {
@@ -198,6 +225,7 @@ async function clearCacheOnUpgrade() {
 }
 
 app.whenReady().then(async () => {
+  loadAppearance();
   await clearCacheOnUpgrade();
   startFastAPI();
   const ready = await waitForBackend();
@@ -310,6 +338,41 @@ ipcMain.handle('resize-overlay', async (event, height) => {
 ipcMain.handle('hide-overlay', async () => {
   if (overlayWindow) overlayWindow.hide();
   return { ok: true };
+});
+
+// Electron disables window.prompt(), so anything that used it to ask for a
+// path silently did nothing. A native folder picker is the right control
+// for choosing a directory anyway.
+ipcMain.handle('pick-directory', async (event, { title, defaultPath } = {}) => {
+  const parent = BrowserWindow.fromWebContents(event.sender) || mainWindow;
+  const result = await dialog.showOpenDialog(parent, {
+    title: title || 'Choose a folder',
+    defaultPath: defaultPath || undefined,
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  if (result.canceled || !result.filePaths.length) return { path: '' };
+  return { path: result.filePaths[0] };
+});
+
+// The renderer reports its resolved appearance after every theme change.
+// Two consumers: the window background (so the next launch opens on the
+// right colour) and the quick-ask overlay, which is a file:// page and so
+// cannot read the app's own localStorage to find out.
+ipcMain.handle('set-appearance', async (event, { background, theme, accent } = {}) => {
+  if (!/^#[0-9a-fA-F]{6}$/.test(String(background || ''))) return { ok: false };
+  appearance = {
+    background,
+    theme: theme === 'light' ? 'light' : 'dark',
+    accent: /^[a-z]+$/.test(String(accent || '')) ? accent : 'carrot',
+  };
+  try {
+    if (mainWindow) mainWindow.setBackgroundColor(appearance.background);
+    if (overlayWindow) overlayWindow.webContents.send('appearance', appearance);
+    fs.writeFileSync(appearancePath(), JSON.stringify(appearance));
+    return { ok: true };
+  } catch (e) {
+    return { ok: false };
+  }
 });
 
 ipcMain.handle('notify', async (event, { title, body }) => {

@@ -463,8 +463,60 @@ async function openInVSCode() {
     }
 }
 
+// window.prompt() is disabled in Electron and silently returns null, which
+// is why this button appeared to do nothing. Use the native folder chooser
+// when the shell offers one, and an inline field in a plain browser.
+async function askForFolder(current) {
+    if (window.carrotAPI && window.carrotAPI.pickDirectory) {
+        const picked = await window.carrotAPI.pickDirectory({
+            title: 'Choose your workspace folder', defaultPath: current,
+        });
+        return picked && picked.path ? picked.path : '';
+    }
+    return await inlineTextPrompt({
+        title: 'Workspace folder',
+        value: current,
+        placeholder: 'absolute path to a folder',
+        action: 'Use folder',
+    });
+}
+
+// Shared replacement for window.prompt(). Every caller in the app goes
+// through here — the native dialog is unavailable in Electron.
+function inlineTextPrompt({ title, value, placeholder, action } = {}) {
+    return new Promise((resolve) => {
+        const host = document.createElement('div');
+        host.className = 'path-prompt';
+        host.innerHTML = `
+            <div class="path-prompt-card">
+              <div class="path-prompt-title"></div>
+              <input type="text" spellcheck="false">
+              <div class="row">
+                <button class="btn btn-primary"></button>
+                <button class="btn btn-ghost">Cancel</button>
+              </div>
+            </div>`;
+        host.querySelector('.path-prompt-title').textContent = title || 'Enter a value';
+        host.querySelector('.btn-primary').textContent = action || 'OK';
+        const input = host.querySelector('input');
+        input.placeholder = placeholder || '';
+        input.value = value || '';
+        const done = (value) => { host.remove(); resolve(value); };
+        host.querySelector('.btn-primary').onclick = () => done(input.value.trim());
+        host.querySelector('.btn-ghost').onclick = () => done('');
+        input.onkeydown = (e) => {
+            if (e.key === 'Enter') done(input.value.trim());
+            if (e.key === 'Escape') done('');
+        };
+        host.onclick = (e) => { if (e.target === host) done(''); };
+        document.body.appendChild(host);
+        input.focus();
+        input.select();
+    });
+}
+
 async function changeCodeRoot() {
-    const folder = prompt('Workspace folder (absolute path):', codeRoot);
+    const folder = await askForFolder(codeRoot);
     if (!folder) return;
     try {
         const r = await api('/api/files/root', { method: 'POST', body: JSON.stringify({ root: folder }) });

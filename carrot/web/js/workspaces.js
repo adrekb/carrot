@@ -201,7 +201,10 @@ async function createFolder() {
 }
 
 async function renameFolder(folderId) {
-    const name = prompt('Rename folder to:');
+    // Not prompt() — Electron disables it and returns null without a dialog.
+    const name = (await inlineTextPrompt({
+        title: 'Rename folder', placeholder: 'folder name', action: 'Rename',
+    })).trim();
     if (!name) return;
     await api(`/api/folders/${folderId}`, { method: 'PATCH', body: JSON.stringify({ name }) });
     loadWorkspaces();

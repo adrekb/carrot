@@ -2996,3 +2996,376 @@ select option:checked { background-color: #2f333d; }
   line-height: 1.45;
   color: var(--yellow);
 }
+
+/* =====================================================================
+   Themes — light mode + accents
+   =====================================================================
+   Everything above this point either used a token or a hard-coded rgba().
+   The hard-coded ones were fine while there was exactly one theme; they
+   are re-declared here in terms of tokens so a second palette is a
+   variable swap rather than a second stylesheet.
+
+   Two independent axes:
+     html[data-theme]  = dark | light        (ground + glass)
+     html[data-accent] = carrot | ember | …  (accent + ambient wash)
+   "auto" is resolved to one of the two by theme.js before first paint,
+   so it never appears in the DOM and nothing here has to match it. */
+
+:root {
+  --scheme: dark;
+  --on-accent: #21150f;          /* text that sits on a filled accent */
+
+  /* Glass: fill, edge, and the inset highlight that fakes a lit rim. */
+  --glass-bar: rgba(24, 26, 32, 0.5);
+  --glass-nav: rgba(22, 24, 30, 0.34);
+  --glass-card: rgba(38, 42, 52, 0.4);
+  --glass-card-hi: rgba(42, 46, 58, 0.48);
+  --glass-pop: rgba(30, 33, 42, 0.66);
+  --glass-bar-edge: rgba(255, 255, 255, 0.07);
+  --glass-nav-edge: rgba(255, 255, 255, 0.055);
+  --glass-card-edge: rgba(255, 255, 255, 0.075);
+  --glass-card-edge-hi: rgba(255, 255, 255, 0.115);
+  --glass-pop-edge: rgba(255, 255, 255, 0.115);
+  --glass-inset: rgba(255, 255, 255, 0.045);
+  --glass-inset-hi: rgba(255, 255, 255, 0.07);
+  --glass-sheen: rgba(255, 255, 255, 0.22);
+  --glass-hover: rgba(255, 255, 255, 0.09);
+  --veil: rgba(19, 20, 25, 0.55);
+  --scrim: rgba(10, 11, 15, 0.62);
+
+  /* Native <select> popups are drawn by the OS and only take these. */
+  --opt-bg: #23262e;
+  --opt-text: #eceef4;
+  --opt-sel: #2f333d;
+
+  --wash-sat: 125%;
+  --wash-strength: 1;
+}
+
+/* ---- Light ----
+   Not the dark palette inverted: a warm paper ground, and the glass
+   goes to white-over-colour so the ambient wash still reads through. */
+:root[data-theme="light"] {
+  --scheme: light;
+  --bg: #f6f4f1;
+  --bg2: #fbfaf8;
+  --card: #ffffff;
+  --card2: #f2efeb;
+  --card3: #e7e3dd;
+  --border: rgba(38, 32, 26, 0.10);
+  --border-hi: rgba(38, 32, 26, 0.17);
+  --text: #1c1a18;
+  --muted: #5f5a54;
+  --faint: #8a847c;
+  --on-accent: #2a1508;
+
+  --shadow-sm: 0 1px 2px rgba(38, 30, 22, 0.07);
+  --shadow: 0 8px 24px rgba(38, 30, 22, 0.10);
+  --shadow-lg: 0 24px 64px rgba(38, 30, 22, 0.16);
+
+  --glass-bar: rgba(255, 255, 255, 0.62);
+  --glass-nav: rgba(255, 255, 255, 0.48);
+  --glass-card: rgba(255, 255, 255, 0.66);
+  --glass-card-hi: rgba(255, 255, 255, 0.82);
+  --glass-pop: rgba(255, 255, 255, 0.84);
+  --glass-bar-edge: rgba(38, 32, 26, 0.09);
+  --glass-nav-edge: rgba(38, 32, 26, 0.07);
+  --glass-card-edge: rgba(38, 32, 26, 0.085);
+  --glass-card-edge-hi: rgba(38, 32, 26, 0.14);
+  --glass-pop-edge: rgba(38, 32, 26, 0.12);
+  /* On white, a white inset highlight is invisible — the rim has to be a
+     soft shadow instead, so these go dark and very faint. */
+  --glass-inset: rgba(38, 32, 26, 0.05);
+  --glass-inset-hi: rgba(38, 32, 26, 0.07);
+  --glass-sheen: rgba(38, 32, 26, 0.14);
+  --glass-hover: rgba(38, 32, 26, 0.06);
+  --veil: rgba(246, 244, 241, 0.62);
+  --scrim: rgba(60, 54, 48, 0.34);
+
+  --opt-bg: #ffffff;
+  --opt-text: #1c1a18;
+  --opt-sel: #eee9e2;
+
+  --wash-sat: 150%;
+  --wash-strength: 0.62;   /* the same glow over white would be garish */
+}
+
+/* ---- Accents ----
+   Each sets the accent ramp and the three wash hues that light the
+   background. The wash is what carries the theme; the accent alone is
+   too small a surface to change the mood of the window. */
+:root, :root[data-accent="carrot"] {
+  --accent: #f4813f;
+  --accent-hi: #ff9a5e;
+  --accent-dim: #d0672c;
+  --accent-soft: rgba(244, 129, 63, 0.14);
+  --accent-line: rgba(244, 129, 63, 0.32);
+  --wash-a: 244, 129, 63;
+  --wash-b: 92, 136, 226;
+  --wash-c: 196, 104, 220;
+}
+:root[data-accent="ember"] {
+  --accent: #f2603f;
+  --accent-hi: #ff7d5f;
+  --accent-dim: #cc4a2c;
+  --accent-soft: rgba(242, 96, 63, 0.14);
+  --accent-line: rgba(242, 96, 63, 0.32);
+  --wash-a: 242, 96, 63;
+  --wash-b: 226, 122, 92;
+  --wash-c: 168, 88, 196;
+}
+:root[data-accent="amber"] {
+  --accent: #e3a33a;
+  --accent-hi: #f7bd58;
+  --accent-dim: #bd8324;
+  --accent-soft: rgba(227, 163, 58, 0.14);
+  --accent-line: rgba(227, 163, 58, 0.32);
+  --wash-a: 227, 163, 58;
+  --wash-b: 96, 168, 152;
+  --wash-c: 214, 122, 88;
+}
+:root[data-accent="orchid"] {
+  --accent: #b57ae0;
+  --accent-hi: #cb98f0;
+  --accent-dim: #9459be;
+  --accent-soft: rgba(181, 122, 224, 0.15);
+  --accent-line: rgba(181, 122, 224, 0.34);
+  --wash-a: 181, 122, 224;
+  --wash-b: 92, 136, 226;
+  --wash-c: 232, 118, 154;
+}
+:root[data-accent="teal"] {
+  --accent: #3fbfa8;
+  --accent-hi: #5fdcc4;
+  --accent-dim: #2d9a86;
+  --accent-soft: rgba(63, 191, 168, 0.15);
+  --accent-line: rgba(63, 191, 168, 0.34);
+  --wash-a: 63, 191, 168;
+  --wash-b: 92, 150, 226;
+  --wash-c: 150, 200, 120;
+}
+:root[data-accent="indigo"] {
+  --accent: #7c8cf0;
+  --accent-hi: #9aa7ff;
+  --accent-dim: #5f6ecb;
+  --accent-soft: rgba(124, 140, 240, 0.15);
+  --accent-line: rgba(124, 140, 240, 0.34);
+  --wash-a: 124, 140, 240;
+  --wash-b: 196, 104, 220;
+  --wash-c: 88, 196, 214;
+}
+
+/* ---- The wash ----
+   Four wide pools, each an accent-derived hue. --wash-strength scales
+   them all so light mode gets the same shape at lower intensity. */
+body::before {
+  background:
+    radial-gradient(48% 40% at 12% 6%,
+      rgba(var(--wash-a), calc(0.17 * var(--wash-strength))), transparent 62%),
+    radial-gradient(46% 42% at 90% 18%,
+      rgba(var(--wash-b), calc(0.16 * var(--wash-strength))), transparent 64%),
+    radial-gradient(40% 34% at 74% 66%,
+      rgba(var(--wash-c), calc(0.11 * var(--wash-strength))), transparent 66%),
+    radial-gradient(56% 46% at 40% 104%,
+      rgba(var(--wash-a), calc(0.11 * var(--wash-strength))), transparent 68%);
+  filter: saturate(var(--wash-sat));
+}
+
+/* ---- Glass, in tokens ---- */
+#menubar {
+  background: var(--glass-bar);
+  border-bottom: 1px solid var(--glass-bar-edge);
+}
+.app-nav {
+  background: var(--glass-nav);
+  border-right: 1px solid var(--glass-nav-edge);
+}
+.settings-card, .ext-section, .hub-card, .widget-card, .hub-spec-card,
+.list-item, .provider-row {
+  background: var(--glass-card);
+  border: 1px solid var(--glass-card-edge);
+  box-shadow: var(--shadow-sm), inset 0 1px 0 var(--glass-inset);
+}
+.settings-card:hover, .hub-card:hover {
+  background: var(--glass-card-hi);
+  border-color: var(--glass-card-edge-hi);
+}
+#model-pop, #ws-pop, #nav-more-list, .combo-pop, #splash .splash-card,
+.skill-pop, #search-pop, #attach-tray .attach-chip {
+  background: var(--glass-pop);
+  border: 1px solid var(--glass-pop-edge);
+  box-shadow: var(--shadow-lg), inset 0 1px 0 var(--glass-inset-hi);
+}
+#cmdbar {
+  background: var(--glass-pop);
+  border: 1px solid var(--glass-pop-edge);
+  box-shadow: var(--shadow-lg), inset 0 1px 0 var(--glass-inset-hi);
+}
+.settings-card::after, .hub-card::after, .splash-card::after,
+#model-pop::after, #cmdbar::after, .combo-pop::after {
+  background: linear-gradient(90deg, transparent, var(--glass-sheen), transparent);
+}
+.attach-x:hover { background: var(--glass-hover); }
+body.dropping::after { background: var(--veil); }
+
+select { color-scheme: var(--scheme); }
+select option, select optgroup { background-color: var(--opt-bg); color: var(--opt-text); }
+select option:checked { background-color: var(--opt-sel); }
+
+/* The whole window, so scrollbars and form controls follow the theme. */
+html, body { color-scheme: var(--scheme); }
+
+/* Light mode inverts which way "raised" reads: an inset white line does
+   nothing on white, so cards lean on their shadow instead. */
+:root[data-theme="light"] .settings-card,
+:root[data-theme="light"] .ext-section,
+:root[data-theme="light"] .hub-card,
+:root[data-theme="light"] .widget-card,
+:root[data-theme="light"] .hub-spec-card {
+  box-shadow: 0 1px 2px rgba(38, 30, 22, 0.05), 0 6px 18px rgba(38, 30, 22, 0.05);
+}
+:root[data-theme="light"] .btn-primary { box-shadow: 0 1px 2px rgba(38, 30, 22, 0.14); }
+:root[data-theme="light"] select {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%235f5a54' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9l6 6 6-6'/></svg>");
+}
+.btn-primary { color: var(--on-accent); }
+
+/* Switching themes should feel like a dimmer, not a page reload — but
+   only for the ground, or every hover on the page inherits the delay. */
+body, #menubar, .app-nav, .settings-card, .hub-card, #cmdbar {
+  transition: background-color 0.28s var(--ease), border-color 0.28s var(--ease),
+              color 0.28s var(--ease);
+}
+
+/* =====================================================================
+   Serif, wider
+   =====================================================================
+   Serif was only on a handful of page titles. Pushing it down a level —
+   card titles, section heads, empty states, the greeting — is what makes
+   the app read as considered rather than as a dashboard. Anything that
+   is a control, a label or data stays in the sans: serif at 12px in a
+   button is just harder to read. */
+h1, h2, h3,
+.card-title, .settings-head h3, .ext-head h3, .page-head h1, .page-head h2,
+.dash-head h1, .splash-card h1, .hub-card h4, .widget-card .card-title,
+.empty-widget .empty-title, .greeting, .section-title {
+  font-family: var(--serif);
+  font-weight: 500;
+  letter-spacing: -0.014em;
+}
+.card-title { font-size: 14.5px; }
+.page-head h2 { font-weight: 500; }
+/* Blockquotes and the research narrative read better set, too. */
+.msg-assistant blockquote, .research-summary { font-family: var(--serif); }
+/* Numerals in a serif face are old-style and wander on a baseline, which
+   looks wrong in tables and counters. Keep those lining and tabular. */
+.stat-value, .metric, .count, td, th, .kbd, code, pre {
+  font-family: var(--sans);
+  font-variant-numeric: tabular-nums lining-nums;
+}
+code, pre, .kbd { font-family: var(--mono); }
+
+/* =====================================================================
+   Composer glow
+   =====================================================================
+   The command bar is the one thing every session starts at, so it gets
+   the light: a soft accent-tinted bloom underneath that brightens on
+   focus. Drawn on a pseudo-element behind the bar so the blur does not
+   have to re-composite the bar's own backdrop-filter. */
+#cmdbar { position: fixed; }        /* re-assert: the glow is positioned to it */
+#cmdbar::before {
+  content: "";
+  position: absolute;
+  inset: -22px -14px -16px;
+  z-index: -1;
+  border-radius: calc(var(--radius-lg) + 12px);
+  background:
+    radial-gradient(60% 120% at 22% 50%, rgba(var(--wash-a), 0.20), transparent 70%),
+    radial-gradient(60% 120% at 78% 50%, rgba(var(--wash-b), 0.16), transparent 70%);
+  filter: blur(22px) saturate(140%);
+  opacity: calc(0.75 * var(--wash-strength));
+  pointer-events: none;
+  transition: opacity 0.3s var(--ease);
+}
+#cmdbar:focus-within::before { opacity: calc(1.15 * var(--wash-strength)); }
+
+/* =====================================================================
+   Inline text prompt
+   =====================================================================
+   Stands in for window.prompt(), which Electron disables. */
+.path-prompt {
+  position: fixed;
+  inset: 0;
+  z-index: 400;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--scrim);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  animation: prompt-in 0.16s var(--ease);
+}
+.path-prompt-card {
+  width: min(520px, 92vw);
+  padding: 20px;
+  border-radius: var(--radius-lg);
+  background: var(--glass-pop);
+  backdrop-filter: blur(44px) saturate(200%);
+  -webkit-backdrop-filter: blur(44px) saturate(200%);
+  border: 1px solid var(--glass-pop-edge);
+  box-shadow: var(--shadow-lg), inset 0 1px 0 var(--glass-inset-hi);
+}
+.path-prompt-title {
+  font-family: var(--serif);
+  font-size: 17px;
+  font-weight: 500;
+  letter-spacing: -0.014em;
+  margin-bottom: 12px;
+}
+.path-prompt-card input { width: 100%; margin-bottom: 14px; }
+.path-prompt-card .row { display: flex; gap: 8px; justify-content: flex-end; }
+@keyframes prompt-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* =====================================================================
+   Theme picker (Settings → Appearance)
+   ===================================================================== */
+.theme-grid { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 4px; }
+.theme-swatch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 12px 9px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--card2);
+  cursor: pointer;
+  font-size: 11.5px;
+  color: var(--muted);
+  transition: border-color 0.16s var(--ease), background 0.16s var(--ease),
+              color 0.16s var(--ease);
+}
+.theme-swatch:hover { border-color: var(--border-hi); color: var(--text); }
+.theme-swatch[aria-pressed="true"] {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+.theme-dot {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid var(--border-hi);
+  box-shadow: inset 0 1px 0 var(--glass-inset-hi);
+}
+.theme-mode-dot {
+  /* Split disc: the dark half and the light half of the app, literally. */
+  background: linear-gradient(105deg, var(--tm-a) 0 50%, var(--tm-b) 50% 100%);
+}
+.settings-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+}

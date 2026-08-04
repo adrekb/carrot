@@ -7,14 +7,37 @@
 <style>
   /* A soft floating command bar: heavy blur, deep round corners, one
      accent. The window itself is transparent, so all the shape lives here. */
+  /* Kept in step with the main window's palette. The overlay is a file://
+     page, so it cannot read the app's stored theme; the desktop shell
+     relays it and stamps data-theme / data-accent on <html> (see the
+     script at the end of this file). */
   :root {
-    --panel: rgba(34, 32, 36, 0.82);
-    --stroke: rgba(255, 255, 255, 0.1);
-    --text: #f2f1f3;
-    --muted: #9a98a3;
-    --accent: #ff6b3d;
+    --panel: rgba(30, 33, 42, 0.82);
+    --stroke: rgba(255, 255, 255, 0.115);
+    --text: #eceef4;
+    --muted: #99a0ae;
+    --accent: #f4813f;
+    --accent-soft: rgba(244, 129, 63, 0.15);
+    --accent-line: rgba(244, 129, 63, 0.32);
+    --sheen: rgba(255, 255, 255, 0.14);
+    --drop: rgba(0, 0, 0, 0.5);
+    --drop-sm: rgba(0, 0, 0, 0.3);
     --ease: cubic-bezier(0.32, 0.72, 0, 1);
   }
+  :root[data-theme="light"] {
+    --panel: rgba(255, 255, 255, 0.86);
+    --stroke: rgba(38, 32, 26, 0.12);
+    --text: #1c1a18;
+    --muted: #5f5a54;
+    --sheen: rgba(38, 32, 26, 0.10);
+    --drop: rgba(38, 30, 22, 0.22);
+    --drop-sm: rgba(38, 30, 22, 0.12);
+  }
+  :root[data-accent="ember"]  { --accent: #f2603f; --accent-soft: rgba(242, 96, 63, 0.15);  --accent-line: rgba(242, 96, 63, 0.32); }
+  :root[data-accent="amber"]  { --accent: #e3a33a; --accent-soft: rgba(227, 163, 58, 0.15); --accent-line: rgba(227, 163, 58, 0.32); }
+  :root[data-accent="orchid"] { --accent: #b57ae0; --accent-soft: rgba(181, 122, 224, 0.16); --accent-line: rgba(181, 122, 224, 0.34); }
+  :root[data-accent="teal"]   { --accent: #3fbfa8; --accent-soft: rgba(63, 191, 168, 0.16); --accent-line: rgba(63, 191, 168, 0.34); }
+  :root[data-accent="indigo"] { --accent: #7c8cf0; --accent-soft: rgba(124, 140, 240, 0.16); --accent-line: rgba(124, 140, 240, 0.34); }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { background: transparent; overflow: hidden; }
   body {
@@ -30,7 +53,7 @@
     -webkit-backdrop-filter: blur(30px) saturate(160%);
     border: 1px solid var(--stroke);
     border-radius: 18px;
-    box-shadow: 0 22px 60px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 22px 60px var(--drop), 0 2px 6px var(--drop-sm);
     padding: 12px 14px;
     display: flex;
     align-items: center;
@@ -46,7 +69,7 @@
     width: 26px; height: 26px;
     flex: 0 0 auto;
     border-radius: 8px;
-    background: rgba(255, 107, 61, 0.15);
+    background: var(--accent-soft);
     display: flex; align-items: center; justify-content: center;
     color: var(--accent);
   }
@@ -75,7 +98,7 @@
     padding: 2px 6px;
     letter-spacing: 0.02em;
   }
-  .hint.busy { color: var(--accent); border-color: rgba(255, 107, 61, 0.3); }
+  .hint.busy { color: var(--accent); border-color: var(--accent-line); }
 
   /* The reply lands under the bar; the window grows to fit it. */
   .reply {
@@ -85,7 +108,7 @@
     -webkit-backdrop-filter: blur(30px) saturate(160%);
     border: 1px solid var(--stroke);
     border-radius: 16px;
-    box-shadow: 0 22px 60px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 22px 60px var(--drop);
     padding: 13px 15px;
     font-size: 13.5px;
     line-height: 1.62;
@@ -99,7 +122,7 @@
   .reply::-webkit-scrollbar { width: 8px; }
   .reply::-webkit-scrollbar-track { background: transparent; }
   .reply::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.14);
+    background: var(--sheen);
     border-radius: 5px;
     border: 2px solid transparent;
     background-clip: content-box;
@@ -187,6 +210,16 @@
   });
 
   window.addEventListener('focus', () => input.focus());
+  // The shell relays the main window's resolved theme; it arrives before
+  // 'overlay-shown', so the panel is already repainted when it appears.
+  if (window.carrotAPI && window.carrotAPI.onAppearance) {
+    window.carrotAPI.onAppearance((a) => {
+      if (!a) return;
+      document.documentElement.setAttribute('data-theme', a.theme === 'light' ? 'light' : 'dark');
+      document.documentElement.setAttribute('data-accent', a.accent || 'carrot');
+    });
+  }
+
   if (window.carrotAPI && window.carrotAPI.onOverlayShown) {
     window.carrotAPI.onOverlayShown(() => { input.value = ''; clearReply(); input.focus(); });
   }

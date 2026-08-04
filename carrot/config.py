@@ -42,6 +42,11 @@ DEFAULTS = {
     "server_host": "127.0.0.1",
     "server_port": 8181,
     "web_ui": True,
+    # Appearance. The browser is the source of truth (it has to decide the
+    # theme before it can call this API); these are the fallback for a
+    # machine whose local storage was cleared. "auto" follows the OS.
+    "ui_theme": "auto",
+    "ui_accent": "carrot",
     "recap_enabled": False,
     "recap_hours": [7, 8],
     "recap_rss_feeds": [
