@@ -295,3 +295,37 @@ def test_build_skips_the_headless_shell():
     """The agent runs headful, so the headless shell is a binary nothing can
     reach — it was 115 MB of download on the first CI run."""
     assert "--no-shell" in BUILD_SRC
+
+
+class TestRunnerLabels:
+    """A retired GitHub-hosted runner label does not fail — it queues.
+
+    The job is never assigned a runner and sits there until the 24h timeout,
+    so the run shows as "in progress" rather than red and the missing artifact
+    is easy to miss. macos-13 was retired on 2025-12-04 and the Intel Mac
+    build silently stopped producing anything for months.
+    """
+
+    # Labels GitHub has retired, mapped to what replaced them.
+    RETIRED = {
+        "macos-11": "macos-14 / macos-15",
+        "macos-12": "macos-14 / macos-15",
+        "macos-13": "macos-15-intel (Intel) or macos-14+ (Apple Silicon)",
+        "ubuntu-18.04": "ubuntu-22.04 / ubuntu-latest",
+        "ubuntu-20.04": "ubuntu-22.04 / ubuntu-latest",
+        "windows-2016": "windows-latest",
+        "windows-2019": "windows-latest",
+    }
+
+    def test_no_retired_runner_labels(self):
+        for label, replacement in self.RETIRED.items():
+            assert f"os: {label}\n" not in WORKFLOW_SRC, (
+                f"'{label}' is a retired runner label — that job will queue "
+                f"forever rather than fail. Use {replacement}."
+            )
+
+    def test_every_platform_still_has_a_job(self):
+        """Losing a matrix entry is the other way a target goes missing."""
+        for artifact in ("windows-x64", "mac-arm64", "mac-x64", "linux-x64"):
+            assert f"artifact: {artifact}" in WORKFLOW_SRC, \
+                f"no build job produces the {artifact} installer"
