@@ -28,6 +28,7 @@ import json
 import shutil
 import platform
 import subprocess
+import time
 import argparse
 import urllib.request
 
@@ -240,13 +241,38 @@ def build_webvendor():
     subprocess.run([NPM, "run", "build"], cwd=vendor_dir, check=True)
 
 
+# Building a .dmg mounts a disk image, styles it, then unmounts. On a busy
+# macOS runner something else — Spotlight, or the diskimages helper that the
+# job's own cleanup later reports as orphaned — can still hold the volume when
+# hdiutil tries to eject, and the whole package step dies with
+# "couldn't eject disk2 - Resource busy". It is a race, not a defect: the same
+# commit packaged cleanly on the arm64 runner in the same run. Retrying is the
+# only lever, since electron-builder exposes no knob for the eject.
+PACKAGE_ATTEMPTS = 3
+PACKAGE_RETRY_DELAY = 20
+
+
 def build_electron():
     """Package the desktop app for the host platform."""
     if not os.path.exists(os.path.join(GUI_DIR, "node_modules")):
         log("Installing Electron dependencies…")
         subprocess.run([NPM, "install", "--quiet"], cwd=GUI_DIR, check=True)
-    log("Packaging with electron-builder…")
-    subprocess.run([NPM, "run", "dist"], cwd=GUI_DIR, check=True)
+
+    for attempt in range(1, PACKAGE_ATTEMPTS + 1):
+        log(f"Packaging with electron-builder… (attempt {attempt}/{PACKAGE_ATTEMPTS})")
+        result = subprocess.run([NPM, "run", "dist"], cwd=GUI_DIR)
+        if result.returncode == 0:
+            break
+        if attempt == PACKAGE_ATTEMPTS:
+            raise subprocess.CalledProcessError(result.returncode, "npm run dist")
+        log(f"Packaging failed; retrying in {PACKAGE_RETRY_DELAY}s. "
+            "On macOS this is usually a busy disk image that could not be ejected.")
+        if IS_MAC:
+            # Detach anything left mounted, or the retry trips over the volume
+            # the failed attempt abandoned.
+            subprocess.run(["hdiutil", "detach", "/Volumes/Carrot", "-force"],
+                           capture_output=True)
+        time.sleep(PACKAGE_RETRY_DELAY)
     log(f"Installer output in {os.path.join(GUI_DIR, 'dist')}")
 
 

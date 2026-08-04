@@ -392,3 +392,26 @@ class TestQuickAskOverlay:
         """The reply is model output; innerHTML with it would run whatever the
         model emitted, inside a window that holds the preload bridge."""
         assert "showReply(esc(" in self.overlay
+
+
+class TestPackagingRetries:
+    """Building a .dmg mounts a disk image and then ejects it. On a busy macOS
+    runner the eject loses a race with Spotlight or the diskimages helper, and
+    electron-builder exits non-zero — the same commit packaged cleanly on the
+    arm64 runner in the same run, so it is timing, not the build."""
+
+    def test_packaging_is_retried(self):
+        assert "PACKAGE_ATTEMPTS" in BUILD_SRC
+        assert build_installer.PACKAGE_ATTEMPTS > 1
+
+    def test_a_failure_still_fails_the_build_eventually(self):
+        """Retrying forever would turn a real breakage into a hung job."""
+        assert "raise subprocess.CalledProcessError" in BUILD_SRC
+
+    def test_a_stuck_volume_is_detached_before_retrying(self):
+        """The retry would otherwise trip over the volume the failed attempt
+        left mounted."""
+        assert "hdiutil" in BUILD_SRC and "detach" in BUILD_SRC
+
+    def test_the_retry_waits(self):
+        assert build_installer.PACKAGE_RETRY_DELAY > 0
