@@ -56,7 +56,34 @@ function traceLine(hostId, text, kind) {
 
 // ---------- Research ----------
 
+const DEPTH_LABELS = {
+    quick: 'Quick — 2 threads, one round',
+    standard: 'Standard — 4 threads, two rounds',
+    deep: 'Deep — 6 threads, three rounds',
+    exhaustive: 'Exhaustive — 10 threads, five rounds (cloud model)',
+};
+
+// Exhaustive only appears when research is routed to a hosted model: an
+// on-device model is the bottleneck at that volume, not the evidence.
+async function loadResearchDepths() {
+    const select = document.getElementById('research-depth');
+    if (!select) return;
+    let info;
+    try { info = await api('/api/research/depths'); } catch (_) { return; }
+    const current = select.value;
+    select.innerHTML = (info.depths || []).map(d =>
+        `<option value="${d}">${escHtml(DEPTH_LABELS[d] || d)}</option>`).join('');
+    select.value = (info.depths || []).includes(current) ? current : (info.default || 'standard');
+    const note = document.getElementById('research-depth-note');
+    if (note) {
+        note.textContent = info.local
+            ? `Running on ${info.model} — assign Research to a cloud provider in Settings for Exhaustive.`
+            : `Running on ${info.model} — Exhaustive available.`;
+    }
+}
+
 async function loadResearch() {
+    loadResearchDepths();
     try {
         const { runs } = await api('/api/research');
         renderResearchRuns(runs);

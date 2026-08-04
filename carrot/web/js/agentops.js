@@ -626,10 +626,19 @@ function renderRouting(status) {
             <td><select id="route-provider-${escHtml(task.id)}"
                         onchange="loadRouteModels('${escHtml(task.id)}')">${options}</select></td>
             <td>
-              <input list="models-${escHtml(task.id)}" id="route-model-${escHtml(task.id)}"
-                     class="mono" placeholder="${escHtml(route.model || 'auto')}"
-                     value="${escHtml(pinned ? pinned.model : '')}" spellcheck="false">
-              <datalist id="models-${escHtml(task.id)}"></datalist>
+              <div class="combo" id="combo-${escHtml(task.id)}">
+                <input id="route-model-${escHtml(task.id)}" class="mono combo-input"
+                       placeholder="${escHtml(route.model || 'auto')}"
+                       value="${escHtml(pinned ? pinned.model : '')}" spellcheck="false"
+                       autocomplete="off"
+                       oninput="comboFilter('${escHtml(task.id)}')"
+                       onfocus="comboOpen('${escHtml(task.id)}')">
+                <button type="button" class="combo-caret" tabindex="-1"
+                        onclick="comboToggle('${escHtml(task.id)}')">
+                  <svg class="ico"><use href="#i-chevron"/></svg>
+                </button>
+                <div class="combo-pop hidden" id="combo-pop-${escHtml(task.id)}"></div>
+              </div>
             </td>
             <td>
               <span class="tag ${route.local ? '' : 'cloud'}">
@@ -671,20 +680,87 @@ async function loadRouteModels(taskId) {
 }
 
 async function fillModelList(taskId, providerId) {
-    const list = document.getElementById(`models-${taskId}`);
-    if (!list || !providerId) return;
+    if (!providerId) return;
     try {
         if (!providerModels[providerId]) {
             const result = await api(`/api/router/providers/${encodeURIComponent(providerId)}/models`);
             providerModels[providerId] = result.models || [];
         }
-        list.innerHTML = providerModels[providerId]
-            .map(m => `<option value="${escHtml(m)}"></option>`).join('');
+        comboRender(taskId);
     } catch (_) {
         // A provider that cannot list its models is still usable — the model
         // field is a free-text input, so the user can just type the name.
     }
 }
+
+// ---------- Model combobox ----------
+//
+// A native <datalist> popup is drawn by the browser, so it ignores the app's
+// theme entirely and scrolls badly inside Electron. This is a plain styled
+// listbox: same free-text input, but a scrollable, filterable, themed popup.
+
+function comboModels(taskId) {
+    const providerId = document.getElementById(`route-provider-${taskId}`)?.value || '';
+    return providerModels[providerId] || [];
+}
+
+// Filtering only ever happens while the user is typing. Opening the list
+// always shows everything — otherwise a saved value filters the list down
+// to itself and the route can never be changed again.
+function comboRender(taskId, filtered) {
+    const pop = document.getElementById(`combo-pop-${taskId}`);
+    const input = document.getElementById(`route-model-${taskId}`);
+    if (!pop || !input) return;
+    const typed = filtered ? input.value.trim().toLowerCase() : '';
+    const models = comboModels(taskId)
+        .filter(m => !typed || m.toLowerCase().includes(typed));
+    if (!models.length) {
+        pop.innerHTML = `<div class="combo-empty">${
+            comboModels(taskId).length ? 'No match — type any model name.'
+                                       : 'Pick a provider to list its models.'}</div>`;
+        return;
+    }
+    pop.innerHTML = models.map(m => `
+        <button type="button" class="combo-opt${m === input.value ? ' selected' : ''}"
+                onmousedown="comboPick('${escHtml(taskId)}', '${escHtml(m)}')">${escHtml(m)}</button>`
+    ).join('');
+}
+
+function comboOpen(taskId) {
+    // Only one popup at a time.
+    document.querySelectorAll('.combo-pop').forEach(p => p.classList.add('hidden'));
+    comboRender(taskId, false);   // show every model, whatever is in the box
+    document.getElementById(`combo-pop-${taskId}`)?.classList.remove('hidden');
+}
+
+function comboToggle(taskId) {
+    const pop = document.getElementById(`combo-pop-${taskId}`);
+    if (!pop) return;
+    if (pop.classList.contains('hidden')) {
+        document.getElementById(`route-model-${taskId}`)?.focus();
+        comboOpen(taskId);
+    } else {
+        pop.classList.add('hidden');
+    }
+}
+
+function comboFilter(taskId) {
+    comboRender(taskId, true);    // typing narrows the list
+    document.getElementById(`combo-pop-${taskId}`)?.classList.remove('hidden');
+}
+
+function comboPick(taskId, model) {
+    const input = document.getElementById(`route-model-${taskId}`);
+    if (input) input.value = model;
+    document.getElementById(`combo-pop-${taskId}`)?.classList.add('hidden');
+}
+
+// Clicking anywhere else closes any open model popup.
+document.addEventListener('click', (e) => {
+    if (!e.target.closest || !e.target.closest('.combo')) {
+        document.querySelectorAll('.combo-pop').forEach(p => p.classList.add('hidden'));
+    }
+});
 
 async function saveRoute(taskId) {
     const provider = document.getElementById(`route-provider-${taskId}`)?.value || '';

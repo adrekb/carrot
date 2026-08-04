@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import os
+import re
 import json
 import queue
 import threading
@@ -31,6 +32,7 @@ from carrot import (
     bootstrap as bootstrap_mod,
     hub as hub_mod,
     calfeed as calfeed_mod,
+    attachments as attach_mod,
     interop as interop_mod,
     deep_research as dr_mod,
     skills as skills_mod,
@@ -74,6 +76,24 @@ VENDOR_DIR = os.path.join(WEB_DIR, "vendor")
 os.makedirs(VENDOR_DIR, exist_ok=True)
 app.mount("/vendor", StaticFiles(directory=VENDOR_DIR), name="vendor")
 
+
+@app.middleware("http")
+async def _revalidate_app_assets(request, call_next):
+    """Make the app's own JS/CSS revalidate on every load.
+
+    StaticFiles serves far-future-cacheable responses, and the Electron
+    renderer honours that — so after an update the shell kept running the
+    previous build's JavaScript against the new backend. Fonts and vendor
+    bundles are content-addressed and huge, so they stay cacheable.
+    """
+    response = await call_next(request)
+    path = request.url.path
+    if path.startswith(("/js/", "/css/")) or path == "/":
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    elif path.startswith(("/assets/fonts/", "/vendor/")):
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return response
+
 app.include_router(files_api.router)
 
 
@@ -101,8 +121,15 @@ class VlmScanRequest(BaseModel):
     scan_dirs: Optional[list] = None
 
 
+class ChatAttachment(BaseModel):
+    name: Optional[str] = ""
+    mime: Optional[str] = ""
+    data: str            # base64, with or without a data: URL prefix
+
+
 class ChatRequest(BaseModel):
     message: str
+    attachments: Optional[List[ChatAttachment]] = None
     conversation_id: Optional[str] = None
     model: Optional[str] = None
     stream: Optional[bool] = False
@@ -404,20 +431,76 @@ async def require_session_token(request: Request, call_next):
 
 # ===== Index / static =====
 
+def _asset_fingerprint() -> str:
+    """A short hash of every JS/CSS file's size and mtime.
+
+    Appended to asset URLs so an update changes the URL itself. Setting
+    cache headers alone cannot fix an *already* cached response — the
+    browser will not revalidate until the old entry expires — but a new
+    URL is a new cache key, so the new build always wins.
+    """
+    import hashlib
+    digest = hashlib.sha1()
+    for folder in ("js", "css"):
+        directory = os.path.join(WEB_DIR, folder)
+        for name in sorted(os.listdir(directory)) if os.path.isdir(directory) else []:
+            try:
+                stat = os.stat(os.path.join(directory, name))
+            except OSError:
+                continue
+            digest.update(f"{name}:{stat.st_size}:{int(stat.st_mtime)}".encode())
+    return digest.hexdigest()[:10]
+
+
+_ASSET_RE = re.compile(r'(src|href)="(/(?:js|css)/[^"?]+)"')
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
     index_path = os.path.join(WEB_DIR, "index.html")
     if os.path.exists(index_path):
         with open(index_path, "r", encoding="utf-8") as handle:
-            return HTMLResponse(security_mod.inject_token(handle.read()))
+            html = handle.read()
+        version = _asset_fingerprint()
+        html = _ASSET_RE.sub(lambda m: f'{m.group(1)}="{m.group(2)}?v={version}"', html)
+        return HTMLResponse(security_mod.inject_token(html))
     return HTMLResponse("<h1>Carrot</h1><p>Frontend not found. Run from project root.</p>")
 
 
 # ===== Health / status =====
 
+def app_version() -> str:
+    """The installed version, for the UI and for bug reports.
+
+    The build stamp written by scripts/build_installer.py wins: package
+    metadata goes stale in an editable checkout, and a frozen app has no
+    pyproject.toml to read.
+    """
+    try:
+        from carrot._build import VERSION, COMMIT
+        return f"{VERSION}+{COMMIT}" if COMMIT else VERSION
+    except Exception:
+        pass
+    try:
+        import tomllib
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "pyproject.toml"), "rb") as handle:
+            return tomllib.load(handle)["project"]["version"]
+    except Exception:
+        pass
+    try:
+        from importlib.metadata import version
+        return version("carrot")
+    except Exception:
+        return "unknown"
+
+
 @app.get("/api/health")
 async def health():
-    return {"status": "healthy"}
+    # The build id makes "am I running the update?" answerable at a glance,
+    # which guesswork repeatedly got wrong.
+    return {"status": "healthy", "version": app_version(),
+            "assets": _asset_fingerprint()}
 
 
 @app.get("/api/status")
@@ -467,6 +550,43 @@ async def bootstrap_run(req: BootstrapRunRequest | None = None):
         return bootstrap_mod.run_bootstrap(model=req.model if req else None)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Bootstrap failed: {e}")
+
+
+@app.get("/api/bootstrap/stream")
+async def bootstrap_stream(model: str = ""):
+    """Run bootstrap, streaming install and download progress as SSE.
+
+    The setup splash needs a real progress bar: pulling a model is a
+    multi-gigabyte download and a bar that jumps 30% -> 100% tells the
+    user nothing. Bootstrap runs on a worker thread and pushes events
+    through a queue so the response can stream while it works.
+    """
+    import queue as _queue
+    import threading as _threading
+
+    events: _queue.Queue = _queue.Queue()
+    DONE = object()
+
+    def worker():
+        try:
+            result = bootstrap_mod.run_bootstrap(
+                progress_cb=events.put, model=model or None)
+            events.put({"type": "done", **result})
+        except Exception as e:
+            events.put({"type": "done", "error": f"Bootstrap failed: {e}"})
+        finally:
+            events.put(DONE)
+
+    _threading.Thread(target=worker, daemon=True).start()
+
+    def event_stream():
+        while True:
+            event = events.get()
+            if event is DONE:
+                break
+            yield f"data: {json.dumps(event)}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 # ===== Carrot Hub (hardware-aware model recommendations) =====
@@ -534,16 +654,60 @@ async def list_models():
     client = ollama_mod.OllamaClient()
     installed = client.list_models() if client.is_available() else []
     installed_names = {m["name"] for m in installed}
-    active = config.get_config().get("ollama_model", bootstrap_mod.DEFAULT_MODEL)
+    cfg = config.get_config()
+    active = cfg.get("ollama_model", bootstrap_mod.DEFAULT_MODEL)
     suggested = [
         {**m, "installed": m["name"] in installed_names}
         for m in SUGGESTED_MODELS
     ]
+
+    # Models from configured cloud providers belong in the picker too —
+    # a key you already pasted is useless if the UI only offers Ollama.
+    #
+    # A provider whose model list cannot be fetched (expired key, rate
+    # limit, proxy) is still listed, carrying its error: dropping it
+    # silently made cloud models look unsupported rather than unreachable,
+    # and left no way to pick one by name.
+    remote = []
+    try:
+        status = router_mod.status()
+        for provider in status.get("providers", []):
+            if not (provider.get("enabled") and provider.get("configured")):
+                continue
+            if provider.get("id") == "ollama":
+                continue
+            try:
+                listed = providers_mod.list_models(provider["id"])
+                names, error = listed.get("models", []), listed.get("error", "")
+            except Exception as exc:
+                names, error = [], str(exc)
+            remote.append({
+                "provider": provider["id"],
+                "label": provider.get("label", provider["id"]),
+                "models": names,
+                "error": error,
+            })
+    except Exception:
+        pass
+
+    # Which provider/model currently serves chat (a pinned route wins).
+    chat_provider, chat_model, chat_local = "ollama", active, True
+    try:
+        chat_route = router_mod.route("chat")
+        chat_provider, chat_model = chat_route.provider, chat_route.model
+        chat_local = chat_route.local
+    except Exception:
+        pass
+
     return {
         "installed": installed,
         "active_model": active,
         "default_model": bootstrap_mod.DEFAULT_MODEL,
         "suggested": suggested,
+        "remote": remote,
+        "chat_provider": chat_provider,
+        "chat_model": chat_model,
+        "chat_local": chat_local,
     }
 
 
@@ -703,7 +867,8 @@ async def calendar_refresh():
 
 # ===== Chat =====
 
-def _prepare_history(conv, message, skill_slug, extra_system=None, mode=None):
+def _prepare_history(conv, message, skill_slug, extra_system=None, mode=None,
+                     images=None):
     """Build the model message list for a turn.
 
     Order matters: the search directive, then skill instructions, then any
@@ -756,7 +921,11 @@ def _prepare_history(conv, message, skill_slug, extra_system=None, mode=None):
             pass
 
     history += summarize_mod.build_history(conv)
-    history.append({"role": "user", "content": message})
+    user_turn = {"role": "user", "content": message}
+    if images:
+        # Ollama takes base64 images on the message itself.
+        user_turn["images"] = images
+    history.append(user_turn)
     return history, skill
 
 
@@ -1036,13 +1205,51 @@ def _chat_stream_response(req, conv, history, skill, resolved, prelude=None, mod
     return StreamingResponse(stream(), media_type="text/event-stream")
 
 
+
+def _apply_attachments(req, resolved):
+    """Turn a request's attachments into (images, extra_system, note).
+
+    Documents become prompt text and work with any model. Images only go
+    through when the resolved model can actually see — otherwise this
+    raises, because a model that silently ignores your screenshot and
+    answers anyway is worse than a clear error.
+    """
+    raw = [a.model_dump() if hasattr(a, "model_dump") else dict(a)
+           for a in (req.attachments or [])]
+    if not raw:
+        return None, None, ""
+    try:
+        images, documents = attach_mod.process(raw)
+    except attach_mod.AttachmentError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    if images:
+        model = getattr(resolved, "model", "") or ""
+        if getattr(resolved, "local", True):
+            can_see = ollama_mod.OllamaClient().supports_vision(model)
+        else:
+            can_see = attach_mod.model_supports_vision(model)
+        if not can_see:
+            raise HTTPException(
+                status_code=400,
+                detail=(f"{model} cannot read images. Pick a vision model — "
+                        "the Model Hub's 'image: Y' filter lists the ones that fit "
+                        "your machine — or attach a PDF or text file instead."),
+            )
+    return images or None, attach_mod.documents_prompt(documents) or None, \
+        attach_mod.describe(images, documents)
+
+
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
     conv = _open_conversation(req)
     resolved = _resolve_chat_route(req)
     mode = search_mode(req.search_mode)
-    history, skill = _prepare_history(conv, req.message, req.skill, mode=mode)
-    conv_mod.add_message(req.conversation_id, "user", req.message)
+    images, docs_system, note = _apply_attachments(req, resolved)
+    history, skill = _prepare_history(conv, req.message, req.skill,
+                                      extra_system=docs_system, mode=mode, images=images)
+    conv_mod.add_message(req.conversation_id, "user",
+                         f"{req.message}\n\n[{note}]" if note else req.message)
 
     if req.stream:
         return _chat_stream_response(req, conv, history, skill, resolved, mode=mode)
@@ -1079,8 +1286,11 @@ async def chat_stream(req: ChatRequest):
     conv = _open_conversation(req)
     resolved = _resolve_chat_route(req)
     mode = search_mode(req.search_mode)
-    history, skill = _prepare_history(conv, req.message, req.skill, mode=mode)
-    conv_mod.add_message(req.conversation_id, "user", req.message)
+    images, docs_system, note = _apply_attachments(req, resolved)
+    history, skill = _prepare_history(conv, req.message, req.skill,
+                                      extra_system=docs_system, mode=mode, images=images)
+    conv_mod.add_message(req.conversation_id, "user",
+                         f"{req.message}\n\n[{note}]" if note else req.message)
     return _chat_stream_response(req, conv, history, skill, resolved, mode=mode)
 
 
@@ -2041,6 +2251,12 @@ def _sse(generator):
             yield f"data: {json.dumps(event)}\n\n"
 
     return StreamingResponse(stream(), media_type="text/event-stream")
+
+
+@app.get("/api/research/depths")
+async def research_depths():
+    """Which depths the current research route can sustain."""
+    return research_mod.available_depths()
 
 
 @app.get("/api/research")

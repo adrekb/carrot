@@ -1,6 +1,6 @@
 {
   "name": "carrot-desktop",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Carrot - A local-first AI assistant with speech, hybrid search, notes, and planning",
   "main": "main.js",
   "scripts": {
@@ -8,9 +8,17 @@
     "package": "electron-builder --dir",
     "dist": "electron-builder --publish=never"
   },
-  "keywords": ["carrot", "ai", "assistant", "local", "ollama", "speech"],
+  "keywords": [
+    "carrot",
+    "ai",
+    "assistant",
+    "local",
+    "ollama",
+    "speech"
+  ],
   "author": "Carrot Community",
   "license": "MIT",
+  "homepage": "https://github.com/ar3116-sketch/carrot",
   "devDependencies": {
     "electron": "^30.0.0",
     "electron-builder": "^24.9.1"
@@ -30,6 +38,10 @@
       {
         "from": "../dist/backend/carrot-backend",
         "to": "backend/carrot-backend"
+      },
+      {
+        "from": "../dist/pw-browsers",
+        "to": "pw-browsers"
       }
     ],
     "win": {
@@ -46,18 +58,34 @@
       "oneClick": true,
       "perMachine": false,
       "runAfterFinish": true,
-      "deleteAppDataOnUninstall": false
+      "deleteAppDataOnUninstall": false,
+      "include": "build/installer.nsh"
     },
     "mac": {
-      "target": ["dmg", "zip"],
+      "target": [
+        "dmg",
+        "zip"
+      ],
       "icon": "public/icon.png",
       "category": "public.app-category.productivity"
     },
     "linux": {
-      "target": ["AppImage", "deb"],
+      "target": [
+        "AppImage",
+        "deb"
+      ],
       "icon": "public/icon.png",
       "category": "Utility",
-      "maintainer": "Carrot Community <carrot@users.noreply.github.com>"
+      "maintainer": "Carrot Community <carrot@users.noreply.github.com>",
+      "depends": [
+        "libnotify4",
+        "libxtst6",
+        "libnss3",
+        "libatspi2.0-0",
+        "libgtk-3-0",
+        "libsecret-1-0",
+        "libportaudio2"
+      ]
     }
   }
 }

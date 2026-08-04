@@ -70,9 +70,35 @@ DEPTHS: Dict[str, Dict[str, int]] = {
         "subquestions": 6, "queries_per_round": 3, "results_per_query": 8,
         "reads_per_round": 4, "rounds": 3, "workers": 4, "chars_per_page": 8000,
     },
+    # Only offered when research is routed to a hosted model. On-device
+    # models are the bottleneck at these volumes — a 1B would spend an hour
+    # producing something worse. A frontier model has the context window and
+    # the throughput to actually use this much evidence.
+    "exhaustive": {
+        "subquestions": 10, "queries_per_round": 4, "results_per_query": 10,
+        "reads_per_round": 7, "rounds": 5, "workers": 8, "chars_per_page": 14000,
+    },
 }
 
+# Depths that are wasted on a local model.
+CLOUD_ONLY_DEPTHS = {"exhaustive"}
+
 DEFAULT_DEPTH = "standard"
+
+
+def available_depths() -> Dict[str, Any]:
+    """Which depths the current research route can actually sustain."""
+    try:
+        from carrot import router as router_mod
+        route = router_mod.route("research")
+        local = bool(route.local)
+        model = route.model
+    except Exception:
+        local, model = True, ""
+    names = [d for d in DEPTHS if not (local and d in CLOUD_ONLY_DEPTHS)]
+    return {"depths": names, "local": local, "model": model,
+            "default": DEFAULT_DEPTH,
+            "cloud_only": sorted(CLOUD_ONLY_DEPTHS)}
 
 RESEARCH_SYSTEM = (
     "You are a research agent inside Carrot, a local-first assistant. You are "
@@ -80,6 +106,10 @@ RESEARCH_SYSTEM = (
     "it to say, and you never present an inference as a quotation. When sources "
     "disagree you say so. Never use emojis."
 )
+
+# Parallel researchers against a metered endpoint are the fastest way to
+# get throttled. Local models have no such limit.
+CLOUD_MAX_WORKERS = 3
 
 MAX_CLAIMS_PER_SUBQUESTION = 8
 VERIFY_BATCH = 6
@@ -435,12 +465,31 @@ class Researcher:
     # --- gathering ---
 
     def _gather_web(self, queries: List[str]) -> List[Dict[str, Any]]:
+        if getattr(self.context, "web_disabled", False):
+            return []
         candidates: List[Dict[str, str]] = []
         for query in queries:
             self.emit({"stage": "search", "subquestion": self.subquestion, "detail": query})
-            for hit in websearch.search(query, max_results=self.profile["results_per_query"]):
+            hits = websearch.search_all(query, max_results=self.profile["results_per_query"])
+            self.context.note_search(bool(hits))
+            for hit in hits:
+                # Homepages and sign-in pages cost a fetch and answer nothing.
+                if not websearch.is_content_url(hit["url"]):
+                    continue
                 if not any(hit["url"] == existing["url"] for existing in candidates):
                     candidates.append(hit)
+
+        # One site should not supply a whole round. Four recipes from the same
+        # domain is one source's opinion wearing four hats.
+        per_domain: Dict[str, int] = {}
+        diverse: List[Dict[str, str]] = []
+        for hit in candidates:
+            host = websearch.host_label(hit["url"])
+            if per_domain.get(host, 0) >= 2:
+                continue
+            per_domain[host] = per_domain.get(host, 0) + 1
+            diverse.append(hit)
+        candidates = diverse
 
         gathered = []
         for hit in candidates[: self.profile["reads_per_round"]]:
@@ -533,8 +582,14 @@ class Researcher:
                 sources += self._gather_local(queries)
 
             if not sources:
-                self.emit({"stage": "read", "subquestion": self.subquestion,
-                           "detail": "no readable sources this round"})
+                # Distinguish "the web gave us nothing" from "we read pages
+                # that turned out to be useless" — they need different fixes.
+                if self.context.search_is_broken:
+                    self.emit({"stage": "read", "subquestion": self.subquestion,
+                               "detail": "web search is returning nothing — stopping early"})
+                else:
+                    self.emit({"stage": "read", "subquestion": self.subquestion,
+                               "detail": "no usable sources this round"})
                 break
 
             new_findings = self._extract(sources)
@@ -730,6 +785,10 @@ def run_research_stream(
     against exactly like anything found on the web.
     """
     depth = depth if depth in DEPTHS else DEFAULT_DEPTH
+    if depth in CLOUD_ONLY_DEPTHS and available_depths()["local"]:
+        # Asked for more than an on-device model can sustain — fall back
+        # rather than grinding for an hour on a worse answer.
+        depth = "deep"
     question = (question or "").strip()
     if not question:
         yield {"error": "a research question is required"}
@@ -743,6 +802,18 @@ def run_research_stream(
     budget = policy.Budget.from_config({"max_seconds": get_config().get("research_max_seconds", 1800)})
     context = policy.register_run(policy.RunContext(run_id, budget=budget, emit=emit))
     store = SourceStore(run_id)
+
+    # Probe the search backend once, before planning. A broken client does
+    # not error — it returns confident nonsense, and finding that out after
+    # thirty queries and a page of soup recipes helps nobody. This does not
+    # abort the run: indexed files and past conversations are real sources,
+    # so the run continues over those and says the web is unavailable.
+    web_ok = websearch.search_backend_healthy()
+    if not web_ok:
+        context.web_disabled = True
+        yield {"stage": "plan", "detail":
+               "web search is not returning usable results — researching your "
+               "local files only"}
 
     try:
         # Seeds first: they take S1, S2 … so a report's lowest citation numbers
@@ -783,7 +854,17 @@ def run_research_stream(
                 errors.append(f"{subquestion['question']}: {exc}")
                 return researcher.mine
 
-        pool = ThreadPoolExecutor(max_workers=DEPTHS[depth]["workers"], thread_name_prefix="carrot-research")
+        # Hosted providers meter requests per minute, and the depth profiles
+        # were sized for a local model that only competes with itself. Fanning
+        # eight workers at a metered endpoint is what trips a 429 in the first
+        # place, so cap concurrency when the route leaves this machine.
+        workers = DEPTHS[depth]["workers"]
+        try:
+            if not router_mod.route("research").local:
+                workers = min(workers, CLOUD_MAX_WORKERS)
+        except Exception:
+            pass
+        pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="carrot-research")
         futures = [pool.submit(work, subquestion) for subquestion in subquestions]
 
         def watch():
@@ -806,7 +887,14 @@ def run_research_stream(
 
         if not findings:
             finish_run(run_id, "failed", error="no supported findings", plan=subquestions)
-            yield {"error": "no sources could be read — check your connection, or try a narrower question"}
+            if getattr(context, "web_disabled", False) or context.search_is_broken:
+                yield {"error": (
+                    "Web search returned nothing for any query. Carrot uses DuckDuckGo; "
+                    "check your connection or a firewall/VPN blocking it. Research needs "
+                    "the web — chat and your indexed files still work offline.")}
+            else:
+                yield {"error": ("Found pages but none were readable or on-topic. "
+                                 "Try a narrower, more specific question.")}
             return
 
         # --- verify ---
@@ -826,20 +914,48 @@ def run_research_stream(
         yield {"stage": "write", "detail": f"writing the report from {len(store.all())} sources"}
         prompt = build_report_prompt(question, findings, store, context.taint_signals)
         parts: List[str] = []
-        try:
-            for event in router_mod.stream_events(
-                _route(router_mod.TASK_RESEARCH),
-                [{"role": "system", "content": RESEARCH_SYSTEM}, {"role": "user", "content": prompt}],
-            ):
-                if event["type"] == "thinking":
-                    yield {"thinking": event["text"]}
-                elif event["type"] == "content":
-                    parts.append(event["text"])
-                    yield {"token": event["text"]}
-        except Exception as exc:
-            finish_run(run_id, "failed", error=str(exc), plan=subquestions)
-            yield {"error": f"the writing model failed: {exc}"}
-            return
+
+        # Losing the report to a rate limit after minutes of gathering evidence
+        # is the worst possible moment to fail, so the write is retried with
+        # backoff. Retrying a *stream* is only safe before any text has been
+        # emitted — once tokens are out, a retry would duplicate them — so a
+        # mid-stream failure is reported rather than restarted.
+        import time as _time
+        attempt = 0
+        while True:
+            try:
+                for event in router_mod.stream_events(
+                    _route(router_mod.TASK_RESEARCH),
+                    [{"role": "system", "content": RESEARCH_SYSTEM},
+                     {"role": "user", "content": prompt}],
+                ):
+                    if event["type"] == "thinking":
+                        yield {"thinking": event["text"]}
+                    elif event["type"] == "content":
+                        parts.append(event["text"])
+                        yield {"token": event["text"]}
+                break
+            except Exception as exc:
+                retryable = (router_mod._is_rate_limited(exc) or router_mod._is_transient(exc))
+                if parts or not retryable or attempt >= router_mod.RATE_LIMIT_RETRIES:
+                    finish_run(run_id, "failed", error=str(exc), plan=subquestions)
+                    if router_mod._is_rate_limited(exc):
+                        yield {"error": (
+                            "The model provider rate-limited the final write. Your evidence "
+                            "was gathered and saved — wait a minute and run it again, or "
+                            "assign Research to a different provider in Settings.")}
+                    else:
+                        yield {"error": f"the writing model failed: {exc}"}
+                    return
+                attempt += 1
+                delay = router_mod._retry_after_seconds(exc)
+                if delay is None:
+                    delay = min(router_mod.RATE_LIMIT_BASE_DELAY * (2 ** (attempt - 1)),
+                                router_mod.RATE_LIMIT_MAX_DELAY)
+                yield {"stage": "write",
+                       "detail": f"provider rate-limited the write — waiting {int(delay)}s "
+                                 f"(attempt {attempt} of {router_mod.RATE_LIMIT_RETRIES})"}
+                _time.sleep(delay)
 
         report = "".join(parts).strip() or "The research produced no report text."
         report += "\n\n" + source_appendix(store)

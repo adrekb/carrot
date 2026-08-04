@@ -38,7 +38,14 @@ from carrot.leaderboard import get_hardware_profile
 
 # The Carrot Hub website. The catalog it serves has the same shape as
 # BUNDLED_CATALOG; both are overridable in config for self-hosters.
-HUB_URL = "https://hub.carrotai.app"
+# There is no Carrot Hub website. The live catalog comes straight from the
+# public Hugging Face API, and the curated list ships in this file. Point
+# ``hub_url``/``hub_catalog_url`` at your own host to serve a custom catalog;
+# left empty, Carrot uses HF plus the bundle and never calls a dead domain.
+HUB_URL = ""
+# Where "browse the source" sends the user: the index the live results
+# actually come from.
+HUB_BROWSE_URL = "https://huggingface.co/models?library=gguf&sort=trending"
 HUB_CATALOG_PATH = "/catalog.json"
 CATALOG_CACHE_PATH = os.path.join(CARROT_DIR, "config", "hub_catalog.json")
 CATALOG_MAX_AGE_HOURS = 24
@@ -232,7 +239,8 @@ def _catalog_urls() -> tuple:
     except Exception:
         cfg = {}
     hub_url = (cfg.get("hub_url") or HUB_URL).rstrip("/")
-    catalog_url = cfg.get("hub_catalog_url") or (hub_url + HUB_CATALOG_PATH)
+    # No catalog URL unless someone actually configured a host.
+    catalog_url = cfg.get("hub_catalog_url") or (hub_url + HUB_CATALOG_PATH if hub_url else "")
     return hub_url, catalog_url
 
 
@@ -272,10 +280,12 @@ def _cache_age_hours(cache: dict) -> float:
 
 
 def refresh_catalog(force: bool = False) -> Optional[list]:
-    """Fetch the live catalog from Carrot Hub; None if unreachable/invalid."""
+    """Fetch a custom catalog if one is configured; None otherwise."""
     if _recently_failed("catalog") and not force:
         return None
     _, catalog_url = _catalog_urls()
+    if not catalog_url:
+        return None      # nothing configured — bundled catalog + live HF
     try:
         resp = requests.get(catalog_url, timeout=10)
         resp.raise_for_status()
@@ -674,6 +684,7 @@ def hub_overview(refresh: bool = False) -> dict:
         "recommendations": recs,
         "trending": annotate_fit(fetch_hf_trending(), specs),
         "hub_url": hub_url,
+        "browse_url": HUB_BROWSE_URL,
         "catalog_source": catalog["source"],
         "catalog_fetched_at": catalog["fetched_at"],
         "use_cases": USE_CASES,

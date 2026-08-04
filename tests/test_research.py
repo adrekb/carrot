@@ -225,11 +225,11 @@ def test_full_pipeline_produces_a_cited_report(isolated_db, fake_ollama, monkeyp
     real check in place would test DNS rather than the pipeline.
     """
     monkeypatch.setattr(policy, "_is_public_address", lambda host: (True, ""))
-    monkeypatch.setattr(research.websearch, "search", lambda query, max_results=6: [
+    monkeypatch.setattr(research.websearch, "search", lambda query, **kw: [
         {"title": "Result one", "url": "https://a.test/one", "snippet": "about the topic"},
         {"title": "Result two", "url": "https://b.test/two", "snippet": "more on the topic"},
     ])
-    monkeypatch.setattr(research.websearch, "fetch", lambda url, max_chars=6000: {
+    monkeypatch.setattr(research.websearch, "fetch", lambda url, **kw: {
         "url": url, "final_url": url, "title": "A page", "text": "The answer is 42.",
         "links": [], "error": "", "screening": {"tainted": False, "signals": [], "origin": url},
         "tainted": False, "truncated": False,
@@ -308,3 +308,285 @@ def test_runs_can_be_listed_and_deleted(isolated_db):
     assert research.get_run(run_id)["report"] == "# Report"
     assert research.delete_run(run_id) is True
     assert research.get_run(run_id) is None
+
+
+# ===== Search relevance guard =====
+#
+# The abandoned duckduckgo-search package now proxies to Bing and returns
+# unrelated pages: a real "RTX 4090" research run came back with
+# centimetre-to-feet converters, which then got read and cited.
+
+from carrot import websearch as websearch_mod
+
+
+@pytest.fixture(autouse=True)
+def _assume_search_works(monkeypatch):
+    """The sandbox has no network. Seed the probe's cache rather than
+    replacing the function, so the probe's own tests still exercise it."""
+    import time
+    monkeypatch.setattr(websearch_mod, "_health_cache",
+                        {"value": True, "at": time.monotonic()})
+
+RTX_QUERY = "RTX 4090 open source LLM inference speed benchmark comparison"
+
+
+def test_off_topic_results_are_dropped():
+    junk = [
+        ("CM to Feet Converter", "Convert centimeters to feet easily"),
+        ("Centimeters to feet (cm to ft) converter", "cm to ft conversion table"),
+        ("TVS Apache RTX: Price, Mileage", "TVS Apache RTX motorcycle specs"),
+    ]
+    for title, snippet in junk:
+        assert not websearch_mod._is_relevant(RTX_QUERY, title, snippet), title
+
+
+def test_on_topic_results_are_kept():
+    good = [
+        ("RTX 4090 LLM inference benchmark", "tokens per second for Llama on a 4090"),
+        ("Open-source models for 24GB VRAM", "RTX 4090 quantization and inference guide"),
+    ]
+    for title, snippet in good:
+        assert websearch_mod._is_relevant(RTX_QUERY, title, snippet), title
+
+
+def test_short_queries_stay_permissive():
+    """A two-word query has little to match on; don't over-filter it."""
+    assert websearch_mod._is_relevant("carrot recipes", "Carrot cake", "the best carrot cake")
+
+
+def test_search_filters_junk_from_the_backend(monkeypatch):
+    monkeypatch.setattr(websearch_mod, "_raw_search", lambda q, n, r: [
+        {"title": "CM to Feet Converter", "href": "https://rapidtables.com/cm",
+         "body": "convert centimeters to feet"},
+        {"title": "RTX 4090 inference benchmark", "href": "https://example.com/bench",
+         "body": "LLM tokens per second on the 4090"},
+    ])
+    results = websearch_mod.search(RTX_QUERY)
+    assert [r["url"] for r in results] == ["https://example.com/bench"]
+
+
+def test_search_returns_empty_when_every_backend_fails(monkeypatch):
+    """Better to report nothing than to hand the model unrelated pages."""
+    def boom(q, n, r):
+        raise RuntimeError("backend down")
+    monkeypatch.setattr(websearch_mod, "_raw_search", boom)
+    assert websearch_mod.search(RTX_QUERY) == []
+
+
+def test_raw_search_prefers_the_maintained_client(monkeypatch):
+    """ddgs replaced duckduckgo_search; the old one returns junk now."""
+    import sys, types
+
+    used = []
+
+    class FakeDDGS:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def text(self, query, **kwargs):
+            used.append("ddgs")
+            return [{"title": "ok", "href": "https://example.com", "body": "body"}]
+
+    monkeypatch.setitem(sys.modules, "ddgs", types.SimpleNamespace(DDGS=FakeDDGS))
+    websearch_mod._raw_search("q", 3, "wt-wt")
+    assert used == ["ddgs"]
+
+
+# ===== Junk URLs =====
+
+def test_homepages_and_signin_pages_are_not_content():
+    """A run that 'reads github.com' has read a marketing page."""
+    for url in ["https://github.com", "https://github.com/", "https://nvidia.com/",
+                "https://github.com/login", "https://example.com/signup",
+                "https://site.com/pricing", "https://x.com/about"]:
+        assert not websearch_mod.is_content_url(url), url
+
+
+def test_real_pages_are_content():
+    for url in ["https://github.com/ollama/ollama",
+                "https://example.com/blog/rtx-4090-benchmarks",
+                "https://site.org/?article=42"]:
+        assert websearch_mod.is_content_url(url), url
+
+
+# ===== Search-health reporting =====
+
+def test_run_context_flags_a_dead_search_backend():
+    from carrot import policy
+    ctx = policy.RunContext("run1", budget=policy.Budget())
+    for _ in range(5):
+        ctx.note_search(False)
+    assert ctx.search_is_broken is False      # not enough evidence yet
+    ctx.note_search(False)
+    assert ctx.search_is_broken is True
+
+
+def test_one_good_search_means_the_backend_works():
+    from carrot import policy
+    ctx = policy.RunContext("run2", budget=policy.Budget())
+    for _ in range(9):
+        ctx.note_search(False)
+    ctx.note_search(True)
+    assert ctx.search_is_broken is False
+
+
+# ===== Depth gating =====
+
+def test_exhaustive_depth_is_cloud_only(monkeypatch):
+    from carrot import research
+
+    class LocalRoute:
+        local, model = True, "llama3.2:1b"
+    monkeypatch.setattr(research.router_mod, "route", lambda *a, **k: LocalRoute())
+    info = research.available_depths()
+    assert "exhaustive" not in info["depths"]
+    assert info["local"] is True
+
+    class CloudRoute:
+        local, model = False, "claude-opus-5"
+    monkeypatch.setattr(research.router_mod, "route", lambda *a, **k: CloudRoute())
+    info = research.available_depths()
+    assert "exhaustive" in info["depths"]
+    assert info["local"] is False
+
+
+def test_exhaustive_profile_is_actually_bigger():
+    from carrot import research
+    deep, exhaustive = research.DEPTHS["deep"], research.DEPTHS["exhaustive"]
+    for key in ("subquestions", "rounds", "workers", "reads_per_round", "chars_per_page"):
+        assert exhaustive[key] > deep[key], key
+
+
+# ===== Backend health probe =====
+
+def test_probe_detects_a_backend_returning_unrelated_results(monkeypatch):
+    """The exact failure seen in the wild: soup recipes for a CS question."""
+    websearch_mod._health_cache.clear()
+    monkeypatch.setattr(websearch_mod, "_raw_search", lambda q, n, r: [
+        {"title": "Provencal Vegetable Soup Recipe", "body": "Ina Garten, Food Network"},
+        {"title": "Target : Expect More. Pay Less.", "body": "shop all categories"},
+    ])
+    assert websearch_mod.search_backend_healthy(force=True) is False
+
+
+def test_probe_accepts_a_working_backend(monkeypatch):
+    websearch_mod._health_cache.clear()
+    monkeypatch.setattr(websearch_mod, "_raw_search", lambda q, n, r: [
+        {"title": "Dynamic programming - Wikipedia",
+         "body": "a method for solving a complex problem by breaking it into subproblems"},
+    ])
+    assert websearch_mod.search_backend_healthy(force=True) is True
+
+
+def test_probe_result_is_cached(monkeypatch):
+    websearch_mod._health_cache.clear()
+    calls = {"n": 0}
+
+    def counted(q, n, r):
+        calls["n"] += 1
+        return [{"title": "Dynamic programming algorithm", "body": "wikipedia"}]
+    monkeypatch.setattr(websearch_mod, "_raw_search", counted)
+    websearch_mod.search_backend_healthy(force=True)
+    websearch_mod.search_backend_healthy()
+    websearch_mod.search_backend_healthy()
+    assert calls["n"] == 1, "one probe should serve a whole run"
+
+
+# ===== Wikipedia fallback =====
+
+def test_search_all_tops_up_from_wikipedia_when_thin(monkeypatch):
+    monkeypatch.setattr(websearch_mod, "search", lambda q, **kw: [
+        {"title": "only one", "url": "https://a.test/1", "snippet": "s"}])
+    monkeypatch.setattr(websearch_mod, "search_wikipedia", lambda q, max_results=5: [
+        {"title": "Dynamic programming", "url": "https://en.wikipedia.org/wiki/Dynamic_programming",
+         "snippet": "method"}])
+    results = websearch_mod.search_all("dynamic programming")
+    assert len(results) == 2
+    assert any("wikipedia.org" in r["url"] for r in results)
+
+
+def test_search_all_leaves_healthy_results_alone(monkeypatch):
+    monkeypatch.setattr(websearch_mod, "search", lambda q, **kw: [
+        {"title": "a", "url": "https://a.test/1", "snippet": "s"},
+        {"title": "b", "url": "https://b.test/2", "snippet": "s"}])
+    called = {"wiki": False}
+
+    def wiki(q, max_results=5):
+        called["wiki"] = True
+        return []
+    monkeypatch.setattr(websearch_mod, "search_wikipedia", wiki)
+    assert len(websearch_mod.search_all("q")) == 2
+    assert called["wiki"] is False
+
+
+# ===== Domain diversity =====
+
+def test_one_domain_cannot_dominate_a_round(isolated_db, monkeypatch):
+    """Four Food Network recipes is one source wearing four hats."""
+    from carrot import policy
+    monkeypatch.setattr(websearch_mod, "search_all", lambda q, **kw: [
+        {"title": f"Recipe {i}", "url": f"https://foodnetwork.com/r{i}", "snippet": "soup"}
+        for i in range(5)
+    ] + [{"title": "Real", "url": "https://other.test/page", "snippet": "topic"}])
+    monkeypatch.setattr(websearch_mod, "fetch", lambda url, **kw: {
+        "url": url, "final_url": url, "title": "t", "text": "body", "links": [],
+        "error": "", "screening": {"tainted": False, "signals": [], "origin": url},
+        "tainted": False, "truncated": False})
+    monkeypatch.setattr(policy, "_is_public_address", lambda host: (True, ""))
+
+    run_id = research.create_run("q", "deep")
+    ctx = policy.register_run(policy.RunContext(run_id, budget=policy.Budget()))
+    store = research.SourceStore(run_id)
+    agent = research.Researcher(
+        run_id, {"question": "q", "sources": ["web"]}, "deep", store, ctx, lambda e: None)
+    gathered = agent._gather_web(["query"])
+    hosts = [websearch_mod.host_label(s["locator"]) for s in gathered]
+    assert hosts.count("foodnetwork.com") <= 2, hosts
+
+
+# ===== No module bypasses the ddgs/duckduckgo_search fallback =====
+#
+# recap.py and deep_research.py used to `from duckduckgo_search import DDGS`
+# at the top of the file. duckduckgo_search was dropped from dependencies in
+# favor of ddgs, so on a machine that only has ddgs installed, importing
+# either module (and therefore importing `carrot` itself, since recap is
+# imported in carrot/__init__.py) raised ModuleNotFoundError before the app
+# could even start.
+
+def test_no_module_imports_duckduckgo_search_at_top_level():
+    import ast
+    import pathlib
+    carrot_dir = pathlib.Path(__file__).resolve().parent.parent / "carrot"
+    offenders = []
+    for path in carrot_dir.glob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in tree.body:  # top-level only; lazy imports inside
+                                 # functions are fine (see websearch._raw_search)
+            if isinstance(node, ast.ImportFrom) and node.module == "duckduckgo_search":
+                offenders.append(path.name)
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name in ("duckduckgo_search", "ddgs"):
+                        offenders.append(path.name)
+    assert not offenders, (
+        f"{offenders} import a DDG client at module load time — this crashes "
+        "carrot's whole import chain if that package isn't installed. Route "
+        "through carrot.websearch instead."
+    )
+
+
+def test_carrot_package_imports_without_any_ddg_client_installed(monkeypatch):
+    """Reproduces the frozen-build crash directly, without needing to
+    actually uninstall packages: block both DDG modules from being found."""
+    import sys
+    import builtins
+    real_import = builtins.__import__
+
+    def blocking_import(name, *args, **kwargs):
+        if name in ("duckduckgo_search", "ddgs"):
+            raise ModuleNotFoundError(f"No module named '{name}'")
+        return real_import(name, *args, **kwargs)
+
+    for mod in ("carrot", "carrot.recap", "carrot.deep_research", "carrot.websearch"):
+        monkeypatch.delitem(sys.modules, mod, raising=False)
+    monkeypatch.setattr(builtins, "__import__", blocking_import)
+    import carrot  # noqa: F401 — must not raise

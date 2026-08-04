@@ -3,109 +3,227 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Carrot - Voice Overlay</title>
+<title>Carrot — Quick Ask</title>
 <style>
+  /* A soft floating command bar: heavy blur, deep round corners, one
+     accent. The window itself is transparent, so all the shape lives here. */
+  /* Kept in step with the main window's palette. The overlay is a file://
+     page, so it cannot read the app's stored theme; the desktop shell
+     relays it and stamps data-theme / data-accent on <html> (see the
+     script at the end of this file). */
+  :root {
+    --panel: rgba(30, 33, 42, 0.82);
+    --stroke: rgba(255, 255, 255, 0.115);
+    --text: #eceef4;
+    --muted: #99a0ae;
+    --accent: #f4813f;
+    --accent-soft: rgba(244, 129, 63, 0.15);
+    --accent-line: rgba(244, 129, 63, 0.32);
+    --sheen: rgba(255, 255, 255, 0.14);
+    --drop: rgba(0, 0, 0, 0.5);
+    --drop-sm: rgba(0, 0, 0, 0.3);
+    --ease: cubic-bezier(0.32, 0.72, 0, 1);
+  }
+  :root[data-theme="light"] {
+    --panel: rgba(255, 255, 255, 0.86);
+    --stroke: rgba(38, 32, 26, 0.12);
+    --text: #1c1a18;
+    --muted: #5f5a54;
+    --sheen: rgba(38, 32, 26, 0.10);
+    --drop: rgba(38, 30, 22, 0.22);
+    --drop-sm: rgba(38, 30, 22, 0.12);
+  }
+  :root[data-accent="ember"]  { --accent: #f2603f; --accent-soft: rgba(242, 96, 63, 0.15);  --accent-line: rgba(242, 96, 63, 0.32); }
+  :root[data-accent="amber"]  { --accent: #e3a33a; --accent-soft: rgba(227, 163, 58, 0.15); --accent-line: rgba(227, 163, 58, 0.32); }
+  :root[data-accent="orchid"] { --accent: #b57ae0; --accent-soft: rgba(181, 122, 224, 0.16); --accent-line: rgba(181, 122, 224, 0.34); }
+  :root[data-accent="teal"]   { --accent: #3fbfa8; --accent-soft: rgba(63, 191, 168, 0.16); --accent-line: rgba(63, 191, 168, 0.34); }
+  :root[data-accent="indigo"] { --accent: #7c8cf0; --accent-soft: rgba(124, 140, 240, 0.16); --accent-line: rgba(124, 140, 240, 0.34); }
   * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { background: transparent; overflow: hidden; }
   body {
-    background: rgba(22, 33, 54, 0.95);
-    backdrop-filter: blur(20px);
-    border-radius: 16px;
-    border: 1px solid rgba(255,255,255,0.1);
-    padding: 12px 20px;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    color: #e0e0e0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    padding: 14px;
+    color: var(--text);
+  }
+
+  .bar {
+    background: var(--panel);
+    backdrop-filter: blur(30px) saturate(160%);
+    -webkit-backdrop-filter: blur(30px) saturate(160%);
+    border: 1px solid var(--stroke);
+    border-radius: 18px;
+    box-shadow: 0 22px 60px var(--drop), 0 2px 6px var(--drop-sm);
+    padding: 12px 14px;
     display: flex;
     align-items: center;
-    gap: 14px;
-    width: 460px;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    gap: 11px;
+    animation: rise 0.22s var(--ease);
   }
-  .mic-icon {
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
-    background: #e94560;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 16px;
-    animation: pulse 1.5s infinite;
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(-6px) scale(0.985); }
+    to   { opacity: 1; transform: none; }
   }
-  @keyframes pulse {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(233, 69, 96, 0.4); }
-    50% { box-shadow: 0 0 0 8px rgba(233, 69, 96, 0); }
+
+  .mark {
+    width: 26px; height: 26px;
+    flex: 0 0 auto;
+    border-radius: 8px;
+    background: var(--accent-soft);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--accent);
   }
-  .input {
+  .mark svg { width: 15px; height: 15px; }
+
+  input {
     flex: 1;
-    background: rgba(255,255,255,0.05);
-    border: 1px solid rgba(255,255,255,0.1);
-    border-radius: 8px;
-    padding: 8px 14px;
-    color: #e0e0e0;
-    font-size: 14px;
-    outline: none;
-  }
-  .input:focus {
-    border-color: #e94560;
-  }
-  .input::placeholder {
-    color: #666;
-  }
-  .send-btn {
-    background: #e94560;
-    color: white;
+    min-width: 0;
+    background: none;
     border: none;
-    border-radius: 8px;
-    padding: 8px 16px;
-    cursor: pointer;
-    font-size: 14px;
+    outline: none;
+    color: var(--text);
+    font: inherit;
+    font-size: 14.5px;
+    letter-spacing: -0.01em;
+    padding: 3px 0;
   }
-  .send-btn:hover { opacity: 0.85; }
-  .status {
-    font-size: 11px;
-    color: #f5a623;
-    white-space: nowrap;
+  input::placeholder { color: var(--muted); }
+
+  .hint {
+    flex: 0 0 auto;
+    font-size: 10.5px;
+    color: var(--muted);
+    border: 1px solid var(--stroke);
+    border-radius: 6px;
+    padding: 2px 6px;
+    letter-spacing: 0.02em;
   }
+  .hint.busy { color: var(--accent); border-color: var(--accent-line); }
+
+  /* The reply lands under the bar; the window grows to fit it. */
+  .reply {
+    margin-top: 9px;
+    background: var(--panel);
+    backdrop-filter: blur(30px) saturate(160%);
+    -webkit-backdrop-filter: blur(30px) saturate(160%);
+    border: 1px solid var(--stroke);
+    border-radius: 16px;
+    box-shadow: 0 22px 60px var(--drop);
+    padding: 13px 15px;
+    font-size: 13.5px;
+    line-height: 1.62;
+    color: var(--text);
+    max-height: 260px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    animation: rise 0.22s var(--ease);
+  }
+  .reply.hidden { display: none; }
+  .reply::-webkit-scrollbar { width: 8px; }
+  .reply::-webkit-scrollbar-track { background: transparent; }
+  .reply::-webkit-scrollbar-thumb {
+    background: var(--sheen);
+    border-radius: 5px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  .dots span {
+    display: inline-block;
+    width: 5px; height: 5px; margin-right: 3px;
+    border-radius: 50%;
+    background: var(--muted);
+    animation: blink 1.2s infinite;
+  }
+  .dots span:nth-child(2) { animation-delay: 0.18s; }
+  .dots span:nth-child(3) { animation-delay: 0.36s; }
+  @keyframes blink { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
 </style>
 </head>
 <body>
-  <div class="mic-icon" title="Carrot is listening">🎤</div>
-  <input type="text" class="input" id="voice-input" placeholder="Speak or type a command..." autofocus>
-  <button class="send-btn" onclick="sendCommand()">Send</button>
-  <div class="status" id="status">Alt+Space to toggle</div>
+  <div class="bar">
+    <div class="mark">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+           stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+    </div>
+    <input id="q" placeholder="Ask Carrot anything…" autofocus autocomplete="off" spellcheck="false">
+    <span class="hint" id="hint">Enter</span>
+  </div>
+  <div class="reply hidden" id="reply"></div>
 
-  <script>
-    const input = document.getElementById('voice-input');
-    const status = document.getElementById('status');
+<script>
+  const input = document.getElementById('q');
+  const hint = document.getElementById('hint');
+  const reply = document.getElementById('reply');
+  let busy = false;
 
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') sendCommand();
-    });
-
-    async function sendCommand() {
-      const text = input.value.trim();
-      if (!text) return;
-      input.value = '';
-      status.textContent = 'Thinking...';
-
-      try {
-        const res = await fetch('http://127.0.0.1:8181/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: text }),
-        });
-        const data = await res.json();
-        status.textContent = '✓ Done';
-        setTimeout(() => { status.textContent = 'Alt+Space to toggle'; }, 2000);
-
-        if (window.parent && window.parent.postMessage) {
-          window.parent.postMessage({ type: 'carrot-response', data }, '*');
-        }
-      } catch (e) {
-        status.textContent = 'Error';
-        setTimeout(() => { status.textContent = 'Alt+Space to toggle'; }, 2000);
-      }
+  function resize() {
+    // Ask the shell to match the window to the content height.
+    const h = document.body.scrollHeight;
+    if (window.carrotAPI && window.carrotAPI.resizeOverlay) {
+      window.carrotAPI.resizeOverlay(Math.min(Math.ceil(h), 460));
     }
-  </script>
+  }
+
+  function showReply(html) {
+    reply.innerHTML = html;
+    reply.classList.remove('hidden');
+    requestAnimationFrame(resize);
+  }
+
+  function clearReply() {
+    reply.classList.add('hidden');
+    reply.textContent = '';
+    requestAnimationFrame(resize);
+  }
+
+  input.addEventListener('keydown', async (e) => {
+    if (e.key === 'Escape') {
+      if (!reply.classList.contains('hidden')) { clearReply(); input.value = ''; return; }
+      if (window.carrotAPI && window.carrotAPI.hideOverlay) window.carrotAPI.hideOverlay();
+      return;
+    }
+    if (e.key !== 'Enter' || busy) return;
+
+    const text = input.value.trim();
+    if (!text) return;
+    busy = true;
+    input.value = '';
+    hint.textContent = 'Thinking';
+    hint.classList.add('busy');
+    showReply('<span class="dots"><span></span><span></span><span></span></span>');
+
+    try {
+      // Goes through the shell over IPC: the backend requires a session
+      // token, and only the main process knows where it lives on disk.
+      const res = await window.carrotAPI.sendCommand(text);
+      if (res && res.error) throw new Error(res.error);
+      const answer = (res && (res.response || res.message || res.content)) || 'No response.';
+      showReply(String(answer));
+    } catch (err) {
+      showReply('Could not reach Carrot: ' + (err && err.message ? err.message : err));
+    } finally {
+      busy = false;
+      hint.textContent = 'Enter';
+      hint.classList.remove('busy');
+      input.focus();
+    }
+  });
+
+  window.addEventListener('focus', () => input.focus());
+  // The shell relays the main window's resolved theme; it arrives before
+  // 'overlay-shown', so the panel is already repainted when it appears.
+  if (window.carrotAPI && window.carrotAPI.onAppearance) {
+    window.carrotAPI.onAppearance((a) => {
+      if (!a) return;
+      document.documentElement.setAttribute('data-theme', a.theme === 'light' ? 'light' : 'dark');
+      document.documentElement.setAttribute('data-accent', a.accent || 'carrot');
+    });
+  }
+
+  if (window.carrotAPI && window.carrotAPI.onOverlayShown) {
+    window.carrotAPI.onOverlayShown(() => { input.value = ''; clearReply(); input.focus(); });
+  }
+  requestAnimationFrame(resize);
+</script>
 </body>
 </html>

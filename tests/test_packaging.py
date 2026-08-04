@@ -109,3 +109,41 @@ def test_install_ollama_unix_fails_cleanly_when_offline(monkeypatch, tmp_path):
                         lambda dest, progress_cb=None, url="": False)
     events = []
     assert bootstrap.install_ollama_unix(progress_cb=events.append) is False
+
+
+# ===== Asset cache busting =====
+#
+# An update that keeps serving the previous build's JavaScript is
+# indistinguishable from the fix never shipping, so this is load-bearing.
+
+def test_index_fingerprints_js_and_css_urls(client):
+    html = client.get("/").text
+    import re as _re
+    refs = _re.findall(r'(?:src|href)="(/(?:js|css)/[^"]+)"', html)
+    assert refs, "no app assets referenced"
+    assert all("?v=" in ref for ref in refs), [r for r in refs if "?v=" not in r]
+    # One fingerprint for the whole page.
+    assert len({r.split("?v=")[1] for r in refs}) == 1
+
+
+def test_fingerprint_changes_when_an_asset_changes(monkeypatch, tmp_path):
+    from carrot import app as app_mod
+    web = tmp_path / "web"
+    (web / "js").mkdir(parents=True)
+    (web / "css").mkdir()
+    asset = web / "js" / "app.js"
+    asset.write_text("v1")
+    monkeypatch.setattr(app_mod, "WEB_DIR", str(web))
+
+    first = app_mod._asset_fingerprint()
+    asset.write_text("a much longer second version")
+    assert app_mod._asset_fingerprint() != first
+
+
+def test_app_code_revalidates_but_fonts_stay_cacheable(client):
+    """Stale JS breaks updates; fonts are immutable and large."""
+    js = client.get("/js/app.js")
+    assert "no-cache" in js.headers.get("cache-control", "")
+    font = client.get("/assets/fonts/InterVariable.woff2")
+    if font.status_code == 200:
+        assert "immutable" in font.headers.get("cache-control", "")

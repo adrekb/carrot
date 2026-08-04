@@ -20,9 +20,12 @@ transport level.
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any, Dict, List
-from urllib.parse import urljoin, urlparse
+from urllib.parse import quote, urljoin, urlparse
+
+LOG = logging.getLogger(__name__)
 
 import httpx
 
@@ -41,32 +44,129 @@ _STRIP_TAGS = ["script", "style", "nav", "header", "footer", "aside", "form", "n
 
 # ===== Search =====
 
+# Words that carry no topical signal, so matching on them means nothing.
+_STOPWORDS = {
+    "a", "an", "and", "any", "are", "as", "at", "be", "best", "by", "can", "compare",
+    "comparison", "do", "does", "for", "from", "has", "have", "how", "in", "is", "it",
+    "its", "latest", "list", "most", "new", "of", "on", "or", "other", "run", "running",
+    "that", "the", "their", "there", "these", "this", "to", "top", "use", "using",
+    "what", "when", "which", "who", "why", "with", "you", "your",
+}
+_MIN_TERM_LEN = 3
+
+
+def _terms(text: str) -> set:
+    return {w for w in re.findall(r"[a-z0-9][a-z0-9.+-]*", (text or "").lower())
+            if len(w) >= _MIN_TERM_LEN and w not in _STOPWORDS}
+
+
+def _is_relevant(query: str, title: str, snippet: str) -> bool:
+    """Does this result share any real topic word with the query?
+
+    A search backend that breaks does not fail loudly — it returns a page of
+    unrelated results (an RTX 4090 query coming back with centimetre-to-feet
+    converters). Feeding those into a research report is far worse than
+    returning nothing, so anything with no lexical overlap is dropped.
+    """
+    wanted = _terms(query)
+    if not wanted:
+        return True
+    overlap = len(wanted & _terms(f"{title} {snippet}"))
+    # One shared word is coincidence on a long query — "RTX" alone matches a
+    # motorcycle. Ask for a second term once the query is specific enough.
+    return overlap >= (2 if len(wanted) >= 4 else 1)
+
+
+# Paths that never contain an answer, only a door to one.
+_NON_CONTENT_PATHS = re.compile(
+    r"^/(login|signin|sign-in|signup|sign-up|register|account|auth|cart|checkout|"
+    r"pricing|download|downloads|contact|about|careers|jobs|legal|privacy|terms|"
+    r"cookie|subscribe|newsletter)(/|$)", re.I)
+
+
+def is_content_url(url: str) -> bool:
+    """Reject links that cannot answer a specific question.
+
+    A research run that "reads github.com" has read the GitHub homepage —
+    a marketing page with no bearing on the question. Bare domains and
+    sign-in/marketing paths are doors, not documents.
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    if parsed.scheme not in ("http", "https"):
+        return False
+    path = parsed.path or "/"
+    # A bare domain is a homepage. Allow it only when a query string carries
+    # the actual request (some sites put article ids there).
+    if path in ("", "/") and not parsed.query:
+        return False
+    if _NON_CONTENT_PATHS.match(path):
+        return False
+    return True
+
+
+def _raw_search(query: str, max_results: int, region: str) -> List[Dict[str, Any]]:
+    """Query DDG through whichever client library is installed.
+
+    ``duckduckgo_search`` was renamed to ``ddgs``; the abandoned package
+    still installs but now proxies to Bing and returns junk, so the new
+    one is tried first.
+    """
+    last_error = None
+    try:
+        from ddgs import DDGS
+
+        with DDGS() as client:
+            return list(client.text(query, max_results=max_results, region=region))
+    except ImportError:
+        pass
+    except Exception as exc:
+        last_error = exc
+    try:
+        from duckduckgo_search import DDGS as LegacyDDGS
+
+        with LegacyDDGS() as client:
+            return list(client.text(query, max_results=max_results, region=region))
+    except ImportError:
+        pass
+    except Exception as exc:
+        last_error = exc
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("no DuckDuckGo client installed — pip install ddgs")
+
+
 def search(query: str, max_results: int = 6, region: str = "wt-wt") -> List[Dict[str, str]]:
     """Free web search via DuckDuckGo. Returns [{title, url, snippet}].
 
     Failures return an empty list rather than raising: a research run that
-    loses one query should narrow its scope, not collapse.
+    loses one query should narrow its scope, not collapse. Results with no
+    topical overlap with the query are discarded — see ``_is_relevant``.
     """
     if not (query or "").strip():
         return []
     try:
-        from duckduckgo_search import DDGS
-
-        with DDGS() as ddgs:
-            raw = list(ddgs.text(query, max_results=max_results, region=region))
-    except Exception:
+        raw = _raw_search(query, max_results, region)
+    except Exception as exc:
+        LOG.warning("web search failed for %r: %s", query[:80], exc)
         return []
 
     results = []
+    dropped = 0
     for item in raw:
         url = item.get("href") or item.get("url") or ""
         if not url:
             continue
-        results.append({
-            "title": (item.get("title") or "").strip(),
-            "url": url,
-            "snippet": (item.get("body") or "").strip(),
-        })
+        title = (item.get("title") or "").strip()
+        snippet = (item.get("body") or item.get("description") or "").strip()
+        if not _is_relevant(query, title, snippet):
+            dropped += 1
+            continue
+        results.append({"title": title, "url": url, "snippet": snippet})
+    if dropped:
+        LOG.info("dropped %d off-topic result(s) for %r", dropped, query[:80])
     return results
 
 
@@ -183,3 +283,88 @@ def host_label(url: str) -> str:
     """A short, human-readable name for a source: the bare domain."""
     host = (urlparse(url or "").hostname or url or "").lower()
     return host[4:] if host.startswith("www.") else host
+
+
+# ===== Backend health and fallback =====
+#
+# A broken search client does not error — it returns confident nonsense
+# ("dynamic programming" answered with soup recipes and Target). Checking
+# once, up front, turns five minutes of grinding into one clear sentence.
+
+_CANARY_QUERY = "wikipedia dynamic programming algorithm"
+_CANARY_TERMS = {"dynamic", "programming", "algorithm", "wikipedia"}
+_health_cache: dict = {}
+_HEALTH_TTL_SECONDS = 300
+
+
+def search_backend_healthy(force: bool = False) -> bool:
+    """Is web search returning results that relate to the query at all?
+
+    Cached briefly so a research run with many sub-questions pays for one
+    probe, not one per agent.
+    """
+    import time
+    now = time.monotonic()
+    cached = _health_cache.get("value")
+    if cached is not None and not force and now - _health_cache.get("at", 0) < _HEALTH_TTL_SECONDS:
+        return cached
+    try:
+        raw = _raw_search(_CANARY_QUERY, 5, "wt-wt")
+    except Exception as exc:
+        LOG.warning("search backend probe failed: %s", exc)
+        _health_cache.update(value=False, at=now)
+        return False
+    hits = 0
+    for item in raw or []:
+        blob = f"{item.get('title', '')} {item.get('body') or item.get('description') or ''}"
+        if len(_CANARY_TERMS & _terms(blob)) >= 2:
+            hits += 1
+    healthy = hits >= 1
+    if not healthy:
+        LOG.warning("search backend returned %d results, none on-topic for the probe", len(raw or []))
+    _health_cache.update(value=healthy, at=now)
+    return healthy
+
+
+def search_wikipedia(query: str, max_results: int = 5) -> List[Dict[str, str]]:
+    """Wikipedia's own search API — a second opinion that needs no key.
+
+    Not a general web search, but for factual and technical questions it
+    is often better than the fourth blog result, and it keeps research
+    usable when the general backend is down.
+    """
+    try:
+        resp = requests.get(
+            "https://en.wikipedia.org/w/api.php",
+            params={"action": "query", "list": "search", "srsearch": query,
+                    "srlimit": max_results, "format": "json"},
+            headers={"User-Agent": "Carrot/1.0 (local assistant)"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        pages = resp.json().get("query", {}).get("search", [])
+    except Exception as exc:
+        LOG.info("wikipedia search failed for %r: %s", query[:60], exc)
+        return []
+    results = []
+    for page in pages:
+        title = page.get("title", "")
+        snippet = re.sub(r"<[^>]+>", "", page.get("snippet", ""))
+        results.append({
+            "title": title,
+            "url": "https://en.wikipedia.org/wiki/" + quote(title.replace(" ", "_")),
+            "snippet": snippet,
+        })
+    return results
+
+
+def search_all(query: str, max_results: int = 6, region: str = "wt-wt") -> List[Dict[str, str]]:
+    """General web search, topped up from Wikipedia when it comes back thin."""
+    results = search(query, max_results=max_results, region=region)
+    if len(results) >= 2:
+        return results
+    seen = {r["url"] for r in results}
+    for extra in search_wikipedia(query, max_results=max_results):
+        if extra["url"] not in seen:
+            results.append(extra)
+    return results

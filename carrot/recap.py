@@ -4,8 +4,6 @@ import feedparser
 from datetime import datetime, date
 
 import httpx
-from duckduckgo_search import DDGS
-
 from carrot.database import get_db
 from carrot.ollama_client import OllamaClient
 from carrot.config import get_config
@@ -52,33 +50,33 @@ def fetch_all_feeds(feed_urls: list = None):
 
 
 def fetch_live_tech_news(query: str = DUCKDUCKGO_QUERY, max_results: int = WEB_SEARCH_MAX_RESULTS) -> str:
+    from carrot import websearch
     search_context = []
     try:
-        with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=max_results))
-            for i, res in enumerate(results, 1):
-                search_context.append(
-                    f"[{i}] Title: {res['title']}\nURL: {res['href']}\nSnippet: {res['body']}\n"
-                )
+        results = websearch._raw_search(query, max_results, "wt-wt")
+        for i, res in enumerate(results, 1):
+            search_context.append(
+                f"[{i}] Title: {res.get('title', '')}\nURL: {res.get('href', '')}\nSnippet: {res.get('body', '')}\n"
+            )
         return "\n".join(search_context)
     except Exception as e:
         return f"Failed to fetch live web data: {str(e)}"
 
 
 def fetch_live_tech_articles(max_results: int = WEB_SEARCH_MAX_RESULTS) -> list:
+    from carrot import websearch
     results_list = []
     try:
-        with DDGS() as ddgs:
-            results = list(ddgs.text(DUCKDUCKGO_QUERY, max_results=max_results))
-            for res in results:
-                results_list.append(
-                    {
-                        "title": res.get("title", ""),
-                        "url": res.get("href", ""),
-                        "summary": res.get("body", ""),
-                        "source": "web_search",
-                    }
-                )
+        results = websearch._raw_search(DUCKDUCKGO_QUERY, max_results, "wt-wt")
+        for res in results:
+            results_list.append(
+                {
+                    "title": res.get("title", ""),
+                    "url": res.get("href", ""),
+                    "summary": res.get("body", ""),
+                    "source": "web_search",
+                }
+            )
     except Exception:
         pass
     return results_list

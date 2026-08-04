@@ -1,24 +1,183 @@
+/* Inter (SIL Open Font License 1.1) — bundled so the UI looks identical on
+   every OS and works with no network. License: /assets/fonts/LICENSE.txt */
+@font-face {
+  font-family: "InterVar";
+  src: url("/assets/fonts/InterVariable.woff2") format("woff2-variations"),
+       url("/assets/fonts/InterVariable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "InterVar";
+  src: url("/assets/fonts/InterVariable-Italic.woff2") format("woff2-variations"),
+       url("/assets/fonts/InterVariable-Italic.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: italic;
+  font-display: swap;
+}
+
 /* ===== Carrot AI — dark workspace theme ===== */
 
 :root {
-  --bg: #0a0a0c;
-  --bg2: #0e0e11;
-  --card: #121216;
-  --card2: #17171c;
-  --border: #212127;
-  --border-hi: #2d2d35;
-  --text: #ececef;
-  --muted: #85858f;
-  --faint: #55555e;
-  --accent: #ff5c1f;
-  --accent-hi: #ff7a42;
-  --accent-soft: rgba(255, 92, 31, 0.12);
-  --green: #3fd68f;
-  --red: #ff5d5d;
-  --yellow: #f5c451;
+  /* Warm, lifted charcoals rather than near-black: softer on the eye and
+     it lets the orange read as warm instead of neon. Surfaces separate by
+     luminance and shadow, not by hard 1px lines. */
+  /* Cool slate greys with a faint indigo cast — deliberately not the warm
+     olive-charcoal everyone else uses. Pairing a cool ground with a warm
+     accent is complementary, so the orange reads brighter at lower
+     saturation and the whole thing stays calm. */
+  --bg: #131419;
+  --bg2: #181a20;
+  --card: #1e2027;
+  --card2: #262932;
+  --card3: #30343f;
+  --border: rgba(190, 205, 235, 0.07);
+  --border-hi: rgba(190, 205, 235, 0.13);
+  --text: #eceef4;
+  --muted: #99a0ae;
+  --faint: #69707f;
+  /* Carrot orange proper: warmer and more saturated than a clay
+     terracotta, softer than the neon it replaced. */
+  --accent: #f4813f;
+  --accent-hi: #ff9a5e;
+  --accent-dim: #d0672c;
+  --accent-soft: rgba(244, 129, 63, 0.14);
+  --accent-line: rgba(244, 129, 63, 0.32);
+  --green: #57d1a0;
+  --red: #f2736b;
+  --yellow: #f0c268;
   --mono: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
-  --sans: "Inter", "Segoe UI", system-ui, sans-serif;
-  --radius: 10px;
+  /* System stacks on purpose: the app runs offline, so it cannot pull a
+     webfont. These resolve to SF Pro on macOS and Segoe UI Variable on
+     Windows 11 — both close in spirit to what we're after. */
+  --sans: "InterVar", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --display: "InterVar", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --serif: ui-serif, "Iowan Old Style", Charter, Cambria, "Palatino Linotype", Georgia, serif;
+  --radius: 14px;
+  --radius-sm: 10px;
+  --radius-lg: 20px;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.22);
+  --shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 24px 64px rgba(0, 0, 0, 0.46);
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* ===== Type =====
+   Softer rendering and a quieter hierarchy: headings get size and a serif,
+   not weight and shouting. */
+body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  letter-spacing: -0.006em;
+  line-height: 1.55;
+}
+.page-head h1, .page-head h2, .splash-card h1, .dash-head h1,
+.settings-head h3, .ext-head h3 {
+  font-family: var(--serif);
+  font-weight: 500;
+  letter-spacing: -0.012em;
+}
+.page-head h2 { font-size: 25px; }
+.settings-head h3, .ext-head h3 { font-size: 18px; }
+.dash-head h1, .splash-card h1 { font-size: 27px; }
+.muted, .subtle { line-height: 1.62; }
+p.muted { max-width: 78ch; }   /* long explanations stay readable */
+
+/* ===== Controls ===== */
+.btn, input, select, textarea {
+  border-radius: var(--radius-sm);
+  transition: background 0.16s var(--ease), border-color 0.16s var(--ease),
+              box-shadow 0.16s var(--ease), transform 0.12s var(--ease),
+              color 0.16s var(--ease);
+}
+.btn {
+  font-weight: 500;              /* 600 read as heavy next to serif titles */
+  letter-spacing: -0.003em;
+  padding: 8px 15px;
+}
+.btn:active { transform: scale(0.98); }
+.btn-primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: #21150f;                /* dark-on-warm reads softer than white */
+  box-shadow: var(--shadow-sm);
+}
+.btn-primary:hover { background: var(--accent-hi); }
+.btn-ghost {
+  background: var(--card2);
+  border-color: var(--border);
+  color: var(--text);
+}
+.btn-ghost:hover { background: var(--card3); border-color: var(--border-hi); }
+input, select, textarea {
+  background: var(--card2);
+  border: 1px solid var(--border);
+  padding: 8px 12px;
+}
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+input::placeholder, textarea::placeholder { color: var(--faint); }
+
+/* ===== Surfaces =====
+   Cards float on shadow instead of being fenced in by a bright border. */
+.settings-card, .hub-card, .widget-card, .splash-card, .hub-spec-card,
+.provider-row, .list-item {
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+.settings-card, .ext-section {
+  background: var(--card);
+  border: 1px solid var(--border);
+  padding: 22px 24px;
+  margin-bottom: 18px;
+}
+.settings-head { gap: 10px; margin-bottom: 6px; }
+.settings-head .ico { color: var(--accent); }
+.settings-row { gap: 9px; margin-top: 12px; }
+
+/* ===== Left navigation ===== */
+.app-nav { padding: 12px 10px; gap: 1px; }
+.nav-item {
+  border-left: none;             /* the active bar was the loudest thing here */
+  border-radius: var(--radius-sm);
+  padding: 8px 11px;
+  gap: 10px;
+  font-weight: 450;
+}
+.nav-item:hover { background: rgba(255, 252, 245, 0.045); color: var(--text); }
+.nav-item.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.nav-item.active .ico { color: var(--accent); }
+.nav-divider { margin: 10px 8px; background: var(--border); }
+
+/* ===== Chrome ===== */
+#menubar {
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  height: 50px;
+}
+.brand-name { font-weight: 600; letter-spacing: 0.02em; }
+.tag {
+  border-radius: 7px;
+  font-weight: 450;
+  border-color: var(--border);
+}
+.pop-section {
+  font-size: 10.5px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--faint);
+  padding: 9px 10px 5px;
+}
+#model-pop, #ws-pop, #nav-more-list, .combo-pop {
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -41,8 +200,8 @@ body {
 .muted { color: var(--muted); }
 
 ::-webkit-scrollbar { width: 9px; height: 9px; }
-::-webkit-scrollbar-thumb { background: #26262d; border-radius: 5px; border: 2px solid var(--bg); }
-::-webkit-scrollbar-thumb:hover { background: #33333c; }
+::-webkit-scrollbar-thumb { background: var(--card2); border-radius: 5px; border: 2px solid var(--bg); }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.22); }
 ::-webkit-scrollbar-track { background: transparent; }
 
 /* ===== Menu bar ===== */
@@ -218,7 +377,7 @@ body {
 .kbar-wrap { margin: 4px 0 8px; }
 .kbar-head { display: flex; justify-content: space-between; font-size: 12.5px; margin-bottom: 5px; }
 .kbar-head .val { color: var(--muted); font-family: var(--mono); font-size: 11.5px; }
-.kbar { height: 4px; background: #202027; border-radius: 3px; overflow: hidden; }
+.kbar { height: 4px; background: var(--card2); border-radius: 3px; overflow: hidden; }
 .kbar > div { height: 100%; background: var(--accent); border-radius: 3px; transition: width 0.4s; }
 
 .engine-row {
@@ -408,7 +567,7 @@ body {
 /* Terminal panel */
 #terminal-panel {
   border-top: 1px solid var(--border);
-  background: #0c0c0f;
+  background: var(--bg);
   flex-shrink: 0;
 }
 
@@ -641,14 +800,29 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   position: absolute;
   bottom: calc(100% + 10px);
   left: 0;
-  width: 320px;
-  background: #17171c;
-  border: 1px solid var(--border-hi);
-  border-radius: 12px;
-  box-shadow: 0 16px 50px rgba(0, 0, 0, 0.6);
+  width: 340px;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
   padding: 8px;
-  max-height: 420px;
-  overflow-y: auto;
+  /* JS clamps this to the room above the button; the value here is only
+     a ceiling for tall windows. */
+  max-height: 460px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#model-pop > .pop-section:first-child,
+#model-installed, #model-remote,
+#model-pop > .pop-section:nth-of-type(2), #model-suggested {
+  flex: 0 0 auto;
+}
+/* Everything except the pull box scrolls. */
+#model-pop .pop-scroll { overflow-y: auto; flex: 1 1 auto; min-height: 0; }
+#model-pop .pop-custom {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+  margin-top: 6px;
 }
 
 .pop-section {
@@ -696,7 +870,7 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 
 #pull-progress { padding: 10px 10px 8px; }
 .pull-label { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-bottom: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pull-track { height: 4px; background: #26262d; border-radius: 3px; overflow: hidden; }
+.pull-track { height: 4px; background: var(--card2); border-radius: 3px; overflow: hidden; }
 .pull-bar { height: 100%; width: 0; background: var(--accent); border-radius: 3px; transition: width 0.3s; }
 
 /* ===== Splash ===== */
@@ -736,7 +910,7 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 
 .splash-progress {
   height: 5px;
-  background: #202027;
+  background: var(--card2);
   border-radius: 3px;
   overflow: hidden;
   margin-bottom: 20px;
@@ -920,7 +1094,7 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   bottom: calc(100% + 10px);
   left: 0;
   width: 320px;
-  background: #17171c;
+  background: var(--card2);
   border: 1px solid var(--border-hi);
   border-radius: 12px;
   box-shadow: 0 16px 50px rgba(0, 0, 0, 0.6);
@@ -1246,7 +1420,7 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   position: absolute; bottom: 4px; left: 50%; transform: translateX(-50%);
   width: 4px; height: 4px; border-radius: 50%; background: var(--accent);
 }
-.cal-cell.today .cal-dot { background: #1a0d06; }
+.cal-cell.today .cal-dot { background: var(--bg); }
 .cal-upcoming-head {
   margin-top: 14px; font-size: 10px; letter-spacing: 0.12em;
   text-transform: uppercase; color: var(--faint);
@@ -1950,7 +2124,7 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   bottom: calc(100% + 10px);
   left: 0;
   width: 320px;
-  background: #17171c;
+  background: var(--card2);
   border: 1px solid var(--border-hi);
   border-radius: 12px;
   box-shadow: 0 16px 50px rgba(0, 0, 0, 0.6);
@@ -2087,7 +2261,7 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   top: calc(100% + 8px);
   right: 0;
   width: 320px;
-  background: #17171c;
+  background: var(--card2);
   border: 1px solid var(--border-hi);
   border-radius: 12px;
   box-shadow: 0 16px 50px rgba(0, 0, 0, 0.6);
@@ -2394,3 +2568,804 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 .storage-row { display: flex; align-items: center; gap: 10px; }
 .storage-row strong { flex: 1; font-family: var(--mono); font-size: 12.5px; }
 .storage-del { margin-left: auto; }
+
+/* ===== Setup splash: live progress + in-splash catalog ===== */
+.splash-detail {
+  font-size: 11.5px;
+  font-family: var(--mono);
+  color: var(--muted);
+  min-height: 16px;
+  margin: -12px 0 12px;
+}
+.splash-bar { transition: width 0.25s linear; }
+.splash-catalog {
+  max-height: 260px;
+  overflow-y: auto;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 6px;
+  margin-bottom: 14px;
+}
+.splash-cat-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 9px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.splash-cat-row:hover:not(:disabled) { background: var(--card2); border-color: var(--border-hi); }
+.splash-cat-row.selected { border-color: var(--accent); background: var(--accent-soft); }
+.splash-cat-row:disabled { opacity: 0.5; cursor: not-allowed; }
+.splash-cat-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.splash-cat-row .fit-badge { flex: 0 0 auto; }
+.splash-cat-why {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--mono);
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* ===== Model combobox (replaces the unstylable native datalist) ===== */
+.combo { position: relative; display: flex; align-items: center; }
+.combo-input { width: 100%; padding-right: 30px; }
+.combo-caret {
+  position: absolute;
+  right: 6px;
+  display: flex;
+  align-items: center;
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 2px;
+}
+.combo-caret:hover { color: var(--text); }
+.combo-pop {
+  position: absolute;
+  top: calc(100% + 5px);
+  left: 0;
+  right: 0;
+  z-index: 60;
+  max-height: 260px;
+  overflow-y: auto;              /* the scrolling the native popup never gave us */
+  overscroll-behavior: contain;
+  background: var(--card2);
+  border: 1px solid var(--border-hi);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg);
+  padding: 5px;
+}
+.combo-opt {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 7px 10px;
+  background: none;
+  border: none;
+  border-radius: 7px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.combo-opt:hover { background: rgba(255, 255, 255, 0.06); }
+.combo-opt.selected { background: var(--accent-soft); color: var(--accent); }
+.combo-empty { padding: 9px 10px; font-size: 12px; color: var(--muted); }
+
+/* Slim, unobtrusive scrollbars — the default Windows bar looks bolted on. */
+.combo-pop::-webkit-scrollbar, .splash-catalog::-webkit-scrollbar,
+.side-list::-webkit-scrollbar, .list::-webkit-scrollbar,
+.view::-webkit-scrollbar, .page::-webkit-scrollbar { width: 10px; height: 10px; }
+.combo-pop::-webkit-scrollbar-track, .splash-catalog::-webkit-scrollbar-track,
+.side-list::-webkit-scrollbar-track, .list::-webkit-scrollbar-track,
+.view::-webkit-scrollbar-track, .page::-webkit-scrollbar-track { background: transparent; }
+.combo-pop::-webkit-scrollbar-thumb, .splash-catalog::-webkit-scrollbar-thumb,
+.side-list::-webkit-scrollbar-thumb, .list::-webkit-scrollbar-thumb,
+.view::-webkit-scrollbar-thumb, .page::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.13);
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+.combo-pop::-webkit-scrollbar-thumb:hover, .splash-catalog::-webkit-scrollbar-thumb:hover,
+.side-list::-webkit-scrollbar-thumb:hover, .list::-webkit-scrollbar-thumb:hover,
+.view::-webkit-scrollbar-thumb:hover, .page::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.22);
+  background-clip: content-box;
+}
+
+/* ===== Measure =====
+   Full-bleed content reads as a dashboard; a bounded column reads as a
+   document. Wide views (grids, tables) opt out. */
+.page {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 26px 28px 60px;
+}
+#view-hub .page, #view-leaderboard .page { max-width: 1320px; }
+.page-head { margin-bottom: 18px; }
+.view { background: var(--bg); }
+
+/* Roomier, quieter lists. */
+.list-item {
+  background: var(--card);
+  border: 1px solid var(--border);
+  padding: 12px 15px;
+  margin-bottom: 8px;
+}
+.list-item:hover { border-color: var(--border-hi); }
+
+/* Cards breathe more and lean on shadow rather than outline. */
+.hub-card { padding: 16px 18px; gap: 8px; }
+.hub-recs, .hub-grid { gap: 14px; }
+.hub-spec-card { padding: 16px 20px; border-radius: var(--radius); }
+
+/* Table chrome: rules only where they separate meaning. */
+.routing-table th {
+  font-weight: 500;
+  font-size: 11.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--faint);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 9px;
+}
+.routing-table td { border-bottom: 1px solid var(--border); padding: 11px 10px 11px 0; }
+.routing-table tr:last-child td { border-bottom: none; }
+
+/* Buttons that are anchors must not look like links. */
+.btn { text-decoration: none; display: inline-flex; align-items: center; gap: 7px; }
+.btn .ico { width: 15px; height: 15px; }
+
+/* The quant explanation is a footnote, not a headline — it was competing
+   with the model name for attention. */
+.quant-note { color: var(--muted); font-size: 10.5px; letter-spacing: 0.01em; }
+
+/* Card hierarchy: name first, everything else recedes. */
+.hub-card-head { align-items: flex-start; gap: 10px; }
+.hub-card-head strong {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+.hub-card > .muted.small { font-size: 11.5px; line-height: 1.55; }
+.hub-blurb { font-size: 12.5px; }
+.hub-card-actions { margin-top: 6px; }
+
+/* Chips: pill-quiet until chosen. */
+.chip-row .chip { padding: 5px 13px; font-family: var(--sans); font-size: 12px; }
+.chip-row .chip.active { font-weight: 500; }
+
+/* Inter's optical sizing and tabular figures: numbers in tables and metrics
+   line up instead of jittering as they update. */
+body { font-optical-sizing: auto; font-variant-ligatures: contextual; }
+.routing-table, .storage-row, .m-meta, .hub-card .muted.small,
+.splash-detail, .cal-cell, .storage-summary { font-variant-numeric: tabular-nums; }
+
+/* ===== Glass =====
+   Blur only reads if there is something behind it, so the app sits on a
+   quiet ambient wash: two wide, low-opacity warm/cool pools that never
+   move. Floating surfaces then sample it. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: -20%;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(46% 38% at 14% 8%, rgba(244, 129, 63, 0.10), transparent 62%),
+    radial-gradient(42% 40% at 88% 22%, rgba(94, 132, 214, 0.09), transparent 64%),
+    radial-gradient(52% 44% at 62% 96%, rgba(244, 129, 63, 0.055), transparent 66%);
+  filter: saturate(115%);
+}
+
+/* Chrome: translucent, blurred, sitting over the wash. */
+#menubar {
+  background: rgba(24, 26, 32, 0.72);
+  backdrop-filter: blur(22px) saturate(170%);
+  -webkit-backdrop-filter: blur(22px) saturate(170%);
+}
+.app-nav {
+  background: rgba(22, 24, 30, 0.55);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  border-right: 1px solid var(--border);
+}
+.view { background: transparent; }
+
+/* Panels: enough translucency to feel like glass, enough body to read on. */
+.settings-card, .ext-section, .hub-card, .widget-card, .hub-spec-card,
+.list-item, .provider-row {
+  background: rgba(32, 35, 43, 0.62);
+  backdrop-filter: blur(16px) saturate(150%);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  border: 1px solid var(--border);
+}
+.hub-card.pick, .settings-card:hover { border-color: var(--border-hi); }
+
+/* Floating layers get the heaviest blur — they overlap real content. */
+#model-pop, #ws-pop, #nav-more-list, .combo-pop, #splash .splash-card,
+.skill-pop, #catalog-modal .modal-card {
+  background: rgba(30, 33, 41, 0.82);
+  backdrop-filter: blur(30px) saturate(180%);
+  -webkit-backdrop-filter: blur(30px) saturate(180%);
+  border: 1px solid var(--border-hi);
+}
+
+/* The command bar floats over the conversation. */
+#cmdbar {
+  background: rgba(30, 33, 41, 0.78);
+  backdrop-filter: blur(26px) saturate(175%);
+  -webkit-backdrop-filter: blur(26px) saturate(175%);
+  border: 1px solid var(--border-hi);
+  box-shadow: var(--shadow);
+}
+
+/* Inputs sit *in* the glass rather than on it. */
+input, select, textarea { background: rgba(255, 255, 255, 0.045); }
+input:focus, select:focus, textarea:focus { background: rgba(255, 255, 255, 0.06); }
+.btn-ghost { background: rgba(255, 255, 255, 0.05); }
+.btn-ghost:hover { background: rgba(255, 255, 255, 0.09); }
+
+/* A hairline of light along the top edge — how real glass catches a room. */
+/* Only elements that are statically positioned need this to anchor their
+   ::after highlight — #cmdbar is fixed and #model-pop/.combo-pop are
+   absolute, and overriding those pushed the command bar off-screen. */
+.settings-card, .hub-card, .splash-card {
+  position: relative;
+}
+.settings-card::after, .hub-card::after, .splash-card::after,
+#model-pop::after, #cmdbar::after, .combo-pop::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.13), transparent);
+  pointer-events: none;
+}
+
+/* ===== Attachments ===== */
+#attach-tray {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.attach-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 260px;
+  padding: 5px 7px 5px 9px;
+  background: rgba(30, 33, 41, 0.85);
+  backdrop-filter: blur(22px) saturate(170%);
+  -webkit-backdrop-filter: blur(22px) saturate(170%);
+  border: 1px solid var(--border-hi);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+  font-size: 12px;
+}
+.attach-chip img {
+  width: 26px; height: 26px;
+  object-fit: cover;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+.attach-chip > .ico { width: 16px; height: 16px; color: var(--accent); flex-shrink: 0; }
+.attach-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attach-size { color: var(--faint); font-size: 11px; flex-shrink: 0; }
+.attach-x {
+  display: flex;
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 5px;
+}
+.attach-x:hover { background: rgba(255, 255, 255, 0.09); color: var(--text); }
+.attach-x .ico { width: 13px; height: 13px; }
+
+/* Whole-window drop target. */
+body.dropping::after {
+  content: "Drop to attach";
+  position: fixed;
+  inset: 14px;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  color: var(--accent);
+  background: rgba(19, 20, 25, 0.55);
+  backdrop-filter: blur(6px);
+  border: 2px dashed var(--accent-line);
+  border-radius: var(--radius-lg);
+  pointer-events: none;
+}
+
+/* ===== More glass =====
+   Stronger wash behind, thinner surfaces on top, brighter edges. Contrast
+   is held by the blur and the edge highlight rather than by opacity. */
+body::before {
+  background:
+    radial-gradient(48% 40% at 12% 6%, rgba(244, 129, 63, 0.17), transparent 62%),
+    radial-gradient(46% 42% at 90% 18%, rgba(92, 136, 226, 0.16), transparent 64%),
+    radial-gradient(40% 34% at 74% 66%, rgba(196, 104, 220, 0.10), transparent 66%),
+    radial-gradient(56% 46% at 40% 104%, rgba(244, 129, 63, 0.11), transparent 68%);
+  filter: saturate(125%);
+}
+
+#menubar {
+  background: rgba(24, 26, 32, 0.5);
+  backdrop-filter: blur(34px) saturate(190%);
+  -webkit-backdrop-filter: blur(34px) saturate(190%);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+.app-nav {
+  background: rgba(22, 24, 30, 0.34);
+  backdrop-filter: blur(30px) saturate(175%);
+  -webkit-backdrop-filter: blur(30px) saturate(175%);
+  border-right: 1px solid rgba(255, 255, 255, 0.055);
+}
+.settings-card, .ext-section, .hub-card, .widget-card, .hub-spec-card,
+.list-item, .provider-row {
+  background: rgba(38, 42, 52, 0.4);
+  backdrop-filter: blur(24px) saturate(165%);
+  -webkit-backdrop-filter: blur(24px) saturate(165%);
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255, 255, 255, 0.045);
+}
+.settings-card:hover, .hub-card:hover {
+  background: rgba(42, 46, 58, 0.48);
+  border-color: rgba(255, 255, 255, 0.115);
+}
+#model-pop, #ws-pop, #nav-more-list, .combo-pop, #splash .splash-card,
+.skill-pop, #search-pop, #attach-tray .attach-chip {
+  background: rgba(30, 33, 42, 0.66);
+  backdrop-filter: blur(44px) saturate(200%);
+  -webkit-backdrop-filter: blur(44px) saturate(200%);
+  border: 1px solid rgba(255, 255, 255, 0.115);
+  box-shadow: var(--shadow-lg), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+}
+#cmdbar {
+  background: rgba(30, 33, 42, 0.55);
+  backdrop-filter: blur(40px) saturate(195%);
+  -webkit-backdrop-filter: blur(40px) saturate(195%);
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  box-shadow: var(--shadow-lg), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+}
+/* The terminal and editors stay opaque — code needs a steady ground. */
+#terminal-body, .monaco-host, .milkdown-host { backdrop-filter: none; }
+
+/* Brighter top-edge catch, and a soft falloff at the bottom. */
+.settings-card::after, .hub-card::after, .splash-card::after,
+#model-pop::after, #cmdbar::after, .combo-pop::after {
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.22), transparent);
+}
+
+/* ===== Native select popups =====
+   The option list is drawn by the OS, not the page. Without explicit
+   colours Windows renders white-on-white against a dark control. These
+   two properties are the only ones that reach that popup. */
+select {
+  color-scheme: dark;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2399a0ae' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9l6 6 6-6'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 30px;
+}
+select option,
+select optgroup {
+  background-color: #23262e;
+  color: #eceef4;
+}
+select option:checked { background-color: #2f333d; }
+
+/* A provider that could not list its models still gets a row explaining why. */
+.model-note {
+  padding: 4px 10px 7px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--yellow);
+}
+
+/* =====================================================================
+   Themes — light mode + accents
+   =====================================================================
+   Everything above this point either used a token or a hard-coded rgba().
+   The hard-coded ones were fine while there was exactly one theme; they
+   are re-declared here in terms of tokens so a second palette is a
+   variable swap rather than a second stylesheet.
+
+   Two independent axes:
+     html[data-theme]  = dark | light        (ground + glass)
+     html[data-accent] = carrot | ember | …  (accent + ambient wash)
+   "auto" is resolved to one of the two by theme.js before first paint,
+   so it never appears in the DOM and nothing here has to match it. */
+
+:root {
+  --scheme: dark;
+  --on-accent: #21150f;          /* text that sits on a filled accent */
+
+  /* Glass: fill, edge, and the inset highlight that fakes a lit rim. */
+  --glass-bar: rgba(24, 26, 32, 0.5);
+  --glass-nav: rgba(22, 24, 30, 0.34);
+  --glass-card: rgba(38, 42, 52, 0.4);
+  --glass-card-hi: rgba(42, 46, 58, 0.48);
+  --glass-pop: rgba(30, 33, 42, 0.66);
+  --glass-bar-edge: rgba(255, 255, 255, 0.07);
+  --glass-nav-edge: rgba(255, 255, 255, 0.055);
+  --glass-card-edge: rgba(255, 255, 255, 0.075);
+  --glass-card-edge-hi: rgba(255, 255, 255, 0.115);
+  --glass-pop-edge: rgba(255, 255, 255, 0.115);
+  --glass-inset: rgba(255, 255, 255, 0.045);
+  --glass-inset-hi: rgba(255, 255, 255, 0.07);
+  --glass-sheen: rgba(255, 255, 255, 0.22);
+  --glass-hover: rgba(255, 255, 255, 0.09);
+  --veil: rgba(19, 20, 25, 0.55);
+  --scrim: rgba(10, 11, 15, 0.62);
+
+  /* Native <select> popups are drawn by the OS and only take these. */
+  --opt-bg: #23262e;
+  --opt-text: #eceef4;
+  --opt-sel: #2f333d;
+
+  --wash-sat: 125%;
+  --wash-strength: 1;
+}
+
+/* ---- Light ----
+   Not the dark palette inverted: a warm paper ground, and the glass
+   goes to white-over-colour so the ambient wash still reads through. */
+:root[data-theme="light"] {
+  --scheme: light;
+  --bg: #f6f4f1;
+  --bg2: #fbfaf8;
+  --card: #ffffff;
+  --card2: #f2efeb;
+  --card3: #e7e3dd;
+  --border: rgba(38, 32, 26, 0.10);
+  --border-hi: rgba(38, 32, 26, 0.17);
+  --text: #1c1a18;
+  --muted: #5f5a54;
+  --faint: #8a847c;
+  --on-accent: #2a1508;
+
+  --shadow-sm: 0 1px 2px rgba(38, 30, 22, 0.07);
+  --shadow: 0 8px 24px rgba(38, 30, 22, 0.10);
+  --shadow-lg: 0 24px 64px rgba(38, 30, 22, 0.16);
+
+  --glass-bar: rgba(255, 255, 255, 0.62);
+  --glass-nav: rgba(255, 255, 255, 0.48);
+  --glass-card: rgba(255, 255, 255, 0.66);
+  --glass-card-hi: rgba(255, 255, 255, 0.82);
+  --glass-pop: rgba(255, 255, 255, 0.84);
+  --glass-bar-edge: rgba(38, 32, 26, 0.09);
+  --glass-nav-edge: rgba(38, 32, 26, 0.07);
+  --glass-card-edge: rgba(38, 32, 26, 0.085);
+  --glass-card-edge-hi: rgba(38, 32, 26, 0.14);
+  --glass-pop-edge: rgba(38, 32, 26, 0.12);
+  /* On white, a white inset highlight is invisible — the rim has to be a
+     soft shadow instead, so these go dark and very faint. */
+  --glass-inset: rgba(38, 32, 26, 0.05);
+  --glass-inset-hi: rgba(38, 32, 26, 0.07);
+  --glass-sheen: rgba(38, 32, 26, 0.14);
+  --glass-hover: rgba(38, 32, 26, 0.06);
+  --veil: rgba(246, 244, 241, 0.62);
+  --scrim: rgba(60, 54, 48, 0.34);
+
+  --opt-bg: #ffffff;
+  --opt-text: #1c1a18;
+  --opt-sel: #eee9e2;
+
+  --wash-sat: 150%;
+  --wash-strength: 0.62;   /* the same glow over white would be garish */
+}
+
+/* ---- Accents ----
+   Each sets the accent ramp and the three wash hues that light the
+   background. The wash is what carries the theme; the accent alone is
+   too small a surface to change the mood of the window. */
+:root, :root[data-accent="carrot"] {
+  --accent: #f4813f;
+  --accent-hi: #ff9a5e;
+  --accent-dim: #d0672c;
+  --accent-soft: rgba(244, 129, 63, 0.14);
+  --accent-line: rgba(244, 129, 63, 0.32);
+  --wash-a: 244, 129, 63;
+  --wash-b: 92, 136, 226;
+  --wash-c: 196, 104, 220;
+}
+:root[data-accent="ember"] {
+  --accent: #f2603f;
+  --accent-hi: #ff7d5f;
+  --accent-dim: #cc4a2c;
+  --accent-soft: rgba(242, 96, 63, 0.14);
+  --accent-line: rgba(242, 96, 63, 0.32);
+  --wash-a: 242, 96, 63;
+  --wash-b: 226, 122, 92;
+  --wash-c: 168, 88, 196;
+}
+:root[data-accent="amber"] {
+  --accent: #e3a33a;
+  --accent-hi: #f7bd58;
+  --accent-dim: #bd8324;
+  --accent-soft: rgba(227, 163, 58, 0.14);
+  --accent-line: rgba(227, 163, 58, 0.32);
+  --wash-a: 227, 163, 58;
+  --wash-b: 96, 168, 152;
+  --wash-c: 214, 122, 88;
+}
+:root[data-accent="orchid"] {
+  --accent: #b57ae0;
+  --accent-hi: #cb98f0;
+  --accent-dim: #9459be;
+  --accent-soft: rgba(181, 122, 224, 0.15);
+  --accent-line: rgba(181, 122, 224, 0.34);
+  --wash-a: 181, 122, 224;
+  --wash-b: 92, 136, 226;
+  --wash-c: 232, 118, 154;
+}
+:root[data-accent="teal"] {
+  --accent: #3fbfa8;
+  --accent-hi: #5fdcc4;
+  --accent-dim: #2d9a86;
+  --accent-soft: rgba(63, 191, 168, 0.15);
+  --accent-line: rgba(63, 191, 168, 0.34);
+  --wash-a: 63, 191, 168;
+  --wash-b: 92, 150, 226;
+  --wash-c: 150, 200, 120;
+}
+:root[data-accent="indigo"] {
+  --accent: #7c8cf0;
+  --accent-hi: #9aa7ff;
+  --accent-dim: #5f6ecb;
+  --accent-soft: rgba(124, 140, 240, 0.15);
+  --accent-line: rgba(124, 140, 240, 0.34);
+  --wash-a: 124, 140, 240;
+  --wash-b: 196, 104, 220;
+  --wash-c: 88, 196, 214;
+}
+
+/* ---- The wash ----
+   Four wide pools, each an accent-derived hue. --wash-strength scales
+   them all so light mode gets the same shape at lower intensity. */
+body::before {
+  background:
+    radial-gradient(48% 40% at 12% 6%,
+      rgba(var(--wash-a), calc(0.17 * var(--wash-strength))), transparent 62%),
+    radial-gradient(46% 42% at 90% 18%,
+      rgba(var(--wash-b), calc(0.16 * var(--wash-strength))), transparent 64%),
+    radial-gradient(40% 34% at 74% 66%,
+      rgba(var(--wash-c), calc(0.11 * var(--wash-strength))), transparent 66%),
+    radial-gradient(56% 46% at 40% 104%,
+      rgba(var(--wash-a), calc(0.11 * var(--wash-strength))), transparent 68%);
+  filter: saturate(var(--wash-sat));
+}
+
+/* ---- Glass, in tokens ---- */
+#menubar {
+  background: var(--glass-bar);
+  border-bottom: 1px solid var(--glass-bar-edge);
+}
+.app-nav {
+  background: var(--glass-nav);
+  border-right: 1px solid var(--glass-nav-edge);
+}
+.settings-card, .ext-section, .hub-card, .widget-card, .hub-spec-card,
+.list-item, .provider-row {
+  background: var(--glass-card);
+  border: 1px solid var(--glass-card-edge);
+  box-shadow: var(--shadow-sm), inset 0 1px 0 var(--glass-inset);
+}
+.settings-card:hover, .hub-card:hover {
+  background: var(--glass-card-hi);
+  border-color: var(--glass-card-edge-hi);
+}
+#model-pop, #ws-pop, #nav-more-list, .combo-pop, #splash .splash-card,
+.skill-pop, #search-pop, #attach-tray .attach-chip {
+  background: var(--glass-pop);
+  border: 1px solid var(--glass-pop-edge);
+  box-shadow: var(--shadow-lg), inset 0 1px 0 var(--glass-inset-hi);
+}
+#cmdbar {
+  background: var(--glass-pop);
+  border: 1px solid var(--glass-pop-edge);
+  box-shadow: var(--shadow-lg), inset 0 1px 0 var(--glass-inset-hi);
+}
+.settings-card::after, .hub-card::after, .splash-card::after,
+#model-pop::after, #cmdbar::after, .combo-pop::after {
+  background: linear-gradient(90deg, transparent, var(--glass-sheen), transparent);
+}
+.attach-x:hover { background: var(--glass-hover); }
+body.dropping::after { background: var(--veil); }
+
+select { color-scheme: var(--scheme); }
+select option, select optgroup { background-color: var(--opt-bg); color: var(--opt-text); }
+select option:checked { background-color: var(--opt-sel); }
+
+/* The whole window, so scrollbars and form controls follow the theme. */
+html, body { color-scheme: var(--scheme); }
+
+/* Light mode inverts which way "raised" reads: an inset white line does
+   nothing on white, so cards lean on their shadow instead. */
+:root[data-theme="light"] .settings-card,
+:root[data-theme="light"] .ext-section,
+:root[data-theme="light"] .hub-card,
+:root[data-theme="light"] .widget-card,
+:root[data-theme="light"] .hub-spec-card {
+  box-shadow: 0 1px 2px rgba(38, 30, 22, 0.05), 0 6px 18px rgba(38, 30, 22, 0.05);
+}
+:root[data-theme="light"] .btn-primary { box-shadow: 0 1px 2px rgba(38, 30, 22, 0.14); }
+:root[data-theme="light"] select {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%235f5a54' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9l6 6 6-6'/></svg>");
+}
+.btn-primary { color: var(--on-accent); }
+
+/* Switching themes should feel like a dimmer, not a page reload — but
+   only for the ground, or every hover on the page inherits the delay. */
+body, #menubar, .app-nav, .settings-card, .hub-card, #cmdbar {
+  transition: background-color 0.28s var(--ease), border-color 0.28s var(--ease),
+              color 0.28s var(--ease);
+}
+
+/* =====================================================================
+   Serif, wider
+   =====================================================================
+   Serif was only on a handful of page titles. Pushing it down a level —
+   card titles, section heads, empty states, the greeting — is what makes
+   the app read as considered rather than as a dashboard. Anything that
+   is a control, a label or data stays in the sans: serif at 12px in a
+   button is just harder to read. */
+h1, h2, h3,
+.card-title, .settings-head h3, .ext-head h3, .page-head h1, .page-head h2,
+.dash-head h1, .splash-card h1, .hub-card h4, .widget-card .card-title,
+.empty-widget .empty-title, .greeting, .section-title {
+  font-family: var(--serif);
+  font-weight: 500;
+  letter-spacing: -0.014em;
+}
+.card-title { font-size: 14.5px; }
+.page-head h2 { font-weight: 500; }
+/* Blockquotes and the research narrative read better set, too. */
+.msg-assistant blockquote, .research-summary { font-family: var(--serif); }
+/* Numerals in a serif face are old-style and wander on a baseline, which
+   looks wrong in tables and counters. Keep those lining and tabular. */
+.stat-value, .metric, .count, td, th, .kbd, code, pre {
+  font-family: var(--sans);
+  font-variant-numeric: tabular-nums lining-nums;
+}
+code, pre, .kbd { font-family: var(--mono); }
+
+/* =====================================================================
+   Composer glow
+   =====================================================================
+   The command bar is the one thing every session starts at, so it gets
+   the light: a soft accent-tinted bloom underneath that brightens on
+   focus. Drawn on a pseudo-element behind the bar so the blur does not
+   have to re-composite the bar's own backdrop-filter. */
+#cmdbar { position: fixed; }        /* re-assert: the glow is positioned to it */
+#cmdbar::before {
+  content: "";
+  position: absolute;
+  inset: -22px -14px -16px;
+  z-index: -1;
+  border-radius: calc(var(--radius-lg) + 12px);
+  background:
+    radial-gradient(60% 120% at 22% 50%, rgba(var(--wash-a), 0.20), transparent 70%),
+    radial-gradient(60% 120% at 78% 50%, rgba(var(--wash-b), 0.16), transparent 70%);
+  filter: blur(22px) saturate(140%);
+  opacity: calc(0.75 * var(--wash-strength));
+  pointer-events: none;
+  transition: opacity 0.3s var(--ease);
+}
+#cmdbar:focus-within::before { opacity: calc(1.15 * var(--wash-strength)); }
+
+/* =====================================================================
+   Inline text prompt
+   =====================================================================
+   Stands in for window.prompt(), which Electron disables. */
+.path-prompt {
+  position: fixed;
+  inset: 0;
+  z-index: 400;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--scrim);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  animation: prompt-in 0.16s var(--ease);
+}
+.path-prompt-card {
+  width: min(520px, 92vw);
+  padding: 20px;
+  border-radius: var(--radius-lg);
+  background: var(--glass-pop);
+  backdrop-filter: blur(44px) saturate(200%);
+  -webkit-backdrop-filter: blur(44px) saturate(200%);
+  border: 1px solid var(--glass-pop-edge);
+  box-shadow: var(--shadow-lg), inset 0 1px 0 var(--glass-inset-hi);
+}
+.path-prompt-title {
+  font-family: var(--serif);
+  font-size: 17px;
+  font-weight: 500;
+  letter-spacing: -0.014em;
+  margin-bottom: 12px;
+}
+.path-prompt-card input { width: 100%; margin-bottom: 14px; }
+.path-prompt-card .row { display: flex; gap: 8px; justify-content: flex-end; }
+@keyframes prompt-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* =====================================================================
+   Theme picker (Settings → Appearance)
+   ===================================================================== */
+.theme-grid { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 4px; }
+.theme-swatch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 12px 9px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--card2);
+  cursor: pointer;
+  font-size: 11.5px;
+  color: var(--muted);
+  transition: border-color 0.16s var(--ease), background 0.16s var(--ease),
+              color 0.16s var(--ease);
+}
+.theme-swatch:hover { border-color: var(--border-hi); color: var(--text); }
+.theme-swatch[aria-pressed="true"] {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+.theme-dot {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid var(--border-hi);
+  box-shadow: inset 0 1px 0 var(--glass-inset-hi);
+}
+.theme-mode-dot {
+  /* Split disc: the dark half and the light half of the app, literally. */
+  background: linear-gradient(105deg, var(--tm-a) 0 50%, var(--tm-b) 50% 100%);
+}
+.settings-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+}

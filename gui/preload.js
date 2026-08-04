@@ -5,6 +5,16 @@ contextBridge.exposeInMainWorld('carrotAPI', {
   getStatus: () => ipcRenderer.invoke('get-status'),
   onSpeechResult: (callback) => ipcRenderer.on('speech-result', (event, data) => callback(data)),
   onSpeechError: (callback) => ipcRenderer.on('speech-error', (event, data) => callback(data)),
+  // Quick-ask overlay: it grows to fit its reply and closes on Escape.
+  resizeOverlay: (height) => ipcRenderer.invoke('resize-overlay', height),
+  hideOverlay: () => ipcRenderer.invoke('hide-overlay'),
+  onOverlayShown: (callback) => ipcRenderer.on('overlay-shown', () => callback()),
+  // Native folder chooser — window.prompt() is disabled in Electron.
+  pickDirectory: (opts) => ipcRenderer.invoke('pick-directory', opts || {}),
+  // Lets the next launch open on the current theme instead of flashing dark,
+  // and keeps the quick-ask overlay in the same palette as the app.
+  setAppearance: (a) => ipcRenderer.invoke('set-appearance', a || {}),
+  onAppearance: (callback) => ipcRenderer.on('appearance', (event, a) => callback(a)),
 });
 
 // The web UI raises proactive notifications; the desktop shell turns them into

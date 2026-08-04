@@ -121,6 +121,16 @@ def record_and_transcribe(
         import wave
     except ImportError:
         return {"success": False, "error": "sounddevice/numpy not installed", "text": ""}
+    except OSError as exc:
+        # sounddevice is a binding, not a driver: it loads PortAudio at import
+        # time and raises OSError — not ImportError — when the system library
+        # is absent. The Windows and macOS wheels carry PortAudio, the Linux
+        # one does not, so this is the normal state of a Linux box without
+        # libportaudio2 installed. It is a missing dependency, not a crash.
+        return {"success": False,
+                "error": f"audio input unavailable: {exc}. "
+                         "On Linux, install libportaudio2.",
+                "text": ""}
 
     sample_rate = 16000
     channels = 1

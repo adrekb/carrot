@@ -42,6 +42,11 @@ DEFAULTS = {
     "server_host": "127.0.0.1",
     "server_port": 8181,
     "web_ui": True,
+    # Appearance. The browser is the source of truth (it has to decide the
+    # theme before it can call this API); these are the fallback for a
+    # machine whose local storage was cleared. "auto" follows the OS.
+    "ui_theme": "auto",
+    "ui_accent": "carrot",
     "recap_enabled": False,
     "recap_hours": [7, 8],
     "recap_rss_feeds": [
@@ -86,7 +91,9 @@ DEFAULTS = {
     "calendar_agent_aware": False,
     # Carrot Hub — hardware-aware model catalog. The catalog URL is derived
     # from hub_url unless overridden (self-hosted hub, corporate mirror).
-    "hub_url": "https://hub.carrotai.app",
+    # Empty = use the bundled catalog plus live Hugging Face results.
+    # Set these only to serve your own catalog.json.
+    "hub_url": "",
     "hub_catalog_url": "",
     # Security
     "auth_enabled": True,

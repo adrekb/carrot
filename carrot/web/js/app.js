@@ -193,6 +193,17 @@ function clearActiveSkill() {
 }
 
 // ===== Status / engine =====
+async function showBuildVersion() {
+    try {
+        const h = await api('/api/health');
+        const el = document.getElementById('brand-sub');
+        if (el && h.version) {
+            el.textContent = `v${h.version}`;
+            el.title = `Carrot ${h.version} · assets ${h.assets || '?'}`;
+        }
+    } catch (_) { /* leave the placeholder */ }
+}
+
 async function refreshStatus() {
     const dot = document.getElementById('engine-dot');
     const label = document.getElementById('engine-label');
@@ -269,21 +280,77 @@ async function loadModels() {
 function renderModelPop(data) {
     const installedEl = document.getElementById('model-installed');
     const suggestedEl = document.getElementById('model-suggested');
+    const remoteEl = document.getElementById('model-remote');
     installedEl.innerHTML = '';
     suggestedEl.innerHTML = '';
+    if (remoteEl) remoteEl.innerHTML = '';
+
+    // A local model is "current" only when chat isn't pinned to a provider.
+    const localActive = data.chat_local !== false ? data.active_model : null;
 
     if (!data.installed.length) {
         installedEl.innerHTML = '<div class="empty" style="padding:4px 9px">No models installed yet.</div>';
     }
     for (const m of data.installed) {
         const row = document.createElement('div');
-        row.className = 'model-row' + (m.name === data.active_model ? ' active' : '');
+        row.className = 'model-row' + (m.name === localActive ? ' active' : '');
         row.innerHTML = `
             <span class="m-name">${escHtml(m.name)}</span>
             <span class="m-meta">${escHtml(m.parameter_size || '')} ${fmtBytes(m.size)}</span>
-            ${m.name === data.active_model ? '<svg class="ico m-check"><use href="#i-check"/></svg>' : ''}`;
+            ${m.name === localActive ? '<svg class="ico m-check"><use href="#i-check"/></svg>' : ''}`;
         row.onclick = () => selectModel(m.name);
         installedEl.appendChild(row);
+    }
+
+    // Models from providers you've configured — the key is already saved,
+    // so they belong in the same picker as the local ones.
+    if (remoteEl) {
+        for (const group of (data.remote || [])) {
+            const head = document.createElement('div');
+            head.className = 'pop-section';
+            head.textContent = group.label;
+            remoteEl.appendChild(head);
+
+            for (const name of group.models) {
+                const isActive = data.chat_local === false
+                    && data.chat_provider === group.provider && data.chat_model === name;
+                const row = document.createElement('div');
+                row.className = 'model-row' + (isActive ? ' active' : '');
+                row.innerHTML = `
+                    <span class="m-name">${escHtml(name)}</span>
+                    <span class="m-meta">cloud</span>
+                    ${isActive ? '<svg class="ico m-check"><use href="#i-check"/></svg>' : ''}`;
+                row.onclick = () => selectRemoteModel(group.provider, name);
+                remoteEl.appendChild(row);
+            }
+
+            // Listing can fail while the provider still works fine. Say why,
+            // and let the model be named by hand instead of dead-ending.
+            if (group.error) {
+                const why = document.createElement('div');
+                why.className = 'model-note';
+                why.textContent = /401|403|unauthor/i.test(group.error)
+                    ? 'Key rejected — check it in Settings → Providers.'
+                    : `Could not list models: ${group.error}`.slice(0, 120);
+                remoteEl.appendChild(why);
+            }
+            if (group.error || !group.models.length) {
+                const row = document.createElement('div');
+                row.className = 'pop-custom';
+                row.innerHTML = `
+                    <input type="text" placeholder="type a ${escHtml(group.label)} model name"
+                           id="remote-custom-${escHtml(group.provider)}">
+                    <button class="btn btn-ghost">Use</button>`;
+                const input = row.querySelector('input');
+                const use = () => {
+                    const name = input.value.trim();
+                    if (name) selectRemoteModel(group.provider, name);
+                };
+                input.onkeydown = (e) => { if (e.key === 'Enter') use(); };
+                row.querySelector('button').onclick = use;
+                remoteEl.appendChild(row);
+            }
+        }
     }
 
     const notInstalled = data.suggested.filter(m => !m.installed);
@@ -306,12 +373,57 @@ function renderModelPop(data) {
     }
 }
 
+// Popovers above the command bar are clamped to the space that actually
+// exists. A fixed max-height ran off the top of the screen on short
+// windows, leaving options you could see but never scroll to.
+function fitPopoverAbove(popId, anchorId, gap = 10, floor = 170) {
+    const pop = document.getElementById(popId);
+    const anchor = document.getElementById(anchorId);
+    if (!pop || !anchor) return;
+    const room = anchor.getBoundingClientRect().top - gap - 14;
+    pop.style.maxHeight = Math.max(floor, Math.min(460, room)) + 'px';
+}
+
 function toggleModelPop() {
-    document.getElementById('model-pop').classList.toggle('hidden');
+    const pop = document.getElementById('model-pop');
+    const opening = pop.classList.contains('hidden');
+    pop.classList.toggle('hidden');
+    if (opening) fitPopoverAbove('model-pop', 'model-btn');
+}
+
+// Re-clamp on resize so a popover left open stays reachable.
+window.addEventListener('resize', () => {
+    if (!document.getElementById('model-pop')?.classList.contains('hidden')) {
+        fitPopoverAbove('model-pop', 'model-btn');
+    }
+    if (!document.getElementById('search-pop')?.classList.contains('hidden')) {
+        fitPopoverAbove('search-pop', 'search-btn');
+    }
+});
+
+// Picking a cloud model pins the 'chat' task to that provider — the same
+// mechanism the Task Routing table uses, so the two never disagree.
+async function selectRemoteModel(provider, model) {
+    try {
+        await api('/api/router/route', {
+            method: 'PUT',
+            body: JSON.stringify({ task: 'chat', provider, model }),
+        });
+        currentModel = model;
+        document.getElementById('model-label').textContent = model;
+        document.getElementById('model-pop').classList.add('hidden');
+        loadModels();
+        refreshStatus();
+        if (typeof loadRouting === 'function') loadRouting();
+    } catch (e) {
+        alert('Could not switch to that model: ' + e.message);
+    }
 }
 
 async function selectModel(name) {
     try {
+        // Selecting a local model also releases any cloud pin on chat.
+        await api('/api/router/route/chat', { method: 'DELETE' }).catch(() => {});
         await api('/api/models/select', { method: 'POST', body: JSON.stringify({ model: name }) });
         currentModel = name;
         document.getElementById('model-label').textContent = name;
@@ -408,23 +520,113 @@ function appendMessage(role, content) {
 async function sendChat() {
     const input = document.getElementById('cmd-input');
     const msg = input.value.trim();
-    if (!msg) return;
+    // An attachment on its own is a valid turn ("what is this?").
+    if (!msg && !pendingAttachments.length) return;
+    const attachments = pendingAttachments.slice();
     input.value = '';
     hideSkillPop();
     switchTab('workspace');
-    appendMessage('user', msg);
+    appendMessage('user', msg + (attachments.length
+        ? `\n\n_${attachments.map(a => a.name).join(', ')}_` : ''));
+    clearAttachments();
     if (!currentConversationId) {
-        document.getElementById('chat-title').textContent = msg.slice(0, 42);
+        document.getElementById('chat-title').textContent = (msg || attachments[0].name).slice(0, 42);
     }
 
     await streamTurn('/api/chat/stream', {
-        message: msg,
+        message: msg || 'What is in the attached file?',
+        attachments: attachments.map(a => ({ name: a.name, mime: a.mime, data: a.data })),
         conversation_id: currentConversationId,
         model: currentModel,
         skill: activeSkill ? activeSkill.slug : null,
         search_mode: currentSearchMode,
     }, activeSkill);
 }
+
+// ===== Attachments =====
+// Images go to the model as images (vision models only — the server says so
+// plainly rather than dropping them); PDFs and text files are extracted
+// server-side and folded into the prompt, so they work with any model.
+
+let pendingAttachments = [];
+const ATTACH_MAX_BYTES = 20 * 1024 * 1024;
+
+function attachIcon(mime, name) {
+    if ((mime || '').startsWith('image/')) return 'i-image';
+    if ((mime || '') === 'application/pdf' || /\.pdf$/i.test(name || '')) return 'i-file-pdf';
+    return 'i-doc';
+}
+
+function renderAttachTray() {
+    const tray = document.getElementById('attach-tray');
+    if (!tray) return;
+    tray.classList.toggle('hidden', !pendingAttachments.length);
+    tray.innerHTML = pendingAttachments.map((a, i) => `
+        <span class="attach-chip">
+          ${a.thumb
+            ? `<img src="${a.thumb}" alt="">`
+            : `<svg class="ico"><use href="#${attachIcon(a.mime, a.name)}"/></svg>`}
+          <span class="attach-name" title="${escHtml(a.name)}">${escHtml(a.name)}</span>
+          <span class="attach-size">${fmtBytes(a.bytes)}</span>
+          <button class="attach-x" title="Remove" onclick="removeAttachment(${i})">
+            <svg class="ico"><use href="#i-x"/></svg>
+          </button>
+        </span>`).join('');
+}
+
+function removeAttachment(index) {
+    pendingAttachments.splice(index, 1);
+    renderAttachTray();
+}
+
+function clearAttachments() {
+    pendingAttachments = [];
+    renderAttachTray();
+}
+
+async function addAttachments(files) {
+    for (const file of Array.from(files || [])) {
+        if (file.size > ATTACH_MAX_BYTES) {
+            alert(`${file.name} is too large (limit ${fmtBytes(ATTACH_MAX_BYTES)}).`);
+            continue;
+        }
+        const data = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+        });
+        const isImage = (file.type || '').startsWith('image/');
+        pendingAttachments.push({
+            name: file.name, mime: file.type, bytes: file.size, data,
+            thumb: isImage ? `data:${file.type};base64,${data}` : null,
+        });
+    }
+    renderAttachTray();
+}
+
+// Paste a screenshot straight into the composer, and drop files anywhere.
+document.addEventListener('paste', (e) => {
+    if (!e.clipboardData || currentTab !== 'workspace') return;
+    const files = Array.from(e.clipboardData.files || []);
+    if (files.length) { e.preventDefault(); addAttachments(files); }
+});
+document.addEventListener('dragover', (e) => {
+    if (e.dataTransfer && e.dataTransfer.types.includes('Files')) {
+        e.preventDefault();
+        document.body.classList.add('dropping');
+    }
+});
+document.addEventListener('dragleave', (e) => {
+    if (e.relatedTarget === null) document.body.classList.remove('dropping');
+});
+document.addEventListener('drop', (e) => {
+    if (!e.dataTransfer || !e.dataTransfer.files.length) return;
+    e.preventDefault();
+    document.body.classList.remove('dropping');
+    switchTab('workspace');
+    addAttachments(e.dataTransfer.files);
+});
 
 // ===== Search mode =====
 // Three postures for one question: never reach the web, reach it once, or keep
@@ -469,7 +671,10 @@ function renderSearchModes() {
 
 function toggleSearchPop() {
     const pop = document.getElementById('search-pop');
-    if (pop) pop.classList.toggle('hidden');
+    if (!pop) return;
+    const opening = pop.classList.contains('hidden');
+    pop.classList.toggle('hidden');
+    if (opening) fitPopoverAbove('search-pop', 'search-btn');
 }
 
 async function setSearchMode(id) {
@@ -1338,6 +1543,7 @@ async function checkBootstrap() {
 }
 
 let splashModel = null; // model picked on the splash; null = stock default
+let splashHub = null;   // /api/hub payload, reused by the in-splash catalog
 
 async function showSplash(s) {
     document.getElementById('splash').classList.remove('hidden');
@@ -1356,13 +1562,13 @@ async function showSplash(s) {
 }
 
 function renderSplashPicks(hub) {
+    splashHub = hub;
     const specsEl = document.getElementById('splash-specs');
     const picksEl = document.getElementById('splash-picks');
     const link = document.getElementById('splash-hub-link');
     const s = hub.specs || {};
     specsEl.textContent = `Detected: ${hubSpecLine(s)} — ${s.model_budget_gb} GB usable for models`;
     specsEl.classList.remove('hidden');
-    link.href = hub.hub_url;
     link.classList.remove('hidden');
 
     const recs = hub.recommendations || {};
@@ -1397,50 +1603,138 @@ function renderSplashPicks(hub) {
 
 function hideSplash() { document.getElementById('splash').classList.add('hidden'); }
 
+// The full catalog, right on the setup screen — including the models that
+// do NOT fit, each saying why. Seeing "needs 12 GB, you have 3.9" is more
+// reassuring than a short list with no explanation.
+function toggleSplashCatalog() {
+    const el = document.getElementById('splash-catalog');
+    const link = document.getElementById('splash-hub-link');
+    if (!el.classList.contains('hidden')) {
+        el.classList.add('hidden');
+        link.textContent = 'See every model and why some won\'t run here →';
+        return;
+    }
+    if (!splashHub) return;
+    const budget = (splashHub.specs || {}).model_budget_gb || 0;
+    const fitOrder = { great: 0, good: 1, tight: 2, too_big: 3 };
+    const models = [...(splashHub.models || [])].sort((a, b) =>
+        (fitOrder[a.fit] - fitOrder[b.fit]) || (a.min_mem_gb - b.min_mem_gb));
+    // Compact badge text — the full wording would squeeze out model names.
+    const SHORT_FIT = { great: 'Great', good: 'Good', tight: 'Tight', too_big: 'Too big' };
+    el.innerHTML = models.map(m => {
+        const why = m.fit === 'too_big'
+            ? `needs ${m.min_mem_gb} GB, you have ${budget}`
+            : (m.fit === 'tight'
+                ? `needs ${m.min_mem_gb} GB — slow`
+                : `${m.download_gb} GB${m.est_tps ? ` · ~${m.est_tps} tok/s` : ''}`);
+        return `
+          <button type="button" class="splash-cat-row fit-${m.fit}"
+                  ${m.fit === 'too_big' ? 'disabled' : `onclick="pickSplashModel('${escHtml(m.id)}')"`}>
+            <span class="splash-cat-name">${escHtml(m.label || m.id)}</span>
+            <span class="fit-badge fit-${m.fit}">${SHORT_FIT[m.fit] || m.fit}</span>
+            <span class="splash-cat-why">${escHtml(why)}</span>
+          </button>`;
+    }).join('');
+    el.classList.remove('hidden');
+    link.textContent = 'Hide the full catalog ←';
+}
+
+function pickSplashModel(id) {
+    splashModel = id;
+    // Reflect the choice in both the picks row and the catalog list.
+    document.querySelectorAll('#splash-picks .splash-pick').forEach(el =>
+        el.classList.toggle('selected', el.dataset.model === id));
+    document.querySelectorAll('#splash-catalog .splash-cat-row').forEach(el =>
+        el.classList.toggle('selected', el.textContent.trim().startsWith(
+            (splashHub.models.find(m => m.id === id) || {}).label || id)));
+    const status = document.getElementById('splash-status');
+    if (status) status.textContent = `${id} selected — press Set up now.`;
+}
+
 function skipModelChoice() {
     // Experienced users: no picker, stock default, straight to setup.
     splashModel = null;
     runBootstrap();
 }
 
-async function runBootstrap() {
+function splashFailed(message) {
     const btn = document.getElementById('splash-btn');
-    const skip = document.getElementById('splash-skip');
+    document.getElementById('splash-status').textContent = message;
+    document.getElementById('splash-detail').textContent = '';
+    btn.textContent = 'Retry';
+    btn.classList.remove('hidden');
+    document.getElementById('splash-skip').classList.remove('hidden');
+    document.getElementById('splash-picks').classList.remove('hidden');
+    document.getElementById('splash-hub-link').classList.remove('hidden');
+}
+
+// Setup streams over SSE so the bar tracks the actual download. A model
+// is gigabytes; a bar that jumps 30% -> 100% just looks frozen.
+function runBootstrap() {
+    const btn = document.getElementById('splash-btn');
     const status = document.getElementById('splash-status');
+    const detail = document.getElementById('splash-detail');
     const bar = document.getElementById('splash-bar');
     btn.classList.add('hidden');
-    skip.classList.add('hidden');
+    document.getElementById('splash-skip').classList.add('hidden');
     document.getElementById('splash-picks').classList.add('hidden');
-    const label = splashModel || 'the default model';
-    status.textContent = `Installing Ollama and pulling ${label}… this may take a while.`;
-    bar.style.width = '30%';
-    try {
-        const result = await api('/api/bootstrap/run', {
-            method: 'POST',
-            body: JSON.stringify({ model: splashModel }),
-        });
-        bar.style.width = '100%';
-        if (result.error) {
-            status.textContent = result.error;
-            btn.classList.remove('hidden');
-            skip.classList.remove('hidden');
-            document.getElementById('splash-picks').classList.remove('hidden');
-        } else {
+    document.getElementById('splash-catalog').classList.add('hidden');
+    document.getElementById('splash-hub-link').classList.add('hidden');
+    status.textContent = 'Setting up…';
+    detail.textContent = '';
+    bar.style.width = '2%';
+
+    const url = tokenUrl('/api/bootstrap/stream'
+        + (splashModel ? `?model=${encodeURIComponent(splashModel)}` : ''));
+    const src = new EventSource(url);
+    let started = Date.now();
+
+    src.onmessage = (ev) => {
+        let p;
+        try { p = JSON.parse(ev.data); } catch (_) { return; }
+
+        if (p.type === 'status' || p.type === 'install') {
+            status.textContent = p.message || '';
+        } else if (p.type === 'download') {
+            // Downloading the Ollama installer itself.
+            const pct = p.total ? Math.round(p.downloaded / p.total * 100) : 0;
+            status.textContent = 'Downloading Ollama…';
+            bar.style.width = Math.max(pct * 0.2, 2) + '%';   // installer = first 20%
+            detail.textContent = `${fmtBytes(p.downloaded)} of ${fmtBytes(p.total)}`;
+        } else if (p.type === 'pull') {
+            status.textContent = `Downloading ${p.model || 'model'}…`;
+            if (p.total && p.completed != null) {
+                const pct = Math.round(p.completed / p.total * 100);
+                bar.style.width = (20 + pct * 0.8) + '%';      // model = remaining 80%
+                const secs = (Date.now() - started) / 1000;
+                const rate = secs > 2 ? ` · ${fmtBytes(p.completed / secs)}/s` : '';
+                detail.textContent = `${fmtBytes(p.completed)} of ${fmtBytes(p.total)} (${pct}%)${rate}`;
+            } else if (p.status) {
+                detail.textContent = p.status;
+            }
+        } else if (p.type === 'error') {
+            detail.textContent = p.message || '';
+        } else if (p.type === 'done') {
+            src.close();
+            if (p.error) { splashFailed(p.error); return; }
+            bar.style.width = '100%';
             status.textContent = 'Setup complete. Launching Carrot…';
+            detail.textContent = '';
             setTimeout(() => { hideSplash(); refreshStatus(); loadModels(); }, 900);
         }
-    } catch (e) {
-        status.textContent = e.message;
-        btn.classList.remove('hidden');
-        skip.classList.remove('hidden');
-        document.getElementById('splash-picks').classList.remove('hidden');
-    }
+    };
+
+    src.onerror = () => {
+        src.close();
+        splashFailed('Lost contact with Carrot during setup. Press Retry.');
+    };
 }
 
 // ===== Init =====
 document.addEventListener('DOMContentLoaded', async () => {
     await loadRecapConfig();
     await refreshStatus();
+    showBuildVersion();
     loadModels();
     loadSkillCatalog();
     loadSearchModes();

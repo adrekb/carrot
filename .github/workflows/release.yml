@@ -38,7 +38,13 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e .
+          # Extras, not just the base install. A shipped build has no Python
+          # for the user to pip into, so anything left out here is a feature
+          # that is dead in the installer: browser = the Agent tab,
+          # cloud = Claude routing, speech = voice, vectors = ANN search.
+          # pyautogui (desktop control) is deliberately left out — it is off
+          # by default and gated by the policy kernel anyway.
+          pip install -e ".[browser,cloud,vectors,speech]"
           pip install pyinstaller
 
       - name: Build installer
