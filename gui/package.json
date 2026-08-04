@@ -38,6 +38,10 @@
       {
         "from": "../dist/backend/carrot-backend",
         "to": "backend/carrot-backend"
+      },
+      {
+        "from": "../dist/pw-browsers",
+        "to": "pw-browsers"
       }
     ],
     "win": {
@@ -54,7 +58,8 @@
       "oneClick": true,
       "perMachine": false,
       "runAfterFinish": true,
-      "deleteAppDataOnUninstall": false
+      "deleteAppDataOnUninstall": false,
+      "include": "build/installer.nsh"
     },
     "mac": {
       "target": [
@@ -71,7 +76,16 @@
       ],
       "icon": "public/icon.png",
       "category": "Utility",
-      "maintainer": "Carrot Community <carrot@users.noreply.github.com>"
+      "maintainer": "Carrot Community <carrot@users.noreply.github.com>",
+      "depends": [
+        "libnotify4",
+        "libxtst6",
+        "libnss3",
+        "libatspi2.0-0",
+        "libgtk-3-0",
+        "libsecret-1-0",
+        "libportaudio2"
+      ]
     }
   }
 }

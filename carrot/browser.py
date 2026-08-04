@@ -26,14 +26,17 @@ three things possible that a coordinate agent cannot offer:
   one the agent asks for ``type_secret(ref, "canvas")``; the value is read from
   the vault inside this module and typed straight into the page.
 
-Playwright is optional. Without it the rest of Carrot is unaffected and the
-agent reports what to install rather than failing mid-task.
+Playwright and its Chromium ship inside the desktop installer, so the Agent
+tab works with nothing to install. In a source checkout they are an optional
+extra; without them the rest of Carrot is unaffected and the agent reports
+what to install rather than failing mid-task.
 """
 
 from __future__ import annotations
 
 import os
 import queue
+import sys
 import threading
 import uuid
 from datetime import datetime
@@ -53,6 +56,51 @@ INSTALL_HINT = (
     "    pip install playwright\n"
     "    python -m playwright install chromium"
 )
+# Shown instead of the pip instructions when Carrot is running as a packaged
+# desktop app. There is no Python there to install into, so telling the user
+# to run pip is a dead end — this is a broken build, not a missing step.
+PACKAGED_HINT = (
+    "Browser control is missing from this installation. Reinstalling Carrot "
+    "should restore it."
+)
+
+
+def _is_packaged() -> bool:
+    """True when running from the frozen backend inside the desktop app."""
+    return bool(getattr(sys, "frozen", False) or os.environ.get("CARROT_RESOURCES"))
+
+
+def bundled_browsers_dir() -> Optional[str]:
+    """The Chromium shipped inside the installer, if this is a packaged app.
+
+    The desktop shell passes its resources directory in CARROT_RESOURCES; the
+    build drops Playwright's browser tree at ``pw-browsers`` inside it.
+    """
+    resources = os.environ.get("CARROT_RESOURCES")
+    if not resources:
+        return None
+    path = os.path.join(resources, "pw-browsers")
+    return path if os.path.isdir(path) else None
+
+
+def use_bundled_browser() -> Optional[str]:
+    """Point Playwright at the bundled Chromium, if there is one.
+
+    Setting PLAYWRIGHT_BROWSERS_PATH rather than an executable path on purpose:
+    the binary sits at a different place inside the tree on every OS
+    (``chrome-win/chrome.exe``, ``chrome-mac/Chromium.app/…``,
+    ``chrome-linux/chrome``) and the revision number changes with every
+    Playwright release. Letting Playwright resolve it inside a
+    directory we choose keeps that knowledge in Playwright.
+
+    Returns the directory it selected, or None if there is nothing bundled.
+    """
+    path = bundled_browsers_dir()
+    if path:
+        # Never clobber an explicit choice — a developer pointing at their own
+        # browser tree should win over the bundled one.
+        os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", path)
+    return path
 
 # The element sweep. Kept in one place because the agent's entire view of a
 # page comes from it — if something is not in this list, the agent cannot touch
@@ -150,10 +198,18 @@ _TEXT_JS = r"""
 
 def is_available() -> Dict[str, Any]:
     """Whether browser control can run here, and what is missing if not."""
+    hint = PACKAGED_HINT if _is_packaged() else INSTALL_HINT
     try:
         import playwright  # noqa: F401
     except ImportError:
-        return {"available": False, "reason": "playwright is not installed", "hint": INSTALL_HINT}
+        return {"available": False, "reason": "playwright is not installed", "hint": hint}
+    # The Python package alone is not enough — it is a client for a browser
+    # that is downloaded separately, so report that case apart from the
+    # import failing. Nothing here launches a browser; it only looks.
+    if _is_packaged() and not bundled_browsers_dir() \
+            and not os.environ.get("PLAYWRIGHT_BROWSERS_PATH") \
+            and not os.environ.get("CARROT_CHROMIUM_PATH"):
+        return {"available": False, "reason": "no bundled browser found", "hint": hint}
     return {"available": True, "reason": "", "hint": ""}
 
 
@@ -203,6 +259,9 @@ class BrowserSession:
         playwright = None
         browser = None
         try:
+            # Must happen before start(): Playwright reads
+            # PLAYWRIGHT_BROWSERS_PATH when the driver comes up.
+            use_bundled_browser()
             playwright = sync_playwright().start()
             launch: Dict[str, Any] = {"headless": self.headless}
             # Packaged environments preinstall Chromium at a known path rather
