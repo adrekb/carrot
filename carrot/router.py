@@ -27,7 +27,10 @@ so the agentic chat loop is provider-agnostic and only written once.
 from __future__ import annotations
 
 import json
+import logging
 import re
+
+LOG = logging.getLogger(__name__)
 from dataclasses import dataclass, asdict
 from typing import Any, Dict, Generator, List, Optional
 
@@ -627,6 +630,84 @@ def stream_events(
         yield {"type": "tool_calls", "calls": calls}
 
 
+# ===== Rate limits =====
+#
+# Research fans out across parallel workers and makes many model calls per
+# run — planning, extraction, verification, then the write. A hosted
+# provider will start refusing (HTTP 429) well before the run is done, and
+# losing the final write after minutes of gathering evidence is the worst
+# possible moment to fail. Every cloud call therefore retries with
+# exponential backoff, honouring Retry-After when the server sends it.
+
+RATE_LIMIT_RETRIES = 5
+RATE_LIMIT_BASE_DELAY = 2.0
+RATE_LIMIT_MAX_DELAY = 60.0
+
+
+def _retry_after_seconds(exc: Exception) -> Optional[float]:
+    """Seconds the provider asked us to wait, if it said so."""
+    for attr in ("response", "http_response"):
+        response = getattr(exc, attr, None)
+        headers = getattr(response, "headers", None)
+        if not headers:
+            continue
+        for key in ("retry-after", "Retry-After", "x-ratelimit-reset-after"):
+            value = headers.get(key) if hasattr(headers, "get") else None
+            if value:
+                try:
+                    return max(0.0, float(value))
+                except (TypeError, ValueError):
+                    pass
+    return None
+
+
+def _is_rate_limited(exc: Exception) -> bool:
+    status = getattr(exc, "status_code", None) or getattr(
+        getattr(exc, "response", None), "status_code", None)
+    if status == 429:
+        return True
+    text = str(exc).lower()
+    return "429" in text or "rate limit" in text or "rate_limited" in text
+
+
+def _is_transient(exc: Exception) -> bool:
+    """Overloaded/unavailable is worth waiting out too."""
+    status = getattr(exc, "status_code", None) or getattr(
+        getattr(exc, "response", None), "status_code", None)
+    if status in (500, 502, 503, 504, 529):
+        return True
+    text = str(exc).lower()
+    return any(s in text for s in ("overloaded", "service unavailable", "bad gateway",
+                                   "timed out", "timeout", "connection reset"))
+
+
+def with_rate_limit_retry(call, *, on_wait=None, retries: int = RATE_LIMIT_RETRIES):
+    """Run ``call``, backing off and retrying when the provider throttles us.
+
+    ``on_wait(attempt, delay, reason)`` is invoked before each sleep so a
+    long research run can show that it is waiting rather than hung.
+    """
+    import random
+    import time
+
+    for attempt in range(retries + 1):
+        try:
+            return call()
+        except Exception as exc:
+            limited = _is_rate_limited(exc)
+            if attempt >= retries or not (limited or _is_transient(exc)):
+                raise
+            delay = _retry_after_seconds(exc)
+            if delay is None:
+                delay = min(RATE_LIMIT_BASE_DELAY * (2 ** attempt), RATE_LIMIT_MAX_DELAY)
+                delay += random.uniform(0, delay * 0.25)   # de-sync parallel workers
+            reason = "rate limited" if limited else "provider busy"
+            if on_wait:
+                on_wait(attempt + 1, delay, reason)
+            LOG.info("%s; retrying in %.1fs (attempt %d/%d)", reason, delay, attempt + 1, retries)
+            time.sleep(delay)
+
+
 def complete(resolved: Route, messages: List[Dict[str, Any]]) -> str:
     """Non-streaming completion through whichever provider the route names."""
     kind = _kind_of(resolved)
@@ -637,9 +718,9 @@ def complete(resolved: Route, messages: List[Dict[str, Any]]) -> str:
         return OllamaClient().chat(messages, model=resolved.model)
 
     if kind == providers_mod.KIND_OPENAI:
-        return _openai_client(resolved.provider).chat(
+        return with_rate_limit_retry(lambda: _openai_client(resolved.provider).chat(
             messages, model=resolved.model, max_tokens=CLOUD_MAX_TOKENS_SYNC
-        )
+        ))
 
     client = _client(resolved.provider)
     system, conversation = _split_system(messages)
@@ -655,7 +736,7 @@ def complete(resolved: Route, messages: List[Dict[str, Any]]) -> str:
     if system:
         request["system"] = system
 
-    response = client.beta.messages.create(**request)
+    response = with_rate_limit_retry(lambda: client.beta.messages.create(**request))
     if response.stop_reason == "refusal":
         return REFUSAL_MESSAGE
     return "".join(block.text for block in response.content if getattr(block, "type", None) == "text")

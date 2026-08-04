@@ -663,6 +663,11 @@ async def list_models():
 
     # Models from configured cloud providers belong in the picker too —
     # a key you already pasted is useless if the UI only offers Ollama.
+    #
+    # A provider whose model list cannot be fetched (expired key, rate
+    # limit, proxy) is still listed, carrying its error: dropping it
+    # silently made cloud models look unsupported rather than unreachable,
+    # and left no way to pick one by name.
     remote = []
     try:
         status = router_mod.status()
@@ -672,15 +677,16 @@ async def list_models():
             if provider.get("id") == "ollama":
                 continue
             try:
-                names = providers_mod.list_models(provider["id"]).get("models", [])
-            except Exception:
-                names = []
-            if names:
-                remote.append({
-                    "provider": provider["id"],
-                    "label": provider.get("label", provider["id"]),
-                    "models": names,
-                })
+                listed = providers_mod.list_models(provider["id"])
+                names, error = listed.get("models", []), listed.get("error", "")
+            except Exception as exc:
+                names, error = [], str(exc)
+            remote.append({
+                "provider": provider["id"],
+                "label": provider.get("label", provider["id"]),
+                "models": names,
+                "error": error,
+            })
     except Exception:
         pass
 

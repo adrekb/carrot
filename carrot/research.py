@@ -107,6 +107,10 @@ RESEARCH_SYSTEM = (
     "disagree you say so. Never use emojis."
 )
 
+# Parallel researchers against a metered endpoint are the fastest way to
+# get throttled. Local models have no such limit.
+CLOUD_MAX_WORKERS = 3
+
 MAX_CLAIMS_PER_SUBQUESTION = 8
 VERIFY_BATCH = 6
 
@@ -850,7 +854,17 @@ def run_research_stream(
                 errors.append(f"{subquestion['question']}: {exc}")
                 return researcher.mine
 
-        pool = ThreadPoolExecutor(max_workers=DEPTHS[depth]["workers"], thread_name_prefix="carrot-research")
+        # Hosted providers meter requests per minute, and the depth profiles
+        # were sized for a local model that only competes with itself. Fanning
+        # eight workers at a metered endpoint is what trips a 429 in the first
+        # place, so cap concurrency when the route leaves this machine.
+        workers = DEPTHS[depth]["workers"]
+        try:
+            if not router_mod.route("research").local:
+                workers = min(workers, CLOUD_MAX_WORKERS)
+        except Exception:
+            pass
+        pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="carrot-research")
         futures = [pool.submit(work, subquestion) for subquestion in subquestions]
 
         def watch():
@@ -900,20 +914,48 @@ def run_research_stream(
         yield {"stage": "write", "detail": f"writing the report from {len(store.all())} sources"}
         prompt = build_report_prompt(question, findings, store, context.taint_signals)
         parts: List[str] = []
-        try:
-            for event in router_mod.stream_events(
-                _route(router_mod.TASK_RESEARCH),
-                [{"role": "system", "content": RESEARCH_SYSTEM}, {"role": "user", "content": prompt}],
-            ):
-                if event["type"] == "thinking":
-                    yield {"thinking": event["text"]}
-                elif event["type"] == "content":
-                    parts.append(event["text"])
-                    yield {"token": event["text"]}
-        except Exception as exc:
-            finish_run(run_id, "failed", error=str(exc), plan=subquestions)
-            yield {"error": f"the writing model failed: {exc}"}
-            return
+
+        # Losing the report to a rate limit after minutes of gathering evidence
+        # is the worst possible moment to fail, so the write is retried with
+        # backoff. Retrying a *stream* is only safe before any text has been
+        # emitted — once tokens are out, a retry would duplicate them — so a
+        # mid-stream failure is reported rather than restarted.
+        import time as _time
+        attempt = 0
+        while True:
+            try:
+                for event in router_mod.stream_events(
+                    _route(router_mod.TASK_RESEARCH),
+                    [{"role": "system", "content": RESEARCH_SYSTEM},
+                     {"role": "user", "content": prompt}],
+                ):
+                    if event["type"] == "thinking":
+                        yield {"thinking": event["text"]}
+                    elif event["type"] == "content":
+                        parts.append(event["text"])
+                        yield {"token": event["text"]}
+                break
+            except Exception as exc:
+                retryable = (router_mod._is_rate_limited(exc) or router_mod._is_transient(exc))
+                if parts or not retryable or attempt >= router_mod.RATE_LIMIT_RETRIES:
+                    finish_run(run_id, "failed", error=str(exc), plan=subquestions)
+                    if router_mod._is_rate_limited(exc):
+                        yield {"error": (
+                            "The model provider rate-limited the final write. Your evidence "
+                            "was gathered and saved — wait a minute and run it again, or "
+                            "assign Research to a different provider in Settings.")}
+                    else:
+                        yield {"error": f"the writing model failed: {exc}"}
+                    return
+                attempt += 1
+                delay = router_mod._retry_after_seconds(exc)
+                if delay is None:
+                    delay = min(router_mod.RATE_LIMIT_BASE_DELAY * (2 ** (attempt - 1)),
+                                router_mod.RATE_LIMIT_MAX_DELAY)
+                yield {"stage": "write",
+                       "detail": f"provider rate-limited the write — waiting {int(delay)}s "
+                                 f"(attempt {attempt} of {router_mod.RATE_LIMIT_RETRIES})"}
+                _time.sleep(delay)
 
         report = "".join(parts).strip() or "The research produced no report text."
         report += "\n\n" + source_appendix(store)

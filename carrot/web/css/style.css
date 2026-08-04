@@ -2988,3 +2988,11 @@ select optgroup {
   color: #eceef4;
 }
 select option:checked { background-color: #2f333d; }
+
+/* A provider that could not list its models still gets a row explaining why. */
+.model-note {
+  padding: 4px 10px 7px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--yellow);
+}

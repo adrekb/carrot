@@ -539,7 +539,9 @@ def test_models_endpoint_reports_which_route_serves_chat(client, monkeypatch):
 
 
 def test_models_endpoint_survives_a_broken_provider(client, monkeypatch):
-    """One provider failing to list must not empty the whole picker."""
+    """One provider failing to list must not break the others. It is still
+    listed, carrying its error, so the user can see why and type a model
+    name by hand instead of the provider silently vanishing."""
     from carrot import app as app_mod
 
     monkeypatch.setattr(app_mod.router_mod, "status", lambda: {"providers": [
@@ -554,5 +556,161 @@ def test_models_endpoint_survives_a_broken_provider(client, monkeypatch):
     monkeypatch.setattr(app_mod.providers_mod, "list_models", flaky)
 
     data = client.get("/api/models").json()
-    assert [g["provider"] for g in data["remote"]] == ["good"]
+    groups = {g["provider"]: g for g in data["remote"]}
+    assert groups["good"]["models"] == ["good-1"] and not groups["good"]["error"]
+    assert groups["bad"]["models"] == [] and "network down" in groups["bad"]["error"]
     assert data["installed"] is not None
+
+
+def test_provider_stays_in_the_picker_when_listing_fails(client, monkeypatch):
+    """A key that cannot list models (expired, rate limited, behind a proxy)
+    must not make cloud models silently disappear from the chat picker —
+    that reads as 'unsupported' rather than 'unreachable', and leaves no
+    way to name a model by hand."""
+    from carrot import app as app_mod
+
+    monkeypatch.setattr(app_mod.router_mod, "status", lambda: {"providers": [
+        {"id": "anthropic", "label": "Anthropic", "enabled": True, "configured": True},
+    ]})
+    monkeypatch.setattr(app_mod.providers_mod, "list_models", lambda pid: {
+        "provider": pid, "models": [],
+        "error": "401 Client Error: Unauthorized for url: https://api.anthropic.com/v1/models",
+    })
+
+    data = client.get("/api/models").json()
+    assert len(data["remote"]) == 1, "provider was dropped instead of explained"
+    group = data["remote"][0]
+    assert group["provider"] == "anthropic"
+    assert group["models"] == []
+    assert "401" in group["error"], "the reason must reach the UI"
+
+
+def test_listing_exception_is_also_surfaced_not_swallowed(client, monkeypatch):
+    from carrot import app as app_mod
+
+    monkeypatch.setattr(app_mod.router_mod, "status", lambda: {"providers": [
+        {"id": "mistral", "label": "Mistral", "enabled": True, "configured": True},
+    ]})
+
+    def boom(pid):
+        raise RuntimeError("connection reset by peer")
+    monkeypatch.setattr(app_mod.providers_mod, "list_models", boom)
+
+    group = client.get("/api/models").json()["remote"][0]
+    assert group["models"] == []
+    assert "connection reset" in group["error"]
+
+
+def test_pinning_chat_to_a_named_cloud_model_takes_effect(client):
+    """What the picker's manual 'Use' box does end to end."""
+    from carrot import config as config_mod
+    config_mod.set_config("provider_keys", {"anthropic": "sk-test"})
+
+    resp = client.put("/api/router/route", json={
+        "task": "chat", "provider": "anthropic", "model": "claude-opus-5"})
+    assert resp.status_code == 200
+
+    data = client.get("/api/models").json()
+    assert data["chat_provider"] == "anthropic"
+    assert data["chat_model"] == "claude-opus-5"
+    assert data["chat_local"] is False
+
+
+# ===== Rate limiting =====
+#
+# Research fans out across workers and makes many calls per run. A hosted
+# provider starts refusing (429) partway through, and losing the final
+# report after minutes of gathering is the worst moment to fail.
+
+def test_rate_limit_is_recognised_in_several_shapes():
+    class WithStatus(Exception):
+        status_code = 429
+    assert router._is_rate_limited(WithStatus()) is True
+    assert router._is_rate_limited(Exception("HTTP 429: rate limit exceeded")) is True
+    assert router._is_rate_limited(Exception('{"type": "rate_limited"}')) is True
+    assert router._is_rate_limited(Exception("400 bad request")) is False
+
+
+def test_transient_provider_errors_are_retried_too():
+    assert router._is_transient(Exception("503 Service Unavailable")) is True
+    assert router._is_transient(Exception("Overloaded")) is True
+    assert router._is_transient(Exception("401 Unauthorized")) is False
+
+
+def test_retry_after_header_is_honoured():
+    class Resp:
+        headers = {"retry-after": "7"}
+
+    class Limited(Exception):
+        status_code = 429
+        response = Resp()
+    assert router._retry_after_seconds(Limited()) == 7.0
+    assert router._retry_after_seconds(Exception("no headers")) is None
+
+
+def test_retry_succeeds_after_being_throttled(monkeypatch):
+    import time as real_time
+    monkeypatch.setattr(real_time, "sleep", lambda s: None)
+
+    calls = {"n": 0}
+
+    def flaky():
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise Exception("HTTP 429: Rate limit exceeded")
+        return "the report"
+
+    waits = []
+    result = router.with_rate_limit_retry(
+        flaky, on_wait=lambda a, d, r: waits.append((a, r)))
+    assert result == "the report"
+    assert calls["n"] == 3
+    assert [r for _, r in waits] == ["rate limited", "rate limited"]
+
+
+def test_a_non_retryable_error_is_raised_immediately(monkeypatch):
+    import time as real_time
+    monkeypatch.setattr(real_time, "sleep", lambda s: None)
+    calls = {"n": 0}
+
+    def bad_key():
+        calls["n"] += 1
+        raise Exception("401 Unauthorized")
+
+    with pytest.raises(Exception, match="401"):
+        router.with_rate_limit_retry(bad_key)
+    assert calls["n"] == 1, "an auth failure must not be retried"
+
+
+def test_retries_are_bounded(monkeypatch):
+    import time as real_time
+    monkeypatch.setattr(real_time, "sleep", lambda s: None)
+    calls = {"n": 0}
+
+    def always_limited():
+        calls["n"] += 1
+        raise Exception("429 rate limit")
+
+    with pytest.raises(Exception):
+        router.with_rate_limit_retry(always_limited, retries=3)
+    assert calls["n"] == 4  # initial attempt + 3 retries
+
+
+def test_research_caps_concurrency_when_routed_to_the_cloud(monkeypatch):
+    """Eight parallel workers at a metered endpoint is what trips a 429."""
+    from carrot import research
+
+    class Cloud:
+        local, model = False, "claude-opus-5"
+
+    class Local:
+        local, model = True, "llama3.2:1b"
+
+    monkeypatch.setattr(research.router_mod, "route", lambda *a, **k: Cloud())
+    assert research.DEPTHS["exhaustive"]["workers"] > research.CLOUD_MAX_WORKERS
+    # The cap is what the pool would actually use.
+    assert min(research.DEPTHS["exhaustive"]["workers"],
+               research.CLOUD_MAX_WORKERS) == research.CLOUD_MAX_WORKERS
+
+    monkeypatch.setattr(research.router_mod, "route", lambda *a, **k: Local())
+    assert research.DEPTHS["deep"]["workers"] == 4  # local keeps full fan-out

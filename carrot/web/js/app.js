@@ -310,6 +310,7 @@ function renderModelPop(data) {
             head.className = 'pop-section';
             head.textContent = group.label;
             remoteEl.appendChild(head);
+
             for (const name of group.models) {
                 const isActive = data.chat_local === false
                     && data.chat_provider === group.provider && data.chat_model === name;
@@ -320,6 +321,33 @@ function renderModelPop(data) {
                     <span class="m-meta">cloud</span>
                     ${isActive ? '<svg class="ico m-check"><use href="#i-check"/></svg>' : ''}`;
                 row.onclick = () => selectRemoteModel(group.provider, name);
+                remoteEl.appendChild(row);
+            }
+
+            // Listing can fail while the provider still works fine. Say why,
+            // and let the model be named by hand instead of dead-ending.
+            if (group.error) {
+                const why = document.createElement('div');
+                why.className = 'model-note';
+                why.textContent = /401|403|unauthor/i.test(group.error)
+                    ? 'Key rejected — check it in Settings → Providers.'
+                    : `Could not list models: ${group.error}`.slice(0, 120);
+                remoteEl.appendChild(why);
+            }
+            if (group.error || !group.models.length) {
+                const row = document.createElement('div');
+                row.className = 'pop-custom';
+                row.innerHTML = `
+                    <input type="text" placeholder="type a ${escHtml(group.label)} model name"
+                           id="remote-custom-${escHtml(group.provider)}">
+                    <button class="btn btn-ghost">Use</button>`;
+                const input = row.querySelector('input');
+                const use = () => {
+                    const name = input.value.trim();
+                    if (name) selectRemoteModel(group.provider, name);
+                };
+                input.onkeydown = (e) => { if (e.key === 'Enter') use(); };
+                row.querySelector('button').onclick = use;
                 remoteEl.appendChild(row);
             }
         }
