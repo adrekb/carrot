@@ -33,6 +33,7 @@ from carrot import (
     hub as hub_mod,
     calfeed as calfeed_mod,
     attachments as attach_mod,
+    artifacts as artifacts_mod,
     interop as interop_mod,
     deep_research as dr_mod,
     skills as skills_mod,
@@ -139,6 +140,9 @@ class ChatRequest(BaseModel):
     cloud: Optional[bool] = False
     # off | single | multi. Omitted means the saved default.
     search_mode: Optional[str] = None
+    # File a newly created conversation into this workspace. The quick-ask
+    # panel uses it to ask a question "in" a project without opening the app.
+    workspace_id: Optional[str] = None
 
 
 class AddMessageRequest(BaseModel):
@@ -366,7 +370,11 @@ class ProviderRequest(BaseModel):
 
 
 class ProviderKeyRequest(BaseModel):
-    api_key: str = ""
+    # Required, with no default. It used to default to "", which meant a body
+    # naming the field anything else — a client typo — validated fine and
+    # quietly cleared a working key while returning 200. Clearing a key is a
+    # real operation and should have to be asked for explicitly.
+    api_key: str
 
 
 class ProviderEnabledRequest(BaseModel):
@@ -934,6 +942,66 @@ MAX_TOOL_ROUNDS = 8
 # Eight rounds is one pass; a real follow-up loop runs out halfway through.
 MAX_TOOL_ROUNDS_MULTI = 16
 
+# What "multi-turn" has to have actually done before an answer is accepted.
+# The directive alone does not achieve this: a small on-device model reads
+# "do not stop at the first set of results", searches once, and answers from
+# the snippets anyway. These gates are checked in code, so the mode means the
+# same thing whatever model is behind it.
+MULTI_MIN_SEARCHES = 2
+MULTI_MIN_READS = 1
+# How many times we push back before taking what we are given. Without a cap a
+# model that simply cannot use read_url would loop until the round budget ran
+# out and the user would get nothing at all.
+MAX_GATE_NUDGES = 3
+
+GATE_NUDGE_NO_READ = (
+    "You have search results but have not opened any of them. Snippets are not "
+    "an answer — they are a list of places an answer might be. Call read_url on "
+    "the results most likely to contain the specifics, then answer from what the "
+    "pages actually say."
+)
+GATE_NUDGE_ONE_SEARCH = (
+    "That was one search. Before answering, name what you still cannot answer "
+    "from what you have, and run another search aimed at exactly that gap — "
+    "using the words a source would use, not the words of the question."
+)
+
+
+def _search_gate_gap(searches: int, reads: int) -> Optional[str]:
+    """What multi-turn still owes the user, if anything.
+
+    Returned as the nudge to send back to the model; None once the mode has
+    done what its name claims.
+    """
+    if reads < MULTI_MIN_READS:
+        return GATE_NUDGE_NO_READ
+    if searches < MULTI_MIN_SEARCHES:
+        return GATE_NUDGE_ONE_SEARCH
+    return None
+
+
+def _query_drifted(question: str, query: str) -> bool:
+    """Did the model search for something other than what was asked?
+
+    The failure this catches is not subtle — a question about the F-15EX
+    program coming back with a search for "current American political news".
+    A generated query that shares no content word with the question is not a
+    rephrasing, it is a different question, and the results cannot answer the
+    one that was asked.
+    """
+    from . import websearch
+    asked = websearch._terms(question)
+    if not asked or not query.strip():
+        return False
+    return not (asked & websearch._terms(query))
+
+
+QUERY_DRIFT_CORRECTION = (
+    "That search was not run: the query {query!r} shares no word with what the "
+    "user actually asked ({question!r}). Search for the user's question, using "
+    "its specific names, models and numbers."
+)
+
 # ===== Chat search modes =====
 #
 # Whether a chat turn may reach the web at all, and how hard it should try.
@@ -1077,7 +1145,18 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mo
     tools = _available_tools(mode)
     rounds = MAX_TOOL_ROUNDS_MULTI if mode == SEARCH_MULTI else MAX_TOOL_ROUNDS
     working = list(history)
-    final_text = []
+    question = next((m["content"] for m in reversed(history) if m.get("role") == "user"), "")
+
+    gated = mode == SEARCH_MULTI
+    searches = reads = nudges = 0
+    final_text = ""
+    stalled = False
+
+    # In gated mode the model's prose is held back until the gates are met,
+    # because a premature answer is one we intend to throw away — streaming it
+    # first would print an answer to the user and then silently replace it.
+    def emit_text(text):
+        return [] if gated else [{"chunk": text}]
 
     for _ in range(rounds):
         content_parts = []
@@ -1089,12 +1168,26 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mo
                 tool_calls.extend(event["calls"])
             else:
                 content_parts.append(event["text"])
-                yield {"chunk": event["text"]}
+                for out in emit_text(event["text"]):
+                    yield out
 
         content_str = "".join(content_parts)
-        if content_str:
-            final_text.append(content_str)
+
         if not tool_calls:
+            # The model wants to finish. In multi-turn that is only allowed
+            # once it has actually searched and read.
+            gap = _search_gate_gap(searches, reads) if gated else None
+            if gap and nudges < MAX_GATE_NUDGES:
+                nudges += 1
+                yield {"gate": {"reason": gap, "searches": searches, "reads": reads}}
+                working.append({"role": "assistant", "content": content_str})
+                working.append({"role": "user", "content": gap})
+                continue
+            if gap:
+                # Out of nudges: the model cannot or will not do it. Keep the
+                # answer, but say so rather than passing it off as researched.
+                stalled = True
+            final_text = content_str
             break
 
         working.append({"role": "assistant", "content": content_str, "tool_calls": tool_calls})
@@ -1108,6 +1201,18 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mo
                 except json.JSONDecodeError:
                     args = {}
 
+            # A query about something else cannot answer the question asked.
+            # Refuse it and say why, instead of spending a round on it.
+            if name == "web_search" and _query_drifted(question, str(args.get("query", ""))):
+                correction = QUERY_DRIFT_CORRECTION.format(
+                    query=str(args.get("query", "")), question=question[:200])
+                yield {"tool": {"name": name, "args": args, "rejected": True}}
+                working.append({
+                    "role": "tool", "content": correction,
+                    "name": name, "tool_call_id": call.get("id", name),
+                })
+                continue
+
             yield {"tool": {"name": name, "args": args}}
             result = ""
             for event in _run_tool(name, args, conversation_id):
@@ -1115,6 +1220,10 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mo
                     result = event["_tool_result"]
                 else:
                     yield event
+            if name == "web_search":
+                searches += 1
+            elif name == "read_url":
+                reads += 1
             yield {"tool_result": {"name": name, "result": result[:2000]}}
             working.append(
                 {
@@ -1124,8 +1233,40 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mo
                     "tool_call_id": call.get("id", name),
                 }
             )
+    else:
+        # Every round went to tool calls and the budget ran out, so the model
+        # was never asked to write an answer. Without this the user waits the
+        # whole loop and receives an empty message.
+        working.append({
+            "role": "user",
+            "content": "Stop searching and answer now from what you have gathered. "
+                       "Say plainly what you could not find.",
+        })
+        parts = []
+        for event in router_mod.stream_events(resolved, working, tools=None):
+            if event["type"] == "thinking":
+                yield {"thinking": event["text"]}
+            elif event["type"] != "tool_calls":
+                parts.append(event["text"])
+                for out in emit_text(event["text"]):
+                    yield out
+        final_text = "".join(parts)
+        stalled = True
 
-    yield {"_final_text": "".join(final_text)}
+    if gated:
+        # Held back above; send the answer we actually kept.
+        if final_text:
+            yield {"chunk": final_text}
+        # The user escalates to Research by hand — this only offers it, and
+        # only when the turn was visibly thin.
+        if stalled or reads < MULTI_MIN_READS or searches < MULTI_MIN_SEARCHES:
+            yield {"suggest_research": {
+                "question": question,
+                "reason": "this turn answered from "
+                          f"{searches} search(es) and {reads} page(s) read",
+            }}
+
+    yield {"_final_text": final_text}
 
 
 def _post_turn(conversation_id, user_message, assistant_text, message_id):
@@ -1161,6 +1302,15 @@ def _open_conversation(req):
     if req.conversation_id is None:
         created = conv_mod.create_conversation(title=req.message[:80])
         req.conversation_id = created["id"]
+        # Only on creation: filing an existing conversation elsewhere because
+        # of one message would move it out from under the user.
+        workspace_id = getattr(req, "workspace_id", None)
+        if workspace_id:
+            try:
+                workspaces_mod.file_item(
+                    workspaces_mod.KIND_CONVERSATION, created["id"], workspace_id)
+            except Exception:
+                pass          # a stale workspace id must not lose the message
     conv = conv_mod.get_conversation(req.conversation_id)
     if conv is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
@@ -1660,6 +1810,55 @@ async def set_config_value(key: str, value: Any = Body(...)):
         )
     config.set_config(key, value)
     return {"key": key, "value": value}
+
+
+# ===== Artifacts =====
+# Charts, diagrams and images the assistant made. The content is model-authored
+# markup, so the API hands back a *document* to drop into a sandboxed iframe
+# rather than a fragment to inline — see carrot/artifacts.py.
+
+@app.get("/api/artifacts/{artifact_id}")
+async def get_artifact(artifact_id: str):
+    artifact = artifacts_mod.get(artifact_id)
+    if not artifact:
+        raise HTTPException(status_code=404, detail="artifact not found")
+    return {**artifact, "document": artifacts_mod.html_document(artifact)}
+
+
+@app.get("/api/conversations/{conversation_id}/artifacts")
+async def list_conversation_artifacts(conversation_id: str):
+    items = artifacts_mod.for_conversation(conversation_id)
+    # The list view does not need the payloads, and a conversation with fifty
+    # charts in it would be megabytes of JSON.
+    return {"artifacts": [{k: v for k, v in a.items() if k != "content"} for a in items]}
+
+
+@app.delete("/api/artifacts/{artifact_id}")
+async def delete_artifact(artifact_id: str):
+    if not artifacts_mod.delete(artifact_id):
+        raise HTTPException(status_code=404, detail="artifact not found")
+    return {"status": "deleted"}
+
+
+class ArtifactRequest(BaseModel):
+    kind: str
+    content: str = ""
+    title: str = ""
+    path: str = ""
+    conversation_id: str = ""
+
+
+@app.post("/api/artifacts")
+async def create_artifact(req: ArtifactRequest):
+    """Used by the UI to re-render an artifact in the current theme, and by
+    tests. The model reaches artifacts through the show_artifact tool."""
+    try:
+        artifact = artifacts_mod.create(
+            req.kind, req.content, title=req.title, path=req.path,
+            conversation_id=req.conversation_id)
+    except artifacts_mod.ArtifactError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {**artifact, "document": artifacts_mod.html_document(artifact)}
 
 
 # ===== Widgets =====

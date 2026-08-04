@@ -12,24 +12,24 @@
      relays it and stamps data-theme / data-accent on <html> (see the
      script at the end of this file). */
   :root {
-    --panel: rgba(30, 33, 42, 0.82);
-    --stroke: rgba(255, 255, 255, 0.115);
-    --text: #eceef4;
-    --muted: #99a0ae;
+    --panel: rgba(34, 32, 26, 0.82);
+    --stroke: rgba(232, 222, 200, 0.12);
+    --text: #f2ece0;
+    --muted: #a89f8d;
     --accent: #f4813f;
     --accent-soft: rgba(244, 129, 63, 0.15);
     --accent-line: rgba(244, 129, 63, 0.32);
-    --sheen: rgba(255, 255, 255, 0.14);
+    --sheen: rgba(255, 246, 226, 0.1);
     --drop: rgba(0, 0, 0, 0.5);
     --drop-sm: rgba(0, 0, 0, 0.3);
     --ease: cubic-bezier(0.32, 0.72, 0, 1);
   }
   :root[data-theme="light"] {
-    --panel: rgba(255, 255, 255, 0.86);
-    --stroke: rgba(38, 32, 26, 0.12);
-    --text: #1c1a18;
-    --muted: #5f5a54;
-    --sheen: rgba(38, 32, 26, 0.10);
+    --panel: rgba(255, 253, 248, 0.88);
+    --stroke: rgba(40, 34, 22, 0.13);
+    --text: #1e1b14;
+    --muted: #5f584a;
+    --sheen: rgba(40, 34, 22, 0.07);
     --drop: rgba(38, 30, 22, 0.22);
     --drop-sm: rgba(38, 30, 22, 0.12);
   }
@@ -137,31 +137,193 @@
   .dots span:nth-child(2) { animation-delay: 0.18s; }
   .dots span:nth-child(3) { animation-delay: 0.36s; }
   @keyframes blink { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
+
+  /* ---- The panel proper ----
+     One surface holding the input, the attachment tray and the footer,
+     rather than a bare bar. The bar keeps its own padding but drops the
+     border and shadow now that the panel carries them. */
+  .panel {
+    background: var(--panel);
+    backdrop-filter: blur(34px) saturate(170%);
+    -webkit-backdrop-filter: blur(34px) saturate(170%);
+    border: 1px solid var(--stroke);
+    border-radius: 20px;
+    box-shadow: 0 26px 70px var(--drop), 0 2px 8px var(--drop-sm);
+    animation: rise 0.22s var(--ease);
+    position: relative;
+  }
+  .bar {
+    background: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    border: 0;
+    box-shadow: none;
+    border-radius: 0;
+    animation: none;
+    padding: 15px 16px 13px;
+  }
+  input { font-size: 16px; }
+
+  .icon {
+    flex: 0 0 auto;
+    width: 30px; height: 30px;
+    display: flex; align-items: center; justify-content: center;
+    border: 0;
+    border-radius: 9px;
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .icon svg { width: 17px; height: 17px; }
+  .icon:hover { background: var(--sheen); color: var(--text); }
+
+  /* Attachment chips */
+  .tray {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 0 16px 12px;
+  }
+  .tray.hidden { display: none; }
+  .file {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    max-width: 260px;
+    padding: 5px 8px 5px 10px;
+    border-radius: 9px;
+    border: 1px solid var(--stroke);
+    background: var(--sheen);
+    font-size: 11.5px;
+  }
+  .file.bad { border-color: var(--accent-line); color: var(--accent); }
+  .file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .file-meta { color: var(--muted); font-size: 10.5px; flex: 0 0 auto; }
+  .file-x {
+    border: 0; background: none; color: var(--muted);
+    cursor: pointer; font-size: 14px; line-height: 1; padding: 0 2px;
+  }
+  .file-x:hover { color: var(--text); }
+
+  /* Footer: workspace scope on the left, the escape hint on the right */
+  .foot {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 12px 11px 13px;
+  }
+  .spacer { flex: 1; }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 9px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    background: none;
+    color: var(--muted);
+    font: inherit;
+    font-size: 11.5px;
+    cursor: pointer;
+  }
+  .chip svg { width: 13px; height: 13px; }
+  .chip:hover { background: var(--sheen); color: var(--text); border-color: var(--stroke); }
+  .key { font-size: 10.5px; color: var(--muted); opacity: 0.75; }
+
+  /* Workspace menu, anchored inside the panel so it cannot be clipped by
+     the window — the window is only as tall as the content. */
+  .menu {
+    position: absolute;
+    left: 12px;
+    bottom: 40px;
+    min-width: 210px;
+    max-height: 190px;
+    overflow-y: auto;
+    padding: 5px;
+    border-radius: 12px;
+    background: var(--panel);
+    backdrop-filter: blur(34px) saturate(180%);
+    -webkit-backdrop-filter: blur(34px) saturate(180%);
+    border: 1px solid var(--stroke);
+    box-shadow: 0 20px 50px var(--drop);
+    z-index: 5;
+  }
+  .menu.hidden { display: none; }
+  .menu-item {
+    display: block; width: 100%;
+    padding: 7px 9px;
+    border: 0; border-radius: 8px;
+    background: none; color: var(--text);
+    font: inherit; font-size: 12.5px; text-align: left; cursor: pointer;
+  }
+  .menu-item:hover { background: var(--sheen); }
+  .menu-item.on { color: var(--accent); }
+  .menu-empty { padding: 8px 9px; font-size: 11.5px; color: var(--muted); }
+
+  /* Whole-panel drop target */
+  body.dropping .panel {
+    border-color: var(--accent-line);
+    box-shadow: 0 26px 70px var(--drop), 0 0 0 3px var(--accent-soft);
+  }
 </style>
 </head>
 <body>
-  <div class="bar">
-    <div class="mark">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
-           stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+  <div class="panel">
+    <div class="bar">
+      <div class="mark">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+             stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+      </div>
+      <input id="q" placeholder="Ask Carrot anything…" autofocus autocomplete="off" spellcheck="false">
+      <button class="icon" id="attach" title="Attach files">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+             stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5l-8.8 8.8a5.3 5.3 0 0 1-7.5-7.5l9-9a3.5 3.5 0 0 1 5 5l-9 9a1.8 1.8 0 0 1-2.5-2.5l8.3-8.3"/></svg>
+      </button>
+      <span class="hint" id="hint">Enter</span>
     </div>
-    <input id="q" placeholder="Ask Carrot anything…" autofocus autocomplete="off" spellcheck="false">
-    <span class="hint" id="hint">Enter</span>
+
+    <div class="tray hidden" id="tray"></div>
+
+    <div class="foot">
+      <button class="chip" id="ws" title="Ask inside a workspace">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+             stroke-linecap="round" stroke-linejoin="round"><path d="M3.2 6.6a2 2 0 0 1 2-2h3.6l2.2 2.6h7.8a2 2 0 0 1 2 2v8.2a2 2 0 0 1-2 2H5.2a2 2 0 0 1-2-2z"/></svg>
+        <span id="ws-label">All workspaces</span>
+      </button>
+      <span class="spacer"></span>
+      <span class="key">Esc to close</span>
+    </div>
+
+    <div class="menu hidden" id="ws-menu"></div>
   </div>
+
   <div class="reply hidden" id="reply"></div>
 
 <script>
   const input = document.getElementById('q');
   const hint = document.getElementById('hint');
   const reply = document.getElementById('reply');
+  const tray = document.getElementById('tray');
+  const wsLabel = document.getElementById('ws-label');
+  const wsMenu = document.getElementById('ws-menu');
+  const api = window.carrotAPI || {};
+
   let busy = false;
+  let attachments = [];      // { name, mime, data, size }
+  let workspaceId = '';
+  let workspaces = [];
+
+  function esc(text) {
+    const div = document.createElement('div');
+    div.textContent = String(text == null ? '' : text);
+    return div.innerHTML;
+  }
 
   function resize() {
-    // Ask the shell to match the window to the content height.
+    // Ask the shell to match the window to the content height. The panel
+    // grows as attachments and a reply appear.
     const h = document.body.scrollHeight;
-    if (window.carrotAPI && window.carrotAPI.resizeOverlay) {
-      window.carrotAPI.resizeOverlay(Math.min(Math.ceil(h), 460));
-    }
+    if (api.resizeOverlay) api.resizeOverlay(Math.ceil(h) + 8);
   }
 
   function showReply(html) {
@@ -176,16 +338,144 @@
     requestAnimationFrame(resize);
   }
 
-  input.addEventListener('keydown', async (e) => {
-    if (e.key === 'Escape') {
-      if (!reply.classList.contains('hidden')) { clearReply(); input.value = ''; return; }
-      if (window.carrotAPI && window.carrotAPI.hideOverlay) window.carrotAPI.hideOverlay();
+  // ---------- attachments ----------
+
+  function renderTray() {
+    if (!attachments.length) {
+      tray.classList.add('hidden');
+      tray.innerHTML = '';
+      requestAnimationFrame(resize);
       return;
     }
-    if (e.key !== 'Enter' || busy) return;
+    tray.classList.remove('hidden');
+    tray.innerHTML = '';
+    attachments.forEach((file, index) => {
+      const chip = document.createElement('span');
+      chip.className = 'file' + (file.error ? ' bad' : '');
+      const size = file.size ? ` · ${Math.max(1, Math.round(file.size / 1024))} KB` : '';
+      chip.innerHTML = `<span class="file-name">${esc(file.name)}</span>`
+                     + `<span class="file-meta">${esc(file.error || size)}</span>`
+                     + `<button class="file-x" aria-label="Remove">×</button>`;
+      chip.querySelector('.file-x').onclick = () => {
+        attachments.splice(index, 1);
+        renderTray();
+      };
+      tray.appendChild(chip);
+    });
+    requestAnimationFrame(resize);
+  }
 
+  async function pickFiles() {
+    if (!api.pickAttachments) return;
+    const result = await api.pickAttachments();
+    for (const file of (result.files || [])) attachments.push(file);
+    renderTray();
+    input.focus();
+  }
+
+  document.getElementById('attach').onclick = pickFiles;
+
+  // Drag a file onto the panel. The renderer only gets a path, so the read
+  // happens in the main process.
+  document.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    document.body.classList.add('dropping');
+  });
+  document.addEventListener('dragleave', (e) => {
+    if (e.relatedTarget === null) document.body.classList.remove('dropping');
+  });
+  document.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    document.body.classList.remove('dropping');
+    if (!api.readAttachment) return;
+    for (const file of Array.from(e.dataTransfer.files || [])) {
+      const filePath = file.path || (window.webUtils && window.webUtils.getPathForFile
+        ? window.webUtils.getPathForFile(file) : '');
+      if (filePath) attachments.push(await api.readAttachment(filePath));
+    }
+    renderTray();
+  });
+
+  // Paste a screenshot straight in — the clipboard gives real bytes here, so
+  // this path does not need the main process.
+  document.addEventListener('paste', (e) => {
+    for (const item of Array.from(e.clipboardData?.items || [])) {
+      if (item.type && item.type.startsWith('image/')) {
+        const blob = item.getAsFile();
+        if (!blob) continue;
+        const reader = new FileReader();
+        reader.onload = () => {
+          attachments.push({
+            name: `pasted-image.${(item.type.split('/')[1] || 'png')}`,
+            mime: item.type,
+            data: String(reader.result).split(',')[1] || '',
+            size: blob.size,
+          });
+          renderTray();
+        };
+        reader.readAsDataURL(blob);
+      }
+    }
+  });
+
+  // ---------- workspace ----------
+
+  async function loadWorkspaces() {
+    if (!api.listWorkspaces) return;
+    try {
+      const body = await api.listWorkspaces();
+      workspaces = (body && body.workspaces) || [];
+    } catch (_) { workspaces = []; }
+  }
+
+  function renderWorkspaceMenu() {
+    wsMenu.innerHTML = '';
+    const options = [{ id: '', name: 'All workspaces' }].concat(workspaces);
+    for (const option of options) {
+      const item = document.createElement('button');
+      item.className = 'menu-item' + (option.id === workspaceId ? ' on' : '');
+      item.textContent = option.name || option.id;
+      item.onclick = () => {
+        workspaceId = option.id;
+        wsLabel.textContent = option.name || 'All workspaces';
+        wsMenu.classList.add('hidden');
+        input.focus();
+      };
+      wsMenu.appendChild(item);
+    }
+    if (!workspaces.length) {
+      const note = document.createElement('div');
+      note.className = 'menu-empty';
+      note.textContent = 'No workspaces yet.';
+      wsMenu.appendChild(note);
+    }
+  }
+
+  document.getElementById('ws').onclick = async (e) => {
+    e.stopPropagation();
+    if (wsMenu.classList.contains('hidden')) {
+      if (!workspaces.length) await loadWorkspaces();
+      renderWorkspaceMenu();
+      wsMenu.classList.remove('hidden');
+      requestAnimationFrame(resize);
+    } else {
+      wsMenu.classList.add('hidden');
+      requestAnimationFrame(resize);
+    }
+  };
+  document.addEventListener('click', () => {
+    if (!wsMenu.classList.contains('hidden')) {
+      wsMenu.classList.add('hidden');
+      requestAnimationFrame(resize);
+    }
+  });
+
+  // ---------- asking ----------
+
+  async function ask() {
     const text = input.value.trim();
-    if (!text) return;
+    if ((!text && !attachments.length) || busy) return;
+    const usable = attachments.filter(f => !f.error);
     busy = true;
     input.value = '';
     hint.textContent = 'Thinking';
@@ -195,34 +485,60 @@
     try {
       // Goes through the shell over IPC: the backend requires a session
       // token, and only the main process knows where it lives on disk.
-      const res = await window.carrotAPI.sendCommand(text);
+      const res = await api.sendCommand({
+        message: text,
+        attachments: usable.map(f => ({ name: f.name, mime: f.mime, data: f.data })),
+        workspace_id: workspaceId || undefined,
+      });
       if (res && res.error) throw new Error(res.error);
       const answer = (res && (res.response || res.message || res.content)) || 'No response.';
-      showReply(String(answer));
+      showReply(esc(answer));
+      attachments = [];
+      renderTray();
     } catch (err) {
-      showReply('Could not reach Carrot: ' + (err && err.message ? err.message : err));
+      showReply(esc('Could not reach Carrot: ' + (err && err.message ? err.message : err)));
     } finally {
       busy = false;
       hint.textContent = 'Enter';
       hint.classList.remove('busy');
       input.focus();
     }
+  }
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      if (!wsMenu.classList.contains('hidden')) { wsMenu.classList.add('hidden'); return; }
+      if (attachments.length) { attachments = []; renderTray(); return; }
+      if (!reply.classList.contains('hidden')) { clearReply(); input.value = ''; return; }
+      if (api.hideOverlay) api.hideOverlay();
+      return;
+    }
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask(); }
   });
 
   window.addEventListener('focus', () => input.focus());
+
   // The shell relays the main window's resolved theme; it arrives before
   // 'overlay-shown', so the panel is already repainted when it appears.
-  if (window.carrotAPI && window.carrotAPI.onAppearance) {
-    window.carrotAPI.onAppearance((a) => {
+  if (api.onAppearance) {
+    api.onAppearance((a) => {
       if (!a) return;
       document.documentElement.setAttribute('data-theme', a.theme === 'light' ? 'light' : 'dark');
       document.documentElement.setAttribute('data-accent', a.accent || 'carrot');
     });
   }
 
-  if (window.carrotAPI && window.carrotAPI.onOverlayShown) {
-    window.carrotAPI.onOverlayShown(() => { input.value = ''; clearReply(); input.focus(); });
+  if (api.onOverlayShown) {
+    api.onOverlayShown(() => {
+      input.value = '';
+      attachments = [];
+      renderTray();
+      clearReply();
+      loadWorkspaces();
+      input.focus();
+    });
   }
+  loadWorkspaces();
   requestAnimationFrame(resize);
 </script>
 </body>

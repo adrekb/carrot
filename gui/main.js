@@ -7,6 +7,13 @@ const http = require('http');
 const BACKEND_URL = 'http://127.0.0.1:8181';
 const IS_DEV = process.argv.includes('--dev');
 
+// The quick-ask panel. It was 620x92, which fits a single line of text and
+// nothing else — no room for an attachment chip, a workspace name, or a
+// reply worth reading.
+const OVERLAY_WIDTH = 760;
+const OVERLAY_HEIGHT = 148;
+const OVERLAY_MAX_HEIGHT = 620;
+
 let mainWindow = null;
 let overlayWindow = null;
 let fastapiProcess = null;
@@ -48,14 +55,57 @@ function startFastAPI() {
 }
 
 function checkHealth() {
+  return backendHealth().then((health) => health !== null);
+}
+
+// The health body carries the build id, which is what makes "is this the
+// version I just installed?" answerable.
+function backendHealth() {
   return new Promise((resolve) => {
     const req = http.get(`${BACKEND_URL}/api/health`, { timeout: 1500 }, (res) => {
-      resolve(res.statusCode === 200);
-      res.resume();
+      if (res.statusCode !== 200) { res.resume(); resolve(null); return; }
+      let body = '';
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => {
+        try { resolve(JSON.parse(body)); } catch (e) { resolve({}); }
+      });
     });
-    req.on('error', () => resolve(false));
-    req.on('timeout', () => { req.destroy(); resolve(false); });
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => { req.destroy(); resolve(null); });
   });
+}
+
+// A backend answering before we have started one is not ours. It is an older
+// Carrot still running — and because it already holds port 8181, the copy we
+// spawn cannot bind, exits, and the new UI ends up talking to the old
+// backend. Every feature added since that build then 404s: the buttons are
+// there, and pressing them reports "Not Found". Detecting it is the whole
+// point; without this it fails silently and looks like broken features.
+async function warnAboutForeignBackend() {
+  const health = await backendHealth();
+  if (!health) return false;
+  const running = health.version || 'an unknown version';
+  const choice = dialog.showMessageBoxSync({
+    type: 'warning',
+    title: 'Another Carrot is already running',
+    message: 'Another copy of Carrot is already running on this computer.',
+    detail:
+      `It is serving version ${running}, and it owns the port this one needs.\n\n` +
+      `This window would show the new interface but talk to the old backend, ` +
+      `so anything added since ${running} would fail with "Not Found".\n\n` +
+      `Quit the other Carrot — check the system tray and Task Manager for ` +
+      `carrot-backend — then press Retry.`,
+    buttons: ['Retry', 'Use the running version anyway', 'Quit'],
+    defaultId: 0,
+    cancelId: 2,
+  });
+  if (choice === 2) { app.quit(); return true; }
+  if (choice === 0) {
+    // Give the other process a moment to actually go away.
+    await new Promise((r) => setTimeout(r, 1500));
+    return warnAboutForeignBackend();
+  }
+  return false;
 }
 
 async function waitForBackend(timeoutMs = 30000) {
@@ -140,14 +190,18 @@ function createOverlayWindow() {
   const { width, height } = primaryDisplay.size;
 
   overlayWindow = new BrowserWindow({
-    width: 620,
-    height: 92,
+    width: OVERLAY_WIDTH,
+    height: OVERLAY_HEIGHT,
     // Sit it in the upper third — a centred panel covers what you're reading.
-    x: Math.floor(width / 2) - 310,
-    y: Math.floor(height * 0.26),
+    x: Math.floor(width / 2) - Math.floor(OVERLAY_WIDTH / 2),
+    y: Math.floor(height * 0.22),
     frame: false,
     alwaysOnTop: true,
     transparent: true,
+    // Without this the window paints Electron's default opaque white behind
+    // the panel, which is the grey slab that showed around it on Windows —
+    // `transparent: true` alone does not clear the base colour.
+    backgroundColor: '#00000000',
     hasShadow: false,          // the panel draws its own soft shadow
     resizable: false,
     focusable: true,
@@ -182,7 +236,7 @@ function createOverlayWindow() {
 function showOverlay() {
   if (!overlayWindow) createOverlayWindow();
   const reveal = () => {
-    overlayWindow.setSize(overlayWindow.getSize()[0], 92);
+    overlayWindow.setSize(OVERLAY_WIDTH, OVERLAY_HEIGHT);
     overlayWindow.show();
     overlayWindow.focus();
     // Push the theme before revealing: the overlay is a file:// page and
@@ -227,6 +281,8 @@ async function clearCacheOnUpgrade() {
 app.whenReady().then(async () => {
   loadAppearance();
   await clearCacheOnUpgrade();
+  // Check before spawning: anything already answering is not ours.
+  await warnAboutForeignBackend();
   startFastAPI();
   const ready = await waitForBackend();
   if (!ready) {
@@ -304,16 +360,94 @@ function apiHeaders() {
   return headers;
 }
 
+// The overlay can attach files and target a workspace, so this takes an
+// options object. A bare string is still accepted — the quick-ask panel is
+// not the only caller and a signature change should not break the others.
 ipcMain.handle('send-command', async (event, command) => {
+  const opts = typeof command === 'string' ? { message: command } : (command || {});
   try {
+    const body = { message: opts.message || '' };
+    if (Array.isArray(opts.attachments) && opts.attachments.length) {
+      body.attachments = opts.attachments;
+    }
+    if (opts.conversation_id) body.conversation_id = opts.conversation_id;
+    if (opts.workspace_id) body.workspace_id = opts.workspace_id;
     const response = await fetch(`${BACKEND_URL}/api/chat`, {
       method: 'POST',
       headers: apiHeaders(),
-      body: JSON.stringify({ message: command }),
+      body: JSON.stringify(body),
     });
     return await response.json();
   } catch (e) {
     return { error: e.message };
+  }
+});
+
+// Files for the quick-ask panel. Read in the main process because the
+// renderer has no Node access, and returned as base64 because that is the
+// shape /api/chat wants.
+const OVERLAY_MAX_ATTACHMENT_BYTES = 12 * 1024 * 1024;
+
+function readAsAttachment(filePath) {
+  const stat = fs.statSync(filePath);
+  if (stat.size > OVERLAY_MAX_ATTACHMENT_BYTES) {
+    return { name: path.basename(filePath), error: 'larger than 12 MB' };
+  }
+  const ext = path.extname(filePath).toLowerCase();
+  const mimes = {
+    '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp',
+    '.pdf': 'application/pdf', '.txt': 'text/plain', '.md': 'text/markdown',
+    '.csv': 'text/csv', '.json': 'application/json', '.py': 'text/x-python',
+    '.js': 'text/javascript', '.ts': 'text/typescript', '.html': 'text/html',
+  };
+  return {
+    name: path.basename(filePath),
+    mime: mimes[ext] || 'application/octet-stream',
+    data: fs.readFileSync(filePath).toString('base64'),
+    size: stat.size,
+  };
+}
+
+ipcMain.handle('pick-attachments', async (event) => {
+  const parent = BrowserWindow.fromWebContents(event.sender) || mainWindow;
+  const result = await dialog.showOpenDialog(parent, {
+    title: 'Attach to your question',
+    properties: ['openFile', 'multiSelections'],
+    filters: [
+      { name: 'Everything Carrot reads', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'pdf', 'txt', 'md', 'csv', 'json', 'py', 'js', 'ts', 'html'] },
+      { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'] },
+      { name: 'Documents', extensions: ['pdf', 'txt', 'md', 'csv', 'json'] },
+      { name: 'All files', extensions: ['*'] },
+    ],
+  });
+  if (result.canceled) return { files: [] };
+  const files = [];
+  for (const filePath of result.filePaths) {
+    try {
+      files.push(readAsAttachment(filePath));
+    } catch (e) {
+      files.push({ name: path.basename(filePath), error: e.message });
+    }
+  }
+  return { files };
+});
+
+// Dropping a file onto the panel gives the renderer a path, not contents.
+ipcMain.handle('read-attachment', async (event, filePath) => {
+  try {
+    return readAsAttachment(String(filePath));
+  } catch (e) {
+    return { name: path.basename(String(filePath)), error: e.message };
+  }
+});
+
+ipcMain.handle('list-workspaces', async () => {
+  try {
+    const response = await fetch(`${BACKEND_URL}/api/workspaces`, { headers: apiHeaders() });
+    return await response.json();
+  } catch (e) {
+    return { error: e.message, workspaces: [] };
   }
 });
 
@@ -331,7 +465,8 @@ ipcMain.handle('get-status', async () => {
 ipcMain.handle('resize-overlay', async (event, height) => {
   if (!overlayWindow) return { ok: false };
   const [width] = overlayWindow.getSize();
-  overlayWindow.setSize(width, Math.max(90, Math.min(Number(height) || 90, 520)));
+  overlayWindow.setSize(width, Math.max(OVERLAY_HEIGHT,
+    Math.min(Number(height) || OVERLAY_HEIGHT, OVERLAY_MAX_HEIGHT)));
   return { ok: true };
 });
 

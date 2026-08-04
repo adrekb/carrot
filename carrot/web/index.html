@@ -40,6 +40,8 @@
   <symbol id="i-news" viewBox="0 0 24 24"><rect x="3.2" y="4.6" width="17.6" height="14.8" rx="3"/><path d="M7 9.2h10M7 12.6h10M7 16h6"/></symbol>
   <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.1"/><path d="M12 2.6l1.5 2.6a7.6 7.6 0 0 1 2 .8l2.9-.6 1.6 2.8-1.9 2.3a7.6 7.6 0 0 1 0 2.2l1.9 2.3-1.6 2.8-2.9-.6a7.6 7.6 0 0 1-2 .8L12 21.4l-1.5-2.6a7.6 7.6 0 0 1-2-.8l-2.9.6-1.6-2.8 1.9-2.3a7.6 7.6 0 0 1 0-2.2L4 9l1.6-2.8 2.9.6a7.6 7.6 0 0 1 2-.8z"/></symbol>
   <symbol id="i-palette" viewBox="0 0 24 24"><path d="M12 3.2a8.8 8.8 0 0 0 0 17.6c1.4 0 2.3-.85 2.3-1.95 0-.55-.2-1-.55-1.35-.35-.35-.55-.8-.55-1.3 0-1.05.85-1.85 1.9-1.85h1.6a4.1 4.1 0 0 0 4.1-4.1C20.8 6.35 16.9 3.2 12 3.2z"/><circle cx="7.7" cy="11.4" r="1.15" fill="currentColor" stroke="none"/><circle cx="10.3" cy="7.6" r="1.15" fill="currentColor" stroke="none"/><circle cx="14.6" cy="7.7" r="1.15" fill="currentColor" stroke="none"/><circle cx="17.3" cy="10.9" r="1.15" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-file-plus" viewBox="0 0 24 24"><path d="M13.4 2.8H7a2.6 2.6 0 0 0-2.6 2.6v13.2A2.6 2.6 0 0 0 7 21.2h10a2.6 2.6 0 0 0 2.6-2.6V9z"/><path d="M13.4 2.8V9h6.2"/><path d="M12 12.4v5.2M9.4 15h5.2"/></symbol>
+  <symbol id="i-folder-plus" viewBox="0 0 24 24"><path d="M3.2 6.6a2 2 0 0 1 2-2h3.6l2.2 2.6h7.8a2 2 0 0 1 2 2v8.2a2 2 0 0 1-2 2H5.2a2 2 0 0 1-2-2z"/><path d="M12 10.8v5M9.5 13.3h5"/></symbol>
   <symbol id="i-check" viewBox="0 0 24 24" stroke-width="2"><path d="M4.8 12.6l4.6 4.4L19.2 7"/></symbol>
   <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3.6 6.4h16.8"/><path d="M8.4 6.4V4.8a2 2 0 0 1 2-2h3.2a2 2 0 0 1 2 2v1.6"/><path d="M18.4 6.4v12.4a2.4 2.4 0 0 1-2.4 2.4H8a2.4 2.4 0 0 1-2.4-2.4V6.4"/><path d="M10.2 10.8v6M13.8 10.8v6"/></symbol>
   <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3.4v11.4"/><path d="M7.4 10.4l4.6 4.4 4.6-4.4"/><path d="M4 17.4v1.6a2.4 2.4 0 0 0 2.4 2.4h11.2a2.4 2.4 0 0 0 2.4-2.4v-1.6"/></symbol>
@@ -70,6 +72,121 @@
   <symbol id="i-flask" viewBox="0 0 24 24"><path d="M9.6 2.8v6L4.4 17.6a2.4 2.4 0 0 0 2.1 3.6h11a2.4 2.4 0 0 0 2.1-3.6L14.4 8.8v-6"/><path d="M8.2 2.8h7.6M7.2 14.4h9.6"/></symbol>
   <symbol id="i-clipboard" viewBox="0 0 24 24"><rect x="8" y="2.6" width="8" height="4" rx="1.6"/><path d="M16 4.6h1.6a2.4 2.4 0 0 1 2.4 2.4v11.6a2.4 2.4 0 0 1-2.4 2.4H6.4A2.4 2.4 0 0 1 4 18.6V7a2.4 2.4 0 0 1 2.4-2.4H8"/><path d="M8.6 11.6h6.8M8.6 15.4h4.6"/></symbol>
 </svg>
+
+<!-- First-run onboarding. Sits in front of the bootstrap splash: which
+     kind of setup you want is a different question from which model to
+     pull, and asking them at once is what made first run confusing. -->
+<div id="onboard" class="hidden">
+  <div class="onboard-card">
+    <button class="onboard-skip" onclick="finishOnboarding(true)">Skip setup</button>
+
+    <section class="onboard-step" data-step="welcome">
+      <div class="splash-logo"><span class="logo-mask"></span></div>
+      <h1>Carrot</h1>
+      <p class="onboard-lede">
+        Carrot is an assistant that runs on your computer. Your chats, notes and
+        files stay here unless you choose otherwise.
+      </p>
+      <p class="onboard-lede muted">
+        There are two ways to give it a brain. You can run a model on this machine,
+        or connect to one over the internet. You can change this later, and you can
+        use both.
+      </p>
+      <div class="onboard-actions">
+        <button class="btn btn-primary" onclick="onboardStep('choose')">Get started</button>
+      </div>
+    </section>
+
+    <section class="onboard-step hidden" data-step="choose">
+      <h2>How would you like to run Carrot?</h2>
+      <div class="onboard-choices">
+        <button class="onboard-choice" onclick="onboardStep('local')">
+          <span class="oc-title">Run it on this computer</span>
+          <span class="oc-body">
+            Carrot downloads a model and runs it locally. Free, works offline, and
+            nothing you type leaves the machine. Needs a few GB of disk, and answers
+            are slower on modest hardware.
+          </span>
+          <span class="oc-tag">Free · Private</span>
+        </button>
+        <button class="onboard-choice" onclick="onboardStep('explain')">
+          <span class="oc-title">What is an API key?</span>
+          <span class="oc-body">
+            I have heard of connecting to a service like Claude or OpenAI, but I do
+            not know what that involves. Explain it first.
+          </span>
+          <span class="oc-tag">Explain it</span>
+        </button>
+        <button class="onboard-choice" onclick="onboardStep('key')">
+          <span class="oc-title">I already have an API key</span>
+          <span class="oc-body">
+            Paste it and Carrot will check it works. Stronger models, no download,
+            and you pay the provider for what you use.
+          </span>
+          <span class="oc-tag">Paste a key</span>
+        </button>
+      </div>
+    </section>
+
+    <section class="onboard-step hidden" data-step="explain">
+      <h2>What an API key is</h2>
+      <div class="onboard-prose">
+        <p>
+          An <b>API key</b> is a long password from a company that runs large AI
+          models — Anthropic, OpenAI, Google and others. You paste it into Carrot
+          once, and Carrot can then send your questions to their model and get
+          answers back.
+        </p>
+        <p><b>What it means in practice:</b></p>
+        <ul>
+          <li><b>You pay for what you use</b>, usually a fraction of a cent per
+              question. Most providers ask for a card and let you set a spending cap.
+              A heavy day of use is typically a few dollars, not hundreds.</li>
+          <li><b>Your questions leave this computer.</b> They go to that company's
+              servers to be answered. That is the trade for a much stronger model.</li>
+          <li><b>It is not a subscription to a chat website.</b> Paying for
+              Claude.ai or ChatGPT Plus does <i>not</i> give you an API key — those
+              are separate products on separate billing.</li>
+          <li><b>Treat it like a password.</b> Anyone who has it can spend your
+              money. Carrot stores it on this computer only.</li>
+        </ul>
+        <p>
+          You do not need one. Running locally is free and private, and you can add
+          a key later from Settings whenever you want.
+        </p>
+      </div>
+      <div class="onboard-actions">
+        <button class="btn btn-ghost" onclick="onboardStep('choose')">Back</button>
+        <button class="btn btn-ghost" onclick="onboardStep('local')">Run locally instead</button>
+        <button class="btn btn-primary" onclick="onboardStep('key')">I want to get one</button>
+      </div>
+    </section>
+
+    <section class="onboard-step hidden" data-step="key">
+      <h2>Connect a model</h2>
+      <p class="onboard-lede muted">
+        Pick who you have an account with. The link opens their key page; Carrot
+        checks the key before saving it.
+      </p>
+      <div class="onboard-field">
+        <label for="onboard-provider">Provider</label>
+        <select id="onboard-provider" onchange="onboardProviderChanged()"></select>
+        <a id="onboard-key-link" class="onboard-link" href="#" target="_blank" rel="noopener">Where do I get a key? →</a>
+      </div>
+      <div class="onboard-field">
+        <label for="onboard-key">API key</label>
+        <input type="password" id="onboard-key" placeholder="paste your key here"
+               spellcheck="false" autocomplete="off">
+      </div>
+      <div id="onboard-key-status" class="onboard-status"></div>
+      <div class="onboard-actions">
+        <button class="btn btn-ghost" onclick="onboardStep('choose')">Back</button>
+        <button class="btn btn-ghost" onclick="onboardStep('local')">Run locally instead</button>
+        <button class="btn btn-primary" id="onboard-key-btn" onclick="saveOnboardingKey()">Check and save</button>
+      </div>
+    </section>
+  </div>
+</div>
 
 <!-- Bootstrap splash (one-click setup) -->
 <div id="splash" class="hidden">
@@ -329,8 +446,15 @@
       <aside class="split-side">
         <div class="split-side-head">
           <span class="side-label" id="code-root-label">workspace</span>
+          <button class="icon-btn" title="New file" onclick="createEntry(false)"><svg class="ico"><use href="#i-file-plus"/></svg></button>
+          <button class="icon-btn" title="New folder" onclick="createEntry(true)"><svg class="ico"><use href="#i-folder-plus"/></svg></button>
+          <button class="icon-btn" title="Find in files (Ctrl+Shift+F)" onclick="toggleCodeSearch()"><svg class="ico"><use href="#i-search"/></svg></button>
           <button class="icon-btn" title="Change workspace folder" onclick="changeCodeRoot()"><svg class="ico"><use href="#i-gear"/></svg></button>
           <button class="icon-btn" title="Refresh" onclick="loadCodeTree()"><svg class="ico"><use href="#i-pulse"/></svg></button>
+        </div>
+        <div id="code-search" class="code-search hidden">
+          <input type="text" id="code-search-input" placeholder="Find in files…" spellcheck="false">
+          <div id="code-search-results" class="code-search-results"></div>
         </div>
         <div id="code-tree" class="side-list tree"></div>
       </aside>
@@ -338,11 +462,32 @@
         <div class="editor-toolbar">
           <div id="code-tabs" class="code-tabs"></div>
           <span id="code-status" class="editor-status"></span>
+          <button class="btn btn-primary" id="run-btn" onclick="runCurrentFile()">Run</button>
           <button class="btn btn-ghost" onclick="saveCurrentFile()">Save</button>
+          <button class="btn btn-ghost" onclick="toggleCodePanel()">Terminal</button>
           <button class="btn btn-ghost" id="open-editor-btn" onclick="openInVSCode()">Open in VS Code</button>
         </div>
         <div id="code-editor-host" class="monaco-host"></div>
         <div id="code-empty" class="editor-empty">Open a file from the tree to start editing.</div>
+        <div id="code-panel" class="code-panel hidden">
+          <div class="code-panel-tabs">
+            <button class="panel-tab active" data-panel="output" onclick="showCodePanel('output')">Output</button>
+            <button class="panel-tab" data-panel="terminal" onclick="showCodePanel('terminal')">Terminal</button>
+            <span class="spacer"></span>
+            <span class="editor-status" id="panel-status"></span>
+            <button class="icon-btn" title="Clear" onclick="clearCodePanel()"><svg class="ico"><use href="#i-trash"/></svg></button>
+            <button class="icon-btn" title="Hide" onclick="toggleCodePanel()"><svg class="ico"><use href="#i-x"/></svg></button>
+          </div>
+          <pre id="panel-output" class="panel-body"></pre>
+          <div id="panel-terminal" class="panel-body hidden">
+            <div id="term-log" class="term-log"></div>
+            <div class="term-input-row">
+              <span class="term-prompt">$</span>
+              <input id="term-input" type="text" placeholder="run a command in the workspace…"
+                     spellcheck="false" autocomplete="off">
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </section>

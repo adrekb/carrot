@@ -32,6 +32,26 @@ class RootRequest(BaseModel):
     root: str
 
 
+class CreateRequest(BaseModel):
+    path: str                      # parent directory, "" for the root
+    name: str
+    is_dir: bool = False
+
+
+class RenameRequest(BaseModel):
+    path: str
+    new_name: str
+
+
+class MoveRequest(BaseModel):
+    path: str
+    dest_dir: str                  # "" for the root
+
+
+class DeleteRequest(BaseModel):
+    path: str
+
+
 def get_root() -> str:
     root = get_config().get("code_workspace_dir", "")
     if not root:
@@ -41,12 +61,48 @@ def get_root() -> str:
     return root
 
 
-def resolve(rel_path: str) -> str:
-    root = get_root()
-    full = os.path.abspath(os.path.join(root, rel_path or ""))
+def resolve(rel_path: str, *, must_exist: bool = False) -> str:
+    """A path inside the workspace root, or a 403.
+
+    realpath, not abspath: abspath resolves "..", but it does not follow
+    symlinks, so a link inside the workspace pointing at /etc would pass a
+    prefix check and then be read or written through. The root is resolved the
+    same way so a symlinked root (common on macOS, where /tmp is /private/tmp)
+    still compares equal.
+    """
+    root = os.path.realpath(get_root())
+    candidate = os.path.join(root, rel_path or "")
+    # Resolve the deepest existing ancestor: a file being created does not
+    # exist yet, but the directory it lands in must still be inside the root.
+    probe = candidate
+    while not os.path.exists(probe):
+        parent = os.path.dirname(probe)
+        if parent == probe:
+            break
+        probe = parent
+    real_parent = os.path.realpath(probe)
+    if real_parent != root and not real_parent.startswith(root + os.sep):
+        raise HTTPException(status_code=403, detail="path escapes the workspace root")
+    full = os.path.join(real_parent, os.path.relpath(candidate, probe)) \
+        if candidate != probe else real_parent
+    full = os.path.normpath(full)
     if full != root and not full.startswith(root + os.sep):
         raise HTTPException(status_code=403, detail="path escapes the workspace root")
+    if must_exist and not os.path.exists(full):
+        raise HTTPException(status_code=404, detail="not found")
     return full
+
+
+def rel_of(full: str) -> str:
+    return os.path.relpath(full, os.path.realpath(get_root())).replace(os.sep, "/")
+
+
+def _reject_reserved(name: str):
+    """Names that would escape or corrupt the tree if taken literally."""
+    if not name or name in (".", ".."):
+        raise HTTPException(status_code=400, detail="invalid name")
+    if "/" in name or "\\" in name or "\x00" in name:
+        raise HTTPException(status_code=400, detail="a name cannot contain a path separator")
 
 
 @router.get("/root")
@@ -101,10 +157,160 @@ async def files_read(path: str):
 @router.post("/write")
 async def files_write(req: WriteRequest):
     full = resolve(req.path)
+    if os.path.isdir(full):
+        raise HTTPException(status_code=409, detail="that path is a directory")
+    # The read side refuses anything over MAX_FILE_BYTES, so accepting a larger
+    # write would create a file the editor can no longer open.
+    encoded = req.content.encode("utf-8")
+    if len(encoded) > MAX_FILE_BYTES:
+        raise HTTPException(status_code=413, detail="file too large to save here")
     os.makedirs(os.path.dirname(full) or get_root(), exist_ok=True)
     with open(full, "w", encoding="utf-8") as f:
         f.write(req.content)
-    return {"path": req.path, "size": len(req.content)}
+    return {"path": req.path, "size": len(encoded)}
+
+
+@router.post("/create")
+async def files_create(req: CreateRequest):
+    """Make a new file or folder. The Code tab's "New file" / "New folder"."""
+    _reject_reserved(req.name)
+    parent = resolve(req.path)
+    if not os.path.isdir(parent):
+        raise HTTPException(status_code=404, detail="parent directory not found")
+    full = resolve(os.path.join(req.path or "", req.name))
+    if os.path.exists(full):
+        raise HTTPException(status_code=409, detail=f"'{req.name}' already exists")
+    if req.is_dir:
+        os.makedirs(full)
+    else:
+        with open(full, "x", encoding="utf-8"):
+            pass
+    return {"path": rel_of(full), "is_dir": req.is_dir}
+
+
+@router.post("/rename")
+async def files_rename(req: RenameRequest):
+    _reject_reserved(req.new_name)
+    full = resolve(req.path, must_exist=True)
+    if full == os.path.realpath(get_root()):
+        raise HTTPException(status_code=400, detail="cannot rename the workspace root")
+    target = resolve(os.path.join(os.path.dirname(req.path), req.new_name))
+    if os.path.exists(target):
+        raise HTTPException(status_code=409, detail=f"'{req.new_name}' already exists")
+    os.rename(full, target)
+    return {"path": rel_of(target), "was": req.path}
+
+
+@router.post("/move")
+async def files_move(req: MoveRequest):
+    """Drag-and-drop in the tree."""
+    full = resolve(req.path, must_exist=True)
+    dest_dir = resolve(req.dest_dir)
+    if not os.path.isdir(dest_dir):
+        raise HTTPException(status_code=404, detail="destination is not a directory")
+    # Moving a directory inside itself detaches the whole subtree.
+    if os.path.isdir(full) and (dest_dir == full or dest_dir.startswith(full + os.sep)):
+        raise HTTPException(status_code=400, detail="cannot move a folder into itself")
+    target = os.path.join(dest_dir, os.path.basename(full))
+    if os.path.exists(target):
+        raise HTTPException(status_code=409, detail="something with that name is already there")
+    shutil.move(full, target)
+    return {"path": rel_of(target), "was": req.path}
+
+
+@router.post("/delete")
+async def files_delete(req: DeleteRequest):
+    full = resolve(req.path, must_exist=True)
+    if full == os.path.realpath(get_root()):
+        raise HTTPException(status_code=400, detail="cannot delete the workspace root")
+    if os.path.isdir(full):
+        shutil.rmtree(full)
+    else:
+        os.remove(full)
+    return {"deleted": req.path}
+
+
+# Project-wide find. Bounded on every axis — a workspace can be a monorepo,
+# and an unbounded walk would hang the UI and pin a core.
+SEARCH_MAX_FILE_BYTES = 512 * 1024
+SEARCH_MAX_HITS = 200
+SEARCH_MAX_FILES = 4000
+SEARCH_TEXT_EXTENSIONS = {
+    ".py", ".js", ".jsx", ".ts", ".tsx", ".json", ".md", ".txt", ".html", ".css",
+    ".scss", ".yml", ".yaml", ".toml", ".ini", ".cfg", ".sh", ".bash", ".zsh",
+    ".c", ".h", ".cpp", ".hpp", ".cs", ".java", ".go", ".rs", ".rb", ".php",
+    ".sql", ".xml", ".svg", ".vue", ".svelte", ".kt", ".swift", ".r", ".lua",
+    ".dockerfile", ".env", ".gitignore", ".conf", ".properties",
+}
+
+
+def _looks_textual(name: str) -> bool:
+    ext = os.path.splitext(name)[1].lower()
+    return ext in SEARCH_TEXT_EXTENSIONS or not ext
+
+
+@router.get("/search")
+async def files_search(q: str, case_sensitive: bool = False, max_hits: int = SEARCH_MAX_HITS):
+    """Grep the workspace. Returns file, line number and the matching line."""
+    query = q if case_sensitive else q.lower()
+    if not query.strip():
+        return {"query": q, "hits": [], "truncated": False}
+    root = os.path.realpath(get_root())
+    hits = []
+    scanned = 0
+    truncated = False
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".")]
+        for name in sorted(filenames):
+            if name.startswith(".") or not _looks_textual(name):
+                continue
+            scanned += 1
+            if scanned > SEARCH_MAX_FILES or len(hits) >= max_hits:
+                truncated = True
+                break
+            full = os.path.join(dirpath, name)
+            try:
+                if os.path.getsize(full) > SEARCH_MAX_FILE_BYTES:
+                    continue
+                with open(full, "r", encoding="utf-8") as handle:
+                    for lineno, line in enumerate(handle, 1):
+                        haystack = line if case_sensitive else line.lower()
+                        if query in haystack:
+                            hits.append({
+                                "path": rel_of(full),
+                                "line": lineno,
+                                "text": line.rstrip("\n")[:300],
+                            })
+                            if len(hits) >= max_hits:
+                                truncated = True
+                                break
+            except (OSError, UnicodeDecodeError):
+                continue          # binary or unreadable; not an error worth raising
+        if truncated:
+            break
+    return {"query": q, "hits": hits, "truncated": truncated}
+
+
+class RunRequest(BaseModel):
+    path: str
+    timeout: Optional[int] = None
+
+
+@router.post("/run")
+async def files_run(req: RunRequest):
+    """Run the open file. Compiled languages build first; see carrot/runner.py."""
+    from carrot import runner
+
+    timeout = max(1, min(int(req.timeout or runner.DEFAULT_TIMEOUT), 300))
+    return runner.run_file(req.path, timeout=timeout)
+
+
+@router.get("/languages")
+async def files_languages():
+    """What the Run button can do here, and what is missing."""
+    from carrot import runner
+
+    return {"languages": runner.languages()}
 
 
 @router.get("/editors")

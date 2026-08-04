@@ -42,6 +42,8 @@ DEFAULTS = {
     "server_host": "127.0.0.1",
     "server_port": 8181,
     "web_ui": True,
+    # First run shows the onboarding flow once; skipping still sets this.
+    "onboarding_done": False,
     # Appearance. The browser is the source of truth (it has to decide the
     # theme before it can call this API); these are the fallback for a
     # machine whose local storage was cleared. "auto" follows the OS.

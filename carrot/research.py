@@ -109,6 +109,8 @@ RESEARCH_SYSTEM = (
 
 # Parallel researchers against a metered endpoint are the fastest way to
 # get throttled. Local models have no such limit.
+# Kept so a caller that still imports it does not break; concurrency is no
+# longer clamped for hosted routes (see the note where the pool is built).
 CLOUD_MAX_WORKERS = 3
 
 MAX_CLAIMS_PER_SUBQUESTION = 8
@@ -854,16 +856,14 @@ def run_research_stream(
                 errors.append(f"{subquestion['question']}: {exc}")
                 return researcher.mine
 
-        # Hosted providers meter requests per minute, and the depth profiles
-        # were sized for a local model that only competes with itself. Fanning
-        # eight workers at a metered endpoint is what trips a 429 in the first
-        # place, so cap concurrency when the route leaves this machine.
+        # Concurrency is no longer how rate limits are handled. Capping workers
+        # on a hosted route traded away sources — a thinner report the user
+        # cannot see the seams in — to avoid a 429, and three was a guess that
+        # is either still too many for a free tier or needlessly few for a paid
+        # one. carrot/pacing.py meters the request *rate* instead and learns
+        # the real limit from the provider's own responses, so the run keeps
+        # its full breadth and a tight limit shows up as a slower run.
         workers = DEPTHS[depth]["workers"]
-        try:
-            if not router_mod.route("research").local:
-                workers = min(workers, CLOUD_MAX_WORKERS)
-        except Exception:
-            pass
         pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="carrot-research")
         futures = [pool.submit(work, subquestion) for subquestion in subquestions]
 

@@ -237,25 +237,211 @@ class TestLinuxAudio:
         )
 
     def test_deb_declares_portaudio(self):
-        import json
-        cfg = json.loads((ROOT / "gui" / "package.json").read_text(encoding="utf-8"))
-        assert "libportaudio2" in cfg["build"]["linux"]["depends"]
+        assert "libportaudio2" in _deb_depends()
 
     def test_deb_does_not_depend_on_packages_debian_removed(self):
         """electron-builder's default depends list still names gconf2,
         gconf-service and libappindicator1, all long gone from Debian and
         Ubuntu. A .deb that requires them cannot be installed at all."""
-        import json
-        cfg = json.loads((ROOT / "gui" / "package.json").read_text(encoding="utf-8"))
-        depends = cfg["build"]["linux"]["depends"]
         for obsolete in ("gconf2", "gconf-service", "libappindicator1"):
-            assert obsolete not in depends
+            assert obsolete not in _deb_depends()
 
     def test_deb_keeps_the_electron_runtime_libraries(self):
         """depends replaces electron-builder's default rather than extending
         it, so dropping one of these silently ships a broken package."""
-        import json
-        cfg = json.loads((ROOT / "gui" / "package.json").read_text(encoding="utf-8"))
-        depends = set(cfg["build"]["linux"]["depends"])
+        depends = set(_deb_depends())
         for required in ("libnotify4", "libxtst6", "libnss3", "libgtk-3-0"):
             assert required in depends, f"the .deb no longer requires {required}"
+
+    def test_depends_is_on_the_deb_target_not_the_linux_platform(self):
+        """depends is a deb-target option. Putting it under `linux` fails
+        schema validation — and electron-builder validates the whole config
+        whatever it is building, so the misplacement broke the Windows and
+        macOS jobs too, not just Linux."""
+        cfg = _builder_config()
+        assert "depends" not in cfg["linux"], \
+            "depends belongs under build.deb; under build.linux it fails validation"
+        assert "depends" in cfg.get("deb", {})
+
+
+def _builder_config():
+    import json
+    return json.loads((ROOT / "gui" / "package.json").read_text(encoding="utf-8"))["build"]
+
+
+def _deb_depends():
+    return _builder_config().get("deb", {}).get("depends", [])
+
+
+def test_builder_config_uses_only_known_platform_keys():
+    """A stray key anywhere under `build` aborts every platform's packaging
+    before it starts, so the failure never looks Linux-specific."""
+    cfg = _builder_config()
+    known_linux = {
+        "appId", "artifactName", "asar", "asarUnpack", "category", "compression",
+        "cscKeyPassword", "cscLink", "defaultArch", "description", "desktop",
+        "detectUpdateChannel", "electronLanguages", "electronUpdaterCompatibility",
+        "executableArgs", "executableName", "extraFiles", "extraResources",
+        "fileAssociations", "files", "forceCodeSigning",
+        "generateUpdatesFilesForAllChannels", "icon", "maintainer", "mimeTypes",
+        "packageCategory", "protocols", "publish", "releaseInfo", "synopsis",
+        "target", "vendor",
+    }
+    unknown = set(cfg.get("linux", {})) - known_linux
+    assert not unknown, f"unknown keys under build.linux: {sorted(unknown)}"
+
+
+def test_build_skips_the_headless_shell():
+    """The agent runs headful, so the headless shell is a binary nothing can
+    reach — it was 115 MB of download on the first CI run."""
+    assert "--no-shell" in BUILD_SRC
+
+
+class TestRunnerLabels:
+    """A retired GitHub-hosted runner label does not fail — it queues.
+
+    The job is never assigned a runner and sits there until the 24h timeout,
+    so the run shows as "in progress" rather than red and the missing artifact
+    is easy to miss. macos-13 was retired on 2025-12-04 and the Intel Mac
+    build silently stopped producing anything for months.
+    """
+
+    # Labels GitHub has retired, mapped to what replaced them.
+    RETIRED = {
+        "macos-11": "macos-14 / macos-15",
+        "macos-12": "macos-14 / macos-15",
+        "macos-13": "macos-15-intel (Intel) or macos-14+ (Apple Silicon)",
+        "ubuntu-18.04": "ubuntu-22.04 / ubuntu-latest",
+        "ubuntu-20.04": "ubuntu-22.04 / ubuntu-latest",
+        "windows-2016": "windows-latest",
+        "windows-2019": "windows-latest",
+    }
+
+    def test_no_retired_runner_labels(self):
+        for label, replacement in self.RETIRED.items():
+            assert f"os: {label}\n" not in WORKFLOW_SRC, (
+                f"'{label}' is a retired runner label — that job will queue "
+                f"forever rather than fail. Use {replacement}."
+            )
+
+    def test_every_platform_still_has_a_job(self):
+        """Losing a matrix entry is the other way a target goes missing."""
+        for artifact in ("windows-x64", "mac-arm64", "mac-x64", "linux-x64"):
+            assert f"artifact: {artifact}" in WORKFLOW_SRC, \
+                f"no build job produces the {artifact} installer"
+
+
+class TestQuickAskOverlay:
+    """The Alt+Space panel. It is a file:// page in its own window, so most of
+    what can go wrong is invisible to the rest of the test suite."""
+
+    @property
+    def main_js(self):
+        return (ROOT / "gui" / "main.js").read_text(encoding="utf-8")
+
+    @property
+    def overlay(self):
+        return (ROOT / "gui" / "public" / "overlay.html").read_text(encoding="utf-8")
+
+    @property
+    def preload(self):
+        return (ROOT / "gui" / "preload.js").read_text(encoding="utf-8")
+
+    def test_the_window_base_colour_is_cleared(self):
+        """transparent:true does not clear Electron's default opaque white —
+        it painted as a grey slab around the panel. Only an explicit
+        fully-transparent backgroundColor removes it."""
+        assert "backgroundColor: '#00000000'" in self.main_js
+
+    def test_the_panel_is_big_enough_to_hold_its_controls(self):
+        """620x92 fits one line of text and nothing else — no attachment
+        chip, no workspace name."""
+        width = int(re.search(r"const OVERLAY_WIDTH = (\d+)", self.main_js).group(1))
+        height = int(re.search(r"const OVERLAY_HEIGHT = (\d+)", self.main_js).group(1))
+        assert width >= 700 and height >= 130
+
+    def test_it_can_grow_beyond_its_collapsed_height(self):
+        max_height = int(re.search(r"const OVERLAY_MAX_HEIGHT = (\d+)", self.main_js).group(1))
+        height = int(re.search(r"const OVERLAY_HEIGHT = (\d+)", self.main_js).group(1))
+        assert max_height > height
+
+    def test_attachments_and_workspaces_are_bridged(self):
+        for call in ("pickAttachments", "readAttachment", "listWorkspaces"):
+            assert call in self.preload, f"the overlay cannot reach {call}"
+            
+    def test_the_handlers_exist_for_every_bridged_call(self):
+        for channel in ("pick-attachments", "read-attachment", "list-workspaces"):
+            assert f"ipcMain.handle('{channel}'" in self.main_js
+
+    def test_send_command_still_accepts_a_bare_string(self):
+        """The overlay now sends an object; other callers still send a string,
+        and a signature change should not silently break them."""
+        assert "typeof command === 'string'" in self.main_js
+
+    def test_a_workspace_choice_reaches_the_chat_api(self):
+        from carrot import app as carrot_app
+
+        assert "workspace_id" in carrot_app.ChatRequest.model_fields
+
+    def test_attachments_are_size_capped_before_being_read(self):
+        """Reading an arbitrary file into base64 in the main process is how a
+        dropped video would freeze the panel."""
+        assert "OVERLAY_MAX_ATTACHMENT_BYTES" in self.main_js
+
+    def test_replies_are_escaped_not_injected(self):
+        """The reply is model output; innerHTML with it would run whatever the
+        model emitted, inside a window that holds the preload bridge."""
+        assert "showReply(esc(" in self.overlay
+
+
+class TestPackagingRetries:
+    """Building a .dmg mounts a disk image and then ejects it. On a busy macOS
+    runner the eject loses a race with Spotlight or the diskimages helper, and
+    electron-builder exits non-zero — the same commit packaged cleanly on the
+    arm64 runner in the same run, so it is timing, not the build."""
+
+    def test_packaging_is_retried(self):
+        assert "PACKAGE_ATTEMPTS" in BUILD_SRC
+        assert build_installer.PACKAGE_ATTEMPTS > 1
+
+    def test_a_failure_still_fails_the_build_eventually(self):
+        """Retrying forever would turn a real breakage into a hung job."""
+        assert "raise subprocess.CalledProcessError" in BUILD_SRC
+
+    def test_a_stuck_volume_is_detached_before_retrying(self):
+        """The retry would otherwise trip over the volume the failed attempt
+        left mounted."""
+        assert "hdiutil" in BUILD_SRC and "detach" in BUILD_SRC
+
+    def test_the_retry_waits(self):
+        assert build_installer.PACKAGE_RETRY_DELAY > 0
+
+
+class TestForeignBackendDetection:
+    """A second Carrot already on port 8181 is the failure that looks like
+    broken features: the new UI loads, the new backend cannot bind and exits,
+    and every endpoint added since the running build 404s. The error the user
+    sees is FastAPI's bare "Not Found" — not any message this code wrote —
+    because the route does not exist at all in the old backend."""
+
+    @property
+    def main_js(self):
+        return (ROOT / "gui" / "main.js").read_text(encoding="utf-8")
+
+    def test_health_is_checked_before_the_backend_is_spawned(self):
+        """Anything answering before we start is not ours."""
+        index_check = self.main_js.index("warnAboutForeignBackend()")
+        index_spawn = self.main_js.index("startFastAPI();")
+        assert index_check < index_spawn
+
+    def test_the_user_is_told_rather_than_left_guessing(self):
+        assert "showMessageBoxSync" in self.main_js
+        assert "Another Carrot is already running" in self.main_js
+
+    def test_the_running_version_is_named(self):
+        """"Some other copy" is not actionable; the build id is."""
+        assert "health.version" in self.main_js
+
+    def test_health_reports_a_version_to_compare(self, client):
+        body = client.get("/api/health").json()
+        assert body["version"]

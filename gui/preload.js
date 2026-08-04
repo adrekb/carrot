@@ -1,7 +1,11 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('carrotAPI', {
+  // Accepts a string or { message, attachments, workspace_id }.
   sendCommand: (command) => ipcRenderer.invoke('send-command', command),
+  pickAttachments: () => ipcRenderer.invoke('pick-attachments'),
+  readAttachment: (filePath) => ipcRenderer.invoke('read-attachment', filePath),
+  listWorkspaces: () => ipcRenderer.invoke('list-workspaces'),
   getStatus: () => ipcRenderer.invoke('get-status'),
   onSpeechResult: (callback) => ipcRenderer.on('speech-result', (event, data) => callback(data)),
   onSpeechError: (callback) => ipcRenderer.on('speech-error', (event, data) => callback(data)),

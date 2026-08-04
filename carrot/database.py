@@ -75,6 +75,23 @@ CREATE TABLE IF NOT EXISTS message_embeddings (
     created_at TEXT DEFAULT (datetime('now'))
 );
 
+-- Charts, diagrams and generated images the assistant produced. Content is
+-- model-authored markup, so it is never inlined into the app document; see
+-- carrot/artifacts.py for how it is isolated when shown.
+CREATE TABLE IF NOT EXISTS artifacts (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT,
+    message_id TEXT,
+    kind TEXT NOT NULL,
+    title TEXT,
+    content TEXT NOT NULL,
+    meta TEXT DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_artifacts_conversation
+    ON artifacts(conversation_id, created_at);
+
 CREATE TABLE IF NOT EXISTS widgets (
     id TEXT PRIMARY KEY,
     type TEXT NOT NULL,

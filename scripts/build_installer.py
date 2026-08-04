@@ -28,6 +28,7 @@ import json
 import shutil
 import platform
 import subprocess
+import time
 import argparse
 import urllib.request
 
@@ -172,8 +173,12 @@ def install_playwright_browser():
     electron-builder copies it in as a resource. carrot/browser.py points
     Playwright back at it at runtime.
 
-    The agent runs headful by default — the user watches it work — so this is
-    the full Chromium, not the headless shell.
+    The agent runs headful by default — the user watches it work — so the
+    headless shell is dead weight. `playwright install` pulls it alongside
+    Chromium unless told not to, and on the first CI run that was 115 MB of
+    download and a few hundred MB in the installer for a binary nothing can
+    reach. --no-shell suppresses it, with a fallback for older Playwright
+    versions that predate the flag.
     """
     try:
         import playwright  # noqa: F401
@@ -188,8 +193,12 @@ def install_playwright_browser():
     os.makedirs(PW_BROWSERS_DIST, exist_ok=True)
     log("Downloading Chromium for the Agent tab (a few hundred MB)…")
     env = dict(os.environ, PLAYWRIGHT_BROWSERS_PATH=PW_BROWSERS_DIST)
-    subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"],
-                   check=True, cwd=ROOT, env=env)
+    base = [sys.executable, "-m", "playwright", "install"]
+    result = subprocess.run(base + ["--no-shell", "chromium"], cwd=ROOT, env=env)
+    if result.returncode != 0:
+        log("--no-shell not supported by this Playwright; "
+            "installing Chromium with the headless shell as well.")
+        subprocess.run(base + ["chromium"], check=True, cwd=ROOT, env=env)
     size_mb = sum(
         os.path.getsize(os.path.join(dirpath, name))
         for dirpath, _, names in os.walk(PW_BROWSERS_DIST) for name in names
@@ -232,13 +241,38 @@ def build_webvendor():
     subprocess.run([NPM, "run", "build"], cwd=vendor_dir, check=True)
 
 
+# Building a .dmg mounts a disk image, styles it, then unmounts. On a busy
+# macOS runner something else — Spotlight, or the diskimages helper that the
+# job's own cleanup later reports as orphaned — can still hold the volume when
+# hdiutil tries to eject, and the whole package step dies with
+# "couldn't eject disk2 - Resource busy". It is a race, not a defect: the same
+# commit packaged cleanly on the arm64 runner in the same run. Retrying is the
+# only lever, since electron-builder exposes no knob for the eject.
+PACKAGE_ATTEMPTS = 3
+PACKAGE_RETRY_DELAY = 20
+
+
 def build_electron():
     """Package the desktop app for the host platform."""
     if not os.path.exists(os.path.join(GUI_DIR, "node_modules")):
         log("Installing Electron dependencies…")
         subprocess.run([NPM, "install", "--quiet"], cwd=GUI_DIR, check=True)
-    log("Packaging with electron-builder…")
-    subprocess.run([NPM, "run", "dist"], cwd=GUI_DIR, check=True)
+
+    for attempt in range(1, PACKAGE_ATTEMPTS + 1):
+        log(f"Packaging with electron-builder… (attempt {attempt}/{PACKAGE_ATTEMPTS})")
+        result = subprocess.run([NPM, "run", "dist"], cwd=GUI_DIR)
+        if result.returncode == 0:
+            break
+        if attempt == PACKAGE_ATTEMPTS:
+            raise subprocess.CalledProcessError(result.returncode, "npm run dist")
+        log(f"Packaging failed; retrying in {PACKAGE_RETRY_DELAY}s. "
+            "On macOS this is usually a busy disk image that could not be ejected.")
+        if IS_MAC:
+            # Detach anything left mounted, or the retry trips over the volume
+            # the failed attempt abandoned.
+            subprocess.run(["hdiutil", "detach", "/Volumes/Carrot", "-force"],
+                           capture_output=True)
+        time.sleep(PACKAGE_RETRY_DELAY)
     log(f"Installer output in {os.path.join(GUI_DIR, 'dist')}")
 
 

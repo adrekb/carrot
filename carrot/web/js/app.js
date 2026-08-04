@@ -42,12 +42,22 @@ async function api(path, options = {}) {
     });
     if (!resp.ok) {
         let detail = resp.statusText;
+        let raw = null;
         try {
             const d = (await resp.json()).detail;
+            raw = d;
             if (typeof d === 'string') detail = d;
+            else if (d && d.message) detail = d.message;
             else if (d) detail = Array.isArray(d) ? (d[0] && d[0].msg ? d.map(x => x.msg).join('; ') : JSON.stringify(d)) : String(d);
         } catch (_) {}
-        throw new Error(detail);
+        // Carry the status and the structured detail: a 428 is the backend
+        // asking for confirmation, not a failure, and the caller needs the
+        // reasons to show. Losing them turned an object detail into
+        // "[object Object]".
+        const err = new Error(detail);
+        err.status = resp.status;
+        err.detail = raw;
+        throw err;
     }
     return resp.json();
 }
@@ -747,6 +757,7 @@ async function streamTurn(url, payload, skill) {
         const decoder = new TextDecoder();
         let buffer = '';
         let full = '';
+        const pendingArtifacts = [];
         while (true) {
             const { done, value } = await reader.read();
             if (done) break;
@@ -781,7 +792,11 @@ async function streamTurn(url, payload, skill) {
                     toolLine(`tool → ${payload.tool.name}(${JSON.stringify(payload.tool.args)})`, 'search');
                 }
                 if (payload.tool_result) {
-                    toolLine(`  ← ${String(payload.tool_result.result).slice(0, 160)}`, 'stage');
+                    const raw = String(payload.tool_result.result);
+                    // show_artifact answers with a marker the UI swaps for the
+                    // rendered thing; the raw marker is noise in the trace.
+                    for (const id of artifactIdsIn(raw)) pendingArtifacts.push(id);
+                    toolLine(`  ← ${stripArtifactMarkers(raw).slice(0, 160)}`, 'stage');
                 }
                 if (payload.approval_request) {
                     showApprovalPrompt(payload.approval_request);
@@ -809,6 +824,12 @@ async function streamTurn(url, payload, skill) {
         finishThink();
         contentEl.classList.add('md');
         contentEl.innerHTML = full ? mdToHtml(full) : '(no response)';
+        // Charts and diagrams land under the finished answer, in the order the
+        // model produced them.
+        if (pendingArtifacts.length && typeof mountArtifacts === 'function') {
+            mountArtifacts(contentEl.parentElement,
+                           pendingArtifacts.map(id => `[[carrot:artifact:${id}]]`).join(' '));
+        }
         if (speakReplies && full) speakText(full);
     } catch (e) {
         contentEl.textContent = e.message;
@@ -1010,7 +1031,20 @@ async function openConversation(convId) {
     const messagesEl = document.getElementById('chat-messages');
     messagesEl.innerHTML = '';
     document.getElementById('chat-title').textContent = conv.title || 'Untitled';
-    for (const m of conv.messages) appendMessage(m.role, m.content);
+    const rendered = conv.messages.map(m => appendMessage(m.role, m.content));
+    // Charts made earlier in this conversation are part of it — reopening a
+    // chat and finding the figures gone would make them feel disposable.
+    if (typeof mountArtifacts === 'function') {
+        try {
+            const { artifacts } = await api(`/api/conversations/${convId}/artifacts`);
+            const last = rendered[rendered.length - 1];
+            const host = last && last.querySelector('.content');
+            if (host && artifacts && artifacts.length) {
+                mountArtifacts(host.parentElement,
+                    artifacts.map(a => `[[carrot:artifact:${a.id}]]`).join(' '));
+            }
+        } catch (_) { /* older conversation, or none stored */ }
+    }
     switchTab('workspace');
 }
 
@@ -1739,7 +1773,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     loadSkillCatalog();
     loadSearchModes();
     loadWorkspaces();
-    checkBootstrap();
+    // Onboarding decides whether the bootstrap splash runs at all.
+    maybeShowOnboarding();
     switchTab('dashboard');
     loadTerminalHistory();
     setInterval(refreshStatus, 15000);
@@ -1762,3 +1797,120 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!cmdbar.contains(e.target)) hideSkillPop();
     });
 });
+
+// ===== First-run onboarding =====
+// Runs in front of the bootstrap splash. "Which kind of setup do you want"
+// and "which model should I download" are different questions, and asking
+// them together is what made first run confusing: a new user was shown a
+// list of quantized model names before anyone had explained what a model is.
+
+const ONBOARD_KEY_PAGES = {
+    anthropic: 'https://console.anthropic.com/settings/keys',
+    openai: 'https://platform.openai.com/api-keys',
+    openrouter: 'https://openrouter.ai/keys',
+    groq: 'https://console.groq.com/keys',
+    together: 'https://api.together.xyz/settings/api-keys',
+    deepseek: 'https://platform.deepseek.com/api_keys',
+    mistral: 'https://console.mistral.ai/api-keys',
+};
+
+function onboardStep(step) {
+    document.querySelectorAll('#onboard .onboard-step').forEach(el => {
+        el.classList.toggle('hidden', el.dataset.step !== step);
+    });
+    if (step === 'local') { finishOnboarding(false); return; }
+    if (step === 'key') onboardLoadProviders();
+}
+
+async function onboardLoadProviders() {
+    const select = document.getElementById('onboard-provider');
+    if (select.dataset.loaded) return;
+    select.dataset.loaded = '1';
+    // The hosted ones only. Offering "LM Studio (local)" on the screen for
+    // people who chose the cloud path is just noise.
+    let options = [
+        { id: 'anthropic', label: 'Anthropic (Claude)' },
+        { id: 'openai', label: 'OpenAI (GPT)' },
+    ];
+    try {
+        const body = await api('/api/router/providers');
+        for (const preset of (body.presets || [])) {
+            if (/local/i.test(preset.label || '')) continue;
+            if (!options.some(o => o.id === preset.id)) {
+                options.push({ id: preset.id, label: preset.label });
+            }
+        }
+    } catch (_) { /* the two built-ins are enough to get started */ }
+    select.innerHTML = options
+        .map(o => `<option value="${escHtml(o.id)}">${escHtml(o.label)}</option>`).join('');
+    onboardProviderChanged();
+}
+
+function onboardProviderChanged() {
+    const id = document.getElementById('onboard-provider').value;
+    const link = document.getElementById('onboard-key-link');
+    const url = ONBOARD_KEY_PAGES[id];
+    link.href = url || '#';
+    link.classList.toggle('hidden', !url);
+}
+
+async function saveOnboardingKey() {
+    const provider = document.getElementById('onboard-provider').value;
+    const key = document.getElementById('onboard-key').value.trim();
+    const status = document.getElementById('onboard-key-status');
+    const button = document.getElementById('onboard-key-btn');
+    if (!key) { status.textContent = 'Paste a key first.'; status.className = 'onboard-status bad'; return; }
+
+    button.disabled = true;
+    status.className = 'onboard-status';
+    status.textContent = 'Checking the key…';
+    try {
+        await api(`/api/router/providers/${encodeURIComponent(provider)}/key`, {
+            method: 'PUT', body: JSON.stringify({ api_key: key }),
+        });
+        // Saving a key that does not work is worse than not saving one: the
+        // failure surfaces later, in the middle of an answer. /test exists for
+        // exactly this and reports the provider's own error — listing models
+        // is not a check, because it falls back to a cached list and returns
+        // an `error` field rather than failing, so a garbage key looked fine.
+        const probe = await api(`/api/router/providers/${encodeURIComponent(provider)}/test`,
+                                { method: 'POST' });
+        if (!probe.ok) {
+            status.className = 'onboard-status bad';
+            status.textContent = 'That key did not work: ' + (probe.error || 'the provider rejected it');
+            return;
+        }
+        status.className = 'onboard-status good';
+        status.textContent = probe.models
+            ? `Working — ${probe.models} models available.`
+            : 'Working.';
+        await api(`/api/router/providers/${encodeURIComponent(provider)}/enabled`, {
+            method: 'PUT', body: JSON.stringify({ enabled: true }),
+        }).catch(() => {});
+        setTimeout(() => finishOnboarding(false), 1200);
+    } catch (e) {
+        status.className = 'onboard-status bad';
+        status.textContent = 'That key did not work: ' + e.message;
+    } finally {
+        button.disabled = false;
+    }
+}
+
+async function finishOnboarding(skipped) {
+    document.getElementById('onboard').classList.add('hidden');
+    try {
+        await api('/api/config/onboarding_done', { method: 'PUT', body: JSON.stringify(true) });
+    } catch (_) { /* it is only a "do not show again" flag */ }
+    // Hand over to the model-download splash unless they skipped outright.
+    if (!skipped && typeof checkBootstrap === 'function') checkBootstrap();
+}
+
+async function maybeShowOnboarding() {
+    let done = false;
+    try {
+        done = !!(await api('/api/config')).onboarding_done;
+    } catch (_) { done = true; }        // cannot ask: do not block the app
+    if (done) { checkBootstrap(); return; }
+    document.getElementById('onboard').classList.remove('hidden');
+    onboardStep('welcome');
+}

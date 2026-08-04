@@ -19,7 +19,14 @@ jobs:
             artifact: windows-x64
           - os: macos-latest     # Apple Silicon
             artifact: mac-arm64
-          - os: macos-13         # Intel Mac
+          # Intel Mac. Was macos-13, which GitHub retired on 2025-12-04 — a
+          # job asking for a retired label is never assigned a runner, so it
+          # sits queued until the 24h timeout instead of failing. That is why
+          # this target silently stopped producing an artifact. macos-15-intel
+          # is the free replacement; the -large labels are the paid ones.
+          # Apple has dropped x86_64, and GitHub retires this image in
+          # autumn 2027, after which Intel Macs cannot be built for at all.
+          - os: macos-15-intel
             artifact: mac-x64
           - os: ubuntu-latest    # Linux x64 (CUDA bundled, ROCm add-on at runtime)
             artifact: linux-x64
