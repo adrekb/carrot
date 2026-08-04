@@ -541,3 +541,52 @@ def test_one_domain_cannot_dominate_a_round(isolated_db, monkeypatch):
     gathered = agent._gather_web(["query"])
     hosts = [websearch_mod.host_label(s["locator"]) for s in gathered]
     assert hosts.count("foodnetwork.com") <= 2, hosts
+
+
+# ===== No module bypasses the ddgs/duckduckgo_search fallback =====
+#
+# recap.py and deep_research.py used to `from duckduckgo_search import DDGS`
+# at the top of the file. duckduckgo_search was dropped from dependencies in
+# favor of ddgs, so on a machine that only has ddgs installed, importing
+# either module (and therefore importing `carrot` itself, since recap is
+# imported in carrot/__init__.py) raised ModuleNotFoundError before the app
+# could even start.
+
+def test_no_module_imports_duckduckgo_search_at_top_level():
+    import ast
+    import pathlib
+    carrot_dir = pathlib.Path(__file__).resolve().parent.parent / "carrot"
+    offenders = []
+    for path in carrot_dir.glob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in tree.body:  # top-level only; lazy imports inside
+                                 # functions are fine (see websearch._raw_search)
+            if isinstance(node, ast.ImportFrom) and node.module == "duckduckgo_search":
+                offenders.append(path.name)
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name in ("duckduckgo_search", "ddgs"):
+                        offenders.append(path.name)
+    assert not offenders, (
+        f"{offenders} import a DDG client at module load time — this crashes "
+        "carrot's whole import chain if that package isn't installed. Route "
+        "through carrot.websearch instead."
+    )
+
+
+def test_carrot_package_imports_without_any_ddg_client_installed(monkeypatch):
+    """Reproduces the frozen-build crash directly, without needing to
+    actually uninstall packages: block both DDG modules from being found."""
+    import sys
+    import builtins
+    real_import = builtins.__import__
+
+    def blocking_import(name, *args, **kwargs):
+        if name in ("duckduckgo_search", "ddgs"):
+            raise ModuleNotFoundError(f"No module named '{name}'")
+        return real_import(name, *args, **kwargs)
+
+    for mod in ("carrot", "carrot.recap", "carrot.deep_research", "carrot.websearch"):
+        monkeypatch.delitem(sys.modules, mod, raising=False)
+    monkeypatch.setattr(builtins, "__import__", blocking_import)
+    import carrot  # noqa: F401 — must not raise
