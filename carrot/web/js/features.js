@@ -306,22 +306,39 @@ async function loadCodeTree() {
     }
 }
 
+// The directory the next "New file"/"New folder" lands in: whatever is
+// selected in the tree, or the workspace root.
+let selectedDir = '';
+
 function renderTreeEntries(parent, entries, depth) {
     for (const entry of entries) {
         const row = document.createElement('div');
         row.className = 'tree-row' + (entry.is_dir ? ' dir' : ' file');
         row.style.paddingLeft = (8 + depth * 14) + 'px';
+        row.dataset.path = entry.path;
+        row.dataset.isDir = entry.is_dir ? '1' : '';
+        row.draggable = true;
         row.innerHTML = `<span class="tree-caret">${entry.is_dir ? '▸' : ''}</span><span class="tree-name">${escHtml(entry.name)}</span>`;
         parent.appendChild(row);
+
+        row.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            showTreeMenu(e.clientX, e.clientY, entry);
+        });
+        wireTreeDrag(row, entry);
+
         if (entry.is_dir) {
             const childBox = document.createElement('div');
             childBox.className = 'tree-children hidden';
             parent.appendChild(childBox);
+            row.dataset.depth = depth;
             let loaded = false;
             row.onclick = async () => {
-                const open = childBox.classList.toggle('hidden');
-                row.querySelector('.tree-caret').textContent = open ? '▸' : '▾';
-                if (!loaded && !open) {
+                selectTreeRow(row, entry);
+                const nowHidden = childBox.classList.toggle('hidden');
+                row.querySelector('.tree-caret').textContent = nowHidden ? '▸' : '▾';
+                if (!loaded && !nowHidden) {
                     loaded = true;
                     try {
                         const data = await api(`/api/files/tree?path=${encodeURIComponent(entry.path)}`);
@@ -332,12 +349,244 @@ function renderTreeEntries(parent, entries, depth) {
                 }
             };
         } else {
-            row.onclick = () => openFile(entry.path);
+            row.onclick = () => { selectTreeRow(row, entry); openFile(entry.path); };
         }
     }
 }
 
-async function openFile(path) {
+function selectTreeRow(row, entry) {
+    document.querySelectorAll('#code-tree .tree-row.selected')
+        .forEach(el => el.classList.remove('selected'));
+    row.classList.add('selected');
+    // New items go inside a selected folder, or beside a selected file.
+    selectedDir = entry.is_dir ? entry.path
+        : entry.path.split('/').slice(0, -1).join('/');
+}
+
+// ---------- create / rename / delete ----------
+
+async function createEntry(isDir, parentPath) {
+    const where = parentPath !== undefined ? parentPath : selectedDir;
+    const name = (await inlineTextPrompt({
+        title: isDir ? 'New folder' : 'New file',
+        placeholder: isDir ? 'folder name' : 'name.ext',
+        action: 'Create',
+    })).trim();
+    if (!name) return;
+    try {
+        const r = await api('/api/files/create', {
+            method: 'POST',
+            body: JSON.stringify({ path: where, name, is_dir: isDir }),
+        });
+        await loadCodeTree();
+        if (!isDir) openFile(r.path);
+        setCodeStatus(`created ${r.path}`);
+    } catch (e) {
+        setCodeStatus('could not create: ' + e.message);
+    }
+}
+
+async function renameEntry(entry) {
+    const name = (await inlineTextPrompt({
+        title: `Rename ${entry.name}`, value: entry.name,
+        placeholder: 'new name', action: 'Rename',
+    })).trim();
+    if (!name || name === entry.name) return;
+    try {
+        const r = await api('/api/files/rename', {
+            method: 'POST',
+            body: JSON.stringify({ path: entry.path, new_name: name }),
+        });
+        // An open tab still points at the old path; move it with the file.
+        if (openFiles[entry.path]) {
+            openFiles[r.path] = openFiles[entry.path];
+            delete openFiles[entry.path];
+            if (activeFilePath === entry.path) activeFilePath = r.path;
+            if (dirtyFiles.has(entry.path)) {
+                dirtyFiles.delete(entry.path);
+                dirtyFiles.add(r.path);
+            }
+            renderCodeTabs();
+        }
+        await loadCodeTree();
+        setCodeStatus(`renamed to ${name}`);
+    } catch (e) {
+        setCodeStatus('could not rename: ' + e.message);
+    }
+}
+
+async function deleteEntry(entry) {
+    const what = entry.is_dir ? `folder "${entry.name}" and everything in it` : `"${entry.name}"`;
+    if (!confirm(`Delete ${what}? This cannot be undone.`)) return;
+    try {
+        await api('/api/files/delete', {
+            method: 'POST', body: JSON.stringify({ path: entry.path }),
+        });
+        // Close any tab whose file just went away, discarding its model.
+        for (const open of Object.keys(openFiles)) {
+            if (open === entry.path || open.startsWith(entry.path + '/')) closeFile(open, true);
+        }
+        await loadCodeTree();
+        setCodeStatus(`deleted ${entry.name}`);
+    } catch (e) {
+        setCodeStatus('could not delete: ' + e.message);
+    }
+}
+
+// ---------- drag to move ----------
+
+let dragPath = null;
+
+function wireTreeDrag(row, entry) {
+    row.addEventListener('dragstart', (e) => {
+        dragPath = entry.path;
+        e.dataTransfer.effectAllowed = 'move';
+        // Firefox refuses to start a drag without data set.
+        try { e.dataTransfer.setData('text/plain', entry.path); } catch (_) {}
+        e.stopPropagation();
+    });
+    row.addEventListener('dragend', () => {
+        dragPath = null;
+        document.querySelectorAll('#code-tree .drop-target')
+            .forEach(el => el.classList.remove('drop-target'));
+    });
+    if (!entry.is_dir) return;                 // only folders accept a drop
+    row.addEventListener('dragover', (e) => {
+        if (!dragPath || dragPath === entry.path) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        row.classList.add('drop-target');
+    });
+    row.addEventListener('dragleave', () => row.classList.remove('drop-target'));
+    row.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        row.classList.remove('drop-target');
+        const moving = dragPath;
+        dragPath = null;
+        if (!moving || moving === entry.path) return;
+        await moveEntry(moving, entry.path);
+    });
+}
+
+async function moveEntry(path, destDir) {
+    try {
+        const r = await api('/api/files/move', {
+            method: 'POST', body: JSON.stringify({ path, dest_dir: destDir }),
+        });
+        if (openFiles[path]) {
+            openFiles[r.path] = openFiles[path];
+            delete openFiles[path];
+            if (activeFilePath === path) activeFilePath = r.path;
+            renderCodeTabs();
+        }
+        await loadCodeTree();
+        setCodeStatus(`moved to ${destDir || 'workspace root'}`);
+    } catch (e) {
+        setCodeStatus('could not move: ' + e.message);
+    }
+}
+
+// ---------- context menu ----------
+
+function showTreeMenu(x, y, entry) {
+    closeTreeMenu();
+    const menu = document.createElement('div');
+    menu.className = 'tree-menu';
+    menu.id = 'tree-menu';
+    const items = [];
+    if (entry.is_dir) {
+        items.push(['New file', () => createEntry(false, entry.path)]);
+        items.push(['New folder', () => createEntry(true, entry.path)]);
+    } else {
+        items.push(['Open', () => openFile(entry.path)]);
+    }
+    items.push(['Rename…', () => renameEntry(entry)]);
+    items.push(['Delete', () => deleteEntry(entry)]);
+
+    for (const [label, action] of items) {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'tree-menu-item' + (label === 'Delete' ? ' danger' : '');
+        item.textContent = label;
+        item.onclick = () => { closeTreeMenu(); action(); };
+        menu.appendChild(item);
+    }
+    document.body.appendChild(menu);
+    // Keep it on screen when right-clicking near an edge.
+    const box = menu.getBoundingClientRect();
+    menu.style.left = Math.min(x, window.innerWidth - box.width - 8) + 'px';
+    menu.style.top = Math.min(y, window.innerHeight - box.height - 8) + 'px';
+    setTimeout(() => document.addEventListener('click', closeTreeMenu, { once: true }), 0);
+}
+
+function closeTreeMenu() {
+    const existing = document.getElementById('tree-menu');
+    if (existing) existing.remove();
+}
+
+// ---------- find in files ----------
+
+let codeSearchTimer = null;
+
+function toggleCodeSearch() {
+    const box = document.getElementById('code-search');
+    const hidden = box.classList.toggle('hidden');
+    if (!hidden) {
+        const input = document.getElementById('code-search-input');
+        input.focus();
+        input.select();
+        if (!input.dataset.wired) {
+            input.dataset.wired = '1';
+            input.addEventListener('input', () => {
+                clearTimeout(codeSearchTimer);
+                // Debounced: every keystroke would otherwise walk the tree.
+                codeSearchTimer = setTimeout(runCodeSearch, 250);
+            });
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') toggleCodeSearch();
+            });
+        }
+    }
+}
+
+async function runCodeSearch() {
+    const query = document.getElementById('code-search-input').value.trim();
+    const out = document.getElementById('code-search-results');
+    if (!query) { out.innerHTML = ''; return; }
+    out.innerHTML = '<div class="empty" style="padding:6px">Searching…</div>';
+    try {
+        const data = await api(`/api/files/search?q=${encodeURIComponent(query)}`);
+        if (!data.hits.length) {
+            out.innerHTML = '<div class="empty" style="padding:6px">No matches.</div>';
+            return;
+        }
+        out.innerHTML = '';
+        for (const hit of data.hits) {
+            const row = document.createElement('div');
+            row.className = 'code-hit';
+            row.innerHTML = `<div class="code-hit-path">${escHtml(hit.path)}:${hit.line}</div>`
+                          + `<div class="code-hit-text">${escHtml(hit.text.trim())}</div>`;
+            row.onclick = () => openFile(hit.path, hit.line);
+            out.appendChild(row);
+        }
+        if (data.truncated) {
+            const note = document.createElement('div');
+            note.className = 'empty';
+            note.style.padding = '6px';
+            note.textContent = 'More matches than shown — narrow the search.';
+            out.appendChild(note);
+        }
+    } catch (e) {
+        out.innerHTML = `<div class="empty" style="padding:6px">${escHtml(e.message)}</div>`;
+    }
+}
+
+// Files with unsaved edits. Shown as a dot on the tab, and checked before
+// anything closes one.
+const dirtyFiles = new Set();
+
+async function openFile(path, line) {
     const monaco = await ensureMonaco();
     ensureMonacoEditor(monaco);
     let model = openFiles[path];
@@ -351,33 +600,74 @@ async function openFile(path) {
             return;
         }
         model = monaco.editor.createModel(content, langForPath(path));
+        // Mark dirty on every edit so the tab dot and the close guard are
+        // driven by the editor itself rather than a timer.
+        model.onDidChangeContent(() => {
+            if (!dirtyFiles.has(path)) {
+                dirtyFiles.add(path);
+                renderCodeTabs();
+            }
+        });
         openFiles[path] = model;
     }
     activeFilePath = path;
     monacoEditor.setModel(model);
     document.getElementById('code-empty').classList.add('hidden');
     document.getElementById('code-editor-host').classList.remove('hidden');
+    if (line) {
+        try {
+            monacoEditor.revealLineInCenter(line);
+            monacoEditor.setPosition({ lineNumber: line, column: 1 });
+            monacoEditor.focus();
+        } catch (_) { /* model not laid out yet; not worth failing the open */ }
+    }
     renderCodeTabs();
     setCodeStatus('');
 }
 
-function ensureMonacoEditor(monaco) {
-    if (monacoEditor) return;
+// Monaco paints its own chrome, so it does not inherit the page's theme —
+// left alone it stays dark on a light page, which is the one part of the UI
+// that would not follow the appearance setting.
+function monacoThemeName() {
+    return document.documentElement.getAttribute('data-theme') === 'light'
+        ? 'carrot-light' : 'carrot-dark';
+}
+
+function defineMonacoThemes(monaco) {
+    const accent = getComputedStyle(document.documentElement)
+        .getPropertyValue('--accent').trim() || '#f4813f';
     monaco.editor.defineTheme('carrot-dark', {
         base: 'vs-dark',
         inherit: true,
         rules: [],
         colors: {
-            'editor.background': '#1a1712',
-            'editor.foreground': '#e8e2d6',
-            'editorLineNumber.foreground': '#5c5344',
-            'editorCursor.foreground': '#e8912b',
-            'editor.selectionBackground': '#3a3122',
+            'editor.background': '#16181e',
+            'editor.foreground': '#eceef4',
+            'editorLineNumber.foreground': '#69707f',
+            'editorCursor.foreground': accent,
+            'editor.selectionBackground': '#2b3040',
         },
     });
+    monaco.editor.defineTheme('carrot-light', {
+        base: 'vs',
+        inherit: true,
+        rules: [],
+        colors: {
+            'editor.background': '#fbfaf8',
+            'editor.foreground': '#1c1a18',
+            'editorLineNumber.foreground': '#a8a29a',
+            'editorCursor.foreground': accent,
+            'editor.selectionBackground': '#f0e5da',
+        },
+    });
+}
+
+function ensureMonacoEditor(monaco) {
+    if (monacoEditor) return;
+    defineMonacoThemes(monaco);
     monacoEditor = monaco.editor.create(document.getElementById('code-editor-host'), {
         model: null,
-        theme: 'carrot-dark',
+        theme: monacoThemeName(),
         automaticLayout: true,
         fontSize: 13,
         minimap: { enabled: false },
@@ -386,6 +676,14 @@ function ensureMonacoEditor(monaco) {
     monacoEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, saveCurrentFile);
 }
 
+// theme.js fires this whenever the appearance changes, including when the OS
+// flips and the mode is "Match system".
+window.addEventListener('carrot-theme', () => {
+    if (!window.monaco || !monacoEditor) return;
+    defineMonacoThemes(window.monaco);
+    window.monaco.editor.setTheme(monacoThemeName());
+});
+
 function renderCodeTabs() {
     const bar = document.getElementById('code-tabs');
     bar.innerHTML = '';
@@ -393,14 +691,22 @@ function renderCodeTabs() {
         const tab = document.createElement('div');
         tab.className = 'code-tab' + (path === activeFilePath ? ' active' : '');
         const name = path.split('/').pop();
-        tab.innerHTML = `<span class="ct-name">${escHtml(name)}</span><span class="ct-close">×</span>`;
+        const dirty = dirtyFiles.has(path);
+        if (dirty) tab.classList.add('dirty');
+        tab.title = path;
+        tab.innerHTML = `<span class="ct-name">${escHtml(name)}</span>`
+                      + `<span class="ct-close">${dirty ? '●' : '×'}</span>`;
         tab.querySelector('.ct-name').onclick = () => openFile(path);
         tab.querySelector('.ct-close').onclick = (e) => { e.stopPropagation(); closeFile(path); };
         bar.appendChild(tab);
     }
 }
 
-function closeFile(path) {
+function closeFile(path, force) {
+    if (!force && dirtyFiles.has(path)) {
+        if (!confirm(`${path.split('/').pop()} has unsaved changes. Close it anyway?`)) return;
+    }
+    dirtyFiles.delete(path);
     const model = openFiles[path];
     if (model) { try { model.dispose(); } catch (_) {} delete openFiles[path]; }
     if (activeFilePath === path) {
@@ -424,6 +730,8 @@ async function saveCurrentFile() {
             method: 'POST',
             body: JSON.stringify({ path: activeFilePath, content }),
         });
+        dirtyFiles.delete(activeFilePath);
+        renderCodeTabs();
         setCodeStatus('saved ' + activeFilePath.split('/').pop());
     } catch (e) {
         setCodeStatus('save failed: ' + e.message);
@@ -720,3 +1028,21 @@ async function refreshMcpTools() {
         marks.forEach(m => m.textContent = 'tools: ' + e.message);
     }
 }
+
+
+// ===== Code tab keyboard =====
+// Ctrl+S is muscle memory; without it the browser's own save dialog appears
+// over the app, which is worse than doing nothing.
+document.addEventListener('keydown', (e) => {
+    const codeVisible = !document.getElementById('view-code')?.classList.contains('hidden')
+        && document.getElementById('view-code')?.offsetParent !== null;
+    if (!codeVisible) return;
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && !e.shiftKey && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        saveCurrentFile();
+    } else if (mod && e.shiftKey && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        toggleCodeSearch();
+    }
+});

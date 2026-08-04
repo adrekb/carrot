@@ -3369,3 +3369,72 @@ code, pre, .kbd { font-family: var(--mono); }
   text-transform: uppercase;
   color: var(--faint);
 }
+
+/* =====================================================================
+   Code tab — mini-IDE
+   ===================================================================== */
+.tree-row { cursor: pointer; user-select: none; }
+.tree-row.selected { background: var(--accent-soft); }
+.tree-row.drop-target {
+  background: var(--accent-soft);
+  outline: 1px solid var(--accent-line);
+  outline-offset: -1px;
+}
+
+/* Right-click menu. Fixed, because the tree scrolls under it. */
+.tree-menu {
+  position: fixed;
+  z-index: 500;
+  min-width: 168px;
+  padding: 5px;
+  border-radius: var(--radius-sm);
+  background: var(--glass-pop);
+  backdrop-filter: blur(30px) saturate(180%);
+  -webkit-backdrop-filter: blur(30px) saturate(180%);
+  border: 1px solid var(--glass-pop-edge);
+  box-shadow: var(--shadow-lg);
+}
+.tree-menu-item {
+  display: block;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.tree-menu-item:hover { background: var(--glass-hover); }
+.tree-menu-item.danger { color: var(--red); }
+
+/* An unsaved tab keeps its dot until you hover, where the dot becomes the
+   close button — the same trick every editor uses to avoid two controls. */
+.code-tab.dirty .ct-close { color: var(--accent); font-size: 10px; }
+.code-tab.dirty:hover .ct-close::before { content: "×"; font-size: 14px; }
+.code-tab.dirty:hover .ct-close { font-size: 0; }
+
+/* Find in files */
+.code-search {
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.code-search input { width: 100%; font-size: 12.5px; }
+.code-search-results { max-height: 260px; overflow-y: auto; margin-top: 6px; }
+.code-hit {
+  padding: 5px 7px;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 11.5px;
+}
+.code-hit:hover { background: var(--glass-hover); }
+.code-hit-path { color: var(--accent); font-family: var(--mono); font-size: 10.5px; }
+.code-hit-text {
+  color: var(--muted);
+  font-family: var(--mono);
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
