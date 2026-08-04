@@ -681,8 +681,15 @@ def _is_transient(exc: Exception) -> bool:
                                    "timed out", "timeout", "connection reset"))
 
 
-def with_rate_limit_retry(call, *, on_wait=None, retries: int = RATE_LIMIT_RETRIES):
-    """Run ``call``, backing off and retrying when the provider throttles us.
+def with_rate_limit_retry(call, *, on_wait=None, retries: int = RATE_LIMIT_RETRIES,
+                          provider: str = ""):
+    """Run ``call``, pacing it and retrying when the provider throttles us.
+
+    Two mechanisms, doing different jobs. The pacer sets how fast requests may
+    leave *before* one is sent, and learns the provider's real limit over the
+    run. The retry loop handles a request that was refused anyway. Retrying
+    alone means every worker discovers the limit by tripping it, over and over
+    — the pacer is what stops the run from repeatedly running into the wall.
 
     ``on_wait(attempt, delay, reason)`` is invoked before each sleep so a
     long research run can show that it is waiting rather than hung.
@@ -690,14 +697,29 @@ def with_rate_limit_retry(call, *, on_wait=None, retries: int = RATE_LIMIT_RETRI
     import random
     import time
 
+    from . import pacing
+
+    pacer = pacing.for_provider(provider) if provider else None
+
     for attempt in range(retries + 1):
+        if pacer:
+            waited = pacer.wait()
+            if waited > 0.5 and on_wait:
+                on_wait(attempt, waited, "pacing to stay under the rate limit")
         try:
-            return call()
+            result = call()
+            if pacer:
+                pacer.on_success()
+            return result
         except Exception as exc:
             limited = _is_rate_limited(exc)
             if attempt >= retries or not (limited or _is_transient(exc)):
                 raise
             delay = _retry_after_seconds(exc)
+            if pacer and limited:
+                # Slow every later request to this provider, not just this
+                # retry — otherwise the other workers walk into the same wall.
+                pacer.on_rate_limited(delay)
             if delay is None:
                 delay = min(RATE_LIMIT_BASE_DELAY * (2 ** attempt), RATE_LIMIT_MAX_DELAY)
                 delay += random.uniform(0, delay * 0.25)   # de-sync parallel workers
@@ -720,7 +742,7 @@ def complete(resolved: Route, messages: List[Dict[str, Any]]) -> str:
     if kind == providers_mod.KIND_OPENAI:
         return with_rate_limit_retry(lambda: _openai_client(resolved.provider).chat(
             messages, model=resolved.model, max_tokens=CLOUD_MAX_TOKENS_SYNC
-        ))
+        ), provider=resolved.provider)
 
     client = _client(resolved.provider)
     system, conversation = _split_system(messages)
@@ -736,7 +758,8 @@ def complete(resolved: Route, messages: List[Dict[str, Any]]) -> str:
     if system:
         request["system"] = system
 
-    response = with_rate_limit_retry(lambda: client.beta.messages.create(**request))
+    response = with_rate_limit_retry(lambda: client.beta.messages.create(**request),
+                                     provider=resolved.provider or "anthropic")
     if response.stop_reason == "refusal":
         return REFUSAL_MESSAGE
     return "".join(block.text for block in response.content if getattr(block, "type", None) == "text")
