@@ -445,7 +445,7 @@ body {
   align-items: center; justify-content: center; gap: 14px;
   color: var(--faint);
 }
-.chat-empty .logo-mask.big { color: #232329; }
+/* superseded below: #232329 is invisible on the cream theme */
 .chat-empty p { font-size: 13px; }
 
 .message { max-width: 72%; }
@@ -3909,3 +3909,27 @@ td, th, .si-sub, .small, .editor-status {
 .onboard-status.good { color: var(--green); }
 .onboard-status.bad { color: var(--red); }
 .onboard-actions { display: flex; gap: 10px; margin-top: 22px; flex-wrap: wrap; }
+
+/* =====================================================================
+   The rabbit, always visible
+   =====================================================================
+   The mark is a PNG tinted through a CSS mask, so its colour is whatever
+   `currentColor` happens to be where it sits. On the splash and onboarding
+   card that resolved to the accent, sitting on an accent-tinted background —
+   the same hue at two opacities, which washes out badly on some accents and
+   disappears at small sizes. Contrast against the *ground* is what matters,
+   and --text is the one colour the theme guarantees that for. */
+.splash-logo .logo-mask,
+.onboard-card .logo-mask,
+.brand-mark .logo-mask,
+.logo-mask.big {
+  background: var(--text);
+}
+/* Keep a hint of warmth without betting legibility on it. */
+.splash-logo, .onboard-card .splash-logo {
+  background: transparent;
+  border: 1px solid var(--border-hi);
+}
+/* The empty-chat watermark is deliberately dim, but it was pinned to a
+   hard-coded near-black that vanished on the cream theme. */
+.chat-empty .logo-mask.big { background: var(--faint); color: var(--faint); }

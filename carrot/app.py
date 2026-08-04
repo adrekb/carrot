@@ -1033,7 +1033,26 @@ SEARCH_MODES = {
 
 ALL_SEARCH_TOOLS = set().union(*(mode["tools"] for mode in SEARCH_MODES.values()))
 
+# Prepended to both search directives. The date one is not optional advice:
+# a model's "now" is its training cutoff, so asked for recent news it will
+# search without a year, accept a 2020 satire page as current, and never
+# notice. The source note exists because a free search backend returns content
+# farms — sites that reword scraped text and match the query wording closely,
+# which is exactly what relevance filtering cannot catch.
+SEARCH_PREAMBLE = (
+    "Before searching for anything time-sensitive — recent, current, latest, "
+    "upcoming, 'now', or anything with a year in it — call current_datetime "
+    "first. You do not know today's date; your sense of it is your training "
+    "cutoff. Once you know it, put the year in the query and reject results "
+    "that turn out to be older.\n"
+    "Prefer sources with a name behind them: wire services, established "
+    "outlets, official and academic sites, project documentation. Results are "
+    "already ordered with those first. If the only results are sites you do "
+    "not recognise, say that rather than reporting their contents as fact.\n"
+)
+
 MULTI_SEARCH_DIRECTIVE = (
+    SEARCH_PREAMBLE +
     "Search mode: multi-turn. Do not stop at the first set of results.\n"
     "- Search, read the pages that look most likely to answer the question, then ask "
     "yourself what you still cannot answer, and search again for exactly that.\n"
@@ -1046,6 +1065,7 @@ MULTI_SEARCH_DIRECTIVE = (
 )
 
 SINGLE_SEARCH_DIRECTIVE = (
+    SEARCH_PREAMBLE +
     "Search mode: single-pass. You may search the web and read a page when the "
     "question needs current information or a source you do not already have. "
     "Cite the URL for anything you take from a page. Do not search for things you "
@@ -1235,12 +1255,21 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mo
             )
     else:
         # Every round went to tool calls and the budget ran out, so the model
-        # was never asked to write an answer. Without this the user waits the
-        # whole loop and receives an empty message.
+        # was never asked to write an answer.
+        stalled = True
+
+    # An empty answer is never acceptable. Two ways to reach one: the budget
+    # ran out before the model wrote anything, or it exhausted its gate nudges
+    # while saying nothing out loud — a small model can spend its whole reply
+    # in `thinking`, which is not content. Either way the user has watched
+    # searches scroll past and would get "(no response)". Ask once more, with
+    # no tools, so the only thing it can do is answer.
+    if not final_text.strip():
         working.append({
             "role": "user",
-            "content": "Stop searching and answer now from what you have gathered. "
-                       "Say plainly what you could not find.",
+            "content": "Stop searching and answer now, in plain text, from what you "
+                       "have gathered. Do not think silently — write the answer. Say "
+                       "plainly what you could not find and which sources you used.",
         })
         parts = []
         for event in router_mod.stream_events(resolved, working, tools=None):

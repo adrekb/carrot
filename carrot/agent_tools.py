@@ -429,6 +429,26 @@ def _tool_web_search(query: str, **_) -> str:
     )
 
 
+def _tool_current_datetime(**_) -> str:
+    """What day it is, locally.
+
+    A model's sense of "now" is its training cutoff, which is months or years
+    stale. Asked for "recent news" it will happily search without ever
+    establishing the date, then accept a 2020 page as current — exactly what
+    happened when a search returned a satire piece from 2020 alongside
+    undated content farms.
+    """
+    import datetime
+
+    now = datetime.datetime.now().astimezone()
+    return (
+        f"Local date and time: {now.strftime('%A, %d %B %Y, %H:%M')} "
+        f"({now.strftime('%Y-%m-%d')}, UTC{now.strftime('%z')})\n"
+        f"Use this when judging whether a source is current: anything from a "
+        f"materially earlier date is not 'recent'."
+    )
+
+
 def _tool_show_artifact(kind: str, content: str = "", title: str = "",
                         path: str = "", conversation_id: str = "", **_) -> str:
     """Put something visual in the conversation.
@@ -595,6 +615,19 @@ TOOLS: Dict[str, Dict[str, Any]] = {
             "properties": {"query": {"type": "string"}},
             "required": ["query"],
         },
+    },
+    "current_datetime": {
+        "handler": _tool_current_datetime,
+        "mutating": False,
+        "risk": "low",
+        "description": (
+            "Today's date and the local time. Call this FIRST whenever the question "
+            "involves what is recent, current, latest, upcoming or 'now' — your own "
+            "sense of the date is your training cutoff and is wrong. Knowing the "
+            "real date is what lets you put a year in the search query and reject "
+            "a page that turns out to be years old."
+        ),
+        "parameters": {"type": "object", "properties": {}},
     },
     "show_artifact": {
         "handler": _tool_show_artifact,

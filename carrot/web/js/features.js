@@ -382,6 +382,10 @@ async function createEntry(isDir, parentPath) {
         await loadCodeTree();
         if (!isDir) openFile(r.path);
         setCodeStatus(`created ${r.path}`);
+        // Say up front if the language cannot run here. Discovering that
+        // after writing a program is a bad order to learn it in.
+        const tc = r.toolchain || {};
+        if (tc.language && !tc.available) warnMissingToolchain(tc);
     } catch (e) {
         setCodeStatus('could not create: ' + e.message);
     }
@@ -1305,4 +1309,16 @@ function wireTerminal() {
             input.value = termHistory[termHistoryIndex] || '';
         }
     });
+}
+
+
+// Shown when a new file's language has no toolchain on this machine.
+function warnMissingToolchain(tc) {
+    showCodePanel('output');
+    const out = document.getElementById('panel-output');
+    out.textContent =
+        `${tc.language} is not installed on this computer, so Run will not work yet.\n\n` +
+        `Install ${tc.install}` + (tc.help_url ? `\n  ${tc.help_url}` : '') +
+        `\n\nYou can still write and save the file — come back and press Run once it is set up.`;
+    document.getElementById('panel-status').textContent = `${tc.language} missing`;
 }
