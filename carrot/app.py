@@ -370,7 +370,11 @@ class ProviderRequest(BaseModel):
 
 
 class ProviderKeyRequest(BaseModel):
-    api_key: str = ""
+    # Required, with no default. It used to default to "", which meant a body
+    # naming the field anything else — a client typo — validated fine and
+    # quietly cleared a working key while returning 200. Clearing a key is a
+    # real operation and should have to be asked for explicitly.
+    api_key: str
 
 
 class ProviderEnabledRequest(BaseModel):

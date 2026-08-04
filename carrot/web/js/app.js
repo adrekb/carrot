@@ -1773,7 +1773,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     loadSkillCatalog();
     loadSearchModes();
     loadWorkspaces();
-    checkBootstrap();
+    // Onboarding decides whether the bootstrap splash runs at all.
+    maybeShowOnboarding();
     switchTab('dashboard');
     loadTerminalHistory();
     setInterval(refreshStatus, 15000);
@@ -1796,3 +1797,120 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!cmdbar.contains(e.target)) hideSkillPop();
     });
 });
+
+// ===== First-run onboarding =====
+// Runs in front of the bootstrap splash. "Which kind of setup do you want"
+// and "which model should I download" are different questions, and asking
+// them together is what made first run confusing: a new user was shown a
+// list of quantized model names before anyone had explained what a model is.
+
+const ONBOARD_KEY_PAGES = {
+    anthropic: 'https://console.anthropic.com/settings/keys',
+    openai: 'https://platform.openai.com/api-keys',
+    openrouter: 'https://openrouter.ai/keys',
+    groq: 'https://console.groq.com/keys',
+    together: 'https://api.together.xyz/settings/api-keys',
+    deepseek: 'https://platform.deepseek.com/api_keys',
+    mistral: 'https://console.mistral.ai/api-keys',
+};
+
+function onboardStep(step) {
+    document.querySelectorAll('#onboard .onboard-step').forEach(el => {
+        el.classList.toggle('hidden', el.dataset.step !== step);
+    });
+    if (step === 'local') { finishOnboarding(false); return; }
+    if (step === 'key') onboardLoadProviders();
+}
+
+async function onboardLoadProviders() {
+    const select = document.getElementById('onboard-provider');
+    if (select.dataset.loaded) return;
+    select.dataset.loaded = '1';
+    // The hosted ones only. Offering "LM Studio (local)" on the screen for
+    // people who chose the cloud path is just noise.
+    let options = [
+        { id: 'anthropic', label: 'Anthropic (Claude)' },
+        { id: 'openai', label: 'OpenAI (GPT)' },
+    ];
+    try {
+        const body = await api('/api/router/providers');
+        for (const preset of (body.presets || [])) {
+            if (/local/i.test(preset.label || '')) continue;
+            if (!options.some(o => o.id === preset.id)) {
+                options.push({ id: preset.id, label: preset.label });
+            }
+        }
+    } catch (_) { /* the two built-ins are enough to get started */ }
+    select.innerHTML = options
+        .map(o => `<option value="${escHtml(o.id)}">${escHtml(o.label)}</option>`).join('');
+    onboardProviderChanged();
+}
+
+function onboardProviderChanged() {
+    const id = document.getElementById('onboard-provider').value;
+    const link = document.getElementById('onboard-key-link');
+    const url = ONBOARD_KEY_PAGES[id];
+    link.href = url || '#';
+    link.classList.toggle('hidden', !url);
+}
+
+async function saveOnboardingKey() {
+    const provider = document.getElementById('onboard-provider').value;
+    const key = document.getElementById('onboard-key').value.trim();
+    const status = document.getElementById('onboard-key-status');
+    const button = document.getElementById('onboard-key-btn');
+    if (!key) { status.textContent = 'Paste a key first.'; status.className = 'onboard-status bad'; return; }
+
+    button.disabled = true;
+    status.className = 'onboard-status';
+    status.textContent = 'Checking the key…';
+    try {
+        await api(`/api/router/providers/${encodeURIComponent(provider)}/key`, {
+            method: 'PUT', body: JSON.stringify({ api_key: key }),
+        });
+        // Saving a key that does not work is worse than not saving one: the
+        // failure surfaces later, in the middle of an answer. /test exists for
+        // exactly this and reports the provider's own error — listing models
+        // is not a check, because it falls back to a cached list and returns
+        // an `error` field rather than failing, so a garbage key looked fine.
+        const probe = await api(`/api/router/providers/${encodeURIComponent(provider)}/test`,
+                                { method: 'POST' });
+        if (!probe.ok) {
+            status.className = 'onboard-status bad';
+            status.textContent = 'That key did not work: ' + (probe.error || 'the provider rejected it');
+            return;
+        }
+        status.className = 'onboard-status good';
+        status.textContent = probe.models
+            ? `Working — ${probe.models} models available.`
+            : 'Working.';
+        await api(`/api/router/providers/${encodeURIComponent(provider)}/enabled`, {
+            method: 'PUT', body: JSON.stringify({ enabled: true }),
+        }).catch(() => {});
+        setTimeout(() => finishOnboarding(false), 1200);
+    } catch (e) {
+        status.className = 'onboard-status bad';
+        status.textContent = 'That key did not work: ' + e.message;
+    } finally {
+        button.disabled = false;
+    }
+}
+
+async function finishOnboarding(skipped) {
+    document.getElementById('onboard').classList.add('hidden');
+    try {
+        await api('/api/config/onboarding_done', { method: 'PUT', body: JSON.stringify(true) });
+    } catch (_) { /* it is only a "do not show again" flag */ }
+    // Hand over to the model-download splash unless they skipped outright.
+    if (!skipped && typeof checkBootstrap === 'function') checkBootstrap();
+}
+
+async function maybeShowOnboarding() {
+    let done = false;
+    try {
+        done = !!(await api('/api/config')).onboarding_done;
+    } catch (_) { done = true; }        // cannot ask: do not block the app
+    if (done) { checkBootstrap(); return; }
+    document.getElementById('onboard').classList.remove('hidden');
+    onboardStep('welcome');
+}

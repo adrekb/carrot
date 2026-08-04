@@ -3755,3 +3755,157 @@ td, th, .si-sub, .small, .editor-status {
   font-size: 12.5px;
   padding: 2px 0;
 }
+
+/* =====================================================================
+   Calendar widget sizing
+   =====================================================================
+   The cells are `aspect-ratio: 1` inside a seven-column grid, so their
+   height is a seventh of whatever the card is wide. In a narrow rail that
+   is fine; across a full dashboard it makes each day ~160px and the month
+   fills the screen. A month grid has a natural size — cap it and centre
+   it rather than letting the container decide. */
+.cal-grid {
+  max-width: 336px;
+  margin-left: auto;
+  margin-right: auto;
+  gap: 3px;
+}
+.cal-cell {
+  max-height: 40px;
+  font-size: 12px;
+}
+.cal-weekdays { max-width: 336px; margin-left: auto; margin-right: auto; }
+.cal-nav { max-width: 336px; margin-left: auto; margin-right: auto; }
+.cal-upcoming { max-width: 420px; margin-left: auto; margin-right: auto; }
+.cal-upcoming-head { max-width: 420px; margin-left: auto; margin-right: auto; }
+
+/* =====================================================================
+   First-run onboarding
+   ===================================================================== */
+#onboard {
+  position: fixed;
+  inset: 0;
+  z-index: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  background: var(--bg);
+  overflow-y: auto;
+}
+#onboard.hidden { display: none; }
+.onboard-card {
+  position: relative;
+  width: min(720px, 100%);
+  padding: 40px 44px 36px;
+  border-radius: var(--radius-lg);
+  background: var(--glass-card);
+  backdrop-filter: blur(30px) saturate(170%);
+  -webkit-backdrop-filter: blur(30px) saturate(170%);
+  border: 1px solid var(--glass-card-edge);
+  box-shadow: var(--shadow-lg);
+}
+.onboard-card h1 {
+  font-family: var(--display);
+  font-weight: 400;
+  font-size: 34px;
+  margin-bottom: 14px;
+}
+.onboard-card h2 {
+  font-family: var(--display);
+  font-weight: 400;
+  font-size: 25px;
+  margin-bottom: 18px;
+}
+.onboard-skip {
+  position: absolute;
+  top: 16px; right: 18px;
+  border: 0; background: none;
+  color: var(--faint);
+  font: inherit; font-family: var(--sans); font-size: 12px;
+  cursor: pointer;
+}
+.onboard-skip:hover { color: var(--text); text-decoration: underline; }
+.onboard-step.hidden { display: none; }
+.onboard-lede {
+  font-family: var(--serif);
+  font-size: 15.5px;
+  line-height: 1.62;
+  max-width: 60ch;
+  margin-bottom: 12px;
+}
+.onboard-lede.muted { color: var(--muted); }
+
+.onboard-choices { display: flex; flex-direction: column; gap: 10px; }
+.onboard-choice {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 16px 18px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--card2);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  transition: border-color 0.16s var(--ease), background 0.16s var(--ease);
+}
+.onboard-choice:hover { border-color: var(--accent-line); background: var(--card3); }
+.oc-title {
+  display: block;
+  font-family: var(--serif);
+  font-weight: 600;
+  font-size: 16px;
+  margin-bottom: 5px;
+}
+.oc-body {
+  display: block;
+  font-family: var(--serif);
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--muted);
+  max-width: 62ch;
+}
+.oc-tag {
+  display: inline-block;
+  margin-top: 9px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: var(--sans);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.onboard-prose { font-family: var(--serif); font-size: 14.5px; line-height: 1.66; max-width: 66ch; }
+.onboard-prose p { margin-bottom: 12px; }
+.onboard-prose ul { margin: 0 0 14px 20px; }
+.onboard-prose li { margin-bottom: 8px; }
+
+.onboard-field { margin-bottom: 14px; }
+.onboard-field label {
+  display: block;
+  font-family: var(--sans);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-bottom: 6px;
+}
+.onboard-field select, .onboard-field input { width: 100%; }
+.onboard-link {
+  display: inline-block;
+  margin-top: 7px;
+  font-size: 12px;
+  color: var(--accent);
+  text-decoration: none;
+}
+.onboard-link:hover { text-decoration: underline; }
+.onboard-link.hidden { display: none; }
+.onboard-status { min-height: 20px; font-size: 12.5px; color: var(--muted); margin-bottom: 10px; }
+.onboard-status.good { color: var(--green); }
+.onboard-status.bad { color: var(--red); }
+.onboard-actions { display: flex; gap: 10px; margin-top: 22px; flex-wrap: wrap; }
