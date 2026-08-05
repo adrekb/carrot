@@ -491,25 +491,34 @@ def _client(provider_id: str = PROVIDER_CLOUD):
         raise RuntimeError(
             "the anthropic package is not installed — run: pip install 'carrot[cloud]'"
         ) from exc
-    key = providers_mod.api_key(provider_id)
-    if not key:
+    # Either a developer key or a subscription token, depending on the mode
+    # this provider is in. They go in different headers, so the scheme decides
+    # which constructor argument is used rather than the value being guessed at.
+    from . import dualauth
+
+    scheme, secret = dualauth.credential(provider_id)
+    if not secret:
         raise RuntimeError(f"no API key configured for {provider_id}")
     provider = providers_mod.get_provider(provider_id) or {}
     base_url = provider.get("base_url") or ""
+    kwargs = {"auth_token": secret} if scheme == "bearer" else {"api_key": secret}
     if base_url and base_url != providers_mod.BUILTIN_PROVIDERS["anthropic"]["base_url"]:
-        return anthropic.Anthropic(api_key=key, base_url=base_url)
-    return anthropic.Anthropic(api_key=key)
+        kwargs["base_url"] = base_url
+    return anthropic.Anthropic(**kwargs)
 
 
 def _openai_client(provider_id: str):
     from .openai_client import OpenAICompatibleClient
 
+    from . import dualauth
+
     provider = providers_mod.require_provider(provider_id)
-    if provider["requires_key"] and not providers_mod.api_key(provider_id):
+    # OpenAI's wire format carries both a key and a subscription token in the
+    # same Bearer header, so unlike Anthropic there is nothing to branch on.
+    _, secret = dualauth.credential(provider_id)
+    if provider["requires_key"] and not secret:
         raise RuntimeError(f"no API key configured for {provider_id}")
-    return OpenAICompatibleClient(
-        base_url=provider["base_url"], api_key=providers_mod.api_key(provider_id)
-    )
+    return OpenAICompatibleClient(base_url=provider["base_url"], api_key=secret)
 
 
 # ===== Message/tool translation =====

@@ -190,8 +190,19 @@ def _hydrate(spec: Dict[str, Any], builtin: bool) -> Dict[str, Any]:
         provider["base_url"] = get_config().get("ollama_host", "http://localhost:11434")
 
     key = api_key(provider["id"])
-    provider["configured"] = bool(key) or not provider["requires_key"]
+    # A provider signed in with a consumer subscription is configured even
+    # with no API key at all — that is the entire point of the second mode.
+    subscribed = False
+    try:
+        from . import dualauth
+
+        subscribed = dualauth.mode(provider["id"]) == dualauth.MODE_SUBSCRIPTION \
+            and dualauth.signed_in(provider["id"])
+    except Exception:
+        pass
+    provider["configured"] = bool(key) or subscribed or not provider["requires_key"]
     provider["key_set"] = bool(key)
+    provider["subscription"] = subscribed
     provider["enabled"] = bool(provider.get("enabled", True))
     provider.pop("api_key", None)  # never surface a secret through the registry
     return provider

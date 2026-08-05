@@ -58,6 +58,7 @@
   <symbol id="i-note" viewBox="0 0 24 24"><path d="M13.4 2.8H7a2.6 2.6 0 0 0-2.6 2.6v13.2A2.6 2.6 0 0 0 7 21.2h10a2.6 2.6 0 0 0 2.6-2.6V9z"/><path d="M13.4 2.8V9h6.2M8.6 13.2h6.8M8.6 16.8h4.6"/></symbol>
   <symbol id="i-edit" viewBox="0 0 24 24"><path d="M11.6 4.6H5.8A2.6 2.6 0 0 0 3.2 7.2v11a2.6 2.6 0 0 0 2.6 2.6h11a2.6 2.6 0 0 0 2.6-2.6v-5.8"/><path d="M17.4 3a2.1 2.1 0 0 1 3 3L12.8 13.6l-3.9.9.9-3.9z"/></symbol>
   <symbol id="i-paperclip" viewBox="0 0 24 24"><path d="M20.4 11.6l-8.5 8.5a5.2 5.2 0 0 1-7.4-7.4l8.7-8.7a3.5 3.5 0 0 1 4.9 4.9l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><circle cx="7.5" cy="12" r="3.6"/><path d="M11.1 12h9.4M17.6 12v3.2M20.5 12v2.4"/></symbol>
   <symbol id="i-image" viewBox="0 0 24 24"><rect x="3.2" y="4.6" width="17.6" height="14.8" rx="3"/><circle cx="8.8" cy="10" r="1.6"/><path d="M20.8 15.6l-4.4-4.2-7.6 8"/></symbol>
   <symbol id="i-file-pdf" viewBox="0 0 24 24"><path d="M13.4 2.8H7a2.6 2.6 0 0 0-2.6 2.6v13.2A2.6 2.6 0 0 0 7 21.2h10a2.6 2.6 0 0 0 2.6-2.6V9z"/><path d="M13.4 2.8V9h6.2"/><path d="M8.8 17.4v-4h1.4a1.3 1.3 0 0 1 0 2.6H8.8"/></symbol>
   <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.6"/><circle cx="12" cy="12" r="4.6"/><circle cx="12" cy="12" r="1.1" fill="currentColor" stroke="none"/></symbol>
@@ -1106,6 +1107,40 @@
 
       <div class="settings-card">
         <div class="settings-head">
+          <svg class="ico"><use href="#i-key"/></svg>
+          <h3>How you sign in</h3>
+        </div>
+        <p class="muted small">
+          Anthropic and OpenAI can be reached two ways. A <strong>developer API key</strong> is
+          billed per token from their console. A <strong>subscription</strong> signs you in to the
+          plan you may already pay for — Claude Pro/Max, ChatGPT Plus/Pro — through their own
+          OAuth flow. Carrot never reads your browser's cookies or drives the web app: if a
+          provider offers no sign-in flow, it says so rather than working around it.
+        </p>
+        <div id="auth-panel"><div class="empty">Loading…</div></div>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-image"/></svg>
+          <h3>Image &amp; video generation</h3>
+        </div>
+        <p class="muted small">
+          Local first here too: point Carrot at a Stable Diffusion server you are already running
+          and nothing leaves the machine. No key, no account, no upload. Hosted backends are
+          there for when you would rather rent someone else's GPU — and Carrot reuses a key you
+          already pasted for chat rather than asking twice.
+        </p>
+        <div id="media-panel"><div class="empty">Loading…</div></div>
+        <div class="settings-row" style="margin-top:12px">
+          <input type="text" id="media-prompt" placeholder="Try it: describe a picture…" spellcheck="false">
+          <button class="btn btn-primary" onclick="tryGenerate()">Generate</button>
+        </div>
+        <div id="media-preview" class="media-preview"></div>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-head">
           <svg class="ico"><use href="#i-chip"/></svg>
           <h3>Task Routing</h3>
         </div>
@@ -1276,5 +1311,6 @@
 <script src="/js/agents.js"></script>
 <script src="/js/docagent.js"></script>
 <script src="/js/hub.js"></script>
+<script src="/js/studio.js"></script>
 </body>
 </html>

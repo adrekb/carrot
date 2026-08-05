@@ -555,6 +555,27 @@ def _tool_edit_file(path: str, edits: str = "", conversation_id: Optional[str] =
     )
 
 
+def _tool_generate_image(prompt: str, backend: str = "", conversation_id: Optional[str] = None,
+                         **_) -> str:
+    from . import media as media_mod
+
+    try:
+        result = media_mod.generate(
+            prompt, kind=media_mod.KIND_IMAGE, backend=backend or "",
+            conversation_id=conversation_id or "",
+        )
+    except media_mod.MediaError as exc:
+        return f"error: {exc}"
+    artifact = result.get("artifact") or {}
+    where = "on this machine" if result["local"] else f"via {result['backend_label']}"
+    return (
+        f"generated an image {where} in {result['seconds']}s"
+        # Same marker show_artifact uses, so the picture renders inline in chat
+        # rather than arriving as a file path the user has to go open.
+        + (f"\n[[carrot:artifact:{artifact['id']}]]" if artifact.get("id") else "")
+    )
+
+
 def _tool_git_status(**_) -> str:
     from . import gitops
 
@@ -840,6 +861,25 @@ TOOLS: Dict[str, Dict[str, Any]] = {
                 "edits": {"type": "string", "description": "One or more SEARCH/REPLACE blocks"},
             },
             "required": ["path", "edits"],
+        },
+    },
+    "generate_image": {
+        "handler": _tool_generate_image,
+        "mutating": True,
+        "risk": "medium",
+        "description": (
+            "Generate an image from a text description and show it in the chat. "
+            "Uses the on-device Stable Diffusion server when one is set up, and "
+            "a hosted backend otherwise. Describe the subject, style and framing "
+            "concretely — a vague prompt gets a vague picture."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string", "description": "What the image should show"},
+                "backend": {"type": "string", "description": "Leave empty for the user's default"},
+            },
+            "required": ["prompt"],
         },
     },
     "git_status": {

@@ -826,6 +826,8 @@ async function loadSettings() {
     loadInteropSettings();
     if (typeof loadRouting === 'function') loadRouting();
     if (typeof loadBackups === 'function') loadBackups();
+    if (typeof loadAuthPanel === 'function') loadAuthPanel();
+    if (typeof loadMediaPanel === 'function') loadMediaPanel();
 
     const toggle = document.getElementById('recap-auto-toggle');
     if (toggle) toggle.checked = !!cfg.recap_auto_enabled;

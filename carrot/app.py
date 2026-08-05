@@ -60,6 +60,9 @@ from carrot import (
     workspaces as workspaces_mod,
     coder as coder_mod,
     coder_api,
+    media as media_mod,
+    media_api,
+    dualauth,
     gitops as gitops_mod,
     help as help_mod,
 )
@@ -100,6 +103,8 @@ async def _revalidate_app_assets(request, call_next):
 
 app.include_router(files_api.router)
 app.include_router(coder_api.router)
+app.include_router(media_api.router)
+app.include_router(media_api.auth_router)
 
 
 # ===== Pydantic request models =====

@@ -510,6 +510,15 @@ ipcMain.handle('set-appearance', async (event, { background, theme, accent } = {
   }
 });
 
+// Only http(s) gets through. A renderer that asked to "open" a file:// or a
+// custom scheme would be asking the OS to launch something, which is not what
+// this channel is for.
+ipcMain.handle('open-external', async (event, url) => {
+  if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) return { opened: false };
+  await shell.openExternal(url);
+  return { opened: true };
+});
+
 ipcMain.handle('notify', async (event, { title, body }) => {
   if (!Notification.isSupported()) return { shown: false };
   const notification = new Notification({ title: title || 'Carrot', body: body || '' });
