@@ -1357,6 +1357,48 @@
 
       <div class="settings-card">
         <div class="settings-head">
+          <svg class="ico"><use href="#i-pulse"/></svg>
+          <h3>Local webhooks</h3>
+        </div>
+        <p class="muted small">
+          Let Home Assistant, a Stream Deck macro, a Shortcut or a shell script on your
+          own network talk to Carrot. This is the only way into the app that does not
+          need its session, so it is off until you turn it on, and each hook does exactly
+          one named thing — a token that leaks cannot be turned into a shell.
+        </p>
+        <div class="settings-row">
+          <label class="switch">
+            <input type="checkbox" id="hooks-enabled" onchange="setHooksEnabled(this.checked)">
+            <span>Enable local webhooks</span>
+          </label>
+        </div>
+        <div id="hooks-panel"></div>
+        <details class="hook-add">
+          <summary>Create a hook</summary>
+          <div class="settings-row">
+            <input type="text" id="hook-id" placeholder="id (e.g. leaving-home)" spellcheck="false">
+            <select id="hook-action"></select>
+            <button class="btn btn-ghost" onclick="createHook()">Create</button>
+          </div>
+          <div id="hook-created" class="hook-created hidden"></div>
+        </details>
+        <details class="hook-add">
+          <summary>Send events to your smart home</summary>
+          <p class="muted small">
+            Carrot POSTs a small JSON payload when something happens. Targets have to be
+            on your own network — a public URL would turn your notifications into someone
+            else's feed.
+          </p>
+          <div class="settings-row">
+            <input type="text" id="target-url" placeholder="http://homeassistant.local:8123/api/webhook/carrot" spellcheck="false">
+            <button class="btn btn-ghost" onclick="addHookTarget()">Add</button>
+          </div>
+          <div id="hook-targets"></div>
+        </details>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-head">
           <svg class="ico"><use href="#i-chip"/></svg>
           <h3>Task Routing</h3>
         </div>

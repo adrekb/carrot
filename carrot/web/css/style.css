@@ -4453,3 +4453,33 @@ td, th, .si-sub, .small, .editor-status {
 @media (max-width: 640px) {
   .tour-item { grid-template-columns: 1fr; gap: 2px; }
 }
+
+/* ===== Local webhooks ===== */
+.hook-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+.hook-row:last-child { border-bottom: none; }
+.hook-main { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 240px; flex-wrap: wrap; }
+.hook-add { margin-top: 12px; font-size: 12.5px; color: var(--muted); }
+.hook-add summary { cursor: pointer; padding: 4px 0; }
+.hook-created { margin-top: 10px; }
+.hook-created.hidden { display: none; }
+.hook-token-warn {
+  font-size: 12.5px;
+  color: var(--accent);
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.hook-example {
+  display: block;
+  white-space: pre;
+  overflow-x: auto;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  line-height: 1.5;
+}
