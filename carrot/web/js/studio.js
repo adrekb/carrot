@@ -437,23 +437,45 @@ let consensusState = null;
 // at debate time rather than at pick time.
 let availableModels = [];
 
+// The composer's Debate chip is unhidden by this, and the settings host does
+// not exist outside the Settings tab — so bailing on a missing host meant the
+// chip stayed hidden forever for anyone who never opened Settings. Which is
+// everyone: the feature was invisible in the only place it is used.
 async function loadConsensusPanel() {
     const host = document.getElementById('consensus-panel');
-    if (!host) return;
     try {
         consensusState = await api('/api/consensus');
     } catch (e) {
-        host.innerHTML = `<div class="empty error">${escHtml(e.message)}</div>`;
+        if (host) host.innerHTML = `<div class="empty error">${escHtml(e.message)}</div>`;
         return;
     }
+    // The chip first, and unconditionally: it is the part that lives outside
+    // this panel and it must reflect the state wherever you are.
+    renderCouncilChip();
+    if (!host) return;
+
     await loadAvailableModels();
     renderPanelMembers(host);
     renderPanelAdder();
     renderJudgePicker();
     renderPanelSuggestion();
+}
 
-    // The composer button only appears once a debate is actually possible.
-    document.getElementById('debate-btn')?.classList.toggle('hidden', !consensusState.ready);
+// Always shown, never hidden. A feature you cannot see is a feature you do not
+// have: hiding the chip until a panel existed meant nobody ever discovered
+// that a panel was a thing you could make. Without one it explains itself and
+// takes you to the setup instead of doing nothing.
+function renderCouncilChip() {
+    const chip = document.getElementById('debate-btn');
+    if (!chip) return;
+    chip.classList.remove('hidden');
+    const ready = !!consensusState?.ready;
+    chip.classList.toggle('needs-setup', !ready);
+    chip.title = ready
+        ? `Ask your council — ${consensusState.panel.map(m => m.model).join(', ')} — `
+          + 'and make them argue before answering'
+        : 'Set up a model council: two or more models answer, critique each '
+          + 'other, then one writes the final answer';
 }
 
 async function loadAvailableModels() {
@@ -610,6 +632,14 @@ async function saveSynthesiser(value) {
 // ---------- Running one from the composer ----------
 
 async function debateCurrentQuestion() {
+    if (!consensusState?.ready) {
+        // Take them to the setup rather than failing quietly. A chip that does
+        // nothing teaches people the feature is broken.
+        if (typeof switchTab === 'function') switchTab('settings');
+        setTimeout(() => document.getElementById('consensus-panel')
+            ?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 300);
+        return;
+    }
     const input = document.getElementById('cmd-input') || document.getElementById('chat-input');
     const question = (input?.value || '').trim();
     if (!question) return;
