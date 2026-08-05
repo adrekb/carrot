@@ -269,3 +269,121 @@ class TestCodeTabWiring:
         used = set(re.findall(r"var\((--[a-z0-9-]+)", block))
         defined = set(re.findall(r"^\s*(--[a-z0-9-]+):", css, re.M))
         assert used <= defined, f"undefined CSS tokens: {sorted(used - defined)}"
+
+
+class TestAgentPanel:
+    """A Plan/Act switch with nowhere to talk to the agent is a steering wheel
+    with no car attached. This is the car."""
+
+    def read(self, *parts):
+        from pathlib import Path
+        return Path(__file__).resolve().parents[1].joinpath("carrot", "web", *parts).read_text()
+
+    def test_the_panel_exists_in_the_code_tab(self):
+        html = self.read("index.html")
+        assert 'id="agent-side"' in html and 'id="agent-log"' in html
+
+    def test_there_is_a_way_to_reopen_it(self):
+        # Closing a panel with no way back is how a feature disappears.
+        assert 'onclick="toggleAgentSide()"' in self.read("index.html")
+
+    def test_it_streams_the_same_chat_endpoint(self):
+        assert "'/api/chat/stream'" in self.read("js", "features.js")
+
+    def test_the_open_file_is_sent_as_context(self):
+        # So "fix this" works without pasting a path.
+        js = self.read("js", "features.js")
+        assert "function agentContext" in js and "activeFilePath" in js
+
+    def test_tool_calls_are_shown_as_they_happen(self):
+        js = self.read("js", "features.js")
+        assert "payload.tool" in js and "agentTrace" in js
+
+    def test_approval_prompts_are_answerable_from_the_panel(self):
+        # Otherwise a mutating tool blocks silently until it times out.
+        js = self.read("js", "features.js")
+        assert "payload.approval" in js and "/api/agent/approvals/" in js
+
+    def test_the_task_can_be_stopped(self):
+        js = self.read("js", "features.js")
+        assert "AbortController" in js and "function stopAgentTask" in js
+
+    def test_the_tree_refreshes_after_the_agent_touches_files(self):
+        js = self.read("js", "features.js").split("async function sendAgentTask")[1][:5000]
+        assert "loadCodeTree();" in js and "loadCoderState();" in js
+
+    def test_attachments_are_supported(self):
+        html, js = self.read("index.html"), self.read("js", "features.js")
+        assert 'id="agent-attach-tray"' in html
+        assert "function addAgentAttachments" in js
+        assert "attachments: attachments.map" in js
+
+    def test_a_screenshot_can_be_pasted(self):
+        assert "clipboardData?.files" in self.read("js", "features.js")
+
+    def test_files_can_be_dropped_on_the_panel(self):
+        js = self.read("js", "features.js")
+        assert "dataTransfer?.files" in js
+
+    def test_a_non_vision_model_is_flagged_before_sending(self):
+        # Turning "400: gemma cannot read images" into a sentence that appears
+        # while there is still time to switch models.
+        assert "function warnIfNoVision" in self.read("js", "features.js")
+
+    def test_the_mode_is_visible_in_the_agent_header(self):
+        js = self.read("js", "features.js")
+        assert "agent-mode-tag" in js and 'id="agent-mode-tag"' in self.read("index.html")
+
+    def test_every_css_token_the_panel_uses_is_defined(self):
+        import re
+
+        css = self.read("css", "style.css")
+        block = css.split("/* ===== The agent panel =====")[1]
+        used = set(re.findall(r"var\((--[a-z0-9-]+)", block))
+        defined = set(re.findall(r"^\s*(--[a-z0-9-]+):", css, re.M))
+        assert used <= defined, f"undefined CSS tokens: {sorted(used - defined)}"
+
+
+class TestPythonIsFound:
+    """A perfectly good Windows install reported 'Python is not set up'."""
+
+    def test_the_windows_name_is_tried_too(self):
+        from unittest.mock import patch
+
+        from carrot import runner
+
+        # `python3` is the Linux and macOS name; Windows ships `python.exe`.
+        with patch.object(runner.shutil, "which",
+                          side_effect=lambda n: r"C:\Python\python.exe" if n == "python" else None):
+            assert runner._find_python() == r"C:\Python\python.exe"
+
+    def test_the_py_launcher_is_the_last_resort(self):
+        from unittest.mock import patch
+
+        from carrot import runner
+
+        with patch.object(runner.shutil, "which",
+                          side_effect=lambda n: r"C:\Windows\py.exe" if n == "py" else None):
+            assert runner._find_python() == r"C:\Windows\py.exe"
+
+    def test_the_microsoft_store_stub_is_skipped(self, tmp_path):
+        from unittest.mock import patch
+
+        from carrot import runner
+
+        # Windows ships a zero-byte alias at this path that opens the Store
+        # instead of running anything — using it looks like a silent crash.
+        stub = tmp_path / "WindowsApps" / "python3.exe"
+        stub.parent.mkdir()
+        stub.write_bytes(b"")
+        with patch.object(runner.shutil, "which",
+                          side_effect=lambda n: str(stub) if n == "python3" else None):
+            assert runner._find_python() is None
+
+    def test_nothing_installed_is_none_not_a_crash(self):
+        from unittest.mock import patch
+
+        from carrot import runner
+
+        with patch.object(runner.shutil, "which", return_value=None):
+            assert runner._find_python() is None

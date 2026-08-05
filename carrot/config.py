@@ -81,6 +81,11 @@ DEFAULTS = {
     "media_keys": {},
     "media_endpoints": {},
     "media_comfy_workflow": {},
+    # Semester planning: intake answers, courses, cached campus geometry and
+    # the last plan produced.
+    "planner_profile": {},
+    "planner_campus": {},
+    "planner_last_plan": {},
     # Dual authentication: per-provider "api_key" or "subscription", the OAuth
     # client each installation registers, and the tokens a sign-in produced.
     "auth_modes": {},

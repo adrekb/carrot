@@ -477,6 +477,8 @@
           <span class="rules-chip hidden" id="rules-chip" title="Project rules are in effect">rules</span>
           <button class="btn btn-ghost" onclick="takeCheckpoint()"
                   title="Snapshot the workspace so everything after this can be undone in one step">Checkpoint</button>
+          <button class="btn btn-primary" onclick="toggleAgentSide()"
+                  title="Talk to the agent about this workspace">Agent</button>
         </div>
         <div class="editor-toolbar">
           <div id="code-tabs" class="code-tabs"></div>
@@ -532,6 +534,48 @@
           </div>
         </div>
       </div>
+
+      <!-- The agent itself. A Plan/Act switch with nowhere to talk to the
+           agent is a steering wheel with no car attached: this is the car. -->
+      <aside class="agent-side" id="agent-side">
+        <div class="agent-side-head">
+          <svg class="ico"><use href="#i-chip"/></svg>
+          <span class="side-label">Agent</span>
+          <span class="agent-mode-tag" id="agent-mode-tag">act</span>
+          <span class="spacer"></span>
+          <button class="icon-btn" title="New task" onclick="newAgentTask()"><svg class="ico"><use href="#i-plus"/></svg></button>
+          <button class="icon-btn" title="Hide the agent" onclick="toggleAgentSide()"><svg class="ico"><use href="#i-x"/></svg></button>
+        </div>
+        <div id="agent-log" class="agent-log">
+          <div class="agent-hello">
+            <p>Tell me what to build, fix or explain. I can see the files in
+               <span class="mono" id="agent-root-hint">your workspace</span>.</p>
+            <p class="muted small">In <strong>Plan</strong> I only read and propose.
+               In <strong>Act</strong> I can edit files and run commands.</p>
+          </div>
+        </div>
+        <div class="agent-compose">
+          <!-- Screenshots of an error, a design mock, a PDF spec: the things
+               you actually want to hand a coding agent. Images need a vision
+               model, so the tray says plainly when the current one cannot. -->
+          <div id="agent-attach-tray" class="attach-tray hidden"></div>
+          <textarea id="agent-input" rows="3" spellcheck="false"
+                    placeholder="Add a retry loop to client.py…  (paste a screenshot, or drop a file)"
+                    onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendAgentTask()}"></textarea>
+          <input type="file" id="agent-file-input" multiple hidden
+                 onchange="addAgentAttachments(this.files); this.value=''">
+          <div class="agent-compose-row">
+            <button class="icon-btn" title="Attach a file or image"
+                    onclick="document.getElementById('agent-file-input').click()">
+              <svg class="ico"><use href="#i-file-plus"/></svg>
+            </button>
+            <span class="muted small" id="agent-context-hint"></span>
+            <span class="spacer"></span>
+            <button class="btn btn-ghost" id="agent-stop" onclick="stopAgentTask()" hidden>Stop</button>
+            <button class="btn btn-primary" id="agent-send" onclick="sendAgentTask()">Send</button>
+          </div>
+        </div>
+      </aside>
     </div>
   </section>
 

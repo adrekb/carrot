@@ -4138,3 +4138,137 @@ td, th, .si-sub, .small, .editor-status {
   overflow-x: auto;
   max-width: 100%;
 }
+
+/* ===== The agent panel =====
+   Sits to the right of the editor because it is a collaborator, not a tool
+   drawer: you read the file and the agent's reasoning side by side. */
+.agent-side {
+  display: flex;
+  flex-direction: column;
+  width: 380px;
+  flex: none;
+  border-left: 1px solid var(--border);
+  background: var(--bg2);
+  min-height: 0;
+}
+.agent-side.hidden { display: none; }
+.agent-side.dropping { outline: 2px dashed var(--accent); outline-offset: -6px; }
+.agent-side-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.agent-side-head .spacer { flex: 1; }
+.agent-mode-tag {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  color: var(--accent);
+}
+.agent-mode-tag.plan {
+  background: transparent;
+  border-color: var(--border-hi);
+  color: var(--muted);
+}
+.agent-log {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+.agent-hello { color: var(--muted); font-size: 13px; line-height: 1.6; }
+.agent-hello p { margin: 0 0 8px; }
+.agent-msg { display: flex; flex-direction: column; gap: 6px; }
+.agent-msg.you .agent-body {
+  align-self: flex-end;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  border-radius: 12px 12px 4px 12px;
+  padding: 7px 11px;
+  max-width: 92%;
+}
+.agent-msg.agent .agent-body {
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.6;
+}
+.agent-body { font-size: 13px; }
+.agent-trace {
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  max-height: 200px;
+  overflow-y: auto;
+  padding: 7px 9px;
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.agent-trace-line { white-space: pre-wrap; word-break: break-all; }
+.agent-trace-line.result { color: var(--faint); }
+.agent-trace-line.rejected { color: var(--red); }
+.agent-approval {
+  border: 1px solid var(--accent-line);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  padding: 9px 11px;
+}
+.approval-what { font-size: 12.5px; color: var(--text); margin-bottom: 8px; }
+.approval-row { display: flex; gap: 8px; }
+.agent-compose {
+  border-top: 1px solid var(--border);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.agent-compose textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 62px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 9px 11px;
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.agent-compose textarea:focus {
+  outline: none;
+  border-color: var(--accent-line);
+}
+.agent-compose-row { display: flex; align-items: center; gap: 8px; }
+.agent-compose-row .spacer { flex: 1; }
+
+/* Narrow windows: the agent goes under the editor rather than squeezing it. */
+@media (max-width: 1200px) {
+  .agent-side { width: 320px; }
+}
+@media (max-width: 900px) {
+  #view-code .split { flex-wrap: wrap; }
+  .agent-side { width: 100%; border-left: none; border-top: 1px solid var(--border); }
+}
+
+/* The agent's tray sits inline above its box rather than floating over the
+   composer the way the chat one does — there is no room to float here. */
+#agent-attach-tray {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+#agent-attach-tray.hidden { display: none; }

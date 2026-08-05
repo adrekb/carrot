@@ -173,7 +173,7 @@ class TestBudgetExhaustion:
         # not by tools being None: the loop passes `tools or None`, so an
         # empty tool list looks identical to the synthesis call.
         def fake_stream(resolved, messages, tools=None):
-            if "Stop searching and answer now" in messages[-1]["content"]:
+            if "QUESTION:" in messages[-1]["content"]:
                 seen["asked"] = messages[-1]["content"]
                 seen["tools"] = tools
                 yield {"type": "text", "text": "Partial answer; could not find X."}
@@ -194,7 +194,7 @@ class TestBudgetExhaustion:
 
         final = next(e["_final_text"] for e in events if "_final_text" in e)
         assert final == "Partial answer; could not find X."
-        assert "Stop searching and answer now" in seen["asked"]
+        assert "QUESTION:" in seen["asked"]
         assert seen["tools"] is None, "the synthesis call must not offer more tools"
         assert any("suggest_research" in e for e in events)
 
