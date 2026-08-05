@@ -410,3 +410,175 @@ class TestTheInterface:
         used = set(re.findall(r"var\((--[a-z0-9-]+)", block))
         defined = set(re.findall(r"^\s*(--[a-z0-9-]+):", css, re.M))
         assert used <= defined, f"undefined CSS tokens: {sorted(used - defined)}"
+
+
+class TestPanelMembersCanSearch:
+    """A panel with no tools is models reciting training data at each other.
+
+    The disagreement that produces is noise about what each one memorised, not
+    signal about the question — so every member gathers its own evidence.
+    """
+
+    def toolset(self):
+        return [{"type": "function", "function": {"name": "carrot__web_search"}}]
+
+    def searching(self, answer="Reuters reports the vote failed."):
+        """A model that searches once, then answers."""
+        state = {}
+
+        def stream(resolved, messages, tools=None):
+            model = resolved.get("model", "")
+            if tools and not state.get(model):
+                state[model] = True
+                yield {"type": "tool_calls", "calls": [{
+                    "id": "1",
+                    "function": {"name": "carrot__web_search",
+                                 "arguments": {"query": "the question"}},
+                }]}
+                return
+            yield {"type": "text", "text": answer}
+
+        return stream
+
+    def test_a_member_can_call_a_tool(self, panel):
+        ran = []
+        run = consensus.debate("recent news?", route, self.searching(),
+                               tools=self.toolset(),
+                               run_tool=lambda n, a: ran.append(n) or "Reuters: the vote failed")
+        assert ran, "no member ever called a tool"
+        assert run["answer"]
+
+    def test_every_member_searches_independently(self, panel):
+        # Two members can find *different* sources, and that disagreement is
+        # real rather than an artefact of what each memorised.
+        callers = []
+
+        def stream(resolved, messages, tools=None):
+            model = resolved.get("model", "")
+            if tools and model not in callers:
+                callers.append(model)
+                yield {"type": "tool_calls", "calls": [{
+                    "id": "1", "function": {"name": "carrot__web_search", "arguments": {}}}]}
+                return
+            yield {"type": "text", "text": "an answer"}
+
+        consensus.debate("q", route, stream, tools=self.toolset(),
+                         run_tool=lambda n, a: "result")
+        assert set(callers) == {"qwen-coder", "deepseek-r1"}
+
+    def test_the_tool_result_reaches_the_model(self, panel):
+        seen = {}
+
+        def stream(resolved, messages, tools=None):
+            if any(m.get("role") == "tool" for m in messages):
+                seen["content"] = messages[-1]["content"]
+                yield {"type": "text", "text": "grounded answer"}
+                return
+            yield {"type": "tool_calls", "calls": [{
+                "id": "1", "function": {"name": "carrot__web_search", "arguments": {}}}]}
+
+        consensus.debate("q", route, stream, tools=self.toolset(),
+                         run_tool=lambda n, a: "AP: the vote failed 51-49")
+        assert "51-49" in seen["content"]
+
+    def test_tool_calls_are_counted_and_reported(self, panel):
+        run = consensus.debate("q", route, self.searching(), tools=self.toolset(),
+                               run_tool=lambda n, a: "result")
+        assert run["tool_calls"] > 0
+        assert any(p.get("tool_calls") for p in run["proposals"])
+
+    def test_critics_can_search_too(self, panel):
+        # "That claim is out of date" is only worth saying if the critic could
+        # go and check.
+        rounds = []
+
+        def stream(resolved, messages, tools=None):
+            prompt = messages[0]["content"]
+            if "ANSWER A" in prompt and "CRITIQUES:" not in prompt and tools:
+                rounds.append("critique")
+                yield {"type": "tool_calls", "calls": [{
+                    "id": "1", "function": {"name": "carrot__web_search", "arguments": {}}}]}
+                return
+            yield {"type": "text", "text": "text"}
+
+        consensus.debate("q", route, stream, tools=self.toolset(),
+                         run_tool=lambda n, a: "result")
+        assert "critique" in rounds
+
+    def test_the_synthesis_gets_no_tools(self, panel):
+        # A judge that goes off to search has stopped judging and started
+        # adding a fourth opinion nobody critiqued.
+        seen = []
+
+        def stream(resolved, messages, tools=None):
+            if "CRITIQUES:" in messages[0]["content"]:
+                seen.append(tools)
+            yield {"type": "text", "text": "text"}
+
+        consensus.debate("q", route, stream, tools=self.toolset(),
+                         run_tool=lambda n, a: "result")
+        assert seen == [None]
+
+    def test_a_member_looping_on_tools_is_stopped(self, panel):
+        # A member that wants fifteen rounds of tool calls is not debating any
+        # more. It gets a budget, and running out is a bounded failure rather
+        # than an unbounded spend.
+        calls = []
+
+        def forever(resolved, messages, tools=None):
+            if tools:
+                yield {"type": "tool_calls", "calls": [{
+                    "id": "1", "function": {"name": "carrot__web_search", "arguments": {}}}]}
+                return
+            yield {"type": "text", "text": "x"}
+
+        with pytest.raises(consensus.ConsensusError):
+            consensus.debate("q", route, forever, tools=self.toolset(),
+                             run_tool=lambda n, a: calls.append(n) or "result")
+        assert 0 < len(calls) <= consensus.MAX_TOOL_ROUNDS * len(PANEL)
+
+    def test_a_tool_that_raises_does_not_kill_the_member(self, panel):
+        # Losing a member's whole answer because one search failed is a bad
+        # trade; it should be told, and work around it, exactly as it would a
+        # 404 from a page.
+        seen = {}
+
+        def stream(resolved, messages, tools=None):
+            if any(m.get("role") == "tool" for m in messages):
+                seen["content"] = messages[-1]["content"]
+                yield {"type": "text", "text": "I could not search, so from memory:"}
+                return
+            yield {"type": "tool_calls", "calls": [{
+                "id": "1", "function": {"name": "carrot__web_search", "arguments": {}}}]}
+
+        def exploding(name, arguments):
+            raise RuntimeError("the search backend is down")
+
+        run = consensus.debate("q", route, stream, tools=self.toolset(),
+                               run_tool=exploding)
+        assert "search backend is down" in seen["content"]
+        assert all(p["ok"] for p in run["proposals"])
+
+    def test_no_tools_still_works(self, panel):
+        run = consensus.debate("q", route, scripted({}))
+        assert run["answer"]
+
+    def test_the_propose_prompt_asks_members_to_look_things_up(self):
+        assert "search or page-reading tools" in consensus.PROPOSE_PROMPT
+        assert "rather than answering from memory" in consensus.PROPOSE_PROMPT
+
+    def test_the_endpoint_hands_the_panel_the_apps_tools(self):
+        from pathlib import Path
+
+        source = (Path(__file__).resolve().parents[1] / "carrot" / "consensus_api.py").read_text()
+        assert "_available_tools" in source and "run_tool=run_tool" in source
+
+    def test_the_search_mode_can_be_chosen_per_debate(self, client):
+        from carrot import router as router_mod
+
+        client.put("/api/consensus/panel", json={"members": PANEL})
+        with patch.object(router_mod, "route", route), \
+             patch.object(router_mod, "stream_events", scripted({}, synthesis="Done.")):
+            body = client.post("/api/consensus/debate",
+                               json={"question": "q", "stream": False, "search_mode": "off"})
+        assert body.status_code == 200

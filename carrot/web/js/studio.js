@@ -655,9 +655,13 @@ async function debateCurrentQuestion() {
                 if (payload.round === 'propose') step(`${payload.members} models answering independently`);
                 if (payload.round === 'critique') step('models critiquing each other, anonymously');
                 if (payload.round === 'synthesis') step('writing the final answer');
+                if (payload.search_mode && payload.search_mode !== 'off') {
+                    step(`each model may search for its own evidence (${payload.search_mode})`);
+                }
                 if (payload.proposals) {
                     for (const p of payload.proposals) {
-                        step(`  ${p.model}: ${p.ok ? `${p.seconds}s` : `failed — ${p.error}`}`);
+                        const searched = p.tool_calls ? `, ${p.tool_calls} lookup(s)` : '';
+                        step(`  ${p.model}: ${p.ok ? `${p.seconds}s${searched}` : `failed — ${p.error}`}`);
                     }
                 }
                 if (payload.error) step('error: ' + payload.error);

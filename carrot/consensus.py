@@ -31,6 +31,7 @@ That is why it is opt-in per question rather than a mode you leave on.
 
 from __future__ import annotations
 
+import json
 import re
 import threading
 import time
@@ -44,6 +45,10 @@ MAX_MEMBERS = 4
 MIN_MEMBERS = 2
 MEMBER_TIMEOUT = 300
 MAX_ANSWER_CHARS = 8000
+# Each member may gather its own evidence, within a small budget. This runs
+# once per member per round, so the cost multiplies by the size of the panel.
+MAX_TOOL_ROUNDS = 4
+TOOL_RESULT_CHARS = 4000
 
 ROUND_PROPOSE = "propose"
 ROUND_CRITIQUE = "critique"
@@ -64,7 +69,12 @@ PROPOSE_PROMPT = (
     "Answer the question below as well as you can. Be concrete and show your "
     "reasoning briefly. If you are unsure of something, say which part — an "
     "answer that flags its own weak point is worth more here than one that "
-    "sounds certain throughout.\n\nQUESTION: {question}"
+    "sounds certain throughout.\n\n"
+    "If you have search or page-reading tools, use them for anything that "
+    "depends on current fact rather than answering from memory, and name the "
+    "sources you used. Another model is answering this same question "
+    "separately; an answer grounded in something you actually looked up is "
+    "what makes the comparison worth anything.\n\nQUESTION: {question}"
 )
 
 CRITIQUE_PROMPT = (
@@ -156,30 +166,82 @@ def require_panel() -> List[Dict[str, Any]]:
 
 # ===== Running one member =====
 
-def _ask(route_fn, stream_fn, member: Dict[str, Any], prompt: str) -> Dict[str, Any]:
-    """One model, one prompt. Never raises — a dead member is a datum."""
+def _ask(route_fn, stream_fn, member: Dict[str, Any], prompt: str,
+         tools: Optional[List[Dict[str, Any]]] = None,
+         run_tool: Optional[Callable] = None) -> Dict[str, Any]:
+    """One model, one prompt, with a bounded tool loop. Never raises.
+
+    Tools matter more here than in a single-model turn, not less. A panel asked
+    about anything recent with no way to look it up is three models reciting
+    training data at each other, and the disagreement it produces is noise
+    about what each one memorised rather than signal about the question. So a
+    member searches for its own evidence, independently — which also means two
+    members can find *different* sources, and that disagreement is real.
+
+    The loop is small on purpose: this runs once per member per round, and a
+    member that wants fifteen rounds of tool calls is not debating any more.
+    """
     started = time.time()
+    calls = 0
     try:
         resolved = route_fn(task="reasoning", model=member["model"],
                             provider=member.get("provider") or None)
-        parts = []
-        for event in stream_fn(resolved, [{"role": "user", "content": prompt}], tools=None):
-            if event.get("type") in ("text", "content"):
-                parts.append(event.get("text", ""))
+        messages = [{"role": "user", "content": prompt}]
+        parts: List[str] = []
+
+        for _ in range(MAX_TOOL_ROUNDS if (tools and run_tool) else 1):
+            round_text: List[str] = []
+            tool_calls: List[Dict[str, Any]] = []
+            for event in stream_fn(resolved, messages, tools=tools or None):
+                kind = event.get("type")
+                if kind == "tool_calls":
+                    tool_calls.extend(event.get("calls", []))
+                elif kind in ("text", "content"):
+                    round_text.append(event.get("text", ""))
+            parts.extend(round_text)
+            if not tool_calls or not run_tool:
+                break
+
+            messages.append({"role": "assistant", "content": "".join(round_text),
+                             "tool_calls": tool_calls})
+            for call in tool_calls:
+                function = call.get("function", {})
+                name = function.get("name", "")
+                arguments = function.get("arguments", {})
+                if isinstance(arguments, str):
+                    try:
+                        arguments = json.loads(arguments)
+                    except json.JSONDecodeError:
+                        arguments = {}
+                try:
+                    result = run_tool(name, arguments)
+                except Exception as exc:
+                    # A tool that breaks is something the model should be told
+                    # about and work around, exactly as it would a 404. Letting
+                    # it kill the member would lose that member's whole answer
+                    # over one failed search.
+                    result = f"error: {exc}"
+                calls += 1
+                messages.append({"role": "tool", "content": str(result)[:TOOL_RESULT_CHARS],
+                                 "name": name, "tool_call_id": call.get("id", name)})
+            # The prose from a tool-calling round is preamble, not the answer.
+            parts = []
+
         text = "".join(parts).strip()[:MAX_ANSWER_CHARS]
         if not text:
             return {**member, "ok": False, "error": "returned nothing", "text": "",
-                    "seconds": round(time.time() - started, 1)}
+                    "tool_calls": calls, "seconds": round(time.time() - started, 1)}
         return {**member, "ok": True, "error": "", "text": text,
-                "seconds": round(time.time() - started, 1)}
+                "tool_calls": calls, "seconds": round(time.time() - started, 1)}
     except Exception as exc:
         # One member being unreachable must not lose the other's work.
         return {**member, "ok": False, "error": str(exc)[:300], "text": "",
-                "seconds": round(time.time() - started, 1)}
+                "tool_calls": calls, "seconds": round(time.time() - started, 1)}
 
 
 def _ask_all(route_fn, stream_fn, members: List[Dict[str, Any]],
-             prompts: List[str]) -> List[Dict[str, Any]]:
+             prompts: List[str], tools: Optional[List[Dict[str, Any]]] = None,
+             run_tool: Optional[Callable] = None) -> List[Dict[str, Any]]:
     """Run every member in parallel. Order of results follows the panel.
 
     Parallel because serial would make a three-model debate three times the
@@ -189,7 +251,8 @@ def _ask_all(route_fn, stream_fn, members: List[Dict[str, Any]],
     results: List[Optional[Dict[str, Any]]] = [None] * len(members)
 
     def work(index: int) -> None:
-        results[index] = _ask(route_fn, stream_fn, members[index], prompts[index])
+        results[index] = _ask(route_fn, stream_fn, members[index], prompts[index],
+                              tools=tools, run_tool=run_tool)
 
     threads = [
         threading.Thread(target=work, args=(i,), daemon=True, name=f"consensus-{i}")
@@ -201,7 +264,7 @@ def _ask_all(route_fn, stream_fn, members: List[Dict[str, Any]],
         thread.join(timeout=MEMBER_TIMEOUT)
     return [
         r or {**members[i], "ok": False, "error": f"timed out after {MEMBER_TIMEOUT}s",
-              "text": "", "seconds": MEMBER_TIMEOUT}
+              "text": "", "tool_calls": 0, "seconds": MEMBER_TIMEOUT}
         for i, r in enumerate(results)
     ]
 
@@ -287,7 +350,9 @@ def agreement_ratio(answers: List[Dict[str, Any]]) -> float:
 
 def debate(question: str, route_fn: Callable, stream_fn: Callable,
            members: Optional[List[Dict[str, Any]]] = None,
-           on_event: Optional[Callable] = None) -> Dict[str, Any]:
+           on_event: Optional[Callable] = None,
+           tools: Optional[List[Dict[str, Any]]] = None,
+           run_tool: Optional[Callable] = None) -> Dict[str, Any]:
     """Propose, critique, synthesise. Returns the answer and the whole argument.
 
     ``route_fn`` and ``stream_fn`` are injected so the orchestration can be
@@ -311,9 +376,11 @@ def debate(question: str, route_fn: Callable, stream_fn: Callable,
     proposals = _ask_all(
         route_fn, stream_fn, members,
         [PROPOSE_PROMPT.format(question=text)] * len(members),
+        tools=tools, run_tool=run_tool,
     )
     emit({"proposals": [
-        {"model": p["model"], "ok": p["ok"], "seconds": p["seconds"], "error": p["error"]}
+        {"model": p["model"], "ok": p["ok"], "seconds": p["seconds"],
+         "error": p["error"], "tool_calls": p.get("tool_calls", 0)}
         for p in proposals
     ]})
 
@@ -330,9 +397,12 @@ def debate(question: str, route_fn: Callable, stream_fn: Callable,
     # --- Round 2: critique, anonymised ---
     emit({"round": ROUND_CRITIQUE})
     labelled = _labelled(proposals)
+    # Critics get tools too: "that claim is out of date" is only worth saying
+    # if the critic could actually go and check.
     critiques = _ask_all(
         route_fn, stream_fn, members,
         [CRITIQUE_PROMPT.format(question=text, answers=labelled)] * len(members),
+        tools=tools, run_tool=run_tool,
     )
     emit({"critiques": [
         {"model": c["model"], "ok": c["ok"], "seconds": c["seconds"]} for c in critiques
@@ -345,6 +415,9 @@ def debate(question: str, route_fn: Callable, stream_fn: Callable,
         f"CRITIQUE {index + 1}:\n{c['text']}"
         for index, c in enumerate(critiques) if c["ok"]
     ) or "(no critiques were produced)"
+    # No tools for the synthesis. Its job is to reconcile what the panel found,
+    # and a judge that goes off to search has stopped judging and started
+    # adding a fourth opinion nobody critiqued.
     final = _ask(route_fn, stream_fn, judge, SYNTHESIS_PROMPT.format(
         question=text, answers=labelled, critiques=critique_text))
 
@@ -364,6 +437,7 @@ def debate(question: str, route_fn: Callable, stream_fn: Callable,
         "critiques": critiques,
         "disagreements": find_disagreements(proposals, critiques),
         "agreement": agreement_ratio(proposals),
+        "tool_calls": sum(p.get("tool_calls", 0) for p in proposals + critiques),
         "seconds": round(time.time() - started, 1),
         "created_at": _now(),
     }
