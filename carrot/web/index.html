@@ -37,6 +37,7 @@
   <symbol id="i-terminal" viewBox="0 0 24 24"><path d="M8.6 7.6L3.6 12l5 4.4M15.4 7.6l5 4.4-5 4.4M13.6 4.4l-3.2 15.2"/></symbol>
   <symbol id="i-doc" viewBox="0 0 24 24"><path d="M13.4 2.8H7a2.6 2.6 0 0 0-2.6 2.6v13.2A2.6 2.6 0 0 0 7 21.2h10a2.6 2.6 0 0 0 2.6-2.6V9z"/><path d="M13.4 2.8V9h6.2"/></symbol>
   <symbol id="i-pulse" viewBox="0 0 24 24"><path d="M2.8 12.4h3.9l2.3-6.2 4.2 12.2 2.4-6h5.6"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.4 12S6.2 5.4 12 5.4 21.6 12 21.6 12 17.8 18.6 12 18.6 2.4 12 2.4 12z"/><circle cx="12" cy="12" r="3.1"/></symbol>
   <symbol id="i-cap" viewBox="0 0 24 24"><path d="M21 9.2L12 4.8 3 9.2l9 4.4z"/><path d="M6.6 11.4v4.4c0 1.6 2.4 2.9 5.4 2.9s5.4-1.3 5.4-2.9v-4.4"/></symbol>
   <symbol id="i-news" viewBox="0 0 24 24"><rect x="3.2" y="4.6" width="17.6" height="14.8" rx="3"/><path d="M7 9.2h10M7 12.6h10M7 16h6"/></symbol>
   <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.1"/><path d="M12 2.6l1.5 2.6a7.6 7.6 0 0 1 2 .8l2.9-.6 1.6 2.8-1.9 2.3a7.6 7.6 0 0 1 0 2.2l1.9 2.3-1.6 2.8-2.9-.6a7.6 7.6 0 0 1-2 .8L12 21.4l-1.5-2.6a7.6 7.6 0 0 1-2-.8l-2.9.6-1.6-2.8 1.9-2.3a7.6 7.6 0 0 1 0-2.2L4 9l1.6-2.8 2.9.6a7.6 7.6 0 0 1 2-.8z"/></symbol>
@@ -1402,6 +1403,43 @@
           <label class="muted small" for="consensus-judge">Which model writes the final answer</label>
           <select id="consensus-judge" onchange="saveSynthesiser(this.value)"></select>
         </div>
+      </div>
+
+      <!-- Ambient capture rules. These exist before ambient capture does, on
+           purpose: written the other way round, the exclusions become a patch
+           on a system that already recorded your banking session. -->
+      <div class="settings-card">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-eye"/></svg>
+          <h3>What Carrot is allowed to see</h3>
+        </div>
+        <p class="muted small">
+          Ambient capture — reading your screen so you can ask "what was that thing I
+          had open on Tuesday" — is off, and every one of these rules is on before you
+          arrive. You should never have to think to exclude a private browsing window:
+          opening one is you saying, in the only words the browser gave you, that this
+          is not to be kept. Nothing here is capture. This is the gate capture has to
+          get through, and you can try it below on a window that does not exist.
+        </p>
+        <div id="ambient-panel"><div class="empty">Loading…</div></div>
+        <div class="settings-row" style="margin-top:12px">
+          <select id="ambient-kind" aria-label="What to exclude">
+            <option value="app">App named…</option>
+            <option value="title">Window title containing…</option>
+            <option value="url">URL containing…</option>
+          </select>
+          <input type="text" id="ambient-value" placeholder="Signal, mail.proton.me, …"
+                 spellcheck="false" onkeydown="if(event.key==='Enter')addAmbientExclusion()">
+          <button class="btn" onclick="addAmbientExclusion()">Never capture this</button>
+        </div>
+        <div id="ambient-exclusions"></div>
+        <div class="settings-row" style="margin-top:12px">
+          <input type="text" id="ambient-try-app" placeholder="App, e.g. Chrome" spellcheck="false">
+          <input type="text" id="ambient-try-title" placeholder="Window title" spellcheck="false"
+                 onkeydown="if(event.key==='Enter')tryAmbientWindow()">
+          <button class="btn btn-ghost" onclick="tryAmbientWindow()">Would this be captured?</button>
+        </div>
+        <div id="ambient-try-result" class="muted small"></div>
       </div>
 
       <div class="settings-card">

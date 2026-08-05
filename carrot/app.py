@@ -68,6 +68,8 @@ from carrot import (
     webhooks_api,
     consensus as consensus_mod,
     consensus_api,
+    ambient as ambient_mod,
+    ambient_api,
     dualauth,
     gitops as gitops_mod,
     help as help_mod,
@@ -115,6 +117,7 @@ app.include_router(planner_api.router)
 app.include_router(webhooks_api.router)
 app.include_router(webhooks_api.public_router)
 app.include_router(consensus_api.router)
+app.include_router(ambient_api.router)
 
 
 # ===== Pydantic request models =====
