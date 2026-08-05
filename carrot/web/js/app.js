@@ -793,7 +793,14 @@ async function streamTurn(url, payload, skill) {
                 const raw = buffer.slice(0, idx).trim();
                 buffer = buffer.slice(idx + 2);
                 if (!raw.startsWith('data:')) continue;
-                const payload = JSON.parse(raw.slice(5).trim());
+                // One malformed frame used to throw out of the whole read loop
+                // and discard every token that had already arrived. Skip it.
+                let payload;
+                try {
+                    payload = JSON.parse(raw.slice(5).trim());
+                } catch (err) {
+                    continue;
+                }
                 const box = document.getElementById('chat-messages');
                 if (payload.skill) toolLine('skill active: ' + payload.skill.name, 'intent');
                 if (payload.route) {
@@ -815,7 +822,18 @@ async function streamTurn(url, payload, skill) {
                     }
                 }
                 if (payload.tool) {
-                    toolLine(`tool → ${payload.tool.name}(${JSON.stringify(payload.tool.args)})`, 'search');
+                    // A rejected call used to print exactly like a real one and
+                    // then show no result — four of those in a row is what a
+                    // dead turn looked like from the outside, with nothing on
+                    // screen to say why. Say why.
+                    const kind = payload.tool.rejected ? 'error' : 'search';
+                    const why = payload.tool.rejected
+                        ? `  ✗ not run: ${payload.tool.reason || 'refused'}` : '';
+                    toolLine(`tool → ${payload.tool.name}(${JSON.stringify(payload.tool.args)})${why}`, kind);
+                }
+                if (payload.provider_error) {
+                    toolLine(`${payload.route ? '' : ''}provider stopped the turn: `
+                             + payload.provider_error.message, 'error');
                 }
                 if (payload.tool_result) {
                     const raw = String(payload.tool_result.result);
@@ -849,7 +867,14 @@ async function streamTurn(url, payload, skill) {
         }
         finishThink();
         contentEl.classList.add('md');
-        contentEl.innerHTML = full ? mdToHtml(full) : '(no response)';
+        // "(no response)" told the user nothing. The backend now guarantees
+        // text on every path, so reaching here means the connection itself
+        // died mid-turn — say that, since it is the one thing the browser
+        // knows and the server never will.
+        contentEl.innerHTML = full ? mdToHtml(full) : mdToHtml(
+            'The connection to Carrot ended before any answer arrived. The '
+            + 'backend may have restarted — check that it is running, then ask '
+            + 'again. Anything the turn found is in the trace above.');
         // Charts and diagrams land under the finished answer, in the order the
         // model produced them.
         if (pendingArtifacts.length && typeof mountArtifacts === 'function') {

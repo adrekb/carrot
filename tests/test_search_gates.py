@@ -327,3 +327,141 @@ class TestGateCountersActuallyCount:
                 [{"role": "user", "content": "who won the senate race in Ohio"}],
                 self.Route(), mode=A.SEARCH_MULTI))
         assert any(e.get("tool", {}).get("rejected") for e in events if "tool" in e)
+
+
+class TestAProviderThatStopsTalking:
+    """The reported failure, third time round, and the cause I kept missing.
+
+    Every earlier fix for "(no response)" was written *inside* the tool loop.
+    None of them ran, because the throw was a provider error escaping the
+    generator — and by then FastAPI had already committed a 200 with headers
+    sent, so the response could not become an error. The socket simply closed,
+    the browser had no text, and it printed "(no response)". These pin the
+    guarantee at both layers.
+    """
+
+    def exploding(self, after=1, message="context length exceeded"):
+        """A model that answers `after` rounds and then fails like an API."""
+        state = {"rounds": 0}
+
+        def fake_stream(resolved, messages, tools=None):
+            state["rounds"] += 1
+            if state["rounds"] > after:
+                raise RuntimeError(message)
+            yield {"type": "tool_calls",
+                   "calls": tool_call("web_search", query="F-15EX program status")}
+        return fake_stream
+
+    def run(self, stream_fn, mode=A.SEARCH_MULTI):
+        class Route:
+            def as_dict(self):
+                return {}
+
+        with patch.object(A.router_mod, "stream_events", stream_fn), \
+             patch.object(A, "_run_tool",
+                          lambda n, a, c: iter([{"_tool_result": "PAGE TEXT"}])), \
+             patch.object(A, "_available_tools", lambda m: []):
+            history = [{"role": "user", "content": "status of the F-15EX program"}]
+            return list(A._agentic_chat_events(history, Route(), None, None, mode))
+
+    def test_a_provider_error_still_produces_an_answer(self):
+        events = self.run(self.exploding())
+        final = next(e["_final_text"] for e in events if "_final_text" in e)
+        assert final.strip(), "the turn ended with nothing to show the user"
+
+    def test_the_provider_error_is_named_not_swallowed(self):
+        # "the model ran out of room" and "your key is rate limited" need
+        # completely different things from the user. Guessing between them is
+        # what made this unfixable for three rounds.
+        events = self.run(self.exploding(message="429 rate limit"))
+        assert any("provider_error" in e for e in events)
+        final = next(e["_final_text"] for e in events if "_final_text" in e)
+        assert "429 rate limit" in final
+
+    def test_what_the_turn_gathered_is_not_thrown_away(self):
+        events = self.run(self.exploding())
+        final = next(e["_final_text"] for e in events if "_final_text" in e)
+        assert "PAGE TEXT" in final or "F-15EX" in final
+
+    def test_a_failure_on_the_very_first_round_still_answers(self):
+        events = self.run(self.exploding(after=0))
+        final = next(e["_final_text"] for e in events if "_final_text" in e)
+        assert final.strip()
+
+    def test_single_turn_mode_is_covered_too(self):
+        events = self.run(self.exploding(), mode=A.SEARCH_SINGLE)
+        final = next(e["_final_text"] for e in events if "_final_text" in e)
+        assert final.strip()
+
+
+class TestDeepeningIsNotDrift:
+    """The check that rejected four correct searches in a row.
+
+    "What is happening in American politics" leads to "August 4 2026 primary
+    winners Kansas Missouri" — no shared word, and the first version of the
+    drift check called that a change of subject. It was the whole point of
+    multi-turn search.
+    """
+
+    def test_a_narrowing_follow_up_is_allowed(self):
+        result = drive([
+            ("", tool_call("web_search", query="American political news August 2026")),
+            ("", tool_call("read_url", url="https://apnews.com/x")),
+            ("", tool_call("web_search",
+                           query="August 4 2026 primary winners Kansas Missouri")),
+            ("Here is what happened.", []),
+        ], A.SEARCH_MULTI, question="what is happening in American politics")
+        assert result["rejected"] == [], \
+            "a legitimate deepening search was refused as off-topic"
+        assert result["ran"].count("web_search") == 2
+
+    def test_a_real_change_of_subject_is_still_caught(self):
+        result = drive([
+            ("", tool_call("web_search", query="sourdough starter hydration ratio")),
+            ("", tool_call("web_search", query="F-15EX unit cost")),
+            ("", tool_call("read_url", url="http://example.com")),
+            ("Answer.", []),
+        ], A.SEARCH_MULTI, question="status of the F-15EX program")
+        assert "sourdough starter hydration ratio" in result["rejected"]
+
+    def test_refusals_cannot_consume_the_whole_round_budget(self):
+        # Four rejected searches and no answer is the reported trace. A refusal
+        # the model does not act on is a wasted round, so the check stands down.
+        script = [("", tool_call("web_search", query=f"unrelated topic {i}"))
+                  for i in range(8)]
+        result = drive(script, A.SEARCH_MULTI, question="status of the F-15EX program")
+        assert len(result["rejected"]) <= A.MAX_QUERY_REJECTIONS
+        assert result["final"].strip()
+
+
+class TestTheStreamItself:
+    """The outermost guarantee: the SSE body cannot end in silence.
+
+    By the time the body generator runs, the 200 and the headers are already
+    on the wire. An exception there is not an error response — it is a closed
+    socket, which is indistinguishable from a finished turn with no text.
+    """
+
+    def test_a_crash_in_the_turn_still_streams_text_and_done(self, client):
+        def explode(*args, **kwargs):
+            raise RuntimeError("something broke deep inside")
+
+        with patch.object(A, "_agentic_chat_events", explode):
+            response = client.post("/api/chat/stream",
+                                   json={"message": "hello", "stream": True})
+        body = response.text
+        assert response.status_code == 200
+        assert "something broke deep inside" in body
+        assert '"done": true' in body.lower()
+
+    def test_failing_to_save_the_turn_does_not_lose_the_answer(self, client):
+        def one_chunk(*args, **kwargs):
+            yield {"chunk": "the answer"}
+            yield {"_final_text": "the answer"}
+
+        with patch.object(A, "_agentic_chat_events", one_chunk), \
+             patch.object(A, "_post_turn", side_effect=RuntimeError("disk full")):
+            response = client.post("/api/chat/stream",
+                                   json={"message": "hello", "stream": True})
+        assert "the answer" in response.text
+        assert '"done": true' in response.text.lower()

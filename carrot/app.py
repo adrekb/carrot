@@ -14,7 +14,10 @@ import os
 import re
 import json
 import queue
+import logging
 import threading
+
+LOG = logging.getLogger("carrot.app")
 
 from carrot.database import get_db, init_db
 from carrot import (
@@ -1019,6 +1022,11 @@ MULTI_MIN_READS = 1
 # model that simply cannot use read_url would loop until the round budget ran
 # out and the user would get nothing at all.
 MAX_GATE_NUDGES = 3
+# How many searches may be refused as off-topic before the check gets out of
+# the way. A refusal only helps if the model changes course; past a couple it
+# is just spending the round budget on nothing, which is how a turn ends with
+# four rejected searches and no answer.
+MAX_QUERY_REJECTIONS = 2
 
 GATE_NUDGE_NO_READ = (
     "You have search results but have not opened any of them. Snippets are not "
@@ -1046,17 +1054,26 @@ def _search_gate_gap(searches: int, reads: int) -> Optional[str]:
     return None
 
 
-def _query_drifted(question: str, query: str) -> bool:
+def _query_drifted(question: str, query: str, context: Optional[set] = None) -> bool:
     """Did the model search for something other than what was asked?
 
     The failure this catches is not subtle — a question about the F-15EX
     program coming back with a search for "current American political news".
     A generated query that shares no content word with the question is not a
-    rephrasing, it is a different question, and the results cannot answer the
-    one that was asked.
+    rephrasing, it is a different question.
+
+    But a *deepening* query shares no word with the question either, and that
+    is the point of multi-turn search. "What is happening in American politics"
+    leads to "August 4 2026 primary winners Kansas Missouri", which is the
+    correct next move and which the first version of this check rejected — four
+    times in a row, burning the round budget on refusals the user could not
+    even see. So the comparison is against everything the turn has learned:
+    the question, plus every query already run, plus the titles that came back.
+    A follow-up is always related to its predecessor; only a genuine change of
+    subject relates to none of them.
     """
     from . import websearch
-    asked = websearch._terms(question)
+    asked = websearch._terms(question) | (context or set())
     if not asked or not query.strip():
         return False
     return not (asked & websearch._terms(query))
@@ -1291,26 +1308,34 @@ def _forced_answer(resolved, question, evidence):
     yield {"_answer": "".join(parts)}
 
 
-def _evidence_answer(question, evidence):
+def _evidence_answer(question, evidence, failure=""):
     """Write something true and useful without the model, as a last resort.
 
     This is not a good answer, and it does not pretend to be. It is the
     difference between "(no response)" — which tells the user nothing and
     wastes everything the turn did — and a list of what was actually found,
     which they can act on.
+
+    ``failure`` is the provider's own words if it stopped mid-turn. Naming it
+    matters: "the model ran out of room" and "your key hit its rate limit" call
+    for completely different things from the user, and guessing between them is
+    what made the last few of these unfixable.
     """
+    blame = f"\n\nThe provider stopped the turn with: `{failure}`" if failure else ""
     if not evidence:
         return (
             "I could not gather anything usable for that. Every source I tried "
             "either refused the request or returned nothing readable. Trying a "
             "narrower question, or sending this to Research, usually gets past it."
+            + blame
         )
     queries = [e["source"] for e in evidence if e["tool"] == "web_search" and e["source"]]
     pages = [e["source"] for e in evidence if e["tool"] == "read_url" and e["source"]]
     lines = [
-        f"I gathered the material for this but could not write it up — the model "
-        f"ran out of room to answer. Here is what the turn actually collected, "
-        f"so it is not wasted:",
+        "I gathered the material for this but could not write it up — "
+        + (f"the provider stopped the turn (`{failure}`)." if failure
+           else "the model ran out of room to answer.")
+        + " Here is what the turn actually collected, so it is not wasted:",
         "",
     ]
     if queries:
@@ -1352,6 +1377,17 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mo
     searches = reads = nudges = 0
     final_text = ""
     stalled = False
+    # What the provider said when it stopped talking to us, if it did. This
+    # used to be an exception that escaped the generator: the SSE response had
+    # already been committed as a 200, so the connection simply closed and the
+    # browser rendered "(no response)" with no error anywhere. Every previous
+    # fix for that was *inside* this loop, and none of them ran, because the
+    # throw happened before they could.
+    failure = ""
+    # Everything the turn has looked at, used to judge whether a follow-up
+    # query is a deepening or a change of subject.
+    topic = set()
+    rejected = 0
     # What the turn actually gathered, kept small on purpose. This is what a
     # forced answer is written from, so it has to fit in a context window that
     # the full transcript already overran.
@@ -1366,15 +1402,26 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mo
     for _ in range(rounds):
         content_parts = []
         tool_calls = []
-        for event in router_mod.stream_events(resolved, working, tools=tools or None):
-            if event["type"] == "thinking":
-                yield {"thinking": event["text"]}
-            elif event["type"] == "tool_calls":
-                tool_calls.extend(event["calls"])
-            else:
-                content_parts.append(event["text"])
-                for out in emit_text(event["text"]):
-                    yield out
+        # A provider can fail mid-turn for reasons that have nothing to do with
+        # the model: a 429, a dropped socket, or — after four rounds of full web
+        # pages have been appended to `working` — a hard context-length error.
+        # None of those may reach the user as silence.
+        try:
+            for event in router_mod.stream_events(resolved, working, tools=tools or None):
+                if event["type"] == "thinking":
+                    yield {"thinking": event["text"]}
+                elif event["type"] == "tool_calls":
+                    tool_calls.extend(event["calls"])
+                else:
+                    content_parts.append(event["text"])
+                    for out in emit_text(event["text"]):
+                        yield out
+        except Exception as exc:
+            failure = str(exc)
+            yield {"provider_error": {"message": failure}}
+            final_text = "".join(content_parts)
+            stalled = True
+            break
 
         content_str = "".join(content_parts)
 
@@ -1415,11 +1462,17 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mo
             bare = name.split("__", 1)[-1]
 
             # A query about something else cannot answer the question asked.
-            # Refuse it and say why, instead of spending a round on it.
-            if bare == "web_search" and _query_drifted(question, str(args.get("query", ""))):
+            # Refuse it and say why, instead of spending a round on it — but
+            # only a couple of times. A refusal the model does not act on is a
+            # round spent producing nothing, and the turn that prompted this
+            # fix spent its last four that way.
+            if (bare == "web_search" and rejected < MAX_QUERY_REJECTIONS
+                    and _query_drifted(question, str(args.get("query", "")), topic)):
+                rejected += 1
                 correction = QUERY_DRIFT_CORRECTION.format(
                     query=str(args.get("query", "")), question=question[:200])
-                yield {"tool": {"name": name, "args": args, "rejected": True}}
+                yield {"tool": {"name": name, "args": args, "rejected": True,
+                                "reason": "off-topic for what you asked"}}
                 working.append({
                     "role": "tool", "content": correction,
                     "name": name, "tool_call_id": call.get("id", name),
@@ -1435,6 +1488,12 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mo
                     yield event
             if bare == "web_search":
                 searches += 1
+                # A query that ran is part of the subject now, so the next one
+                # is judged against it rather than against the opening question
+                # alone. This is what makes a chain of narrowing searches legal.
+                from . import websearch as _ws
+                topic |= _ws._terms(str(args.get("query", "")))
+                topic |= _ws._terms(result[:1500])
             elif bare == "read_url":
                 reads += 1
             yield {"tool_result": {"name": name, "result": result[:2000]}}
@@ -1475,7 +1534,7 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mo
         # watched ten searches scroll past is the worst outcome in the app,
         # and it must not be reachable.
         if not final_text.strip():
-            final_text = _evidence_answer(question, evidence)
+            final_text = _evidence_answer(question, evidence, failure)
         for out in emit_text(final_text):
             yield out
         stalled = True
@@ -1608,16 +1667,36 @@ def _chat_stream_response(req, conv, history, skill, resolved, prelude=None, mod
         final_text = ""
         if prelude:
             yield f"data: {json.dumps({'document': prelude})}\n\n"
-        for event in _agentic_chat_events(history, resolved, skill, req.conversation_id, mode):
-            if "_final_text" in event:
-                final_text = event["_final_text"]
-                continue
-            yield f"data: {json.dumps(event)}\n\n"
-        stored = conv_mod.add_message(req.conversation_id, "assistant", final_text)
-        _post_turn(
-            req.conversation_id, req.message, final_text,
-            stored.get("id") if isinstance(stored, dict) else None,
-        )
+        # The last line of defence, and the one that was missing. By the time
+        # this generator runs, FastAPI has already sent a 200 and the headers —
+        # so an exception here is not an error response, it is a closed socket.
+        # The browser sees a stream that ended, has no text, and prints
+        # "(no response)". Whatever breaks, the user gets told what broke, the
+        # turn is saved, and `done` is sent.
+        try:
+            for event in _agentic_chat_events(
+                    history, resolved, skill, req.conversation_id, mode):
+                if "_final_text" in event:
+                    final_text = event["_final_text"]
+                    continue
+                yield f"data: {json.dumps(event)}\n\n"
+        except Exception as exc:
+            LOG.exception("chat turn failed")
+            final_text = final_text or (
+                f"The turn stopped before I could answer: {exc}\n\n"
+                "That is a fault in Carrot or in the provider, not in what you "
+                "asked. The trace above shows how far it got."
+            )
+            yield f"data: {json.dumps({'chunk': final_text})}\n\n"
+        try:
+            stored = conv_mod.add_message(req.conversation_id, "assistant", final_text)
+            _post_turn(
+                req.conversation_id, req.message, final_text,
+                stored.get("id") if isinstance(stored, dict) else None,
+            )
+        except Exception:
+            # Bookkeeping must never cost the user the answer they can see.
+            LOG.exception("could not store the assistant turn")
         yield f"data: {json.dumps({'done': True, 'conversation_id': req.conversation_id})}\n\n"
 
     return StreamingResponse(stream(), media_type="text/event-stream")

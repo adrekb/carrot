@@ -174,6 +174,7 @@ def search(query: str, max_results: int = 6, region: str = "wt-wt") -> List[Dict
         return []
 
     results = []
+    rejects = []
     dropped = 0
     for item in raw:
         url = item.get("href") or item.get("url") or ""
@@ -181,12 +182,25 @@ def search(query: str, max_results: int = 6, region: str = "wt-wt") -> List[Dict
             continue
         title = (item.get("title") or "").strip()
         snippet = (item.get("body") or item.get("description") or "").strip()
+        kept = {"title": title, "url": url, "snippet": snippet}
         if not _is_relevant(query, title, snippet):
             dropped += 1
+            rejects.append(kept)
             continue
-        results.append({"title": title, "url": url, "snippet": snippet})
+        results.append(kept)
     if dropped:
         LOG.info("dropped %d off-topic result(s) for %r", dropped, query[:80])
+    # The filter exists to catch a backend that has broken and is returning
+    # unit converters for a GPU query. It is not there to decide that the
+    # Associated Press is not about American politics — but with a short query
+    # and a headline that shares no wording, that is exactly what it does, and
+    # an empty result page reads to the user as a blocked source. So it may
+    # thin a page of results; it may never empty one. If nothing survived, the
+    # backend was probably fine and the wording simply did not line up.
+    if not results and rejects:
+        LOG.info("relevance filter emptied the page for %r; keeping raw results",
+                 query[:80])
+        results = rejects
     # Reputable sources first. The model reads from the top, so ordering does
     # most of the work that a block list would do, without losing the long
     # tail of legitimate small sites.

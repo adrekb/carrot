@@ -442,3 +442,42 @@ class TestSectionFronts:
         with patch.object(websearch, "fetch", return_value=page):
             out = agent_tools._tool_read_url("https://apnews.com/article/x")
         assert "section index" not in out and "the vote failed" in out
+
+
+class TestTheFilterCannotEmptyAPage:
+    """It looked like a source blacklist, and the user asked whether it was.
+
+    It is not — there is no reputation block list anywhere, only a ranking.
+    But the lexical relevance filter could drop every result on a page, and an
+    empty page for a query that plainly worked is indistinguishable from a
+    blocked source. The filter exists to catch a *broken backend*, so it may
+    thin a page. It may not empty one.
+    """
+
+    def raw(self, *titles):
+        return [{"title": t, "href": f"https://example.com/{i}", "body": ""}
+                for i, t in enumerate(titles)]
+
+    def test_results_survive_when_none_share_the_query_wording(self):
+        from unittest.mock import patch
+
+        from carrot import websearch
+
+        with patch.object(websearch, "_raw_search",
+                          lambda q, n, r: self.raw("Primary results roundup",
+                                                   "Live vote tallies")):
+            results = websearch.search("American political news August 2026")
+        assert results, "a working search came back empty because of the filter"
+
+    def test_a_genuinely_broken_backend_is_still_thinned(self):
+        from unittest.mock import patch
+
+        from carrot import websearch
+
+        with patch.object(websearch, "_raw_search",
+                          lambda q, n, r: self.raw(
+                              "RTX 4090 benchmark results deep dive",
+                              "Centimetre to feet converter")):
+            results = websearch.search("RTX 4090 benchmark results")
+        assert len(results) == 1
+        assert "4090" in results[0]["title"]

@@ -4601,3 +4601,32 @@ td, th, .si-sub, .small, .editor-status {
 .planner-said.pending { opacity: 0.6; font-style: italic; }
 #planner-intake-card summary { cursor: pointer; list-style: none; }
 #planner-intake-card summary::-webkit-details-marker { display: none; }
+
+/* ===== Composer breathing room =====
+ *
+ * The bar had grown to eight controls — model, Temporary, Council, search
+ * mode, attach, mic, speak, send — and the thing you actually type in was
+ * the only one that gave up space for them. On a 760px bar the input had
+ * about an inch left, which is the wrong trade in a box whose entire job is
+ * to take a question.
+ *
+ * The fix is not to remove any of them. It is to let the labels go first:
+ * every one of these controls has an icon and a tooltip, and the label is
+ * the least load-bearing part. Below 900px the chips become their icons and
+ * the input takes the space back. */
+#cmd-input { min-width: 0; }
+
+@media (max-width: 900px) {
+  .composer-chip span,
+  #search-label,
+  #model-btn .chev { display: none; }
+  .composer-chip { padding: 8px; }
+  #model-btn { max-width: 132px; }
+}
+
+/* Narrower still: the model name is the last label standing, because it is
+ * the one piece of state you cannot recover from an icon. */
+@media (max-width: 620px) {
+  #model-label { max-width: 76px; }
+  #speak-toggle { display: none; }
+}
