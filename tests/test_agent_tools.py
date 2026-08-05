@@ -1,6 +1,7 @@
 """Tests for built-in agent tools: sandboxing, approval, and the undo journal."""
 import os
 import threading
+from unittest.mock import patch
 
 import pytest
 
@@ -337,3 +338,92 @@ def test_run_tool_reports_exceptions_as_results(isolated_db, monkeypatch):
     monkeypatch.setattr(mcp_mod, "call_namespaced_tool", explode)
     results = [e for e in app_mod._run_tool("weather__forecast", {}, None) if "_tool_result" in e]
     assert "server gone" in results[0]["_tool_result"]
+
+
+class TestAnUnansweredPromptDoesNotBecomeALoop:
+    """The reported failure: "just do it all with minimal input from my end",
+    followed by two identical write_file calls, each dying at the timeout.
+
+    The prompt is not the bug. Returning `error:` for it is: a model reading
+    "error: approval timed out" concludes the tool is flaky and calls it again,
+    which stops at the same prompt, which times out again. Four minutes gone
+    and a file that was never written.
+    """
+
+    def spec(self):
+        return {"handler": lambda **kw: "wrote it",
+                "mutating": True, "risk": "high"}
+
+    def test_a_timeout_is_not_reported_as_a_tool_error(self, isolated_db, monkeypatch):
+        monkeypatch.setattr(agent_tools, "_request_approval",
+                            lambda *a, **k: (False, "approval timed out after 600s"))
+        result = agent_tools.run_tool("write_file", self.spec(),
+                                      {"path": "snake.py", "content": "x"})
+        assert not result.startswith("error:")
+
+    def test_the_model_is_told_not_to_call_it_again(self, isolated_db, monkeypatch):
+        monkeypatch.setattr(agent_tools, "_request_approval",
+                            lambda *a, **k: (False, "approval timed out after 600s"))
+        result = agent_tools.run_tool("write_file", self.spec(),
+                                      {"path": "snake.py", "content": "x"})
+        assert "again" in result
+        assert "write_file" in result
+
+    def test_the_user_is_told_how_to_stop_being_asked(self, isolated_db, monkeypatch):
+        monkeypatch.setattr(agent_tools, "_request_approval",
+                            lambda *a, **k: (False, "the user denied this action"))
+        result = agent_tools.run_tool("write_file", self.spec(),
+                                      {"path": "snake.py", "content": "x"})
+        assert "Settings" in result
+
+    def test_the_reason_survives_into_the_message(self, isolated_db, monkeypatch):
+        monkeypatch.setattr(agent_tools, "_request_approval",
+                            lambda *a, **k: (False, "the user denied this action"))
+        result = agent_tools.run_tool("write_file", self.spec(),
+                                      {"path": "snake.py", "content": "x"})
+        assert "denied" in result
+
+
+class TestRiskIsAboutTheCallNotTheTool:
+    """Creating a file destroys nothing. Overwriting one can destroy a day.
+
+    ``write_file`` was flat "high", so a brand-new snake_game.py in an empty
+    workspace raised the same red prompt as flattening a file with work in it.
+    Asking hardest about the safest thing a tool does is how a user who said
+    "just do it" ends up staring at a modal.
+    """
+
+    def spec(self):
+        return {"handler": lambda **kw: "ok", "mutating": True, "risk": "high"}
+
+    def test_creating_a_new_file_is_low_risk(self, isolated_db):
+        assert agent_tools._risk_of(
+            "write_file", self.spec(), {"path": "brand_new.py"}) == "low"
+
+    def test_overwriting_an_existing_file_is_still_high_risk(self, isolated_db):
+        path = os.path.join(agent_tools.workspace_root(), "existing.py")
+        with open(path, "w") as handle:
+            handle.write("a day of work")
+        assert agent_tools._risk_of(
+            "write_file", self.spec(), {"path": "existing.py"}) == "high"
+
+    def test_other_tools_keep_their_declared_risk(self, isolated_db):
+        assert agent_tools._risk_of(
+            "run_command", {"risk": "high"}, {"command": "rm -rf /"}) == "high"
+
+    def test_a_path_that_escapes_the_workspace_is_not_downgraded(self, isolated_db):
+        # resolve() raises for these; a raise must never become "low".
+        assert agent_tools._risk_of(
+            "write_file", self.spec(), {"path": "../../etc/passwd"}) == "high"
+
+    def test_the_prompt_a_user_actually_sees_uses_the_call_risk(self, isolated_db):
+        seen = {}
+
+        def capture(tool, args, summary, risk, emit):
+            seen["risk"] = risk
+            return True, "approved"
+
+        with patch.object(agent_tools, "_request_approval", capture):
+            agent_tools.run_tool("write_file", self.spec(),
+                                 {"path": "snake_game.py", "content": "import pygame"})
+        assert seen["risk"] == "low"

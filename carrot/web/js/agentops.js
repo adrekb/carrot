@@ -42,6 +42,12 @@ function showApprovalPrompt(request) {
                    class="approval-confirm-input" autocomplete="off" spellcheck="false">
         </div>` : '';
 
+    // "Allow, and stop asking" only where the server said remembering is
+    // allowed — an irreversible action never offers it, whatever this renders.
+    const alwaysButton = (request.remember_allowed === false || request.confirm_phrase)
+        ? '' : '<button class="btn ghost" data-decision="allow" data-always="1">'
+               + 'Allow &amp; stop asking</button>';
+
     const detail = request.detail ? `
         <div class="approval-detail">${escHtml(String(request.detail).slice(0, 600))}</div>` : '';
 
@@ -54,6 +60,7 @@ function showApprovalPrompt(request) {
         ${confirmRow}
         <div class="approval-actions">
             <button class="btn ghost" data-decision="deny">Deny</button>
+            ${alwaysButton}
             <button class="btn primary" data-decision="allow">Allow</button>
         </div>`;
 
@@ -64,7 +71,10 @@ function showApprovalPrompt(request) {
             resolveApproval(
                 request.id,
                 button.dataset.decision,
-                remember && remember.checked,
+                // The dedicated button is the "minimal input from my end" path:
+                // a user who has just said "just do it" should not have to find
+                // a checkbox, tick it, and then find the button.
+                button.dataset.always === '1' || (remember && remember.checked),
                 confirmation ? confirmation.value : '',
             );
         };

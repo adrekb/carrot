@@ -843,10 +843,20 @@ async function streamTurn(url, payload, skill) {
                     toolLine(`  ← ${stripArtifactMarkers(raw).slice(0, 160)}`, 'stage');
                 }
                 if (payload.approval_request) {
+                    // The line goes in the trace first, because that is where
+                    // the user is looking. The card is in the corner and can
+                    // be read past — and a card read past is a turn that dies
+                    // at the timeout with nothing on screen explaining why.
+                    toolLine(`  ⏸ waiting for you: ${payload.approval_request.summary}`
+                             + ' — see the card, bottom right', 'intent');
                     showApprovalPrompt(payload.approval_request);
                 }
                 if (payload.approval_resolved) {
                     dismissApprovalPrompt(payload.approval_resolved.id);
+                    if (payload.approval_resolved.decision === 'timeout') {
+                        toolLine('  ⏸ nobody answered, so that action did not run.'
+                                 + ' Settings → Security can stop the asking.', 'error');
+                    }
                 }
                 if (payload.thinking) {
                     ensureThink();

@@ -2813,10 +2813,21 @@ def _sse(generator):
 
     Every research and agent event goes out the same way, so the UI has one
     parser for both and a new event type never needs a transport change.
+
+    And one exception handler, for the same reason chat needed one: the status
+    line and the headers are already on the wire by the time this runs, so a
+    throw here is not an error response — it is a socket that closes. A deep
+    research run that dies on its ninth page fetch would end with a spinner and
+    no explanation. It ends with the reason instead.
     """
     async def stream():
-        for event in generator:
-            yield f"data: {json.dumps(event)}\n\n"
+        try:
+            for event in generator:
+                yield f"data: {json.dumps(event)}\n\n"
+        except Exception as exc:
+            LOG.exception("streamed run failed")
+            yield f"data: {json.dumps({'type': 'error', 'error': str(exc)})}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'error': str(exc)})}\n\n"
 
     return StreamingResponse(stream(), media_type="text/event-stream")
 
@@ -3311,8 +3322,14 @@ async def dismiss_notification(notification_id: str):
 async def stream_notifications():
     """SSE feed of notifications as they are raised."""
     def stream():
-        for notification in proactive_mod.stream_new():
-            yield f"data: {json.dumps(notification)}\n\n"
+        try:
+            for notification in proactive_mod.stream_new():
+                yield f"data: {json.dumps(notification)}\n\n"
+        except Exception as exc:
+            # A crash here used to end the feed silently, and notifications
+            # simply stopped arriving with nothing to say they had.
+            LOG.exception("notification stream failed")
+            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
 
     return StreamingResponse(stream(), media_type="text/event-stream")
 

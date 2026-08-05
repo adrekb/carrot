@@ -590,3 +590,38 @@ def test_carrot_package_imports_without_any_ddg_client_installed(monkeypatch):
         monkeypatch.delitem(sys.modules, mod, raising=False)
     monkeypatch.setattr(builtins, "__import__", blocking_import)
     import carrot  # noqa: F401 — must not raise
+
+
+class TestAResearchRunCannotEndInSilence:
+    """Same class of defect as the chat one, in the stream deep research uses.
+
+    ``_sse`` wraps every research and agent trace. It had no exception handler,
+    and by the time its body runs the 200 and the headers are already sent — so
+    a run that died on its ninth page fetch ended as a closed socket: a spinner
+    that stops spinning, with nothing anywhere saying what happened.
+    """
+
+    def drive(self, generator):
+        """Collect everything the SSE wrapper puts on the wire."""
+        import asyncio
+
+        from carrot import app as A
+
+        async def collect():
+            response = A._sse(generator)
+            return "".join([part async for part in response.body_iterator])
+
+        return asyncio.new_event_loop().run_until_complete(collect())
+
+    def exploding(self):
+        yield {"type": "step", "text": "reading page 9"}
+        raise RuntimeError("the fetch pool died")
+
+    def test_the_work_done_before_the_crash_still_reaches_the_user(self):
+        assert "reading page 9" in self.drive(self.exploding())
+
+    def test_the_reason_is_named(self):
+        assert "the fetch pool died" in self.drive(self.exploding())
+
+    def test_the_run_is_closed_off_rather_than_left_spinning(self):
+        assert '"type": "done"' in self.drive(self.exploding())

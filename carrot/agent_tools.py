@@ -30,7 +30,11 @@ from .config import get_config
 from .database import get_db
 
 TOOL_PREFIX = "carrot"
-APPROVAL_TIMEOUT_SECONDS = 120
+# Two minutes was too short for a prompt that renders as a card in the corner
+# of the screen: a user reading the answer misses it, and the turn dies. Ten
+# minutes is long enough to notice, and the timeout is a backstop against a
+# closed tab rather than a deadline for the user.
+APPROVAL_TIMEOUT_SECONDS = 600
 MAX_READ_CHARS = 20000
 MAX_LIST_ENTRIES = 300
 MAX_GREP_MATCHES = 100
@@ -1140,6 +1144,35 @@ def ollama_tools(enabled: Optional[List[str]] = None) -> List[Dict[str, Any]]:
     ]
 
 
+NOT_APPROVED_TEMPLATE = (
+    "not-run: {reason}. Do not call {tool} again — a second identical call "
+    "will stop at the same prompt. Tell the user the action is waiting on "
+    "their approval, and that Settings → Security has a switch to stop asking "
+    "for routine actions. Then answer as best you can without the tool."
+)
+
+
+def _risk_of(name: str, spec: Dict[str, Any], arguments: Dict[str, Any]) -> str:
+    """How dangerous this particular call is, not how dangerous the tool is.
+
+    ``write_file`` was flat "high", so creating a brand-new file in an empty
+    workspace — which destroys nothing, is journaled, and is revertable — got
+    the same red prompt as flattening a file with work in it. Asking hardest
+    about the safest thing the tool does is how a user who said "just do it"
+    ends up staring at a modal for a snake game.
+    """
+    risk = spec.get("risk", "medium")
+    if name in ("write_file", "create_file") and risk == "high":
+        path = str(arguments.get("path") or "")
+        try:
+            existing = os.path.exists(resolve(path))
+        except Exception:
+            return risk
+        # Creating is not overwriting. Overwriting still is.
+        return "high" if existing else "low"
+    return risk
+
+
 def _summarize_call(name: str, arguments: Dict[str, Any]) -> str:
     if name == "write_file":
         return f"Write {len(arguments.get('content', ''))} characters to {arguments.get('path', '?')}"
@@ -1177,10 +1210,15 @@ def run_tool(
     if spec.get("mutating") and get_config().get("agent_require_approval", True):
         approved, reason = _request_approval(
             name, arguments, summary or _summarize_call(name, arguments),
-            spec.get("risk", "medium"), emit,
+            _risk_of(name, spec, arguments), emit,
         )
         if not approved:
-            return f"error: {reason}"
+            # Not "error:". A tool that errored is one worth trying again, and
+            # a model reading "error: approval timed out" does exactly that —
+            # which is how one unanswered prompt became two identical calls and
+            # four minutes of dead air. This tells it the call is finished and
+            # what to say instead.
+            return NOT_APPROVED_TEMPLATE.format(reason=reason, tool=name)
 
     started = time.time()
     try:
