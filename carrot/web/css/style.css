@@ -3933,3 +3933,115 @@ td, th, .si-sub, .small, .editor-status {
 /* The empty-chat watermark is deliberately dim, but it was pinned to a
    hard-coded near-black that vanished on the cream theme. */
 .chat-empty .logo-mask.big { background: var(--faint); color: var(--faint); }
+
+/* ===== The coding agent =====
+   Plan vs Act is the one switch in this tab whose state you must never have
+   to guess at, so it gets a real segmented control rather than a checkbox,
+   and Act — the mode that can change your files — is the one that lights up
+   in the accent colour. */
+.agent-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg2);
+}
+.agent-bar .spacer { flex: 1; }
+.mode-switch {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow: hidden;
+}
+.mode-opt {
+  padding: 4px 14px;
+  font-family: var(--sans);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  background: transparent;
+  color: var(--muted);
+  border: none;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.mode-opt:hover { color: var(--text); }
+.mode-opt.on {
+  background: var(--accent);
+  color: #16120e;
+}
+.agent-hint {
+  font-size: 11.5px;
+  color: var(--faint);
+  font-style: italic;
+}
+.git-chip,
+.rules-chip {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.git-chip:hover { color: var(--text); border-color: var(--accent); }
+.rules-chip { cursor: default; }
+.git-chip.hidden, .rules-chip.hidden { display: none; }
+
+/* Source control */
+.git-head { display: flex; align-items: center; gap: 8px; padding-bottom: 6px; }
+.git-head .spacer { flex: 1; }
+.git-branch { font-family: var(--mono); font-size: 12px; color: var(--accent); }
+.git-changes { max-height: 150px; overflow-y: auto; }
+.git-change {
+  display: flex;
+  gap: 10px;
+  padding: 3px 6px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 12.5px;
+}
+.git-change:hover { background: var(--card2); }
+.git-code {
+  font-family: var(--mono);
+  color: var(--accent);
+  width: 22px;
+  flex: none;
+}
+.git-path { font-family: var(--mono); color: var(--text); }
+.git-commit-row { display: flex; gap: 8px; padding: 8px 0; }
+.git-commit-row input {
+  flex: 1;
+  min-width: 0;
+  background: var(--card2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 13px;
+}
+.git-diff {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--muted);
+  white-space: pre;
+  overflow: auto;
+  max-height: 220px;
+  margin: 0;
+}
+
+/* Checkpoints */
+.checkpoint-list { display: flex; flex-direction: column; gap: 4px; }
+.checkpoint-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.cp-label { flex: 1; font-size: 12.5px; color: var(--text); }
+.cp-when { font-family: var(--mono); font-size: 11px; color: var(--faint); }

@@ -510,6 +510,106 @@ def _tool_create_note(title: str, content: str = "", folder: str = "", **_) -> s
     return f"created note {note['id']}: {title}"
 
 
+# ===== Coding agent =====
+#
+# An edit is search/replace blocks rather than a whole new file: the cost of a
+# change stops scaling with the size of the file, and nothing outside the
+# blocks can be quietly lost in a re-transcription.
+
+def _tool_edit_file(path: str, edits: str = "", conversation_id: Optional[str] = None, **_) -> str:
+    from . import coder as coder_mod
+
+    full = resolve(path)
+    if not os.path.isfile(full):
+        return f"error: no such file: {path}. Use write_file to create it."
+    try:
+        with open(full, "r", encoding="utf-8") as handle:
+            before = handle.read()
+    except (OSError, UnicodeDecodeError) as exc:
+        return f"error: {exc}"
+
+    try:
+        blocks = coder_mod.parse_edit_blocks(edits)
+        after = coder_mod.apply_edits(before, blocks)
+    except coder_mod.EditError as exc:
+        # A failed edit is reported, never partially applied. The model can
+        # read the file again and retry with the exact text.
+        return f"error: {exc}"
+
+    if after == before:
+        return f"{path} already matches the requested edit — nothing changed."
+    try:
+        with open(full, "w", encoding="utf-8") as handle:
+            handle.write(after)
+    except OSError as exc:
+        return f"error: {exc}"
+
+    entry_id = journal_write(full, before, after, "edit", conversation_id)
+    diff = "\n".join(difflib.unified_diff(
+        before.splitlines(), after.splitlines(),
+        fromfile=f"a/{path}", tofile=f"b/{path}", lineterm="", n=2,
+    ))
+    return (
+        f"applied {len(blocks)} edit(s) to {path}. Revert with journal entry "
+        f"{entry_id}.\n\n{diff[:4000]}"
+    )
+
+
+def _tool_git_status(**_) -> str:
+    from . import gitops
+
+    try:
+        state = gitops.status(workspace_root())
+    except gitops.GitError as exc:
+        return f"error: {exc}"
+    if state["clean"]:
+        return f"on {state['branch']}, working tree clean"
+    lines = [f"{c['code']}\t{c['path']}" for c in state["changes"]]
+    return f"on {state['branch']} ({len(lines)} changed)\n" + "\n".join(lines)
+
+
+def _tool_git_diff(path: str = "", staged: bool = False, **_) -> str:
+    from . import gitops
+
+    try:
+        return gitops.diff(workspace_root(), path, bool(staged))
+    except gitops.GitError as exc:
+        return f"error: {exc}"
+
+
+def _tool_git_log(limit: int = 15, **_) -> str:
+    from . import gitops
+
+    try:
+        entries = gitops.log(workspace_root(), limit)
+    except gitops.GitError as exc:
+        return f"error: {exc}"
+    return "\n".join(
+        f"{e['sha']}  {e['subject']}  ({e['author']}, {e['when']})" for e in entries
+    ) or "(no commits yet)"
+
+
+def _tool_git_commit(message: str, paths: Optional[List[str]] = None, **_) -> str:
+    from . import gitops
+
+    try:
+        result = gitops.commit(workspace_root(), message, paths or None)
+    except gitops.GitError as exc:
+        return f"error: {exc}"
+    head = result.get("head") or {}
+    return f"committed {head.get('sha', '')}: {result['message']}".strip()
+
+
+def _tool_create_checkpoint(label: str = "", conversation_id: Optional[str] = None, **_) -> str:
+    from . import coder as coder_mod
+
+    made = coder_mod.create_checkpoint(workspace_root(), label, conversation_id)
+    return (
+        f"checkpoint {made['id']} saved ({made['files']} files). "
+        f"Restore it to undo everything after this point."
+    )
+
+
 # name -> (handler, mutating, risk, schema)
 TOOLS: Dict[str, Dict[str, Any]] = {
     "read_file": {
@@ -719,6 +819,92 @@ TOOLS: Dict[str, Dict[str, Any]] = {
             "required": ["title"],
         },
     },
+    "edit_file": {
+        "handler": _tool_edit_file,
+        "mutating": True,
+        "risk": "high",
+        "description": (
+            "Change part of an existing file using exact search/replace blocks. "
+            "Prefer this over write_file for anything but a brand-new file: it "
+            "costs the size of the change, not the size of the file. Format:\n"
+            "------- SEARCH\n<exact existing text>\n=======\n<new text>\n"
+            "+++++++ REPLACE\n"
+            "Repeat the block for multiple edits. Each SEARCH must appear exactly "
+            "once in the file, so include enough surrounding lines to be unique. "
+            "Nothing is applied unless every block matches."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Workspace-relative file path"},
+                "edits": {"type": "string", "description": "One or more SEARCH/REPLACE blocks"},
+            },
+            "required": ["path", "edits"],
+        },
+    },
+    "git_status": {
+        "handler": _tool_git_status,
+        "mutating": False,
+        "risk": "low",
+        "description": "Current branch and the list of changed files in the workspace repository.",
+        "parameters": {"type": "object", "properties": {}},
+    },
+    "git_diff": {
+        "handler": _tool_git_diff,
+        "mutating": False,
+        "risk": "low",
+        "description": "The diff of what has changed. Read this before committing, and to check your own work.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "One file, or empty for everything"},
+                "staged": {"type": "boolean", "description": "Show the staged diff instead"},
+            },
+        },
+    },
+    "git_log": {
+        "handler": _tool_git_log,
+        "mutating": False,
+        "risk": "low",
+        "description": "Recent commits, newest first — how this project words its history.",
+        "parameters": {
+            "type": "object",
+            "properties": {"limit": {"type": "integer", "description": "How many commits (default 15)"}},
+        },
+    },
+    "git_commit": {
+        "handler": _tool_git_commit,
+        "mutating": True,
+        "risk": "high",
+        "description": (
+            "Stage and commit the workspace's changes. Write the message the way "
+            "this repository's history does — read git_log first."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "message": {"type": "string", "description": "The commit message"},
+                "paths": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "Commit only these files, or omit for everything",
+                },
+            },
+            "required": ["message"],
+        },
+    },
+    "create_checkpoint": {
+        "handler": _tool_create_checkpoint,
+        "mutating": False,
+        "risk": "low",
+        "description": (
+            "Snapshot the workspace so the user can undo everything that follows "
+            "in one step. Take one before a change that spans several files."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {"label": {"type": "string", "description": "What is about to be attempted"}},
+        },
+    },
 }
 
 
@@ -758,6 +944,13 @@ def _summarize_call(name: str, arguments: Dict[str, Any]) -> str:
         return f"Create reminder: {arguments.get('title', '?')}"
     if name == "create_note":
         return f"Create note: {arguments.get('title', '?')}"
+    if name == "edit_file":
+        # The approval prompt should say what is being changed, not how many
+        # characters of block syntax it took to say it.
+        blocks = arguments.get("edits", "").count("=======") or 1
+        return f"Edit {arguments.get('path', '?')} ({blocks} change(s))"
+    if name == "git_commit":
+        return f"Commit: {arguments.get('message', '?')}"
     return f"{name}({', '.join(f'{k}={v!r}'[:60] for k, v in arguments.items())})"
 
 

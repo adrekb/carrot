@@ -226,6 +226,21 @@ CREATE TABLE IF NOT EXISTS file_journal (
 
 CREATE INDEX IF NOT EXISTS idx_file_journal_created ON file_journal(created_at DESC);
 
+-- A whole-workspace snapshot taken before the coding agent acts. The journal
+-- above reverses one write; this reverses a whole train of thought, which is
+-- what you want when the agent went wrong nine steps ago. `files` is a JSON
+-- map of relative path -> contents, text files only.
+CREATE TABLE IF NOT EXISTS coder_checkpoints (
+    id TEXT PRIMARY KEY,
+    label TEXT DEFAULT '',
+    root TEXT NOT NULL,
+    files TEXT NOT NULL DEFAULT '{}',
+    conversation_id TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_coder_checkpoints_created ON coder_checkpoints(created_at DESC);
+
 -- ===== Carrot Research =====
 
 -- One research run. `question` is what was asked, `report` the final cited

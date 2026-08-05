@@ -67,6 +67,10 @@ DEFAULTS = {
     "agent_tools_enabled": True,
     "agent_require_approval": True,
     "code_workspace_dir": "",
+    # Coding agent. "act" keeps the tools it has always had; "plan" takes the
+    # write tools away so a change can be agreed before anything moves.
+    "coder_mode": "act",
+    "coder_recipes": [],
     # Model routing. `model_routes` maps a task to {provider, model, effort};
     # a bare model string from an older build is still read.
     "model_routes": {},

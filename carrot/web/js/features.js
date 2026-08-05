@@ -290,6 +290,7 @@ async function loadCodeTab() {
     } catch (_) {}
     wireTerminal();
     loadCodeTree();
+    loadCoderState();
 }
 
 async function loadCodeTree() {
@@ -1198,16 +1199,188 @@ function showCodePanel(which) {
     document.querySelectorAll('#code-panel .panel-tab').forEach(tab => {
         tab.classList.toggle('active', tab.dataset.panel === which);
     });
-    document.getElementById('panel-output').classList.toggle('hidden', which !== 'output');
-    document.getElementById('panel-terminal').classList.toggle('hidden', which !== 'terminal');
+    ['output', 'terminal', 'git', 'checkpoints'].forEach(name => {
+        document.getElementById('panel-' + name)?.classList.toggle('hidden', which !== name);
+    });
     toggleCodePanel(true);
     if (which === 'terminal') document.getElementById('term-input')?.focus();
+    if (which === 'git') loadGitPanel();
+    if (which === 'checkpoints') loadCheckpoints();
 }
 
 function clearCodePanel() {
     if (codePanelTab === 'output') document.getElementById('panel-output').textContent = '';
-    else document.getElementById('term-log').innerHTML = '';
+    else if (codePanelTab === 'terminal') document.getElementById('term-log').innerHTML = '';
+    else if (codePanelTab === 'git') document.getElementById('git-diff').textContent = '';
     document.getElementById('panel-status').textContent = '';
+}
+
+// ---------- The coding agent: plan/act, git, checkpoints ----------
+//
+// Plan mode is enforced server-side by removing the write tools, not by asking
+// the model to hold back. This is just the switch and its readout — but the
+// readout matters: someone who thinks they are in Plan and is actually in Act
+// is exactly the person who gets a surprise commit.
+
+let coderMode = 'act';
+
+async function loadCoderState() {
+    let state;
+    try {
+        state = await api('/api/coder/state');
+    } catch (_) { return; }
+    coderMode = state.mode;
+    document.getElementById('mode-plan')?.classList.toggle('on', state.mode === 'plan');
+    document.getElementById('mode-act')?.classList.toggle('on', state.mode === 'act');
+    const hint = document.getElementById('mode-hint');
+    if (hint) {
+        hint.textContent = state.mode === 'plan'
+            ? 'read-only — the agent proposes, you approve'
+            : 'the agent can edit files and run commands';
+    }
+    const rules = document.getElementById('rules-chip');
+    if (rules) {
+        rules.classList.toggle('hidden', !state.has_rules);
+        rules.title = `Project rules in effect (${state.rules_chars} characters)`;
+    }
+    const chip = document.getElementById('git-chip');
+    if (chip) {
+        const git = state.git || {};
+        chip.classList.toggle('hidden', !git.repo);
+        if (git.repo) {
+            const n = (git.changes || []).length;
+            chip.textContent = `${git.branch || 'HEAD'}${n ? ` · ${n}` : ''}`;
+        }
+    }
+}
+
+async function setCoderMode(mode) {
+    try {
+        await api('/api/coder/mode', { method: 'PUT', body: JSON.stringify({ mode }) });
+    } catch (e) {
+        setCodeStatus('could not switch mode: ' + e.message);
+        return;
+    }
+    loadCoderState();
+    setCodeStatus(mode === 'plan' ? 'Plan mode — writes are off' : 'Act mode — writes are on');
+}
+
+async function takeCheckpoint() {
+    try {
+        const made = await api('/api/coder/checkpoints', {
+            method: 'POST',
+            body: JSON.stringify({ label: activeFilePath ? `before editing ${activeFilePath}` : '' }),
+        });
+        setCodeStatus(`checkpoint saved (${made.files} files)`);
+        if (codePanelTab === 'checkpoints') loadCheckpoints();
+    } catch (e) {
+        setCodeStatus('could not checkpoint: ' + e.message);
+    }
+}
+
+async function loadCheckpoints() {
+    const host = document.getElementById('checkpoint-list');
+    if (!host) return;
+    let items = [];
+    try {
+        items = (await api('/api/coder/checkpoints')).checkpoints || [];
+    } catch (e) {
+        host.innerHTML = `<div class="empty">Could not load checkpoints: ${escHtml(e.message)}</div>`;
+        return;
+    }
+    if (!items.length) {
+        host.innerHTML = '<div class="empty">No checkpoints yet. Take one before a big change '
+            + 'and you can undo the whole thing in one step.</div>';
+        return;
+    }
+    host.innerHTML = '';
+    for (const item of items) {
+        const row = document.createElement('div');
+        row.className = 'checkpoint-row';
+        row.innerHTML = `
+            <span class="cp-label">${escHtml(item.label || 'checkpoint')}</span>
+            <span class="cp-when">${escHtml((item.created_at || '').replace('T', ' ').slice(0, 16))}</span>`;
+        const restore = document.createElement('button');
+        restore.className = 'btn btn-ghost';
+        restore.textContent = 'Restore';
+        restore.onclick = () => restoreCheckpoint(item.id, item.label);
+        row.appendChild(restore);
+        host.appendChild(row);
+    }
+}
+
+async function restoreCheckpoint(id, label) {
+    // Restoring throws away work that came after it, so it asks first — and
+    // says what it will do, not just "are you sure".
+    if (!confirm(`Restore "${label || id}"?\n\nEvery change made after this point `
+        + `is undone, and files created since are deleted.`)) return;
+    try {
+        const result = await api(`/api/coder/checkpoints/${encodeURIComponent(id)}/restore`,
+            { method: 'POST' });
+        setCodeStatus(`restored ${result.restored.length} file(s), removed ${result.removed.length}`);
+        loadCodeTree();
+        if (activeFilePath) openFile(activeFilePath);
+    } catch (e) {
+        setCodeStatus('could not restore: ' + e.message);
+    }
+}
+
+async function loadGitPanel() {
+    const changes = document.getElementById('git-changes');
+    const branch = document.getElementById('git-branch');
+    if (!changes) return;
+    let state;
+    try {
+        state = await api('/api/coder/git/status');
+    } catch (e) {
+        branch.textContent = '';
+        changes.innerHTML = `<div class="empty">${escHtml(e.detail || e.message)}</div>`;
+        return;
+    }
+    branch.textContent = state.branch
+        + (state.ahead ? ` ↑${state.ahead}` : '') + (state.behind ? ` ↓${state.behind}` : '');
+    if (state.clean) {
+        changes.innerHTML = '<div class="empty">Working tree clean.</div>';
+        document.getElementById('git-diff').textContent = '';
+        return;
+    }
+    changes.innerHTML = '';
+    for (const change of state.changes) {
+        const row = document.createElement('div');
+        row.className = 'git-change';
+        row.innerHTML = `<span class="git-code">${escHtml(change.code)}</span>
+                         <span class="git-path">${escHtml(change.path)}</span>`;
+        row.onclick = () => showGitDiff(change.path);
+        changes.appendChild(row);
+    }
+    showGitDiff('');
+}
+
+async function showGitDiff(path) {
+    const host = document.getElementById('git-diff');
+    try {
+        const body = await api('/api/coder/git/diff?path=' + encodeURIComponent(path || ''));
+        host.textContent = body.diff;
+    } catch (e) {
+        host.textContent = e.detail || e.message;
+    }
+}
+
+async function commitChanges() {
+    const input = document.getElementById('git-message');
+    const message = input.value.trim();
+    if (!message) { setCodeStatus('a commit needs a message'); return; }
+    try {
+        const result = await api('/api/coder/git/commit', {
+            method: 'POST', body: JSON.stringify({ message }),
+        });
+        input.value = '';
+        setCodeStatus(`committed ${result.head ? result.head.sha : ''}`);
+        loadGitPanel();
+        loadCoderState();
+    } catch (e) {
+        setCodeStatus('could not commit: ' + (e.detail || e.message));
+    }
 }
 
 // ---------- Run ----------

@@ -459,6 +459,24 @@
         <div id="code-tree" class="side-list tree"></div>
       </aside>
       <div class="split-main">
+        <!-- The agent header. Plan or Act is the single most consequential
+             switch in the tab, so it sits above the editor and never scrolls
+             away: you should never be unsure whether the agent can write. -->
+        <div class="agent-bar">
+          <div class="mode-switch" role="group" aria-label="Agent mode">
+            <button class="mode-opt" id="mode-plan" onclick="setCoderMode('plan')"
+                    title="Read-only. The agent proposes; nothing on disk moves.">Plan</button>
+            <button class="mode-opt" id="mode-act" onclick="setCoderMode('act')"
+                    title="The agent can edit files and run commands.">Act</button>
+          </div>
+          <span class="agent-hint" id="mode-hint"></span>
+          <span class="spacer"></span>
+          <span class="git-chip hidden" id="git-chip" onclick="showCodePanel('git')"
+                title="Repository status"></span>
+          <span class="rules-chip hidden" id="rules-chip" title="Project rules are in effect">rules</span>
+          <button class="btn btn-ghost" onclick="takeCheckpoint()"
+                  title="Snapshot the workspace so everything after this can be undone in one step">Checkpoint</button>
+        </div>
         <div class="editor-toolbar">
           <div id="code-tabs" class="code-tabs"></div>
           <span id="code-status" class="editor-status"></span>
@@ -473,6 +491,8 @@
           <div class="code-panel-tabs">
             <button class="panel-tab active" data-panel="output" onclick="showCodePanel('output')">Output</button>
             <button class="panel-tab" data-panel="terminal" onclick="showCodePanel('terminal')">Terminal</button>
+            <button class="panel-tab" data-panel="git" onclick="showCodePanel('git')">Source Control</button>
+            <button class="panel-tab" data-panel="checkpoints" onclick="showCodePanel('checkpoints')">Checkpoints</button>
             <span class="spacer"></span>
             <span class="editor-status" id="panel-status"></span>
             <button class="icon-btn" title="Clear" onclick="clearCodePanel()"><svg class="ico"><use href="#i-trash"/></svg></button>
@@ -486,6 +506,23 @@
               <input id="term-input" type="text" placeholder="run a command in the workspace…"
                      spellcheck="false" autocomplete="off">
             </div>
+          </div>
+          <div id="panel-git" class="panel-body hidden">
+            <div class="git-head">
+              <span id="git-branch" class="git-branch"></span>
+              <span class="spacer"></span>
+              <button class="btn btn-ghost" onclick="loadGitPanel()">Refresh</button>
+            </div>
+            <div id="git-changes" class="git-changes"></div>
+            <div class="git-commit-row">
+              <input id="git-message" type="text" placeholder="Commit message" spellcheck="false"
+                     onkeydown="if(event.key==='Enter')commitChanges()">
+              <button class="btn btn-primary" onclick="commitChanges()">Commit</button>
+            </div>
+            <pre id="git-diff" class="git-diff"></pre>
+          </div>
+          <div id="panel-checkpoints" class="panel-body hidden">
+            <div id="checkpoint-list" class="checkpoint-list"></div>
           </div>
         </div>
       </div>

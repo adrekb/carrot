@@ -58,6 +58,9 @@ from carrot import (
     research as research_mod,
     agent as carrot_agent,
     workspaces as workspaces_mod,
+    coder as coder_mod,
+    coder_api,
+    gitops as gitops_mod,
     help as help_mod,
 )
 from carrot.speech import whisper_stt, kokoro_tts
@@ -96,6 +99,7 @@ async def _revalidate_app_assets(request, call_next):
     return response
 
 app.include_router(files_api.router)
+app.include_router(coder_api.router)
 
 
 # ===== Pydantic request models =====
@@ -875,6 +879,24 @@ async def calendar_refresh():
 
 # ===== Chat =====
 
+def _coder_context():
+    """Mode guidance plus the workspace's own rules, as system messages.
+
+    Only emitted when there is something to say: a chat about dinner should not
+    carry a plan/act preamble, and an empty rules block is noise in every turn.
+    """
+    blocks = []
+    cfg = config.get_config()
+    mode = coder_mod.normalize_mode(cfg.get("coder_mode"))
+    if mode == coder_mod.MODE_PLAN:
+        blocks.append({"role": "system", "content": coder_mod.MODE_PREAMBLE[mode]})
+    if cfg.get("agent_tools_enabled", True):
+        rules = coder_mod.load_rules(agent_mod.workspace_root())
+        if rules:
+            blocks.append({"role": "system", "content": rules})
+    return blocks
+
+
 def _prepare_history(conv, message, skill_slug, extra_system=None, mode=None,
                      images=None):
     """Build the model message list for a turn.
@@ -902,6 +924,14 @@ def _prepare_history(conv, message, skill_slug, extra_system=None, mode=None,
 
     if extra_system:
         history.append({"role": "system", "content": extra_system})
+
+    # The coding agent's mode, and whatever instruction files the workspace
+    # carries. A repo already set up for Cline, Continue, Goose or Cursor is
+    # already set up for Carrot — its rules are read, not re-authored.
+    try:
+        history.extend(_coder_context())
+    except Exception:
+        pass
 
     # Calendar awareness is an explicit opt-in; when on, the assistant sees
     # the next few days so "what does my week look like" just works.
@@ -1112,7 +1142,26 @@ def _available_tools(mode: str = SEARCH_SINGLE):
         tools += mcp_mod.ollama_tools()
     except Exception:
         pass
-    return tools
+    return _apply_coder_mode(tools)
+
+
+def _apply_coder_mode(tools):
+    """In plan mode, take the write tools away rather than asking nicely.
+
+    Cline's plan/act split only means anything if it is enforced by the tool
+    list: a model that *can* write eventually will, however the prompt is
+    worded. This subtracts, so it also covers pack and MCP tools whose names
+    happen to be write tools.
+    """
+    try:
+        mode = coder_mod.normalize_mode(config.get_config().get("coder_mode"))
+    except Exception:
+        return tools
+    if mode == coder_mod.MODE_ACT:
+        return tools
+    names = [t.get("function", {}).get("name", "") for t in tools]
+    keep = set(coder_mod.tools_for_mode(names, mode))
+    return [t for t in tools if t.get("function", {}).get("name", "") in keep]
 
 
 def _run_tool(name, args, conversation_id):
