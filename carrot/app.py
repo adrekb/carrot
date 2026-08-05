@@ -1354,9 +1354,38 @@ def _resolve_chat_route(req):
         provider=getattr(req, "provider", None),
         prefer_cloud=bool(getattr(req, "cloud", False)),
     )
-    if resolved.local and not ollama_mod.OllamaClient().is_available():
-        raise HTTPException(status_code=503, detail="Ollama is not available")
+    if resolved.local:
+        client = ollama_mod.OllamaClient()
+        if not client.is_available():
+            raise HTTPException(status_code=503, detail="Ollama is not available")
+        # Naming a model Ollama has never pulled used to fail deep inside the
+        # stream as an empty answer. Say which model is missing, and where it
+        # would have to come from, before a single token is spent.
+        _require_installed_model(client, resolved.model)
     return resolved
+
+
+def _require_installed_model(client, model: str) -> None:
+    """Fail early, and legibly, when an on-device model is not installed."""
+    if not model:
+        return
+    try:
+        installed = {m.get("name", "") for m in client.list_models()}
+    except Exception:
+        return  # Listing is best-effort; never block a turn on it.
+    if not installed or model in installed:
+        return
+    # Ollama treats a bare name as ":latest", so match that way round too.
+    base = model.split(":", 1)[0]
+    if any(name == model or name.split(":", 1)[0] == base for name in installed):
+        return
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"'{model}' is not installed on this machine. Pull it from the model "
+            f"picker, or pick a hosted provider's model in Settings → Providers."
+        ),
+    )
 
 
 def _chat_stream_response(req, conv, history, skill, resolved, prelude=None, mode=SEARCH_SINGLE):

@@ -98,6 +98,28 @@ HARDWARE_TIERS = [
 
 TASK_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
 
+# Model-name families that identify their provider on sight. Longest-lived
+# naming conventions only — a guess here is a fallback, never a substitute for
+# the provider the caller actually named. First match wins.
+MODEL_FAMILIES = (
+    ("claude", PROVIDER_CLOUD),
+    ("gpt-", "openai"),
+    ("chatgpt", "openai"),
+    ("o1", "openai"),
+    ("o3", "openai"),
+    ("o4-", "openai"),
+    ("codestral", "mistral"),
+    ("devstral", "mistral"),
+    ("magistral", "mistral"),
+    ("ministral", "mistral"),
+    ("mistral", "mistral"),
+    ("pixtral", "mistral"),
+    ("open-mistral", "mistral"),
+    ("open-mixtral", "mistral"),
+    ("deepseek", "deepseek"),
+    ("grok", "xai"),
+)
+
 
 @dataclass
 class Route:
@@ -204,8 +226,30 @@ def _infer_provider(model: str) -> str:
 
     Only used when the caller did not name one — an explicit ``model=`` from the
     UI's model picker, or a route stored by an older build as a plain string.
+
+    Guessing "on-device" for everything that is not a Claude model was wrong in
+    the way that hurts most: picking ``mistral-medium`` sent the turn to Ollama,
+    which does not have it, and the UI cheerfully labelled the hosted model
+    "(on-device)" while the call failed.
+
+    An Ollama tag (``gemma4:e4b``, ``mistral:7b``) is local by construction, so
+    that is checked first — a locally pulled Mistral must not be mistaken for
+    the hosted one. Otherwise a known model family names its vendor, but only
+    when that provider is actually configured: guessing "mistral" for someone
+    who never added a Mistral key would trade a wrong label for a dead end.
     """
-    return PROVIDER_CLOUD if model.startswith("claude") else PROVIDER_LOCAL
+    name = (model or "").strip().lower()
+    if not name or ":" in name:
+        return PROVIDER_LOCAL
+    for prefix, provider_id in MODEL_FAMILIES:
+        if name.startswith(prefix):
+            if provider_id == PROVIDER_CLOUD or providers_mod.usable(provider_id):
+                return provider_id
+            break
+    # "vendor/model" is OpenRouter's naming, and nobody else's.
+    if "/" in name and providers_mod.usable("openrouter"):
+        return "openrouter"
+    return PROVIDER_LOCAL
 
 
 def _normalize_assignment(value: Any) -> Optional[Dict[str, Any]]:
@@ -335,7 +379,17 @@ def recommend_local_model() -> Dict[str, Any]:
 
 def _build(task: str, provider_id: str, model: str, reason: str, effort: Optional[str] = None) -> Route:
     provider = providers_mod.get_provider(provider_id)
-    kind = provider["kind"] if provider else providers_mod.KIND_OLLAMA
+    if provider:
+        kind = provider["kind"]
+    else:
+        # An unregistered provider is not Ollama just because it is unknown.
+        # Defaulting to the local kind is what put "(on-device)" next to a
+        # hosted model — only the local provider may claim to be local.
+        kind = (
+            providers_mod.KIND_OLLAMA
+            if provider_id == PROVIDER_LOCAL
+            else providers_mod.KIND_OPENAI
+        )
     return Route(
         task=task,
         provider=provider_id,
