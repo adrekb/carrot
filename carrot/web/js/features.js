@@ -1247,6 +1247,8 @@ async function loadCoderState() {
         rules.classList.toggle('hidden', !state.has_rules);
         rules.title = `Project rules in effect (${state.rules_chars} characters)`;
     }
+    loadAgentModelPicker();
+
     const rootHint = document.getElementById('agent-root-hint');
     if (rootHint && state.root) rootHint.textContent = state.root;
     const chip = document.getElementById('git-chip');
@@ -1825,8 +1827,12 @@ async function sendAgentTask() {
                     || 'What is in the attached file?',
                 attachments: attachments.map(a => ({ name: a.name, mime: a.mime, data: a.data })),
                 conversation_id: agentConversationId,
-                model: typeof currentModel !== 'undefined' ? currentModel : null,
-                provider: typeof currentProvider !== 'undefined' ? currentProvider : null,
+                // The agent's own pick, falling back to the composer's when
+                // it is set to "Same as chat".
+                model: agentModel ? agentModel.model
+                    : (typeof currentModel !== 'undefined' ? currentModel : null),
+                provider: agentModel ? agentModel.provider
+                    : (typeof currentProvider !== 'undefined' ? currentProvider : null),
                 // The agent works on files; a web search mid-task is rarely
                 // what was asked for and always costs a round.
                 search_mode: 'off',
@@ -1951,4 +1957,58 @@ function revealAgentMode() {
     if (!target) return;
     target.parentElement.classList.add('flash');
     setTimeout(() => target.parentElement.classList.remove('flash'), 1200);
+}
+
+
+// ---------- The agent's own model ----------
+//
+// It used to take whatever the chat composer happened to be set to, with
+// nothing on screen saying which model that was. The coding agent is the one
+// place the choice matters most — a 4B local model and a frontier model are
+// not interchangeable at editing a file — and it was the one place you could
+// neither see nor make it.
+
+let agentModel = null;      // {provider, model}, or null to follow the composer
+
+function agentModelKey(entry) {
+    return `${entry.provider || 'ollama'}::${entry.model}`;
+}
+
+async function loadAgentModelPicker() {
+    const select = document.getElementById('agent-model');
+    if (!select) return;
+    if (typeof loadAvailableModels === 'function' && !(availableModels || []).length) {
+        await loadAvailableModels();
+    }
+    const groups = {};
+    for (const entry of (typeof availableModels !== 'undefined' ? availableModels : [])) {
+        (groups[entry.group] = groups[entry.group] || []).push(entry);
+    }
+    const saved = localStorage.getItem('carrot-agent-model') || '';
+    // "Same as chat" stays the default, because that is what it did before and
+    // silently changing which model runs someone's agent is not an upgrade.
+    let html = '<option value="">Same as chat</option>';
+    for (const [label, entries] of Object.entries(groups)) {
+        html += `<optgroup label="${escHtml(label)}">`;
+        for (const entry of entries) {
+            const key = agentModelKey(entry);
+            html += `<option value="${escHtml(key)}"${key === saved ? ' selected' : ''}>`
+                  + `${escHtml(entry.model)}</option>`;
+        }
+        html += '</optgroup>';
+    }
+    select.innerHTML = html;
+    applyAgentModel(saved);
+}
+
+function setAgentModel(key) {
+    if (key) localStorage.setItem('carrot-agent-model', key);
+    else localStorage.removeItem('carrot-agent-model');
+    applyAgentModel(key);
+}
+
+function applyAgentModel(key) {
+    if (!key) { agentModel = null; return; }
+    const [provider, ...rest] = key.split('::');
+    agentModel = { provider, model: rest.join('::') };
 }

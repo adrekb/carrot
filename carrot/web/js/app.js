@@ -647,6 +647,14 @@ document.addEventListener('paste', (e) => {
     const files = Array.from(e.clipboardData.files || []);
     if (files.length) { e.preventDefault(); addAttachments(files); }
 });
+// The drag overlay is switched on by a class, and every way a drag can end
+// has to switch it off again. Missing one of them used to leave a full-window
+// element on screen that swallowed clicks and keystrokes app-wide, with
+// nothing visible to explain it. The overlay is `pointer-events: none` now so
+// a miss is harmless, and these make a miss unlikely as well.
+function stopDropping() {
+    document.body.classList.remove('dropping');
+}
 document.addEventListener('dragover', (e) => {
     if (e.dataTransfer && e.dataTransfer.types.includes('Files')) {
         e.preventDefault();
@@ -654,12 +662,26 @@ document.addEventListener('dragover', (e) => {
     }
 });
 document.addEventListener('dragleave', (e) => {
-    if (e.relatedTarget === null) document.body.classList.remove('dropping');
+    // relatedTarget is null when the pointer leaves the window — but not
+    // reliably, and not at all in some Chromium builds. Falling back to the
+    // pointer being outside the viewport catches the rest.
+    if (e.relatedTarget === null
+        || e.clientX <= 0 || e.clientY <= 0
+        || e.clientX >= window.innerWidth || e.clientY >= window.innerHeight) {
+        stopDropping();
+    }
 });
+// A drag cancelled with Escape, or released outside the window, fires neither
+// drop nor a useful dragleave. This is the one event that always arrives.
+document.addEventListener('dragend', stopDropping);
+window.addEventListener('blur', stopDropping);
+document.addEventListener('mousedown', stopDropping);
 document.addEventListener('drop', (e) => {
+    // Cleared before the early return, not after it: dropping something that
+    // is not a file — a text selection, a link — used to leave the overlay up.
+    stopDropping();
     if (!e.dataTransfer || !e.dataTransfer.files.length) return;
     e.preventDefault();
-    document.body.classList.remove('dropping');
     switchTab('workspace');
     addAttachments(e.dataTransfer.files);
 });

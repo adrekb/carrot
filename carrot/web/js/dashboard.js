@@ -420,6 +420,9 @@ function wxUseMyLocation() {
     );
 }
 
+// The last city search's results. Module scope on purpose — see wxSearchCity.
+let wxCityResults = [];
+
 async function wxSearchCity() {
     const input = document.getElementById('wx-city-input');
     const res = document.getElementById('wx-city-results');
@@ -431,20 +434,32 @@ async function wxSearchCity() {
         const data = await r.json();
         const results = data.results || [];
         if (!results.length) { res.innerHTML = '<div class="muted small">No matches found.</div>'; return; }
+        // Kept in a variable, not on the element. Stashing it as `res._results`
+        // meant any re-render of the dashboard — a widget saving, the GitHub
+        // poller finishing — replaced the node and took the results with it.
+        // The list stayed on screen looking clickable and every click did
+        // nothing, silently, which is the worst way for a button to fail.
+        wxCityResults = results;
         res.innerHTML = results.map((c, i) => `
             <div class="wx-city-item" onclick="wxPickCity(${i})">
               ${escHtml(c.name)}${c.admin1 ? ', ' + escHtml(c.admin1) : ''}${c.country ? ' · ' + escHtml(c.country) : ''}
             </div>`).join('');
-        res._results = results;
     } catch (_) {
         res.innerHTML = '<div class="muted small">City search failed. Check your connection.</div>';
     }
 }
 
 function wxPickCity(i) {
-    const res = document.getElementById('wx-city-results');
-    const c = res && res._results ? res._results[i] : null;
-    if (c) wxSaveLocation(c.latitude, c.longitude, c.name || '');
+    const c = wxCityResults[i];
+    if (!c) {
+        // Never fail silently again: if the list is somehow stale, say so
+        // rather than leaving the user clicking a row that does nothing.
+        const res = document.getElementById('wx-city-results');
+        if (res) res.innerHTML = '<div class="muted small">That list went stale — search again.</div>';
+        return;
+    }
+    wxSaveLocation(c.latitude, c.longitude,
+                   [c.name, c.admin1, c.country].filter(Boolean).join(', '));
 }
 
 async function wxSaveLocation(lat, lon, label) {

@@ -2891,9 +2891,20 @@ input:focus, select:focus, textarea:focus { background: rgba(255, 255, 255, 0.06
 .attach-x:hover { background: rgba(255, 255, 255, 0.09); color: var(--text); }
 .attach-x .ico { width: 13px; height: 13px; }
 
-/* Whole-window drop target. */
+/* Whole-window drop target.
+ *
+ * `pointer-events: none` is not a detail, it is the whole safety property.
+ * This is a decoration that covers the entire window, and it is switched on by
+ * a class that a cancelled drag can leave behind — a drag that ends outside
+ * the window fires no drop and, in Chromium, no dragleave with a null
+ * relatedTarget either. Without this line that stuck class silently eats every
+ * click and every keystroke in the app: text boxes stop accepting input,
+ * buttons stop responding, and nothing on screen explains why, because the
+ * thing blocking them is invisible. A decoration must never be able to do
+ * that, however the class got there. */
 body.dropping::after {
   content: "Drop to attach";
+  pointer-events: none;
   position: fixed;
   inset: 14px;
   z-index: 200;
@@ -4616,7 +4627,14 @@ td, th, .si-sub, .small, .editor-status {
  * the input takes the space back. */
 #cmd-input { min-width: 0; }
 
-@media (max-width: 900px) {
+/* Keyed to the bar, not the window. The first attempt used a viewport media
+ * query, which was simply the wrong measurement: the bar is capped at 760px
+ * however wide the screen is, so on a 1000px window the labels stayed on, the
+ * eight controls took ~700px of it, and the input the box exists for was left
+ * with about an inch — enough to show "Ask ar" and nothing else. */
+#cmdbar { container-type: inline-size; }
+
+@container (max-width: 720px) {
   .composer-chip span,
   #search-label,
   #model-btn .chev { display: none; }
@@ -4624,11 +4642,24 @@ td, th, .si-sub, .small, .editor-status {
   #model-btn { max-width: 132px; }
 }
 
-/* Narrower still: the model name is the last label standing, because it is
- * the one piece of state you cannot recover from an icon. */
-@media (max-width: 620px) {
+@container (max-width: 560px) {
+  /* The model name is the last label standing: it is the one piece of state
+   * you cannot recover from an icon. */
   #model-label { max-width: 76px; }
   #speak-toggle { display: none; }
+}
+
+/* Belt and braces for a browser without container queries, and the floor the
+ * flexbox may not go below whatever else is in the row. */
+#cmd-input { min-width: 160px; }
+@supports not (container-type: inline-size) {
+  .composer-chip span, #search-label { display: none; }
+}
+
+/* There is room for a wider bar on a wide screen, and the question is the
+ * point of the box. */
+@media (min-width: 1200px) {
+  #cmdbar { width: min(920px, calc(100vw - 32px)); }
 }
 
 /* ===== One mode control, not two =====
@@ -4669,3 +4700,19 @@ td, th, .si-sub, .small, .editor-status {
  * the title and two icon buttons. */
 .agent-side-head .mode-switch { margin-left: 8px; }
 .agent-side-head .mode-opt { padding: 3px 9px; font-size: 11.5px; }
+
+/* The agent's model picker. Compact, because it shares the compose row with
+ * the attach button and the send button — but present, because "which model
+ * is doing this" was previously unanswerable from the agent panel. */
+.agent-model-picker {
+  background: var(--card2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 4px 6px;
+  max-width: 150px;
+  cursor: pointer;
+}
+.agent-model-picker:hover { border-color: var(--border-hi); }

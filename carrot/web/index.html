@@ -660,6 +660,13 @@
                     onclick="document.getElementById('agent-file-input').click()">
               <svg class="ico"><use href="#i-file-plus"/></svg>
             </button>
+            <!-- The agent used to silently borrow whatever the chat composer
+                 was set to, with nothing on screen saying so. A coding agent
+                 is exactly where the model matters most, and it was the one
+                 place you could not choose or even see it. -->
+            <select id="agent-model" class="agent-model-picker"
+                    title="Which model does the work here"
+                    onchange="setAgentModel(this.value)"></select>
             <span class="muted small" id="agent-context-hint"></span>
             <span class="spacer"></span>
             <button class="btn btn-ghost" id="agent-stop" onclick="stopAgentTask()" hidden>Stop</button>
