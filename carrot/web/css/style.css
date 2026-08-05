@@ -4272,3 +4272,155 @@ td, th, .si-sub, .small, .editor-status {
   gap: 7px;
 }
 #agent-attach-tray.hidden { display: none; }
+
+/* ===== Semester planner =====
+   Four steps down the page, in the order the information is actually needed.
+   The week grid at the bottom is the payoff, so it gets the colour. */
+.intake-row {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 4px;
+}
+.intake-row:last-child { border-bottom: none; }
+.intake-row.needed { border-left: 3px solid var(--accent); padding-left: 12px; }
+.intake-q { font-size: 13.5px; color: var(--text); font-weight: 500; }
+.intake-required {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  font-weight: 600;
+}
+.intake-why { font-size: 12px; color: var(--faint); font-style: italic; line-height: 1.5; }
+.intake-input {
+  margin-top: 4px;
+  max-width: 460px;
+  background: var(--card2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 7px 11px;
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 13px;
+}
+.intake-input:focus { outline: none; border-color: var(--accent-line); }
+
+.planner-drop {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 20px;
+  margin: 10px 0;
+  border: 1px dashed var(--border-hi);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+.planner-drop.dropping { border-color: var(--accent); background: var(--accent-soft); }
+.planner-paste { margin-top: 8px; font-size: 12.5px; color: var(--muted); }
+.planner-paste summary { cursor: pointer; padding: 4px 0; }
+.planner-paste textarea {
+  width: 100%;
+  margin: 8px 0;
+  background: var(--card2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 9px 11px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.course-table { margin: 12px 0; overflow-x: auto; }
+.course-row {
+  display: grid;
+  grid-template-columns: 90px 1.4fr 70px 90px 90px 1.2fr 32px;
+  gap: 6px;
+  margin-bottom: 6px;
+  min-width: 700px;
+}
+.course-row.head {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--faint);
+  margin-bottom: 8px;
+}
+.course-row input {
+  background: var(--card2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 12.5px;
+  min-width: 0;
+}
+.course-row input:focus { outline: none; border-color: var(--accent-line); }
+
+.planner-problem,
+.planner-note {
+  font-size: 12.5px;
+  line-height: 1.55;
+  padding: 8px 11px;
+  margin-bottom: 6px;
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+.planner-problem { border-left-color: var(--red); background: rgba(242, 115, 107, 0.1); }
+.planner-totals {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--muted);
+  padding: 8px 0;
+}
+.building-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+
+.planner-week {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(120px, 1fr));
+  gap: 8px;
+  margin-top: 14px;
+  overflow-x: auto;
+}
+.day-column {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.day-head {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--faint);
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.day-empty { font-size: 11.5px; color: var(--faint); font-style: italic; padding: 6px 0; }
+.day-block {
+  padding: 6px 8px;
+  border-radius: 7px;
+  border-left: 3px solid var(--border-hi);
+  background: var(--card);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+.block-time { font-family: var(--mono); font-size: 10.5px; color: var(--faint); }
+.block-title { color: var(--text); font-weight: 500; }
+.block-place { color: var(--muted); font-size: 10.5px; }
+/* Classes are the anchor, so they read strongest; travel is deliberately the
+   quietest thing on the grid — you need to see it, not read it. */
+.day-block.kind-class { border-left-color: var(--accent); background: var(--accent-soft); }
+.day-block.kind-meal { border-left-color: var(--green); }
+.day-block.kind-gym { border-left-color: var(--yellow); }
+.day-block.kind-study { border-left-color: var(--border-hi); }
+.day-block.kind-commute { border-left-color: transparent; background: transparent; opacity: 0.55; }
+.day-block.kind-work { border-left-color: var(--red); }
+
+@media (max-width: 1100px) {
+  .planner-week { grid-template-columns: repeat(7, minmax(110px, 1fr)); }
+}

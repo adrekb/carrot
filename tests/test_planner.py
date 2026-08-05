@@ -471,3 +471,68 @@ class TestPlannerEndpoints:
 
     def test_the_endpoints_need_a_session_token(self, unauthenticated_client):
         assert unauthenticated_client.get("/api/planner/state").status_code == 401
+
+
+class TestPlannerTabIsReachable:
+    """The engine shipped with no tab, so none of it could be used."""
+
+    def read(self, *parts):
+        from pathlib import Path
+        return Path(__file__).resolve().parents[1].joinpath("carrot", "web", *parts).read_text()
+
+    def test_there_is_a_nav_entry(self):
+        assert 'data-tab="planner"' in self.read("index.html")
+
+    def test_the_view_exists(self):
+        assert 'id="view-planner"' in self.read("index.html")
+
+    def test_the_tab_loader_is_registered(self):
+        # A view with no loader renders empty forever.
+        assert "planner: loadPlanner," in self.read("js", "app.js")
+
+    def test_the_script_is_included(self):
+        assert "/js/planner.js" in self.read("index.html")
+
+    def test_all_four_steps_are_present(self):
+        html = self.read("index.html")
+        for step in ("planner-intake", "planner-courses", "planner-buildings", "planner-week"):
+            assert f'id="{step}"' in html
+
+    def test_each_question_shows_why_it_is_asked(self):
+        # A stranger asking which dorm you live in owes you a reason.
+        assert "intake-why" in self.read("js", "planner.js")
+
+    def test_a_photo_can_be_dropped_or_pasted(self):
+        js = self.read("js", "planner.js")
+        assert "dataTransfer?.files" in js and "clipboardData?.files" in js
+
+    def test_extracted_courses_are_editable_before_saving(self):
+        # A misread room number is easier to fix here than on the walk there.
+        js = self.read("js", "planner.js")
+        assert "courses[index][field] = input.value.trim()" in js
+        assert "These look right" in js
+
+    def test_conflicts_and_warnings_render_above_the_grid(self):
+        js = self.read("js", "planner.js")
+        assert "planner-problem" in js and "plan.conflicts" in js and "plan.notes" in js
+
+    def test_unknown_buildings_are_disclosed(self):
+        # Those are the walks the planner has to guess at.
+        assert "generous guess rather than a real number" in self.read("js", "planner.js")
+
+    def test_every_css_token_the_planner_uses_is_defined(self):
+        import re
+
+        css = self.read("css", "style.css")
+        block = css.split("/* ===== Semester planner =====")[1]
+        used = set(re.findall(r"var\((--[a-z0-9-]+)", block))
+        defined = set(re.findall(r"^\s*(--[a-z0-9-]+):", css, re.M))
+        assert used <= defined, f"undefined CSS tokens: {sorted(used - defined)}"
+
+    def test_every_block_kind_the_planner_emits_has_a_colour(self):
+        from carrot import planner
+
+        css = self.read("css", "style.css")
+        for kind in (planner.KIND_CLASS, planner.KIND_MEAL, planner.KIND_GYM,
+                     planner.KIND_STUDY, planner.KIND_COMMUTE, planner.KIND_WORK):
+            assert f".day-block.kind-{kind}" in css, kind

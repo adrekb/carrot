@@ -269,6 +269,7 @@
     <button class="nav-item sub" data-tab="search" onclick="switchTab('search')"><svg class="ico"><use href="#i-search"/></svg><span class="nav-label">Search</span></button>
     <button class="nav-item sub" data-tab="notes" onclick="switchTab('notes')"><svg class="ico"><use href="#i-note"/></svg><span class="nav-label">Notes</span></button>
     <button class="nav-item sub" data-tab="code" onclick="switchTab('code')"><svg class="ico"><use href="#i-terminal"/></svg><span class="nav-label">Code</span></button>
+    <button class="nav-item sub" data-tab="planner" onclick="switchTab('planner')"><svg class="ico"><use href="#i-cap"/></svg><span class="nav-label">Planner</span></button>
     <button class="nav-item sub" data-tab="goals" onclick="switchTab('goals')"><svg class="ico"><use href="#i-target"/></svg><span class="nav-label">Goals</span></button>
     <button class="nav-item sub" data-tab="reminders" onclick="switchTab('reminders')"><svg class="ico"><use href="#i-bell"/></svg><span class="nav-label">Reminders</span></button>
     <button class="nav-item sub" data-tab="workspaces" onclick="switchTab('workspaces')"><svg class="ico"><use href="#i-folder"/></svg><span class="nav-label">Workspaces</span></button>
@@ -576,6 +577,89 @@
           </div>
         </div>
       </aside>
+    </div>
+  </section>
+
+  <!-- Planner -->
+  <section id="view-planner" class="view">
+    <div class="page">
+      <div class="page-head">
+        <h2>Semester planner</h2>
+        <span class="muted small" id="planner-status"></span>
+      </div>
+
+      <!-- Step 1. Nobody volunteers where they live or when they sleep, and a
+           plan built without those is a beautiful schedule for a person who
+           does not exist. So it asks, one question at a time, and says why. -->
+      <div class="settings-card" id="planner-intake-card">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-help"/></svg>
+          <h3>1 · About you</h3>
+        </div>
+        <div id="planner-intake"><div class="empty">Loading…</div></div>
+      </div>
+
+      <!-- Step 2. -->
+      <div class="settings-card">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-image"/></svg>
+          <h3>2 · Your classes</h3>
+        </div>
+        <p class="muted small">
+          Photograph or screenshot your schedule and drop it here — a vision model reads
+          the grid. You can paste the text instead if you have it. Nothing is saved until
+          you have checked it: a misread room number would send you to the wrong building
+          all term.
+        </p>
+        <div id="planner-drop" class="planner-drop">
+          <input type="file" id="planner-file" accept="image/*" hidden
+                 onchange="readSyllabusFile(this.files[0]); this.value=''">
+          <button class="btn btn-primary" onclick="document.getElementById('planner-file').click()">
+            Choose a photo
+          </button>
+          <span class="muted small">or drop one here, or paste a screenshot</span>
+        </div>
+        <details class="planner-paste">
+          <summary>Paste the schedule as text instead</summary>
+          <textarea id="planner-text" rows="5" spellcheck="false"
+                    placeholder="COSC 30  Discrete Math  MWF 10:00-11:05  Kemeny 007"></textarea>
+          <button class="btn btn-ghost" onclick="readSyllabusText()">Read it</button>
+        </details>
+        <div id="planner-courses"></div>
+      </div>
+
+      <!-- Step 3. Travel time is the whole difference between a schedule and a
+           schedule you can actually walk. -->
+      <div class="settings-card">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-target"/></svg>
+          <h3>3 · Your campus</h3>
+        </div>
+        <p class="muted small">
+          Carrot needs to know roughly where each building is, or it cannot tell that
+          lunch is eleven minutes after a class on the other side of campus. It will look
+          them up; anything it is unsure of is listed so you can correct it.
+        </p>
+        <div class="settings-row">
+          <button class="btn btn-primary" onclick="lookupCampus()">Look up my buildings</button>
+          <span class="muted small" id="planner-campus-status"></span>
+        </div>
+        <div id="planner-buildings"></div>
+      </div>
+
+      <!-- Step 4. -->
+      <div class="settings-card">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-cap"/></svg>
+          <h3>4 · Your week</h3>
+        </div>
+        <div class="settings-row">
+          <button class="btn btn-primary" id="planner-build" onclick="buildPlan()">Build my week</button>
+          <span class="muted small" id="planner-build-status"></span>
+        </div>
+        <div id="planner-notes"></div>
+        <div id="planner-week" class="planner-week"></div>
+      </div>
     </div>
   </section>
 
@@ -1361,5 +1445,6 @@
 <script src="/js/docagent.js"></script>
 <script src="/js/hub.js"></script>
 <script src="/js/studio.js"></script>
+<script src="/js/planner.js"></script>
 </body>
 </html>
