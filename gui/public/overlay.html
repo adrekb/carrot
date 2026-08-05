@@ -12,7 +12,7 @@
      relays it and stamps data-theme / data-accent on <html> (see the
      script at the end of this file). */
   :root {
-    --panel: rgba(34, 32, 26, 0.82);
+    --panel: rgba(28, 26, 21, 0.97);
     --stroke: rgba(232, 222, 200, 0.12);
     --text: #f2ece0;
     --muted: #a89f8d;
@@ -25,7 +25,7 @@
     --ease: cubic-bezier(0.32, 0.72, 0, 1);
   }
   :root[data-theme="light"] {
-    --panel: rgba(255, 253, 248, 0.88);
+    --panel: rgba(252, 250, 245, 0.98);
     --stroke: rgba(40, 34, 22, 0.13);
     --text: #1e1b14;
     --muted: #5f584a;
@@ -176,6 +176,9 @@
   }
   .icon svg { width: 17px; height: 17px; }
   .icon:hover { background: var(--sheen); color: var(--text); }
+  .icon.on { background: var(--accent-soft); color: var(--accent); }
+  .icon.on svg { animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
 
   /* Attachment chips */
   .tray {
@@ -275,6 +278,10 @@
              stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
       </div>
       <input id="q" placeholder="Ask Carrot anything…" autofocus autocomplete="off" spellcheck="false">
+      <button class="icon" id="dictate" title="Dictate (click, then speak)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+             stroke-linecap="round" stroke-linejoin="round"><rect x="9.2" y="2.6" width="5.6" height="11" rx="2.8"/><path d="M5.4 11.2a6.6 6.6 0 0 0 13.2 0M12 17.8V21.4M8.6 21.4h6.8"/></svg>
+      </button>
       <button class="icon" id="attach" title="Attach files">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
              stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5l-8.8 8.8a5.3 5.3 0 0 1-7.5-7.5l9-9a3.5 3.5 0 0 1 5 5l-9 9a1.8 1.8 0 0 1-2.5-2.5l8.3-8.3"/></svg>
@@ -374,6 +381,57 @@
   }
 
   document.getElementById('attach').onclick = pickFiles;
+
+  // ---------- dictation ----------
+  // The Web Speech API ships with Chromium, so this needs no model and no
+  // round trip. If it is unavailable the button hides rather than failing on
+  // click — a button that does nothing is worse than one that is not there.
+  let recogniser = null;
+  let listening = false;
+  const dictateBtn = document.getElementById('dictate');
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+  if (!SpeechRecognition) {
+    dictateBtn.style.display = 'none';
+  } else {
+    dictateBtn.onclick = () => {
+      if (listening) { stopDictation(); return; }
+      recogniser = new SpeechRecognition();
+      recogniser.continuous = true;
+      recogniser.interimResults = true;
+      recogniser.lang = navigator.language || 'en-US';
+      // Keep what was already typed; dictation appends rather than replaces.
+      const base = input.value ? input.value.trimEnd() + ' ' : '';
+      recogniser.onresult = (e) => {
+        let text = '';
+        for (let i = e.resultIndex; i < e.results.length; i++) text += e.results[i][0].transcript;
+        input.value = base + text.trim();
+      };
+      recogniser.onerror = (e) => {
+        stopDictation();
+        hint.textContent = e.error === 'not-allowed' ? 'Mic blocked' : 'Mic error';
+        setTimeout(() => { hint.textContent = 'Enter'; }, 2200);
+      };
+      recogniser.onend = () => stopDictation();
+      try {
+        recogniser.start();
+        listening = true;
+        dictateBtn.classList.add('on');
+        hint.textContent = 'Listening';
+        hint.classList.add('busy');
+      } catch (_) { stopDictation(); }
+    };
+  }
+
+  function stopDictation() {
+    if (recogniser) { try { recogniser.stop(); } catch (_) {} }
+    recogniser = null;
+    listening = false;
+    dictateBtn.classList.remove('on');
+    hint.textContent = 'Enter';
+    hint.classList.remove('busy');
+    input.focus();
+  }
 
   // Drag a file onto the panel. The renderer only gets a path, so the read
   // happens in the main process.

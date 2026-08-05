@@ -2,6 +2,11 @@
 let currentTab = 'dashboard';
 let currentConversationId = null;
 let currentModel = null;
+// The provider that serves `currentModel`. Sent with every turn so the server
+// never has to guess: a name like "mistral-medium" is a hosted model to one
+// provider and a pulled tag to Ollama, and guessing wrong routed chat to a
+// model that was not there.
+let currentProvider = null;
 let speakReplies = false;
 let mediaRecorder = null;
 let recordedChunks = [];
@@ -279,7 +284,16 @@ async function setRecapTime(value) {
 async function loadModels() {
     try {
         const data = await api('/api/models');
-        currentModel = data.active_model;
+        // The label has to show what chat *actually* runs on. `active_model` is
+        // only the Ollama default, so reading it here made a pinned cloud model
+        // silently revert to the local one in the picker on every refresh.
+        if (data.chat_local === false && data.chat_model) {
+            currentModel = data.chat_model;
+            currentProvider = data.chat_provider || null;
+        } else {
+            currentModel = data.active_model;
+            currentProvider = 'ollama';
+        }
         document.getElementById('model-label').textContent = currentModel;
         renderModelPop(data);
     } catch (_) {
@@ -420,6 +434,7 @@ async function selectRemoteModel(provider, model) {
             body: JSON.stringify({ task: 'chat', provider, model }),
         });
         currentModel = model;
+        currentProvider = provider;
         document.getElementById('model-label').textContent = model;
         document.getElementById('model-pop').classList.add('hidden');
         loadModels();
@@ -436,6 +451,7 @@ async function selectModel(name) {
         await api('/api/router/route/chat', { method: 'DELETE' }).catch(() => {});
         await api('/api/models/select', { method: 'POST', body: JSON.stringify({ model: name }) });
         currentModel = name;
+        currentProvider = 'ollama';
         document.getElementById('model-label').textContent = name;
         document.getElementById('model-pop').classList.add('hidden');
         loadModels();
@@ -548,6 +564,7 @@ async function sendChat() {
         attachments: attachments.map(a => ({ name: a.name, mime: a.mime, data: a.data })),
         conversation_id: currentConversationId,
         model: currentModel,
+        provider: currentProvider,
         skill: activeSkill ? activeSkill.slug : null,
         search_mode: currentSearchMode,
     }, activeSkill);

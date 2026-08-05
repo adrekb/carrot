@@ -58,6 +58,12 @@ from carrot import (
     research as research_mod,
     agent as carrot_agent,
     workspaces as workspaces_mod,
+    coder as coder_mod,
+    coder_api,
+    media as media_mod,
+    media_api,
+    dualauth,
+    gitops as gitops_mod,
     help as help_mod,
 )
 from carrot.speech import whisper_stt, kokoro_tts
@@ -96,6 +102,9 @@ async def _revalidate_app_assets(request, call_next):
     return response
 
 app.include_router(files_api.router)
+app.include_router(coder_api.router)
+app.include_router(media_api.router)
+app.include_router(media_api.auth_router)
 
 
 # ===== Pydantic request models =====
@@ -875,6 +884,34 @@ async def calendar_refresh():
 
 # ===== Chat =====
 
+def _coder_context(conversation_id: str = ""):
+    """Mode guidance, the compacted plan, and the workspace's own rules.
+
+    Only emitted when there is something to say: a chat about dinner should not
+    carry a plan/act preamble, and an empty rules block is noise in every turn.
+    """
+    blocks = []
+    cfg = config.get_config()
+    mode = coder_mod.normalize_mode(cfg.get("coder_mode"))
+    if mode == coder_mod.MODE_PLAN:
+        blocks.append({"role": "system", "content": coder_mod.MODE_PREAMBLE[mode]})
+    else:
+        # The brief replaces the planning transcript rather than joining it:
+        # by Act time the reading and grepping has served its purpose, and
+        # carrying it forward spends the window on transcript.
+        brief = coder_mod.snapshot_for(conversation_id)
+        if brief:
+            blocks.append({
+                "role": "system",
+                "content": f"{coder_mod.SNAPSHOT_HEADER}\n\n{brief}",
+            })
+    if cfg.get("agent_tools_enabled", True):
+        rules = coder_mod.load_rules(agent_mod.workspace_root())
+        if rules:
+            blocks.append({"role": "system", "content": rules})
+    return blocks
+
+
 def _prepare_history(conv, message, skill_slug, extra_system=None, mode=None,
                      images=None):
     """Build the model message list for a turn.
@@ -902,6 +939,14 @@ def _prepare_history(conv, message, skill_slug, extra_system=None, mode=None,
 
     if extra_system:
         history.append({"role": "system", "content": extra_system})
+
+    # The coding agent's mode, and whatever instruction files the workspace
+    # carries. A repo already set up for Cline, Continue, Goose or Cursor is
+    # already set up for Carrot — its rules are read, not re-authored.
+    try:
+        history.extend(_coder_context(conv.get("id", "") if conv else ""))
+    except Exception:
+        pass
 
     # Calendar awareness is an explicit opt-in; when on, the assistant sees
     # the next few days so "what does my week look like" just works.
@@ -1033,7 +1078,26 @@ SEARCH_MODES = {
 
 ALL_SEARCH_TOOLS = set().union(*(mode["tools"] for mode in SEARCH_MODES.values()))
 
+# Prepended to both search directives. The date one is not optional advice:
+# a model's "now" is its training cutoff, so asked for recent news it will
+# search without a year, accept a 2020 satire page as current, and never
+# notice. The source note exists because a free search backend returns content
+# farms — sites that reword scraped text and match the query wording closely,
+# which is exactly what relevance filtering cannot catch.
+SEARCH_PREAMBLE = (
+    "Before searching for anything time-sensitive — recent, current, latest, "
+    "upcoming, 'now', or anything with a year in it — call current_datetime "
+    "first. You do not know today's date; your sense of it is your training "
+    "cutoff. Once you know it, put the year in the query and reject results "
+    "that turn out to be older.\n"
+    "Prefer sources with a name behind them: wire services, established "
+    "outlets, official and academic sites, project documentation. Results are "
+    "already ordered with those first. If the only results are sites you do "
+    "not recognise, say that rather than reporting their contents as fact.\n"
+)
+
 MULTI_SEARCH_DIRECTIVE = (
+    SEARCH_PREAMBLE +
     "Search mode: multi-turn. Do not stop at the first set of results.\n"
     "- Search, read the pages that look most likely to answer the question, then ask "
     "yourself what you still cannot answer, and search again for exactly that.\n"
@@ -1046,6 +1110,7 @@ MULTI_SEARCH_DIRECTIVE = (
 )
 
 SINGLE_SEARCH_DIRECTIVE = (
+    SEARCH_PREAMBLE +
     "Search mode: single-pass. You may search the web and read a page when the "
     "question needs current information or a source you do not already have. "
     "Cite the URL for anything you take from a page. Do not search for things you "
@@ -1092,7 +1157,26 @@ def _available_tools(mode: str = SEARCH_SINGLE):
         tools += mcp_mod.ollama_tools()
     except Exception:
         pass
-    return tools
+    return _apply_coder_mode(tools)
+
+
+def _apply_coder_mode(tools):
+    """In plan mode, take the write tools away rather than asking nicely.
+
+    Cline's plan/act split only means anything if it is enforced by the tool
+    list: a model that *can* write eventually will, however the prompt is
+    worded. This subtracts, so it also covers pack and MCP tools whose names
+    happen to be write tools.
+    """
+    try:
+        mode = coder_mod.normalize_mode(config.get_config().get("coder_mode"))
+    except Exception:
+        return tools
+    if mode == coder_mod.MODE_ACT:
+        return tools
+    names = [t.get("function", {}).get("name", "") for t in tools]
+    keep = set(coder_mod.tools_for_mode(names, mode))
+    return [t for t in tools if t.get("function", {}).get("name", "") in keep]
 
 
 def _run_tool(name, args, conversation_id):
@@ -1103,6 +1187,20 @@ def _run_tool(name, args, conversation_id):
     pushes events onto a queue this generator drains, so the SSE stream stays
     live for the whole wait.
     """
+    # Removing a tool's declaration is the first line of defence, but a small
+    # model will still emit a call for a name it saw in training and was never
+    # offered. Reject it here, structured, so it reads as a protocol error and
+    # gets corrected rather than apologised for.
+    try:
+        refusal = coder_mod.reject_tool(
+            name, config.get_config().get("coder_mode")
+        )
+    except Exception:
+        refusal = None
+    if refusal:
+        yield {"_tool_result": json.dumps(refusal)}
+        return
+
     events = queue.Queue()
     outcome = {}
 
@@ -1235,12 +1333,21 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mo
             )
     else:
         # Every round went to tool calls and the budget ran out, so the model
-        # was never asked to write an answer. Without this the user waits the
-        # whole loop and receives an empty message.
+        # was never asked to write an answer.
+        stalled = True
+
+    # An empty answer is never acceptable. Two ways to reach one: the budget
+    # ran out before the model wrote anything, or it exhausted its gate nudges
+    # while saying nothing out loud — a small model can spend its whole reply
+    # in `thinking`, which is not content. Either way the user has watched
+    # searches scroll past and would get "(no response)". Ask once more, with
+    # no tools, so the only thing it can do is answer.
+    if not final_text.strip():
         working.append({
             "role": "user",
-            "content": "Stop searching and answer now from what you have gathered. "
-                       "Say plainly what you could not find.",
+            "content": "Stop searching and answer now, in plain text, from what you "
+                       "have gathered. Do not think silently — write the answer. Say "
+                       "plainly what you could not find and which sources you used.",
         })
         parts = []
         for event in router_mod.stream_events(resolved, working, tools=None):
@@ -1325,9 +1432,38 @@ def _resolve_chat_route(req):
         provider=getattr(req, "provider", None),
         prefer_cloud=bool(getattr(req, "cloud", False)),
     )
-    if resolved.local and not ollama_mod.OllamaClient().is_available():
-        raise HTTPException(status_code=503, detail="Ollama is not available")
+    if resolved.local:
+        client = ollama_mod.OllamaClient()
+        if not client.is_available():
+            raise HTTPException(status_code=503, detail="Ollama is not available")
+        # Naming a model Ollama has never pulled used to fail deep inside the
+        # stream as an empty answer. Say which model is missing, and where it
+        # would have to come from, before a single token is spent.
+        _require_installed_model(client, resolved.model)
     return resolved
+
+
+def _require_installed_model(client, model: str) -> None:
+    """Fail early, and legibly, when an on-device model is not installed."""
+    if not model:
+        return
+    try:
+        installed = {m.get("name", "") for m in client.list_models()}
+    except Exception:
+        return  # Listing is best-effort; never block a turn on it.
+    if not installed or model in installed:
+        return
+    # Ollama treats a bare name as ":latest", so match that way round too.
+    base = model.split(":", 1)[0]
+    if any(name == model or name.split(":", 1)[0] == base for name in installed):
+        return
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"'{model}' is not installed on this machine. Pull it from the model "
+            f"picker, or pick a hosted provider's model in Settings → Providers."
+        ),
+    )
 
 
 def _chat_stream_response(req, conv, history, skill, resolved, prelude=None, mode=SEARCH_SINGLE):

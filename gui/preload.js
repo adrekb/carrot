@@ -25,4 +25,8 @@ contextBridge.exposeInMainWorld('carrotAPI', {
 // native OS toasts so they reach the user even when Carrot is not focused.
 contextBridge.exposeInMainWorld('carrot', {
   notify: (title, body) => ipcRenderer.invoke('notify', { title, body }),
+  // A provider's sign-in page must open in the real browser: that is where the
+  // user is already logged in, and an embedded window asking for their
+  // password is indistinguishable from a phishing page.
+  openExternal: (url) => ipcRenderer.invoke('open-external', url),
 });

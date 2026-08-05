@@ -136,12 +136,17 @@ def run_file(rel_path: str, timeout: int = DEFAULT_TIMEOUT) -> Dict[str, Any]:
 
     tool = _resolve_tool(recipe)
     if not tool:
+        # Pressing Run is the moment someone finds out they have no Python, so
+        # this answer has to carry the download page and not just a complaint.
+        from .files_api import LANGUAGE_HELP
+
         return {
             "ok": False,
             "language": recipe.language,
             "output": (f"{recipe.language} is not set up on this computer.\n"
                        f"Install {recipe.install}, then try again."),
             "missing_tool": recipe.install,
+            "help_url": LANGUAGE_HELP.get(recipe.language, ""),
         }
 
     workdir = os.path.dirname(full)
@@ -168,6 +173,7 @@ def run_file(rel_path: str, timeout: int = DEFAULT_TIMEOUT) -> Dict[str, Any]:
                     "stage": "build",
                     "steps": steps,
                     "missing_tool": "",
+                    "missing_package": _missing_package(built["output"], recipe.language),
                 }
 
         ran = _spawn(fill(recipe.run), workdir, timeout)
@@ -180,7 +186,22 @@ def run_file(rel_path: str, timeout: int = DEFAULT_TIMEOUT) -> Dict[str, Any]:
             "stage": "run",
             "steps": steps,
             "missing_tool": "",
+            # A traceback whose real content is one line near the bottom is not
+            # an answer for someone who just wanted to import pandas.
+            "missing_package": None if ran["ok"] else _missing_package(
+                ran["output"], recipe.language
+            ),
         }
+
+
+def _missing_package(output: str, language: str):
+    """Never let dependency detection be the thing that breaks a run."""
+    try:
+        from . import packages
+
+        return packages.detect(output, language)
+    except Exception:
+        return None
 
 
 def _spawn(argv: List[str], cwd: str, timeout: int) -> Dict[str, Any]:

@@ -167,7 +167,83 @@ def search(query: str, max_results: int = 6, region: str = "wt-wt") -> List[Dict
         results.append({"title": title, "url": url, "snippet": snippet})
     if dropped:
         LOG.info("dropped %d off-topic result(s) for %r", dropped, query[:80])
+    # Reputable sources first. The model reads from the top, so ordering does
+    # most of the work that a block list would do, without losing the long
+    # tail of legitimate small sites.
+    results = rank_results(results)
+    for item in results:
+        item["source_rank"] = source_rank(item["url"])
     return results
+
+
+# ===== Source quality =====
+# A free search backend will happily return content farms. Asked for recent
+# American political news it came back with 242movietv.com, saboridades.net
+# and doktergaul.com — sites that scrape and reword, carry no byline, and are
+# worthless to cite. Relevance filtering does not catch them, because their
+# whole trick is to match the query wording closely.
+#
+# This is a ranking, not a block list: an unknown domain is still usable and
+# still returned, it just sorts below a known one. Blocking would break the
+# long tail of legitimate small sites, which is most of the web.
+
+REPUTABLE_DOMAINS = {
+    # Wire services and major outlets
+    "reuters.com", "apnews.com", "bbc.com", "bbc.co.uk", "npr.org",
+    "nytimes.com", "washingtonpost.com", "wsj.com", "ft.com", "economist.com",
+    "theguardian.com", "bloomberg.com", "politico.com", "axios.com",
+    "thehill.com", "cnn.com", "nbcnews.com", "abcnews.go.com", "cbsnews.com",
+    "pbs.org", "propublica.org", "theatlantic.com", "newyorker.com",
+    "aljazeera.com", "dw.com", "france24.com", "cnbc.com", "forbes.com",
+    # Reference, standards, primary sources
+    "wikipedia.org", "britannica.com", "nature.com", "science.org",
+    "arxiv.org", "pubmed.ncbi.nlm.nih.gov", "nih.gov", "who.int",
+    "congress.gov", "supremecourt.gov", "federalregister.gov", "gao.gov",
+    "census.gov", "bls.gov", "cdc.gov", "nasa.gov", "noaa.gov",
+    # Technical
+    "github.com", "stackoverflow.com", "developer.mozilla.org", "python.org",
+    "docs.python.org", "kernel.org", "ietf.org", "w3.org",
+}
+
+# Whole-domain suffixes that are institutional by construction.
+REPUTABLE_SUFFIXES = (".gov", ".edu", ".mil", ".int", ".ac.uk", ".gov.uk", ".edu.au")
+
+# Shapes that correlate with scraped filler rather than reporting.
+_FARM_HINTS = re.compile(
+    r"(^|\.)(blogspot|wordpress|weebly|wixsite|medium)\.com$|"
+    r"(movie|film|stream|watch|download|casino|bet|slot|crypto|forex)",
+    re.I)
+
+
+def domain_of(url: str) -> str:
+    try:
+        from urllib.parse import urlparse
+
+        host = (urlparse(url).hostname or "").lower()
+        return host[4:] if host.startswith("www.") else host
+    except Exception:
+        return ""
+
+
+def source_rank(url: str) -> int:
+    """Lower sorts first. 0 = known-good, 1 = neutral, 2 = looks like filler."""
+    host = domain_of(url)
+    if not host:
+        return 2
+    if host in REPUTABLE_DOMAINS or any(host.endswith(d) for d in REPUTABLE_DOMAINS):
+        return 0
+    if host.endswith(REPUTABLE_SUFFIXES):
+        return 0
+    if _FARM_HINTS.search(host):
+        return 2
+    return 1
+
+
+def rank_results(results: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """Sort by source quality, keeping the backend's order within a tier."""
+    return [item for _, _, item in
+            sorted(((source_rank(r["url"]), i, r) for i, r in enumerate(results)),
+                   key=lambda triple: (triple[0], triple[1]))]
 
 
 # ===== Fetch =====

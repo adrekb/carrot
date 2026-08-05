@@ -35,7 +35,11 @@ TOKEN_PATH = os.path.join(CONFIG_DIR, "session.json")
 # Paths reachable without a token: the shell that carries the token, the static
 # assets it pulls in, and the health probe the Electron launcher polls before
 # the UI exists.
-PUBLIC_PATHS = {"/", "/api/health", "/favicon.ico"}
+# The OAuth callback is reached by the provider redirecting the system browser,
+# which has no session token and cannot be given one. It is safe to leave open
+# because it is useless without a `state` this process generated and is still
+# holding in memory — an unknown state is rejected before anything happens.
+PUBLIC_PATHS = {"/", "/api/health", "/favicon.ico", "/api/auth/callback"}
 PUBLIC_PREFIXES = ("/css/", "/js/", "/vendor/", "/assets/", "/docs", "/openapi.json", "/redoc")
 
 _token: Optional[str] = None

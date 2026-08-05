@@ -429,6 +429,26 @@ def _tool_web_search(query: str, **_) -> str:
     )
 
 
+def _tool_current_datetime(**_) -> str:
+    """What day it is, locally.
+
+    A model's sense of "now" is its training cutoff, which is months or years
+    stale. Asked for "recent news" it will happily search without ever
+    establishing the date, then accept a 2020 page as current — exactly what
+    happened when a search returned a satire piece from 2020 alongside
+    undated content farms.
+    """
+    import datetime
+
+    now = datetime.datetime.now().astimezone()
+    return (
+        f"Local date and time: {now.strftime('%A, %d %B %Y, %H:%M')} "
+        f"({now.strftime('%Y-%m-%d')}, UTC{now.strftime('%z')})\n"
+        f"Use this when judging whether a source is current: anything from a "
+        f"materially earlier date is not 'recent'."
+    )
+
+
 def _tool_show_artifact(kind: str, content: str = "", title: str = "",
                         path: str = "", conversation_id: str = "", **_) -> str:
     """Put something visual in the conversation.
@@ -488,6 +508,162 @@ def _tool_create_note(title: str, content: str = "", folder: str = "", **_) -> s
 
     note = notes_mod.create_note(title=title, content=content, folder=folder or None)
     return f"created note {note['id']}: {title}"
+
+
+# ===== Coding agent =====
+#
+# An edit is search/replace blocks rather than a whole new file: the cost of a
+# change stops scaling with the size of the file, and nothing outside the
+# blocks can be quietly lost in a re-transcription.
+
+def _tool_edit_file(path: str, edits: str = "", conversation_id: Optional[str] = None, **_) -> str:
+    from . import coder as coder_mod
+
+    full = resolve(path)
+    if not os.path.isfile(full):
+        return f"error: no such file: {path}. Use write_file to create it."
+    try:
+        with open(full, "r", encoding="utf-8") as handle:
+            before = handle.read()
+    except (OSError, UnicodeDecodeError) as exc:
+        return f"error: {exc}"
+
+    try:
+        blocks = coder_mod.parse_edit_blocks(edits)
+        after = coder_mod.apply_edits(before, blocks)
+    except coder_mod.EditError as exc:
+        # A failed edit is reported, never partially applied — and reported as
+        # structured coordinates rather than prose. "Edit failed" makes a small
+        # model panic and rewrite the whole file; "line 42 expected X, found Y"
+        # makes it fix the block.
+        import json as _json
+
+        return _json.dumps({**exc.payload, "path": path})
+
+    if after == before:
+        return f"{path} already matches the requested edit — nothing changed."
+    try:
+        with open(full, "w", encoding="utf-8") as handle:
+            handle.write(after)
+    except OSError as exc:
+        return f"error: {exc}"
+
+    entry_id = journal_write(full, before, after, "edit", conversation_id)
+    diff = "\n".join(difflib.unified_diff(
+        before.splitlines(), after.splitlines(),
+        fromfile=f"a/{path}", tofile=f"b/{path}", lineterm="", n=2,
+    ))
+    return (
+        f"applied {len(blocks)} edit(s) to {path}. Revert with journal entry "
+        f"{entry_id}.\n\n{diff[:4000]}"
+    )
+
+
+def _tool_run_recipe(recipe: str, values: Optional[Dict[str, Any]] = None, **_) -> str:
+    """Expand a saved recipe, validating its parameters before anything runs.
+
+    The schema barrier is the point: an omitted `{{path}}` is caught here, on
+    this machine, and returned as a structured validation error the model can
+    fix on its next turn. Without it the model would either be handed a prompt
+    containing the literal text `{{path}}` — which looks like it worked — or
+    would go on to generate a file path out of nothing.
+    """
+    import json as _json
+
+    from . import coder as coder_mod
+
+    try:
+        return coder_mod.render_recipe(recipe, values or {})
+    except KeyError:
+        known = [r["id"] for r in coder_mod.recipes()]
+        return _json.dumps({
+            "error": f"No recipe named '{recipe}'.",
+            "available": known,
+        })
+    except ValueError as exc:
+        spec = coder_mod.get_recipe(recipe) or {}
+        return _json.dumps({
+            "error": str(exc),
+            "recipe": recipe,
+            "parameters": spec.get("parameters", []),
+            "required": coder_mod.required_parameters(recipe),
+        })
+
+
+def _tool_generate_image(prompt: str, backend: str = "", conversation_id: Optional[str] = None,
+                         **_) -> str:
+    from . import media as media_mod
+
+    try:
+        result = media_mod.generate(
+            prompt, kind=media_mod.KIND_IMAGE, backend=backend or "",
+            conversation_id=conversation_id or "",
+        )
+    except media_mod.MediaError as exc:
+        return f"error: {exc}"
+    artifact = result.get("artifact") or {}
+    where = "on this machine" if result["local"] else f"via {result['backend_label']}"
+    return (
+        f"generated an image {where} in {result['seconds']}s"
+        # Same marker show_artifact uses, so the picture renders inline in chat
+        # rather than arriving as a file path the user has to go open.
+        + (f"\n[[carrot:artifact:{artifact['id']}]]" if artifact.get("id") else "")
+    )
+
+
+def _tool_git_status(**_) -> str:
+    from . import gitops
+
+    try:
+        state = gitops.status(workspace_root())
+    except gitops.GitError as exc:
+        return f"error: {exc}"
+    if state["clean"]:
+        return f"on {state['branch']}, working tree clean"
+    lines = [f"{c['code']}\t{c['path']}" for c in state["changes"]]
+    return f"on {state['branch']} ({len(lines)} changed)\n" + "\n".join(lines)
+
+
+def _tool_git_diff(path: str = "", staged: bool = False, **_) -> str:
+    from . import gitops
+
+    try:
+        return gitops.diff(workspace_root(), path, bool(staged))
+    except gitops.GitError as exc:
+        return f"error: {exc}"
+
+
+def _tool_git_log(limit: int = 15, **_) -> str:
+    from . import gitops
+
+    try:
+        entries = gitops.log(workspace_root(), limit)
+    except gitops.GitError as exc:
+        return f"error: {exc}"
+    return "\n".join(
+        f"{e['sha']}  {e['subject']}  ({e['author']}, {e['when']})" for e in entries
+    ) or "(no commits yet)"
+
+
+def _tool_git_commit(message: str, paths: Optional[List[str]] = None, **_) -> str:
+    from . import gitops
+
+    try:
+        result = gitops.commit(workspace_root(), message, paths or None)
+    except gitops.GitError as exc:
+        return f"error: {exc}"
+    head = result.get("head") or {}
+    return f"committed {head.get('sha', '')}: {result['message']}".strip()
+
+
+def _tool_create_checkpoint(label: str = "", conversation_id: Optional[str] = None, **_) -> str:
+    from . import coder as coder_mod
+
+    made = coder_mod.create_checkpoint(workspace_root(), label, conversation_id)
+    return (
+        f"checkpoint {made['id']} saved ({made['files']} files). "
+        f"Restore it to undo everything after this point."
+    )
 
 
 # name -> (handler, mutating, risk, schema)
@@ -596,6 +772,19 @@ TOOLS: Dict[str, Dict[str, Any]] = {
             "required": ["query"],
         },
     },
+    "current_datetime": {
+        "handler": _tool_current_datetime,
+        "mutating": False,
+        "risk": "low",
+        "description": (
+            "Today's date and the local time. Call this FIRST whenever the question "
+            "involves what is recent, current, latest, upcoming or 'now' — your own "
+            "sense of the date is your training cutoff and is wrong. Knowing the "
+            "real date is what lets you put a year in the search query and reject "
+            "a page that turns out to be years old."
+        ),
+        "parameters": {"type": "object", "properties": {}},
+    },
     "show_artifact": {
         "handler": _tool_show_artifact,
         "mutating": False,
@@ -686,6 +875,132 @@ TOOLS: Dict[str, Dict[str, Any]] = {
             "required": ["title"],
         },
     },
+    "edit_file": {
+        "handler": _tool_edit_file,
+        "mutating": True,
+        "risk": "high",
+        "description": (
+            "Change part of an existing file using exact search/replace blocks. "
+            "Prefer this over write_file for anything but a brand-new file: it "
+            "costs the size of the change, not the size of the file. Format:\n"
+            "------- SEARCH\n<exact existing text>\n=======\n<new text>\n"
+            "+++++++ REPLACE\n"
+            "Repeat the block for multiple edits. Each SEARCH must appear exactly "
+            "once in the file, so include enough surrounding lines to be unique. "
+            "Nothing is applied unless every block matches."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Workspace-relative file path"},
+                "edits": {"type": "string", "description": "One or more SEARCH/REPLACE blocks"},
+            },
+            "required": ["path", "edits"],
+        },
+    },
+    "run_recipe": {
+        "handler": _tool_run_recipe,
+        "mutating": False,
+        "risk": "low",
+        "description": (
+            "Expand one of the user's saved recipes into the instructions to "
+            "follow. Supply every parameter the recipe declares — a missing one "
+            "is rejected with the list of what is required."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "recipe": {"type": "string", "description": "The recipe's id"},
+                "values": {
+                    "type": "object",
+                    "description": "Parameter name to value, e.g. {\"path\": \"src/\"}",
+                },
+            },
+            "required": ["recipe"],
+        },
+    },
+    "generate_image": {
+        "handler": _tool_generate_image,
+        "mutating": True,
+        "risk": "medium",
+        "description": (
+            "Generate an image from a text description and show it in the chat. "
+            "Uses the on-device Stable Diffusion server when one is set up, and "
+            "a hosted backend otherwise. Describe the subject, style and framing "
+            "concretely — a vague prompt gets a vague picture."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string", "description": "What the image should show"},
+                "backend": {"type": "string", "description": "Leave empty for the user's default"},
+            },
+            "required": ["prompt"],
+        },
+    },
+    "git_status": {
+        "handler": _tool_git_status,
+        "mutating": False,
+        "risk": "low",
+        "description": "Current branch and the list of changed files in the workspace repository.",
+        "parameters": {"type": "object", "properties": {}},
+    },
+    "git_diff": {
+        "handler": _tool_git_diff,
+        "mutating": False,
+        "risk": "low",
+        "description": "The diff of what has changed. Read this before committing, and to check your own work.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "One file, or empty for everything"},
+                "staged": {"type": "boolean", "description": "Show the staged diff instead"},
+            },
+        },
+    },
+    "git_log": {
+        "handler": _tool_git_log,
+        "mutating": False,
+        "risk": "low",
+        "description": "Recent commits, newest first — how this project words its history.",
+        "parameters": {
+            "type": "object",
+            "properties": {"limit": {"type": "integer", "description": "How many commits (default 15)"}},
+        },
+    },
+    "git_commit": {
+        "handler": _tool_git_commit,
+        "mutating": True,
+        "risk": "high",
+        "description": (
+            "Stage and commit the workspace's changes. Write the message the way "
+            "this repository's history does — read git_log first."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "message": {"type": "string", "description": "The commit message"},
+                "paths": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "Commit only these files, or omit for everything",
+                },
+            },
+            "required": ["message"],
+        },
+    },
+    "create_checkpoint": {
+        "handler": _tool_create_checkpoint,
+        "mutating": False,
+        "risk": "low",
+        "description": (
+            "Snapshot the workspace so the user can undo everything that follows "
+            "in one step. Take one before a change that spans several files."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {"label": {"type": "string", "description": "What is about to be attempted"}},
+        },
+    },
 }
 
 
@@ -725,6 +1040,13 @@ def _summarize_call(name: str, arguments: Dict[str, Any]) -> str:
         return f"Create reminder: {arguments.get('title', '?')}"
     if name == "create_note":
         return f"Create note: {arguments.get('title', '?')}"
+    if name == "edit_file":
+        # The approval prompt should say what is being changed, not how many
+        # characters of block syntax it took to say it.
+        blocks = arguments.get("edits", "").count("=======") or 1
+        return f"Edit {arguments.get('path', '?')} ({blocks} change(s))"
+    if name == "git_commit":
+        return f"Commit: {arguments.get('message', '?')}"
     return f"{name}({', '.join(f'{k}={v!r}'[:60] for k, v in arguments.items())})"
 
 

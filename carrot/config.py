@@ -67,6 +67,25 @@ DEFAULTS = {
     "agent_tools_enabled": True,
     "agent_require_approval": True,
     "code_workspace_dir": "",
+    # Coding agent. "act" keeps the tools it has always had; "plan" takes the
+    # write tools away so a change can be agreed before anything moves.
+    "coder_mode": "act",
+    "coder_recipes": [],
+    # Implementation briefs, one per conversation, written when Plan hands off
+    # to Act so the transcript can be dropped.
+    "coder_snapshots": {},
+    # Image and video generation. Empty backend means "pick the best set-up
+    # one, preferring on-device" rather than a hardcoded cloud default.
+    "media_backend_image": "",
+    "media_backend_video": "",
+    "media_keys": {},
+    "media_endpoints": {},
+    "media_comfy_workflow": {},
+    # Dual authentication: per-provider "api_key" or "subscription", the OAuth
+    # client each installation registers, and the tokens a sign-in produced.
+    "auth_modes": {},
+    "oauth_clients": {},
+    "oauth_tokens": {},
     # Model routing. `model_routes` maps a task to {provider, model, effort};
     # a bare model string from an older build is still read.
     "model_routes": {},
@@ -133,7 +152,12 @@ DEFAULTS = {
 # providers have a key without any key leaving the process.
 # calendar_ics_url is a capability URL: anyone holding it can read the
 # whole calendar, so it is redacted like an API key.
-SECRET_KEYS = {"cloud_api_key", "provider_keys", "agent_secrets", "calendar_ics_url"}
+SECRET_KEYS = {
+    "cloud_api_key", "provider_keys", "agent_secrets", "calendar_ics_url",
+    # Generation backends hold keys of their own, and an OAuth token is a
+    # bearer credential — leaking one is leaking the account.
+    "media_keys", "oauth_tokens",
+}
 
 
 def redact(settings):

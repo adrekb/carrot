@@ -32,6 +32,28 @@ class RootRequest(BaseModel):
     root: str
 
 
+# Where to send someone who does not have the toolchain. Official download
+# pages only — pointing a beginner at a random mirror is how they end up with
+# something else entirely.
+LANGUAGE_HELP = {
+    "Python": "https://www.python.org/downloads/",
+    "JavaScript": "https://nodejs.org/en/download",
+    "TypeScript": "https://nodejs.org/en/download",
+    "Java": "https://adoptium.net/temurin/releases/",
+    "C": "https://gcc.gnu.org/install/",
+    "C++": "https://gcc.gnu.org/install/",
+    "Go": "https://go.dev/dl/",
+    "Rust": "https://rustup.rs/",
+    "Ruby": "https://www.ruby-lang.org/en/downloads/",
+    "C#": "https://dotnet.microsoft.com/download",
+    "Kotlin": "https://kotlinlang.org/docs/command-line.html",
+    "Swift": "https://www.swift.org/install/",
+    "PHP": "https://www.php.net/downloads",
+    "Lua": "https://www.lua.org/download.html",
+    "Perl": "https://www.perl.org/get.html",
+}
+
+
 class CreateRequest(BaseModel):
     path: str                      # parent directory, "" for the root
     name: str
@@ -172,7 +194,13 @@ async def files_write(req: WriteRequest):
 
 @router.post("/create")
 async def files_create(req: CreateRequest):
-    """Make a new file or folder. The Code tab's "New file" / "New folder"."""
+    """Make a new file or folder. The Code tab's "New file" / "New folder".
+
+    Also reports whether the toolchain for the new file's language is present.
+    Finding out that Python is not installed *after* writing a program is a
+    bad order to learn it in, and "python is not recognised as an internal or
+    external command" is not something a non-technical user can act on.
+    """
     _reject_reserved(req.name)
     parent = resolve(req.path)
     if not os.path.isdir(parent):
@@ -185,7 +213,21 @@ async def files_create(req: CreateRequest):
     else:
         with open(full, "x", encoding="utf-8"):
             pass
-    return {"path": rel_of(full), "is_dir": req.is_dir}
+
+    toolchain = {}
+    if not req.is_dir:
+        from carrot import runner
+
+        recipe = runner.recipe_for(full)
+        if recipe is not None:
+            available = runner._resolve_tool(recipe) is not None
+            toolchain = {
+                "language": recipe.language,
+                "available": available,
+                "install": "" if available else recipe.install,
+                "help_url": "" if available else LANGUAGE_HELP.get(recipe.language, ""),
+            }
+    return {"path": rel_of(full), "is_dir": req.is_dir, "toolchain": toolchain}
 
 
 @router.post("/rename")
@@ -303,6 +345,27 @@ async def files_run(req: RunRequest):
 
     timeout = max(1, min(int(req.timeout or runner.DEFAULT_TIMEOUT), 300))
     return runner.run_file(req.path, timeout=timeout)
+
+
+class InstallRequest(BaseModel):
+    package: str
+    manager: str
+
+
+@router.post("/install")
+async def files_install(req: InstallRequest):
+    """Install one package the last run said was missing.
+
+    Only ever reached by the user clicking the offer that a failed run
+    produced — the name is re-validated here regardless, since an endpoint has
+    no way to know which button called it.
+    """
+    from carrot import packages
+
+    result = packages.install(req.package, req.manager, cwd=get_root())
+    if not result["ok"] and "not a valid package name" in result["output"]:
+        raise HTTPException(status_code=400, detail=result["output"])
+    return result
 
 
 @router.get("/languages")
