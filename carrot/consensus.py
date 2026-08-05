@@ -41,7 +41,12 @@ from typing import Any, Callable, Dict, List, Optional
 
 from .config import get_config, set_config
 
-MAX_MEMBERS = 4
+# Eight, not four. The old ceiling was a guess about what a laptop could take,
+# but the machine and the wallet are the user's to know about: someone with
+# eight provider keys has eight models, and a panel is exactly where you would
+# want them. The real limits — time, tokens — are visible in the trace as they
+# are spent, which is a better brake than a number chosen here.
+MAX_MEMBERS = 8
 MIN_MEMBERS = 2
 MEMBER_TIMEOUT = 300
 MAX_ANSWER_CHARS = 8000
@@ -102,7 +107,7 @@ SYNTHESIS_PROMPT = (
     "QUESTION: {question}\n\n{answers}\n\nCRITIQUES:\n{critiques}"
 )
 
-LABELS = "ABCD"
+LABELS = "ABCDEFGH"
 
 
 # ===== Panels =====

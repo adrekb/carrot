@@ -4540,3 +4540,23 @@ td, th, .si-sub, .small, .editor-status {
   font-size: 11px;
   color: var(--faint);
 }
+
+/* ===== Temporary chats =====
+   The banner is not decoration. A mode that silently changes whether you are
+   being remembered is a mode people forget they are in. */
+.composer-chip.on {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+  color: var(--accent);
+}
+.temp-banner {
+  padding: 11px 14px;
+  margin-bottom: 14px;
+  border-radius: var(--radius-sm);
+  border: 1px dashed var(--border-hi);
+  background: var(--card);
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+.temp-banner strong { color: var(--text); }
