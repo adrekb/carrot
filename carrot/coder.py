@@ -54,7 +54,7 @@ MODES = (MODE_PLAN, MODE_ACT)
 # Tools that change something. In plan mode none of these are offered at all.
 WRITE_TOOLS = frozenset({
     "write_file", "edit_file", "run_command", "create_file", "delete_file",
-    "git_commit", "git_checkout", "restore_checkpoint",
+    "move_file", "git_commit", "git_checkout", "restore_checkpoint",
 })
 
 
@@ -87,13 +87,48 @@ MODE_PREAMBLE = {
         "mode when the plan is right."
     ),
     MODE_ACT: (
-        "You are in ACT mode. Carry out the agreed plan. Prefer edit_file with "
-        "exact search/replace blocks over rewriting whole files. After a change "
-        "that should be runnable, run it and read the output. If you discover "
-        "the plan was wrong, stop and say so rather than improvising something "
-        "the user did not agree to."
+        "You are in ACT mode, and you have the tools to change the workspace: "
+        "write_file, edit_file and run_command are available to you right now.\n\n"
+        "Use them. Do not print a file into the chat and describe how to save "
+        "it — write it. Do not tell the user to run a command — run it and read "
+        "the output. Pasting code the user then has to copy is the one thing "
+        "ACT mode exists to avoid; if you were going to show a file, call "
+        "write_file with that exact content instead, then say what you wrote "
+        "and what it does.\n\n"
+        "Prefer edit_file with exact search/replace blocks over rewriting whole "
+        "files. After a change that should be runnable, run it and read the "
+        "output. If you discover the plan was wrong, stop and say so rather "
+        "than improvising something the user did not agree to."
     ),
 }
+
+# What a turn looks like when the model ignored all of that: a fenced block
+# long enough to be a file, and not one call to a write tool.
+ACT_NOT_ACTING = (
+    "You are in ACT mode and you just printed a file into the chat instead of "
+    "writing it. The user cannot run that. Call write_file with the exact "
+    "content you produced — pick a sensible path if none was given — and then "
+    "say what you wrote. If a tool call failed, say which one and why; do not "
+    "silently fall back to pasting."
+)
+# Long enough that a three-line illustration does not trip it, short enough
+# that a real file always does.
+ACT_CODE_BLOCK_CHARS = 400
+
+
+def looks_like_a_pasted_file(text: str) -> bool:
+    """Did this answer hand the user a file instead of writing one?
+
+    Deliberately crude: one fenced block over a few hundred characters. The
+    cost of a false positive is one extra round; the cost of a false negative
+    is the user copying code out of a chat window in a tool whose entire
+    purpose is that they should not have to.
+    """
+    if "```" not in (text or ""):
+        return False
+    parts = text.split("```")
+    # Odd indices are the insides of fences.
+    return any(len(parts[i]) >= ACT_CODE_BLOCK_CHARS for i in range(1, len(parts), 2))
 
 
 # ===== Project rules =====

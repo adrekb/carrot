@@ -917,9 +917,14 @@ def _coder_context(conversation_id: str = ""):
     blocks = []
     cfg = config.get_config()
     mode = coder_mod.normalize_mode(cfg.get("coder_mode"))
-    if mode == coder_mod.MODE_PLAN:
-        blocks.append({"role": "system", "content": coder_mod.MODE_PREAMBLE[mode]})
-    else:
+    # Both modes get their preamble. Act's used to be written and then never
+    # sent — the branch only emitted the plan brief, and with no brief it
+    # emitted nothing at all. So the mode whose entire job is "use the tools"
+    # was the one mode that never said so, and a small local model did the
+    # thing models do without instruction: printed the file into the chat and
+    # called it done. That is the whole "why can't the agent edit files".
+    blocks.append({"role": "system", "content": coder_mod.MODE_PREAMBLE[mode]})
+    if mode == coder_mod.MODE_ACT:
         # The brief replaces the planning transcript rather than joining it:
         # by Act time the reading and grepping has served its purpose, and
         # carrying it forward spends the window on transcript.
@@ -1052,6 +1057,15 @@ def _search_gate_gap(searches: int, reads: int) -> Optional[str]:
     if searches < MULTI_MIN_SEARCHES:
         return GATE_NUDGE_ONE_SEARCH
     return None
+
+
+def _act_mode_now() -> bool:
+    """Is the coding agent allowed to change things right now?"""
+    try:
+        return coder_mod.normalize_mode(
+            config.get_config().get("coder_mode")) == coder_mod.MODE_ACT
+    except Exception:
+        return False
 
 
 def _query_drifted(question: str, query: str, context: Optional[set] = None) -> bool:
@@ -1388,6 +1402,9 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mo
     # query is a deepening or a change of subject.
     topic = set()
     rejected = 0
+    # Whether this turn actually changed anything, which is what ACT mode
+    # promises and what a pasted code block is not.
+    wrote = 0
     # What the turn actually gathered, kept small on purpose. This is what a
     # forced answer is written from, so it has to fit in a context window that
     # the full transcript already overran.
@@ -1426,6 +1443,19 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mo
         content_str = "".join(content_parts)
 
         if not tool_calls:
+            # ACT mode's one promise is that you do not have to copy code out
+            # of a chat window. A model that prints a file and stops has broken
+            # it, so it gets told once — the same structural push-back the
+            # search gate uses, for the same reason: an instruction is a
+            # request, and a check is a guarantee.
+            if (_act_mode_now() and wrote == 0 and nudges < MAX_GATE_NUDGES
+                    and coder_mod.looks_like_a_pasted_file(content_str)):
+                nudges += 1
+                yield {"gate": {"reason": coder_mod.ACT_NOT_ACTING,
+                                "searches": searches, "reads": reads}}
+                working.append({"role": "assistant", "content": content_str})
+                working.append({"role": "user", "content": coder_mod.ACT_NOT_ACTING})
+                continue
             # The model wants to finish. In multi-turn that is only allowed
             # once it has actually searched and read.
             gap = _search_gate_gap(searches, reads) if gated else None
@@ -1486,6 +1516,8 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mo
                     result = event["_tool_result"]
                 else:
                     yield event
+            if bare in coder_mod.WRITE_TOOLS and not result.startswith("error:"):
+                wrote += 1
             if bare == "web_search":
                 searches += 1
                 # A query that ran is part of the subject now, so the next one

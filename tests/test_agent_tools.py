@@ -427,3 +427,74 @@ class TestRiskIsAboutTheCallNotTheTool:
             agent_tools.run_tool("write_file", self.spec(),
                                  {"path": "snake_game.py", "content": "import pygame"})
         assert seen["risk"] == "low"
+
+
+class TestTheAgentCanRemoveThingsToo:
+    """"Can it edit, add and delete files?" — the answer used to be two of three.
+
+    There was no delete and no rename at all, which means most refactors could
+    not be finished: the dead module stays and the user is asked to remove it
+    by hand, in the one tool that was supposed to do the work.
+    """
+
+    def test_a_file_can_be_deleted(self, workspace):
+        (workspace / "dead.py").write_text("obsolete")
+        result = agent_tools.call("carrot__delete_file", {"path": "dead.py"}, None, None)
+        assert not (workspace / "dead.py").exists()
+        assert "deleted" in result
+
+    def test_a_delete_is_revertable(self, workspace):
+        (workspace / "dead.py").write_text("obsolete")
+        result = agent_tools.call("carrot__delete_file", {"path": "dead.py"}, None, None)
+        entry = result.rsplit(" ", 1)[-1].rstrip(".")
+        assert agent_tools.revert_journal_entry(entry)["success"]
+        assert (workspace / "dead.py").read_text() == "obsolete"
+
+    def test_deleting_a_directory_is_refused(self, workspace):
+        (workspace / "src").mkdir()
+        result = agent_tools.call("carrot__delete_file", {"path": "src"}, None, None)
+        assert result.startswith("error:")
+        assert (workspace / "src").exists()
+
+    def test_deleting_outside_the_workspace_is_refused(self, workspace):
+        result = agent_tools.call(
+            "carrot__delete_file", {"path": "../../etc/hosts"}, None, None)
+        assert result.startswith("error:")
+
+    def test_a_missing_file_is_an_error_not_a_silent_success(self, workspace):
+        result = agent_tools.call("carrot__delete_file", {"path": "ghost.py"}, None, None)
+        assert result.startswith("error:")
+
+    def test_a_file_can_be_renamed(self, workspace):
+        (workspace / "old.py").write_text("content")
+        agent_tools.call("carrot__move_file",
+                         {"path": "old.py", "to": "new.py"}, None, None)
+        assert not (workspace / "old.py").exists()
+        assert (workspace / "new.py").read_text() == "content"
+
+    def test_a_move_never_silently_overwrites(self, workspace):
+        (workspace / "a.py").write_text("keep me")
+        (workspace / "b.py").write_text("do not lose me")
+        result = agent_tools.call("carrot__move_file",
+                                  {"path": "a.py", "to": "b.py"}, None, None)
+        assert result.startswith("error:")
+        assert (workspace / "b.py").read_text() == "do not lose me"
+
+    def test_a_move_cannot_escape_the_workspace(self, workspace):
+        (workspace / "a.py").write_text("x")
+        result = agent_tools.call("carrot__move_file",
+                                  {"path": "a.py", "to": "../../escaped.py"}, None, None)
+        assert result.startswith("error:")
+        assert (workspace / "a.py").exists()
+
+    def test_both_removals_ask_before_acting(self, isolated_db):
+        for name in ("delete_file", "move_file"):
+            assert agent_tools.TOOLS[name]["mutating"] is True
+            assert agent_tools.TOOLS[name]["risk"] == "high"
+
+    def test_plan_mode_cannot_reach_them(self):
+        from carrot import coder
+
+        names = ["carrot__delete_file", "carrot__move_file", "carrot__read_file"]
+        allowed = coder.tools_for_mode(names, coder.MODE_PLAN)
+        assert allowed == ["carrot__read_file"]

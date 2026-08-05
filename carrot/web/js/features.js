@@ -1232,21 +1232,20 @@ async function loadCoderState() {
     coderMode = state.mode;
     document.getElementById('mode-plan')?.classList.toggle('on', state.mode === 'plan');
     document.getElementById('mode-act')?.classList.toggle('on', state.mode === 'act');
-    const hint = document.getElementById('mode-hint');
-    if (hint) {
-        hint.textContent = state.mode === 'plan'
-            ? 'read-only — the agent proposes, you approve'
-            : 'the agent can edit files and run commands';
+    // One status word above the editor, saying what the agent may do. It is
+    // deliberately a sentence rather than a mode name: "act" told the user
+    // nothing about whether their files were at risk.
+    const status = document.getElementById('mode-status');
+    if (status) {
+        status.textContent = state.mode === 'plan'
+            ? 'Plan — the agent reads and proposes, nothing on disk moves'
+            : 'Act — the agent can create, edit, move and delete files, and run commands';
+        status.classList.toggle('is-act', state.mode === 'act');
     }
     const rules = document.getElementById('rules-chip');
     if (rules) {
         rules.classList.toggle('hidden', !state.has_rules);
         rules.title = `Project rules in effect (${state.rules_chars} characters)`;
-    }
-    const tag = document.getElementById('agent-mode-tag');
-    if (tag) {
-        tag.textContent = state.mode;
-        tag.classList.toggle('plan', state.mode === 'plan');
     }
     const rootHint = document.getElementById('agent-root-hint');
     if (rootHint && state.root) rootHint.textContent = state.root;
@@ -1939,3 +1938,17 @@ document.addEventListener('DOMContentLoaded', () => {
         addAgentAttachments(e.dataTransfer?.files);
     });
 });
+
+
+// The status word above the editor is a pointer, not a control: clicking it
+// opens the agent panel, which is where the one Plan/Act switch lives.
+function revealAgentMode() {
+    const side = document.getElementById('agent-side');
+    if (side && side.classList.contains('hidden') && typeof toggleAgentSide === 'function') {
+        toggleAgentSide();
+    }
+    const target = document.getElementById('mode-plan');
+    if (!target) return;
+    target.parentElement.classList.add('flash');
+    setTimeout(() => target.parentElement.classList.remove('flash'), 1200);
+}

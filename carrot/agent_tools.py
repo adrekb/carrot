@@ -329,6 +329,63 @@ def _tool_write_file(path: str, content: str = "", conversation_id: Optional[str
     return f"{verb} {path} ({len(content)} chars). Revert with journal entry {entry_id}."
 
 
+def _tool_delete_file(path: str, conversation_id: Optional[str] = None, **_) -> str:
+    """Delete a workspace file, keeping its contents in the journal.
+
+    A coding agent that can create and edit but not delete cannot finish most
+    refactors: the dead module stays, and the user is asked to remove it by
+    hand in the one tool that was supposed to do the work. The safety property
+    is the same one writes have — the contents go into the journal first, so
+    the delete is revertable rather than merely apologised for.
+    """
+    full = resolve(path)
+    if os.path.isdir(full):
+        return (f"error: {path} is a directory. Deleting a whole tree is not "
+                "something this tool will do — remove the files you mean.")
+    if not os.path.isfile(full):
+        return f"error: no such file: {path}"
+    try:
+        with open(full, "r", encoding="utf-8", errors="replace") as handle:
+            before = handle.read()
+    except OSError:
+        before = ""
+    try:
+        os.remove(full)
+    except OSError as exc:
+        return f"error: {exc}"
+    entry_id = journal_write(full, before, None, "delete", conversation_id)
+    return f"deleted {path}. Revert with journal entry {entry_id}."
+
+
+def _tool_move_file(path: str, to: str, conversation_id: Optional[str] = None, **_) -> str:
+    """Rename or move a file inside the workspace.
+
+    Journaled as a delete of the old path and a create of the new one, so both
+    halves can be undone. Doing it as a copy-then-delete would lose file mode
+    and be slow on anything large, so it is a real rename.
+    """
+    source = resolve(path)
+    target = resolve(to)
+    if not os.path.exists(source):
+        return f"error: no such file: {path}"
+    if os.path.exists(target):
+        return f"error: {to} already exists. Delete it first if that is what you mean."
+    try:
+        with open(source, "r", encoding="utf-8", errors="replace") as handle:
+            content = handle.read()
+    except OSError:
+        content = ""
+    try:
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        os.replace(source, target)
+    except OSError as exc:
+        return f"error: {exc}"
+    gone = journal_write(source, content, None, "delete", conversation_id)
+    made = journal_write(target, None, content, "create", conversation_id)
+    return (f"moved {path} to {to}. Revert with journal entries {made} "
+            f"(the new file) then {gone} (the old one).")
+
+
 def _tool_list_dir(path: str = "", **_) -> str:
     full = resolve(path)
     if not os.path.isdir(full):
@@ -777,6 +834,38 @@ TOOLS: Dict[str, Dict[str, Any]] = {
                 "content": {"type": "string", "description": "Full new file contents"},
             },
             "required": ["path", "content"],
+        },
+    },
+    "delete_file": {
+        "handler": _tool_delete_file,
+        "mutating": True,
+        "risk": "high",
+        "description": (
+            "Delete a file in the workspace. The contents are journaled first, "
+            "so the delete can be reverted. Refuses directories."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {"path": {"type": "string",
+                                    "description": "Workspace-relative file path"}},
+            "required": ["path"],
+        },
+    },
+    "move_file": {
+        "handler": _tool_move_file,
+        "mutating": True,
+        "risk": "high",
+        "description": (
+            "Rename or move a file inside the workspace. Journaled at both ends, "
+            "so it can be reverted. Refuses to overwrite an existing file."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Current workspace-relative path"},
+                "to": {"type": "string", "description": "New workspace-relative path"},
+            },
+            "required": ["path", "to"],
         },
     },
     "list_dir": {

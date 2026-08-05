@@ -104,9 +104,35 @@ class TestRulesReachThePrompt:
         blocks = A._coder_context()
         assert any("never use global state" in b["content"] for b in blocks)
 
-    def test_no_rules_means_no_wasted_system_message(self, isolated_db, tmp_path, monkeypatch):
+    def test_no_rules_means_no_wasted_rules_message(self, isolated_db, tmp_path, monkeypatch):
+        # The mode preamble is always sent; an empty rules block never is.
         monkeypatch.setattr(agent_tools, "workspace_root", lambda: str(tmp_path))
-        assert A._coder_context() == []
+        blocks = A._coder_context()
+        assert not any("rule" in b["content"].lower() for b in blocks)
+
+    def test_act_mode_states_itself_to_the_model(self, isolated_db, tmp_path, monkeypatch):
+        """The bug behind "why can't the agent edit files".
+
+        Act's preamble was written and then never sent: the branch only emitted
+        the plan brief, and with no brief it emitted nothing at all. The one
+        mode whose whole job is "use the tools" was the one that never said so,
+        and a small local model did what models do without instruction — it
+        printed the file into the chat.
+        """
+        from carrot import config
+
+        monkeypatch.setattr(agent_tools, "workspace_root", lambda: str(tmp_path))
+        config.set_config("coder_mode", "act")
+        blocks = A._coder_context()
+        assert any("ACT mode" in b["content"] for b in blocks)
+
+    def test_act_mode_is_told_not_to_paste_files(self, isolated_db, tmp_path, monkeypatch):
+        from carrot import config
+
+        monkeypatch.setattr(agent_tools, "workspace_root", lambda: str(tmp_path))
+        config.set_config("coder_mode", "act")
+        joined = " ".join(b["content"] for b in A._coder_context())
+        assert "write_file" in joined
 
     def test_plan_mode_states_itself_to_the_model(self, isolated_db, tmp_path, monkeypatch):
         from carrot import config
@@ -330,9 +356,28 @@ class TestAgentPanel:
         # while there is still time to switch models.
         assert "function warnIfNoVision" in self.read("js", "features.js")
 
-    def test_the_mode_is_visible_in_the_agent_header(self):
+    def test_the_mode_switch_lives_with_the_agent_it_governs(self):
+        """One control, not two at opposite ends of the screen.
+
+        Plan/Act sat at the far left of the editor bar while the agent sat at
+        the far right behind a chip that also displayed the mode — two
+        representations of one piece of state, and the read-only one looked
+        like a button.
+        """
+        html = self.read("index.html")
+        head = html.split('class="agent-side-head"')[1].split("</div>")[0]
+        assert 'id="mode-plan"' in head and 'id="mode-act"' in head
+
+    def test_there_is_only_one_mode_switch(self):
+        html = self.read("index.html")
+        assert html.count('id="mode-plan"') == 1
+        assert html.count('class="mode-switch"') == 1
+
+    def test_the_status_line_says_what_the_agent_may_do(self):
+        # "act" told the user nothing about whether their files were at risk.
         js = self.read("js", "features.js")
-        assert "agent-mode-tag" in js and 'id="agent-mode-tag"' in self.read("index.html")
+        assert "mode-status" in js
+        assert "delete files" in js
 
     def test_every_css_token_the_panel_uses_is_defined(self):
         import re

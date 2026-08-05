@@ -4630,3 +4630,42 @@ td, th, .si-sub, .small, .editor-status {
   #model-label { max-width: 76px; }
   #speak-toggle { display: none; }
 }
+
+/* ===== One mode control, not two =====
+ *
+ * Plan/Act sat at the far left of the editor bar while the agent it governs
+ * sat at the far right behind a chip that also displayed the mode. Two
+ * representations of one piece of state, a screen apart, and the read-only
+ * one was styled like a button. The switch now lives in the agent's own
+ * header; this is the status line above the editor, which reports and points. */
+.agent-mode-status {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 5px 9px;
+  color: var(--muted);
+  font-family: var(--sans);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  transition: color 0.15s, border-color 0.15s;
+}
+.agent-mode-status:hover { color: var(--text); border-color: var(--border); }
+.agent-mode-status.is-act { color: var(--accent); }
+
+/* Clicking the status word opens the agent and points at the switch, so the
+ * relationship between the two is shown rather than described. */
+.mode-switch.flash {
+  animation: mode-flash 1.2s ease-out;
+  border-radius: 9px;
+}
+@keyframes mode-flash {
+  0%, 100% { box-shadow: 0 0 0 0 transparent; }
+  20%      { box-shadow: 0 0 0 3px var(--accent-line); }
+  60%      { box-shadow: 0 0 0 3px var(--accent-line); }
+}
+
+/* In the agent header the switch has to be compact — it shares the row with
+ * the title and two icon buttons. */
+.agent-side-head .mode-switch { margin-left: 8px; }
+.agent-side-head .mode-opt { padding: 3px 9px; font-size: 11.5px; }

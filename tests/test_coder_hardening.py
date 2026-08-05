@@ -432,3 +432,78 @@ class TestCarrotLeavesNoTrace:
         coder.restore_checkpoint(made["id"])
         assert (tmp_path / gitops.CHECKPOINT_DIR).is_dir()
         assert not (tmp_path / "ghost.py").exists()
+
+
+class TestActModeHasToActuallyAct:
+    """A code block in the chat is the failure ACT mode exists to prevent.
+
+    The user asked for a snake game, in Act, and got a fenced block to copy —
+    which is the same thing a chat window does, from the tab that has write
+    tools. An instruction is a request; this is the check.
+    """
+
+    def test_a_pasted_file_is_recognised(self):
+        text = "Here you go:\n\n```python\n" + ("x = 1\n" * 120) + "```\n"
+        assert coder.looks_like_a_pasted_file(text)
+
+    def test_a_short_illustration_is_not(self):
+        assert not coder.looks_like_a_pasted_file(
+            "Use `range`:\n\n```python\nfor i in range(3):\n    print(i)\n```")
+
+    def test_prose_with_no_code_is_not(self):
+        assert not coder.looks_like_a_pasted_file("I would change three files.")
+
+    def test_the_push_back_names_the_tool_to_call(self):
+        assert "write_file" in coder.ACT_NOT_ACTING
+
+    def test_act_mode_is_pushed_back_once_then_left_alone(self, isolated_db):
+        from unittest.mock import patch
+
+        from carrot import app as A, config
+
+        config.set_config("coder_mode", "act")
+        pasted = "```python\n" + ("x = 1\n" * 120) + "```"
+        rounds = {"n": 0}
+
+        def stream(resolved, messages, tools=None):
+            rounds["n"] += 1
+            yield {"type": "text", "text": pasted}
+
+        class Route:
+            def as_dict(self):
+                return {}
+
+        with patch.object(A.router_mod, "stream_events", stream), \
+             patch.object(A, "_available_tools", lambda m: []):
+            events = list(A._agentic_chat_events(
+                [{"role": "user", "content": "make a snake game"}],
+                Route(), None, None, A.SEARCH_OFF))
+
+        gates = [e for e in events if "gate" in e]
+        assert gates, "the model pasted a file in Act mode and was not pushed back"
+        assert len(gates) <= A.MAX_GATE_NUDGES, "it must give up, not loop forever"
+        assert next(e["_final_text"] for e in events if "_final_text" in e).strip()
+
+    def test_plan_mode_is_left_alone(self, isolated_db):
+        from unittest.mock import patch
+
+        from carrot import app as A, config
+
+        config.set_config("coder_mode", "plan")
+        pasted = "```python\n" + ("x = 1\n" * 120) + "```"
+
+        def stream(resolved, messages, tools=None):
+            yield {"type": "text", "text": pasted}
+
+        class Route:
+            def as_dict(self):
+                return {}
+
+        with patch.object(A.router_mod, "stream_events", stream), \
+             patch.object(A, "_available_tools", lambda m: []):
+            events = list(A._agentic_chat_events(
+                [{"role": "user", "content": "how would you do it?"}],
+                Route(), None, None, A.SEARCH_OFF))
+        # Plan mode's entire job is proposing without writing. Showing the code
+        # it would write is the correct behaviour there.
+        assert not [e for e in events if "gate" in e]

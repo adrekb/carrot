@@ -546,17 +546,16 @@
         <div id="code-tree" class="side-list tree"></div>
       </aside>
       <div class="split-main">
-        <!-- The agent header. Plan or Act is the single most consequential
-             switch in the tab, so it sits above the editor and never scrolls
-             away: you should never be unsure whether the agent can write. -->
+        <!-- Plan/Act used to live here, at the far left, while the agent it
+             governs sat at the far right behind a chip that also said the
+             mode. Two controls for one piece of state, a screen apart, and
+             the read-only one looked like a button. There is one switch now
+             and it is in the agent's own header, next to the thing it
+             governs. This is a status word: it reports, and clicking it takes
+             you to the switch. -->
         <div class="agent-bar">
-          <div class="mode-switch" role="group" aria-label="Agent mode">
-            <button class="mode-opt" id="mode-plan" onclick="setCoderMode('plan')"
-                    title="Read-only. The agent proposes; nothing on disk moves.">Plan</button>
-            <button class="mode-opt" id="mode-act" onclick="setCoderMode('act')"
-                    title="The agent can edit files and run commands.">Act</button>
-          </div>
-          <span class="agent-hint" id="mode-hint"></span>
+          <button class="agent-mode-status" id="mode-status" onclick="revealAgentMode()"
+                  title="What the agent may do right now — click to change it"></button>
           <span class="spacer"></span>
           <span class="git-chip hidden" id="git-chip" onclick="showCodePanel('git')"
                 title="Repository status"></span>
@@ -627,7 +626,13 @@
         <div class="agent-side-head">
           <svg class="ico"><use href="#i-chip"/></svg>
           <span class="side-label">Agent</span>
-          <span class="agent-mode-tag" id="agent-mode-tag">act</span>
+          <!-- The one Plan/Act control, where the agent is. -->
+          <div class="mode-switch" role="group" aria-label="Agent mode">
+            <button class="mode-opt" id="mode-plan" onclick="setCoderMode('plan')"
+                    title="Read-only. The agent proposes; nothing on disk moves.">Plan</button>
+            <button class="mode-opt" id="mode-act" onclick="setCoderMode('act')"
+                    title="The agent can create, edit, move and delete files, and run commands.">Act</button>
+          </div>
           <span class="spacer"></span>
           <button class="icon-btn" title="New task" onclick="newAgentTask()"><svg class="ico"><use href="#i-plus"/></svg></button>
           <button class="icon-btn" title="Hide the agent" onclick="toggleAgentSide()"><svg class="ico"><use href="#i-x"/></svg></button>
