@@ -518,6 +518,73 @@ def _tool_create_reminder(title: str, due_at: str = "", description: str = "", *
     return f"created reminder {reminder['id']}: {title}" + (f" (due {due_at})" if due_at else "")
 
 
+def _tool_plan_semester(action: str = "state", answers: Optional[Dict[str, Any]] = None,
+                        **_) -> str:
+    """Drive the semester planner from a conversation.
+
+    The Planner tab exists because an editable course table and a seven-column
+    week need real estate. But nobody opens a tab they have not been told
+    about, and "plan my semester" is a thing people say out loud — so the same
+    engine is reachable from chat, sharing one state. The tab and the
+    conversation are two doors into one room, not two features.
+    """
+    import json as _json
+
+    from . import planner
+
+    if action == "answer" and answers:
+        planner.save_answers({k: v for k, v in answers.items()})
+
+    profile = planner.profile()
+    missing = planner.missing_intake(profile)
+    courses = profile.get("courses", [])
+
+    if action == "plan":
+        if missing:
+            return _json.dumps({
+                "status": "NEEDS_ANSWERS",
+                "ask": missing[0]["question"],
+                "why": missing[0]["why"],
+                "remaining": [q["id"] for q in missing],
+            })
+        if not courses:
+            return _json.dumps({
+                "status": "NEEDS_COURSES",
+                "message": "No classes yet. Ask the user to open the Planner tab and "
+                           "drop in a photo of their schedule — reading the grid needs "
+                           "the image, which this tool cannot take.",
+            })
+        try:
+            plan = planner.plan_week(profile, courses)
+        except planner.PlannerError as exc:
+            return _json.dumps({"status": "ERROR", "message": str(exc)})
+        planner.save_plan(plan)
+        return _json.dumps({
+            "status": "PLANNED",
+            "totals": plan["totals"],
+            "conflicts": plan["conflicts"],
+            "notes": plan["notes"],
+            "days": [
+                {"day": d["label"],
+                 "blocks": [f"{b['start_label']}–{b['end_label']} {b['title']}"
+                            + (f" @ {b['place']}" if b.get("place") else "")
+                            for b in d["blocks"]]}
+                for d in plan["days"]
+            ],
+        })
+
+    # Default: report what is known and what still has to be asked, so the
+    # model asks the next question rather than inventing an answer.
+    return _json.dumps({
+        "status": "READY" if not missing and courses else "INCOMPLETE",
+        "answers": profile.get("answers", {}),
+        "courses": len(courses),
+        "next_question": {"id": missing[0]["id"], "ask": missing[0]["question"],
+                          "why": missing[0]["why"]} if missing else None,
+        "remaining": [q["id"] for q in missing],
+    })
+
+
 def _tool_create_note(title: str, content: str = "", folder: str = "", **_) -> str:
     from . import notes as notes_mod
 
@@ -873,6 +940,33 @@ TOOLS: Dict[str, Dict[str, Any]] = {
                 "description": {"type": "string"},
             },
             "required": ["title"],
+        },
+    },
+    "plan_semester": {
+        "handler": _tool_plan_semester,
+        "mutating": True,
+        "risk": "low",
+        "description": (
+            "Build or inspect the user's semester schedule. Call with "
+            "action='state' to see what is known and what still needs asking, "
+            "action='answer' with `answers` to record what they just told you, "
+            "and action='plan' to build the week once nothing is missing.\n"
+            "Ask the questions it reports one at a time, in your own words, and "
+            "pass each answer back. Never invent an answer — a plan built on a "
+            "guessed dorm or bedtime is a schedule for a person who does not "
+            "exist. Reading a schedule photo happens in the Planner tab; point "
+            "the user there for that step."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "description": "state, answer, or plan"},
+                "answers": {
+                    "type": "object",
+                    "description": "Answers keyed by question id, e.g. "
+                                   "{\"home\": \"Russell Sage\", \"wake\": \"7:30 AM\"}",
+                },
+            },
         },
     },
     "create_note": {

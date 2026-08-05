@@ -1836,8 +1836,77 @@ function onboardStep(step) {
     document.querySelectorAll('#onboard .onboard-step').forEach(el => {
         el.classList.toggle('hidden', el.dataset.step !== step);
     });
-    if (step === 'local') { finishOnboarding(false); return; }
+    // Choosing to run locally used to close the whole flow immediately, which
+    // meant most people never saw where anything was. It goes to the tour now,
+    // and the model download starts behind it.
+    if (step === 'local') { startLocalSetup(); return; }
     if (step === 'key') onboardLoadProviders();
+    if (step === 'subscription') onboardCheckSubscription();
+}
+
+let onboardingBootstrapStarted = false;
+
+function startLocalSetup() {
+    onboardingBootstrapStarted = true;
+    onboardStep('tour');
+}
+
+// ---------- "I want to use my own AI subscription" ----------
+//
+// Most people who reach this screen are already paying one of these companies
+// every month. Being told to go create a second, separately-billed developer
+// account is the worst five minutes in the app, and it is where people stop.
+
+async function onboardCheckSubscription() {
+    const status = document.getElementById('onboard-sub-status');
+    const select = document.getElementById('onboard-sub-provider');
+    if (!status || !select) return;
+    status.textContent = '';
+    try {
+        const state = await api(`/api/auth/status/${encodeURIComponent(select.value)}`);
+        if (state.signed_in) {
+            status.textContent = `Already signed in to ${select.value}.`;
+        } else if (!state.oauth_configured) {
+            // Saying so beats a button that fails for reasons nobody can see.
+            status.textContent = 'This copy of Carrot does not have sign-in details for '
+                + 'that provider yet, so an API key is the reliable path for now.';
+        }
+    } catch (_) { /* the screen still works without this */ }
+}
+
+async function startOnboardingSignIn() {
+    const select = document.getElementById('onboard-sub-provider');
+    const status = document.getElementById('onboard-sub-status');
+    const provider = select.value;
+    status.textContent = 'Opening the sign-in page…';
+    try {
+        await api(`/api/auth/mode/${encodeURIComponent(provider)}`,
+            { method: 'PUT', body: JSON.stringify({ mode: 'subscription' }) });
+        const started = await api(`/api/auth/login/${encodeURIComponent(provider)}`,
+            { method: 'POST' });
+        if (window.carrot?.openExternal) window.carrot.openExternal(started.url);
+        else window.open(started.url, '_blank', 'noopener');
+        status.textContent = 'Finish signing in in your browser, then come back here.';
+        pollOnboardingSignIn(provider, status);
+    } catch (e) {
+        status.textContent = e.detail || e.message;
+    }
+}
+
+function pollOnboardingSignIn(provider, status) {
+    let tries = 0;
+    const timer = setInterval(async () => {
+        tries += 1;
+        try {
+            const state = await api(`/api/auth/status/${encodeURIComponent(provider)}`);
+            if (state.signed_in) {
+                clearInterval(timer);
+                status.textContent = 'Signed in.';
+                onboardStep('tour');
+            }
+        } catch (_) { clearInterval(timer); }
+        if (tries > 90) clearInterval(timer);
+    }, 2000);
 }
 
 async function onboardLoadProviders() {
@@ -1905,7 +1974,8 @@ async function saveOnboardingKey() {
         await api(`/api/router/providers/${encodeURIComponent(provider)}/enabled`, {
             method: 'PUT', body: JSON.stringify({ enabled: true }),
         }).catch(() => {});
-        setTimeout(() => finishOnboarding(false), 1200);
+        // Everyone ends on the tour, whichever path they took.
+        setTimeout(() => onboardStep('tour'), 1200);
     } catch (e) {
         status.className = 'onboard-status bad';
         status.textContent = 'That key did not work: ' + e.message;
@@ -1914,13 +1984,22 @@ async function saveOnboardingKey() {
     }
 }
 
-async function finishOnboarding(skipped) {
+async function finishOnboarding(skipped, goTo) {
     document.getElementById('onboard').classList.add('hidden');
     try {
         await api('/api/config/onboarding_done', { method: 'PUT', body: JSON.stringify(true) });
     } catch (_) { /* it is only a "do not show again" flag */ }
-    // Hand over to the model-download splash unless they skipped outright.
-    if (!skipped && typeof checkBootstrap === 'function') checkBootstrap();
+    if (goTo && typeof switchTab === 'function') {
+        // Landing on Help rather than being told where it is: the difference
+        // between knowing a page exists and having seen it.
+        switchTab(goTo);
+        return;
+    }
+    // Hand over to the model-download splash unless they skipped outright, or
+    // already chose a cloud provider and need no local model.
+    if (!skipped && onboardingBootstrapStarted && typeof checkBootstrap === 'function') {
+        checkBootstrap();
+    }
 }
 
 async function maybeShowOnboarding() {

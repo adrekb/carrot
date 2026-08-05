@@ -126,6 +126,48 @@
           </span>
           <span class="oc-tag">Paste a key</span>
         </button>
+        <button class="onboard-choice" onclick="onboardStep('subscription')">
+          <span class="oc-title">I want to use my own AI subscription</span>
+          <span class="oc-body">
+            You already pay for Claude Pro or ChatGPT Plus. Sign in with that
+            account instead of setting up separate developer billing.
+          </span>
+          <span class="oc-tag">Sign in</span>
+        </button>
+      </div>
+    </section>
+
+    <section class="onboard-step hidden" data-step="subscription">
+      <h2>Use the subscription you already pay for</h2>
+      <p class="onboard-lede muted">
+        If you have Claude Pro or Max, or ChatGPT Plus or Pro, you can sign in with
+        that account rather than creating a second, separately-billed developer one.
+      </p>
+      <div class="onboard-prose">
+        <p><b>How this works, precisely:</b></p>
+        <ul>
+          <li>Carrot uses the provider's <b>own sign-in page</b>, opened in your real
+              browser. It never sees your password.</li>
+          <li>It does <b>not</b> read your browser's cookies or drive the web app
+              behind your back. Those methods break constantly and violate the
+              providers' terms.</li>
+          <li>Sign-in needs this installation's OAuth client details. If your copy of
+              Carrot does not have them yet, it will say so plainly instead of
+              half-working — an API key is the reliable path until then.</li>
+        </ul>
+      </div>
+      <div class="onboard-field">
+        <label for="onboard-sub-provider">Which subscription?</label>
+        <select id="onboard-sub-provider">
+          <option value="anthropic">Anthropic — Claude Pro or Max</option>
+          <option value="openai">OpenAI — ChatGPT Plus or Pro</option>
+        </select>
+      </div>
+      <div id="onboard-sub-status" class="onboard-status"></div>
+      <div class="onboard-actions">
+        <button class="btn btn-ghost" onclick="onboardStep('choose')">Back</button>
+        <button class="btn btn-ghost" onclick="onboardStep('key')">Use an API key instead</button>
+        <button class="btn btn-primary" onclick="startOnboardingSignIn()">Sign in</button>
       </div>
     </section>
 
@@ -145,9 +187,11 @@
               A heavy day of use is typically a few dollars, not hundreds.</li>
           <li><b>Your questions leave this computer.</b> They go to that company's
               servers to be answered. That is the trade for a much stronger model.</li>
-          <li><b>It is not a subscription to a chat website.</b> Paying for
-              Claude.ai or ChatGPT Plus does <i>not</i> give you an API key — those
-              are separate products on separate billing.</li>
+          <li><b>It is not the same as a chat subscription.</b> Paying for
+              Claude.ai or ChatGPT Plus does <i>not</i> give you an API key — they
+              are separate products on separate billing. Carrot can use a
+              subscription directly instead; that is the third option on the
+              previous screen.</li>
           <li><b>Treat it like a password.</b> Anyone who has it can spend your
               money. Carrot stores it on this computer only.</li>
         </ul>
@@ -184,6 +228,45 @@
         <button class="btn btn-ghost" onclick="onboardStep('choose')">Back</button>
         <button class="btn btn-ghost" onclick="onboardStep('local')">Run locally instead</button>
         <button class="btn btn-primary" id="onboard-key-btn" onclick="saveOnboardingKey()">Check and save</button>
+      </div>
+    </section>
+
+    <!-- Last screen, always shown. Someone who has just been asked three
+         questions about billing has learned nothing about the app itself, and
+         "where is help" is the one thing they will need first. -->
+    <section class="onboard-step hidden" data-step="tour">
+      <h2>Where things are</h2>
+      <div class="onboard-tour">
+        <div class="tour-item">
+          <span class="tour-what">Chat</span>
+          <span class="tour-why">Ask anything. It can search the web, read files you
+            attach, and make charts and images right in the conversation.</span>
+        </div>
+        <div class="tour-item">
+          <span class="tour-what">Code</span>
+          <span class="tour-why">A real editor with a terminal, plus an agent that can
+            read and change files — in Plan mode it only proposes, in Act it edits.</span>
+        </div>
+        <div class="tour-item">
+          <span class="tour-what">Planner</span>
+          <span class="tour-why">Hand it a photo of your class schedule and it builds a
+            week around it, travel time and meals included.</span>
+        </div>
+        <div class="tour-item">
+          <span class="tour-what">Research</span>
+          <span class="tour-why">For questions worth a few minutes: many sources, every
+            claim checked, one cited report.</span>
+        </div>
+        <div class="tour-item highlight">
+          <span class="tour-what">Help</span>
+          <span class="tour-why">In the left sidebar under <b>More → Help</b>. Every
+            feature explained, in plain language. Start there when something is
+            confusing — that is what it is for.</span>
+        </div>
+      </div>
+      <div class="onboard-actions">
+        <button class="btn btn-ghost" onclick="finishOnboarding(false)">Close</button>
+        <button class="btn btn-primary" onclick="finishOnboarding(false, 'help')">Take me to Help</button>
       </div>
     </section>
   </div>

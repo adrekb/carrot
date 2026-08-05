@@ -35,12 +35,15 @@ class TestTheFlow:
     def test_skipping_does_not_then_show_the_model_splash(self):
         """Skip means skip; falling through to a download prompt would make
         the skip button a lie."""
-        assert "if (!skipped && typeof checkBootstrap" in APP_JS
+        assert re.search(r"if \(!skipped &&[^)]*checkBootstrap", APP_JS)
 
     def test_choosing_local_still_reaches_the_model_picker(self):
-        """The local path needs the splash — that is where a model is chosen."""
+        """The local path needs the splash — that is where a model is chosen.
+        It now goes via the closing tour, so the download starts behind a screen
+        that has actually told the user where anything is."""
         assert "onboardStep('local')" in INDEX
-        assert "if (step === 'local') { finishOnboarding(false); return; }" in APP_JS
+        assert "if (step === 'local') { startLocalSetup(); return; }" in APP_JS
+        assert "onboardingBootstrapStarted = true;" in APP_JS
 
     def test_onboarding_runs_before_the_splash(self):
         assert "maybeShowOnboarding();" in APP_JS
@@ -70,7 +73,10 @@ class TestTheExplainer:
     def test_it_distinguishes_a_key_from_a_chat_subscription(self):
         """Paying for ChatGPT Plus or Claude.ai does not give you a key, and
         assuming otherwise is the most common way this goes wrong."""
-        assert "not a subscription" in self.prose
+        # It used to say a chat subscription simply cannot be used. Now it can,
+        # so the wording distinguishes the two products instead of ruling one out.
+        assert "not the same as a chat subscription" in self.prose
+        assert "separate billing" in self.prose
 
     def test_it_says_to_treat_it_like_a_password(self):
         assert "like a password" in self.prose

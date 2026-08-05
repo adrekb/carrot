@@ -536,3 +536,115 @@ class TestPlannerTabIsReachable:
         for kind in (planner.KIND_CLASS, planner.KIND_MEAL, planner.KIND_GYM,
                      planner.KIND_STUDY, planner.KIND_COMMUTE, planner.KIND_WORK):
             assert f".day-block.kind-{kind}" in css, kind
+
+
+class TestPlannerFromChat:
+    """The tab exists because a course table and a week grid need real estate.
+    But nobody opens a tab they were never told about, and "plan my semester"
+    is a thing people say out loud — so the same engine answers from chat."""
+
+    def call(self, **kwargs):
+        import json
+
+        from carrot import agent_tools
+
+        return json.loads(agent_tools._tool_plan_semester(**kwargs))
+
+    def test_it_reports_the_next_question_rather_than_guessing(self, isolated_db):
+        body = self.call(action="state")
+        assert body["status"] == "INCOMPLETE"
+        assert body["next_question"]["id"] == "school"
+        assert body["next_question"]["why"]
+
+    def test_an_answer_can_be_recorded_from_the_conversation(self, isolated_db):
+        body = self.call(action="answer", answers={"school": "Dartmouth"})
+        assert planner.profile()["answers"]["school"] == "Dartmouth"
+        assert body["next_question"]["id"] == "home"
+
+    def test_planning_too_early_asks_instead_of_failing(self, isolated_db):
+        body = self.call(action="plan")
+        assert body["status"] == "NEEDS_ANSWERS" and body["ask"]
+
+    def test_planning_without_classes_points_at_the_tab(self, isolated_db):
+        # Reading a schedule photo needs the image, which a tool call has not got.
+        planner.save_answers(profile()["answers"])
+        body = self.call(action="plan")
+        assert body["status"] == "NEEDS_COURSES" and "Planner tab" in body["message"]
+
+    def test_a_complete_profile_produces_a_week(self, campus):
+        planner.save_answers(profile()["answers"])
+        planner.save_courses(COURSES)
+        body = self.call(action="plan")
+        assert body["status"] == "PLANNED"
+        assert len(body["days"]) == 7
+        assert any("Class" in b or "COSC" in b for d in body["days"] for b in d["blocks"])
+
+    def test_the_chat_plan_and_the_tab_share_one_state(self, campus):
+        # Two doors into one room, not two features.
+        planner.save_answers(profile()["answers"])
+        planner.save_courses(COURSES)
+        self.call(action="plan")
+        assert planner.last_plan()["blocks"]
+
+    def test_the_tool_forbids_inventing_answers(self):
+        from carrot import agent_tools
+
+        description = agent_tools.TOOLS["plan_semester"]["description"]
+        assert "Never invent an answer" in description
+
+
+class TestOnboardingRevision:
+    def read(self, *parts):
+        from pathlib import Path
+        return Path(__file__).resolve().parents[1].joinpath("carrot", "web", *parts).read_text()
+
+    def test_using_your_own_subscription_is_offered(self):
+        assert "I want to use my own AI subscription" in self.read("index.html")
+
+    def test_the_subscription_step_exists(self):
+        assert 'data-step="subscription"' in self.read("index.html")
+
+    def test_it_states_what_it_does_not_do(self):
+        # The claim is only worth making if it is specific.
+        html = self.read("index.html")
+        assert "does <b>not</b> read your browser's cookies" in html
+
+    def test_an_unconfigured_provider_says_so_before_the_button_fails(self):
+        assert "does not have sign-in details" in self.read("js", "app.js")
+
+    def test_the_outdated_api_key_claim_was_corrected(self):
+        # It used to say a chat subscription cannot be used. It now can.
+        html = self.read("index.html")
+        assert "Carrot can use a\n              subscription directly instead" in html
+
+    def test_every_path_ends_on_the_tour(self):
+        js = self.read("js", "app.js")
+        assert "onboardStep('tour')" in js
+        assert "function startLocalSetup" in js
+
+    def test_the_tour_shows_where_help_is(self):
+        html = self.read("index.html")
+        assert "More → Help" in html
+
+    def test_help_is_the_highlighted_row(self):
+        # It is the one they will need first and never find on their own.
+        html = self.read("index.html")
+        tour = html.split('class="onboard-tour"')[1].split("</div>\n      <div class=\"onboard-actions\"")[0]
+        assert 'tour-item highlight' in tour
+        assert tour.index("highlight") < tour.index("Take me to Help") if "Take me to Help" in tour else True
+
+    def test_the_last_button_lands_on_help_rather_than_describing_it(self):
+        html = self.read("index.html")
+        assert "finishOnboarding(false, 'help')" in html
+
+    def test_finish_can_route_somewhere(self):
+        assert "async function finishOnboarding(skipped, goTo)" in self.read("js", "app.js")
+
+    def test_every_css_token_the_tour_uses_is_defined(self):
+        import re
+
+        css = self.read("css", "style.css")
+        block = css.split("/* ===== Onboarding: the closing tour =====")[1]
+        used = set(re.findall(r"var\((--[a-z0-9-]+)", block))
+        defined = set(re.findall(r"^\s*(--[a-z0-9-]+):", css, re.M))
+        assert used <= defined, f"undefined CSS tokens: {sorted(used - defined)}"
