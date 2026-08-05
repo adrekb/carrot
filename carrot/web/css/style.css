@@ -4138,3 +4138,348 @@ td, th, .si-sub, .small, .editor-status {
   overflow-x: auto;
   max-width: 100%;
 }
+
+/* ===== The agent panel =====
+   Sits to the right of the editor because it is a collaborator, not a tool
+   drawer: you read the file and the agent's reasoning side by side. */
+.agent-side {
+  display: flex;
+  flex-direction: column;
+  width: 380px;
+  flex: none;
+  border-left: 1px solid var(--border);
+  background: var(--bg2);
+  min-height: 0;
+}
+.agent-side.hidden { display: none; }
+.agent-side.dropping { outline: 2px dashed var(--accent); outline-offset: -6px; }
+.agent-side-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.agent-side-head .spacer { flex: 1; }
+.agent-mode-tag {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  color: var(--accent);
+}
+.agent-mode-tag.plan {
+  background: transparent;
+  border-color: var(--border-hi);
+  color: var(--muted);
+}
+.agent-log {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+.agent-hello { color: var(--muted); font-size: 13px; line-height: 1.6; }
+.agent-hello p { margin: 0 0 8px; }
+.agent-msg { display: flex; flex-direction: column; gap: 6px; }
+.agent-msg.you .agent-body {
+  align-self: flex-end;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  border-radius: 12px 12px 4px 12px;
+  padding: 7px 11px;
+  max-width: 92%;
+}
+.agent-msg.agent .agent-body {
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.6;
+}
+.agent-body { font-size: 13px; }
+.agent-trace {
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  max-height: 200px;
+  overflow-y: auto;
+  padding: 7px 9px;
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.agent-trace-line { white-space: pre-wrap; word-break: break-all; }
+.agent-trace-line.result { color: var(--faint); }
+.agent-trace-line.rejected { color: var(--red); }
+.agent-approval {
+  border: 1px solid var(--accent-line);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  padding: 9px 11px;
+}
+.approval-what { font-size: 12.5px; color: var(--text); margin-bottom: 8px; }
+.approval-row { display: flex; gap: 8px; }
+.agent-compose {
+  border-top: 1px solid var(--border);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.agent-compose textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 62px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 9px 11px;
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.agent-compose textarea:focus {
+  outline: none;
+  border-color: var(--accent-line);
+}
+.agent-compose-row { display: flex; align-items: center; gap: 8px; }
+.agent-compose-row .spacer { flex: 1; }
+
+/* Narrow windows: the agent goes under the editor rather than squeezing it. */
+@media (max-width: 1200px) {
+  .agent-side { width: 320px; }
+}
+@media (max-width: 900px) {
+  #view-code .split { flex-wrap: wrap; }
+  .agent-side { width: 100%; border-left: none; border-top: 1px solid var(--border); }
+}
+
+/* The agent's tray sits inline above its box rather than floating over the
+   composer the way the chat one does — there is no room to float here. */
+#agent-attach-tray {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+#agent-attach-tray.hidden { display: none; }
+
+/* ===== Semester planner =====
+   Four steps down the page, in the order the information is actually needed.
+   The week grid at the bottom is the payoff, so it gets the colour. */
+.intake-row {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 4px;
+}
+.intake-row:last-child { border-bottom: none; }
+.intake-row.needed { border-left: 3px solid var(--accent); padding-left: 12px; }
+.intake-q { font-size: 13.5px; color: var(--text); font-weight: 500; }
+.intake-required {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  font-weight: 600;
+}
+.intake-why { font-size: 12px; color: var(--faint); font-style: italic; line-height: 1.5; }
+.intake-input {
+  margin-top: 4px;
+  max-width: 460px;
+  background: var(--card2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 7px 11px;
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 13px;
+}
+.intake-input:focus { outline: none; border-color: var(--accent-line); }
+
+.planner-drop {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 20px;
+  margin: 10px 0;
+  border: 1px dashed var(--border-hi);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+.planner-drop.dropping { border-color: var(--accent); background: var(--accent-soft); }
+.planner-paste { margin-top: 8px; font-size: 12.5px; color: var(--muted); }
+.planner-paste summary { cursor: pointer; padding: 4px 0; }
+.planner-paste textarea {
+  width: 100%;
+  margin: 8px 0;
+  background: var(--card2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 9px 11px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.course-table { margin: 12px 0; overflow-x: auto; }
+.course-row {
+  display: grid;
+  grid-template-columns: 90px 1.4fr 70px 90px 90px 1.2fr 32px;
+  gap: 6px;
+  margin-bottom: 6px;
+  min-width: 700px;
+}
+.course-row.head {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--faint);
+  margin-bottom: 8px;
+}
+.course-row input {
+  background: var(--card2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 12.5px;
+  min-width: 0;
+}
+.course-row input:focus { outline: none; border-color: var(--accent-line); }
+
+.planner-problem,
+.planner-note {
+  font-size: 12.5px;
+  line-height: 1.55;
+  padding: 8px 11px;
+  margin-bottom: 6px;
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+.planner-problem { border-left-color: var(--red); background: rgba(242, 115, 107, 0.1); }
+.planner-totals {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--muted);
+  padding: 8px 0;
+}
+.building-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+
+.planner-week {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(120px, 1fr));
+  gap: 8px;
+  margin-top: 14px;
+  overflow-x: auto;
+}
+.day-column {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.day-head {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--faint);
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.day-empty { font-size: 11.5px; color: var(--faint); font-style: italic; padding: 6px 0; }
+.day-block {
+  padding: 6px 8px;
+  border-radius: 7px;
+  border-left: 3px solid var(--border-hi);
+  background: var(--card);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+.block-time { font-family: var(--mono); font-size: 10.5px; color: var(--faint); }
+.block-title { color: var(--text); font-weight: 500; }
+.block-place { color: var(--muted); font-size: 10.5px; }
+/* Classes are the anchor, so they read strongest; travel is deliberately the
+   quietest thing on the grid — you need to see it, not read it. */
+.day-block.kind-class { border-left-color: var(--accent); background: var(--accent-soft); }
+.day-block.kind-meal { border-left-color: var(--green); }
+.day-block.kind-gym { border-left-color: var(--yellow); }
+.day-block.kind-study { border-left-color: var(--border-hi); }
+.day-block.kind-commute { border-left-color: transparent; background: transparent; opacity: 0.55; }
+.day-block.kind-work { border-left-color: var(--red); }
+
+@media (max-width: 1100px) {
+  .planner-week { grid-template-columns: repeat(7, minmax(110px, 1fr)); }
+}
+
+/* ===== Onboarding: the closing tour =====
+   Someone who has just answered three questions about billing has learned
+   nothing about the app. Help is the row that gets the accent, because it is
+   the one they will need first and the one nobody finds on their own. */
+.onboard-tour { display: flex; flex-direction: column; gap: 2px; margin: 8px 0 18px; }
+.tour-item {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 14px;
+  align-items: baseline;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+}
+.tour-item.highlight {
+  background: var(--accent-soft);
+  border-left: 3px solid var(--accent);
+}
+.tour-what {
+  font-family: var(--sans);
+  font-weight: 600;
+  font-size: 13.5px;
+  color: var(--text);
+}
+.tour-item.highlight .tour-what { color: var(--accent); }
+.tour-why { font-size: 12.5px; line-height: 1.55; color: var(--muted); }
+@media (max-width: 640px) {
+  .tour-item { grid-template-columns: 1fr; gap: 2px; }
+}
+
+/* ===== Local webhooks ===== */
+.hook-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+.hook-row:last-child { border-bottom: none; }
+.hook-main { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 240px; flex-wrap: wrap; }
+.hook-add { margin-top: 12px; font-size: 12.5px; color: var(--muted); }
+.hook-add summary { cursor: pointer; padding: 4px 0; }
+.hook-created { margin-top: 10px; }
+.hook-created.hidden { display: none; }
+.hook-token-warn {
+  font-size: 12.5px;
+  color: var(--accent);
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.hook-example {
+  display: block;
+  white-space: pre;
+  overflow-x: auto;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  line-height: 1.5;
+}

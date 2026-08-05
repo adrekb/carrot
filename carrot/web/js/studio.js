@@ -253,3 +253,172 @@ async function tryGenerate() {
         preview.innerHTML = `<div class="empty error">${escHtml(e.detail || e.message)}</div>`;
     }
 }
+
+// ---------- Local webhooks ----------
+//
+// The one door into Carrot with no session behind it, so the panel is built to
+// make that obvious: an explicit switch, one named action per hook, and the
+// token shown exactly once at creation rather than rendered in a list forever.
+
+let hooksState = null;
+
+async function loadHooksPanel() {
+    const host = document.getElementById('hooks-panel');
+    if (!host) return;
+    try {
+        hooksState = await api('/api/webhooks');
+    } catch (e) {
+        host.innerHTML = `<div class="empty error">${escHtml(e.message)}</div>`;
+        return;
+    }
+    const toggle = document.getElementById('hooks-enabled');
+    if (toggle) toggle.checked = !!hooksState.enabled;
+
+    const actions = document.getElementById('hook-action');
+    if (actions && !actions.dataset.loaded) {
+        actions.dataset.loaded = '1';
+        actions.innerHTML = hooksState.actions
+            .map(a => `<option value="${escHtml(a.id)}">${escHtml(a.description)}</option>`).join('');
+    }
+
+    host.innerHTML = '';
+    if (!hooksState.hooks.length) {
+        host.innerHTML = '<div class="empty">No hooks yet.</div>';
+    }
+    for (const hook of hooksState.hooks) host.appendChild(hookRow(hook));
+    renderHookTargets();
+}
+
+function hookRow(hook) {
+    const row = document.createElement('div');
+    row.className = 'hook-row';
+    row.innerHTML = `
+      <div class="hook-main">
+        <span class="provider-name">${escHtml(hook.label || hook.id)}</span>
+        <span class="tag">${escHtml(hook.action)}</span>
+        ${hook.fires ? `<span class="muted small">${hook.fires} call(s)</span>` : ''}
+      </div>
+      <code class="offer-cmd">${escHtml(hook.url)}</code>`;
+
+    const controls = document.createElement('div');
+    controls.className = 'settings-row';
+    const rotate = document.createElement('button');
+    rotate.className = 'btn btn-ghost';
+    rotate.textContent = 'New token';
+    rotate.onclick = () => rotateHook(hook.id);
+    const remove = document.createElement('button');
+    remove.className = 'btn btn-ghost';
+    remove.textContent = 'Delete';
+    remove.onclick = () => deleteHook(hook.id, hook.label || hook.id);
+    controls.append(rotate, remove);
+    row.appendChild(controls);
+    return row;
+}
+
+async function setHooksEnabled(enabled) {
+    try {
+        await api('/api/webhooks/enabled',
+            { method: 'PUT', body: JSON.stringify({ enabled }) });
+        loadHooksPanel();
+    } catch (e) {
+        alert('Could not change that: ' + (e.detail || e.message));
+    }
+}
+
+async function createHook() {
+    const id = document.getElementById('hook-id').value.trim();
+    const action = document.getElementById('hook-action').value;
+    if (!id) return;
+    let made;
+    try {
+        made = await api('/api/webhooks/hooks',
+            { method: 'POST', body: JSON.stringify({ id, action }) });
+    } catch (e) {
+        alert(e.detail || e.message);
+        return;
+    }
+    document.getElementById('hook-id').value = '';
+    showHookToken(made);
+    loadHooksPanel();
+}
+
+// The token is shown once, here, with a copyable example — because the next
+// thing anyone does is paste it into Home Assistant, and hunting for the right
+// curl incantation is where people give up.
+function showHookToken(hook) {
+    const host = document.getElementById('hook-created');
+    host.classList.remove('hidden');
+    const example = `curl -X POST ${hook.url} \\\n`
+        + `  -H "Authorization: Bearer ${hook.token}" \\\n`
+        + `  -H "Content-Type: application/json" \\\n`
+        + `  -d '{"title": "Hello from my house"}'`;
+    host.innerHTML = `
+      <div class="hook-token-warn">This token is shown once. Copy it now.</div>
+      <pre class="offer-cmd hook-example">${escHtml(example)}</pre>`;
+    const copy = document.createElement('button');
+    copy.className = 'btn btn-primary';
+    copy.textContent = 'Copy the command';
+    copy.onclick = () => {
+        navigator.clipboard?.writeText(example);
+        copy.textContent = 'Copied';
+    };
+    host.appendChild(copy);
+}
+
+async function rotateHook(id) {
+    if (!confirm(`Give "${id}" a new token? Anything using the old one stops working.`)) return;
+    try {
+        showHookToken(await api(`/api/webhooks/hooks/${encodeURIComponent(id)}/rotate`,
+            { method: 'POST' }));
+    } catch (e) {
+        alert(e.detail || e.message);
+    }
+}
+
+async function deleteHook(id, label) {
+    if (!confirm(`Delete "${label}"? Anything calling it stops working.`)) return;
+    try {
+        await api(`/api/webhooks/hooks/${encodeURIComponent(id)}`, { method: 'DELETE' });
+        loadHooksPanel();
+    } catch (e) {
+        alert(e.detail || e.message);
+    }
+}
+
+function renderHookTargets() {
+    const host = document.getElementById('hook-targets');
+    if (!host) return;
+    const targets = hooksState?.targets || [];
+    host.innerHTML = targets.length ? '' : '<div class="empty">No targets yet.</div>';
+    for (const target of targets) {
+        const row = document.createElement('div');
+        row.className = 'hook-row';
+        row.innerHTML = `<div class="hook-main">
+            <span class="provider-name">${escHtml(target.label)}</span>
+            <code class="offer-cmd">${escHtml(target.url)}</code></div>`;
+        const remove = document.createElement('button');
+        remove.className = 'btn btn-ghost';
+        remove.textContent = 'Remove';
+        remove.onclick = async () => {
+            await api(`/api/webhooks/targets/${encodeURIComponent(target.id)}`,
+                { method: 'DELETE' }).catch(() => {});
+            loadHooksPanel();
+        };
+        row.appendChild(remove);
+        host.appendChild(row);
+    }
+}
+
+async function addHookTarget() {
+    const input = document.getElementById('target-url');
+    const url = input.value.trim();
+    if (!url) return;
+    try {
+        await api('/api/webhooks/targets',
+            { method: 'POST', body: JSON.stringify({ url, events: ['notification'] }) });
+        input.value = '';
+        loadHooksPanel();
+    } catch (e) {
+        alert(e.detail || e.message);
+    }
+}

@@ -40,7 +40,13 @@ TOKEN_PATH = os.path.join(CONFIG_DIR, "session.json")
 # because it is useless without a `state` this process generated and is still
 # holding in memory — an unknown state is rejected before anything happens.
 PUBLIC_PATHS = {"/", "/api/health", "/favicon.ico", "/api/auth/callback"}
-PUBLIC_PREFIXES = ("/css/", "/js/", "/vendor/", "/assets/", "/docs", "/openapi.json", "/redoc")
+PUBLIC_PREFIXES = (
+    "/css/", "/js/", "/vendor/", "/assets/", "/docs", "/openapi.json", "/redoc",
+    # Local webhooks carry their own per-hook token, checked in constant time,
+    # and are refused outright unless the user turned the feature on. Home
+    # Assistant has no session and cannot be given one.
+    "/api/hooks/",
+)
 
 _token: Optional[str] = None
 

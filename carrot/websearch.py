@@ -31,7 +31,27 @@ import httpx
 
 from . import policy
 
-USER_AGENT = "Mozilla/5.0 (compatible; Carrot/1.0; local assistant)"
+# A header set a real browser would send. The previous value announced itself
+# as a bot ("compatible; Carrot/1.0"), and sent nothing else — no Accept, no
+# Accept-Language. Every serious news site runs bot management that 403s
+# exactly that shape, which is why Politico and Cook Political refused while
+# AP and NYT let us through. The user asked to read a public page from their
+# own machine; this sends what their own browser would send for it, and
+# nothing more. No cookie forging, no proxy rotation, no captcha work — a
+# site that still says no is taken at its word.
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+)
+BROWSER_HEADERS = {
+    "User-Agent": USER_AGENT,
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Upgrade-Insecure-Requests": "1",
+}
 MAX_REDIRECTS = 5
 MAX_BYTES = 2 * 1024 * 1024
 DEFAULT_TIMEOUT = 15.0
@@ -279,6 +299,42 @@ def _extract(html: str, base_url: str) -> Dict[str, Any]:
     return {"title": title, "text": "\n".join(lines), "links": links}
 
 
+# A section front — nytimes.com/section/politics, politico.com/politics — is a
+# list of links with almost no prose. Reading one and finding nothing to
+# summarise is what makes a model read it again, and then read three more like
+# it. Naming the shape lets the tool hand back the headlines instead.
+INDEX_MIN_LINKS = 25
+INDEX_MAX_WORDS_PER_LINK = 12
+
+
+def looks_like_an_index(text: str, links: List[Dict[str, str]]) -> bool:
+    """Is this a list of headlines rather than an article?"""
+    if len(links) < INDEX_MIN_LINKS:
+        return False
+    words = len(text.split())
+    return words < len(links) * INDEX_MAX_WORDS_PER_LINK
+
+
+def _status_message(status: int, url: str) -> str:
+    """Say who refused, and what to do about it.
+
+    "HTTP 403" reads to a model like a transient failure worth retrying, and
+    that is exactly what it did — the same URL twice in one turn.
+    """
+    host = urlparse(url).netloc or url
+    if status in (401, 403):
+        return (f"HTTP {status} — {host} blocks automated readers. Do not retry "
+                f"this URL; use a different source for the same story.")
+    if status == 429:
+        return (f"HTTP 429 — {host} is rate limiting. Use a different source "
+                f"rather than retrying.")
+    if status == 451:
+        return f"HTTP 451 — {host} is legally unavailable here. Use another source."
+    if status == 404:
+        return f"HTTP 404 — that page does not exist on {host}."
+    return f"HTTP {status} from {host}."
+
+
 def fetch(url: str, max_chars: int = DEFAULT_MAX_CHARS, timeout: float = DEFAULT_TIMEOUT) -> Dict[str, Any]:
     """Fetch one URL and return readable text, or an explained failure.
 
@@ -295,7 +351,7 @@ def fetch(url: str, max_chars: int = DEFAULT_MAX_CHARS, timeout: float = DEFAULT
     current = url
     try:
         with httpx.Client(timeout=timeout, follow_redirects=False,
-                          headers={"User-Agent": USER_AGENT}) as client:
+                          headers=dict(BROWSER_HEADERS)) as client:
             for _ in range(MAX_REDIRECTS + 1):
                 check = policy.check_url(current)
                 if check.denied:
@@ -317,7 +373,8 @@ def fetch(url: str, max_chars: int = DEFAULT_MAX_CHARS, timeout: float = DEFAULT
 
             result["final_url"] = current
             if response.status_code >= 400:
-                result["error"] = f"HTTP {response.status_code}"
+                result["error"] = _status_message(response.status_code, current)
+                result["blocked"] = response.status_code in (401, 403, 429, 451)
                 return result
 
             content_type = response.headers.get("content-type", "")
@@ -444,3 +501,44 @@ def search_all(query: str, max_results: int = 6, region: str = "wt-wt") -> List[
         if extra["url"] not in seen:
             results.append(extra)
     return results
+
+
+# Words that mark a link as furniture rather than a story. A section front
+# carries a hundred of these around a dozen real headlines.
+NAV_WORDS = {
+    "subscribe", "sign in", "log in", "menu", "search", "newsletters",
+    "advertisement", "privacy", "terms", "contact", "about", "careers",
+    "cookies", "accessibility", "home", "sections", "more", "share",
+    "facebook", "twitter", "instagram", "youtube", "tiktok", "rss", "skip",
+}
+HEADLINE_MIN_WORDS = 4
+MAX_HEADLINES = 20
+
+
+def headline_links(links: List[Dict[str, str]], base_url: str) -> List[Dict[str, str]]:
+    """The links on a section front that are plausibly stories.
+
+    A headline is several words long and points somewhere deeper on the same
+    site. Nav links are one or two words and point at the top level, which is
+    what makes this separable without understanding the page.
+    """
+    host = urlparse(base_url).netloc
+    picked, seen = [], set()
+    for link in links:
+        text = (link.get("text") or "").strip()
+        url = link.get("url") or ""
+        if not text or not url or url in seen:
+            continue
+        if text.lower() in NAV_WORDS or len(text.split()) < HEADLINE_MIN_WORDS:
+            continue
+        parsed = urlparse(url)
+        if parsed.netloc and parsed.netloc != host:
+            continue
+        # A story lives below the section, not beside it.
+        if parsed.path.count("/") < 2:
+            continue
+        seen.add(url)
+        picked.append({"text": text, "url": url})
+        if len(picked) >= MAX_HEADLINES:
+            break
+    return picked

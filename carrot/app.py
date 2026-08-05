@@ -62,6 +62,10 @@ from carrot import (
     coder_api,
     media as media_mod,
     media_api,
+    planner as planner_mod,
+    planner_api,
+    webhooks as webhooks_mod,
+    webhooks_api,
     dualauth,
     gitops as gitops_mod,
     help as help_mod,
@@ -105,6 +109,9 @@ app.include_router(files_api.router)
 app.include_router(coder_api.router)
 app.include_router(media_api.router)
 app.include_router(media_api.auth_router)
+app.include_router(planner_api.router)
+app.include_router(webhooks_api.router)
+app.include_router(webhooks_api.public_router)
 
 
 # ===== Pydantic request models =====
@@ -1226,6 +1233,88 @@ def _run_tool(name, args, conversation_id):
     yield {"_tool_result": outcome.get("result", "")}
 
 
+# How much of each source is kept for the forced-answer digest. Six sources at
+# 1200 characters is ~2k tokens, which fits in a 4k-context local model with
+# room to write — the full transcript emphatically does not.
+EVIDENCE_CHARS = 1200
+MAX_EVIDENCE_SOURCES = 6
+
+FORCED_ANSWER_PROMPT = (
+    "Answer the question below using only the notes that follow. Write the "
+    "answer in plain text now — do not think silently, do not ask to search "
+    "again, and do not apologise. If the notes do not answer it, say exactly "
+    "what is missing and what they did cover.\n\n"
+    "QUESTION: {question}\n\nNOTES:\n{notes}"
+)
+
+
+def _forced_answer(resolved, question, evidence):
+    """One last, small ask: answer from a digest rather than the transcript.
+
+    Yields the usual stream events, plus a final ``{"_answer": text}``. The
+    prompt is rebuilt from scratch instead of appended to the working history,
+    because the history is exactly what made the model run out of room.
+    """
+    notes = "\n\n".join(
+        f"[{item['tool']}] {item['source']}\n{item['text']}"
+        for item in evidence[-MAX_EVIDENCE_SOURCES:]
+    ) or "(nothing was successfully gathered)"
+    messages = [{
+        "role": "user",
+        "content": FORCED_ANSWER_PROMPT.format(question=question[:500], notes=notes),
+    }]
+    parts = []
+    try:
+        for event in router_mod.stream_events(resolved, messages, tools=None):
+            if event["type"] == "thinking":
+                yield {"thinking": event["text"]}
+            elif event["type"] != "tool_calls":
+                parts.append(event["text"])
+    except Exception as exc:
+        # A failed retry must not become an exception the user sees instead of
+        # an answer; the deterministic fallback below still runs.
+        yield {"thinking": f"(could not re-ask the model: {exc})"}
+    yield {"_answer": "".join(parts)}
+
+
+def _evidence_answer(question, evidence):
+    """Write something true and useful without the model, as a last resort.
+
+    This is not a good answer, and it does not pretend to be. It is the
+    difference between "(no response)" — which tells the user nothing and
+    wastes everything the turn did — and a list of what was actually found,
+    which they can act on.
+    """
+    if not evidence:
+        return (
+            "I could not gather anything usable for that. Every source I tried "
+            "either refused the request or returned nothing readable. Trying a "
+            "narrower question, or sending this to Research, usually gets past it."
+        )
+    queries = [e["source"] for e in evidence if e["tool"] == "web_search" and e["source"]]
+    pages = [e["source"] for e in evidence if e["tool"] == "read_url" and e["source"]]
+    lines = [
+        f"I gathered the material for this but could not write it up — the model "
+        f"ran out of room to answer. Here is what the turn actually collected, "
+        f"so it is not wasted:",
+        "",
+    ]
+    if queries:
+        lines.append("**Searched:** " + ", ".join(dict.fromkeys(queries))[:400])
+    if pages:
+        lines.append("**Read:**")
+        lines += [f"- {url}" for url in list(dict.fromkeys(pages))[:8]]
+    excerpt = next((e["text"] for e in evidence if e["tool"] == "read_url"), "")
+    if excerpt:
+        lines += ["", "**From the first page read:**", "", excerpt[:700].strip()]
+    lines += [
+        "",
+        "A model with a larger context window, or sending this to Research, will "
+        "get you the written answer.",
+    ]
+    return "\n".join(lines)
+
+
 def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mode=SEARCH_SINGLE):
     """Yield SSE dicts for one chat turn, running the tool-calling loop.
 
@@ -1249,6 +1338,10 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mo
     searches = reads = nudges = 0
     final_text = ""
     stalled = False
+    # What the turn actually gathered, kept small on purpose. This is what a
+    # forced answer is written from, so it has to fit in a context window that
+    # the full transcript already overran.
+    evidence = []
 
     # In gated mode the model's prose is held back until the gates are met,
     # because a premature answer is one we intend to throw away — streaming it
@@ -1299,9 +1392,17 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mo
                 except json.JSONDecodeError:
                     args = {}
 
+            # Tools are offered to the model namespaced as `carrot__web_search`,
+            # so every comparison below has to be against the bare name. Getting
+            # this wrong meant the gate counters never incremented: the model
+            # searched, read six pages, and was told after each one that it had
+            # not searched yet — which is exactly the thrashing users saw, and
+            # why the turn always ended stalled with nothing written.
+            bare = name.split("__", 1)[-1]
+
             # A query about something else cannot answer the question asked.
             # Refuse it and say why, instead of spending a round on it.
-            if name == "web_search" and _query_drifted(question, str(args.get("query", ""))):
+            if bare == "web_search" and _query_drifted(question, str(args.get("query", ""))):
                 correction = QUERY_DRIFT_CORRECTION.format(
                     query=str(args.get("query", "")), question=question[:200])
                 yield {"tool": {"name": name, "args": args, "rejected": True}}
@@ -1318,11 +1419,17 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mo
                     result = event["_tool_result"]
                 else:
                     yield event
-            if name == "web_search":
+            if bare == "web_search":
                 searches += 1
-            elif name == "read_url":
+            elif bare == "read_url":
                 reads += 1
             yield {"tool_result": {"name": name, "result": result[:2000]}}
+            if bare in ("web_search", "read_url") and not result.startswith("error:"):
+                evidence.append({
+                    "tool": bare,
+                    "source": str(args.get("url") or args.get("query") or ""),
+                    "text": result[:EVIDENCE_CHARS],
+                })
             working.append(
                 {
                     "role": "tool",
@@ -1336,28 +1443,27 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mo
         # was never asked to write an answer.
         stalled = True
 
-    # An empty answer is never acceptable. Two ways to reach one: the budget
-    # ran out before the model wrote anything, or it exhausted its gate nudges
-    # while saying nothing out loud — a small model can spend its whole reply
-    # in `thinking`, which is not content. Either way the user has watched
-    # searches scroll past and would get "(no response)". Ask once more, with
-    # no tools, so the only thing it can do is answer.
+    # An empty answer is never acceptable, and the first attempt at this fix
+    # was not enough. Re-asking with the *same* history fails the same way:
+    # by then `working` holds several full web pages, which overruns a small
+    # local model's context window, and a model with no room left produces
+    # nothing. So the retry is asked with a compact digest instead of the
+    # transcript — a few thousand characters that fit anywhere.
     if not final_text.strip():
-        working.append({
-            "role": "user",
-            "content": "Stop searching and answer now, in plain text, from what you "
-                       "have gathered. Do not think silently — write the answer. Say "
-                       "plainly what you could not find and which sources you used.",
-        })
-        parts = []
-        for event in router_mod.stream_events(resolved, working, tools=None):
-            if event["type"] == "thinking":
-                yield {"thinking": event["text"]}
-            elif event["type"] != "tool_calls":
-                parts.append(event["text"])
-                for out in emit_text(event["text"]):
-                    yield out
-        final_text = "".join(parts)
+        final_text = ""
+        for event in _forced_answer(resolved, question, evidence):
+            if "_answer" in event:
+                final_text = event["_answer"]
+            else:
+                yield event
+        # And if even that returns nothing, the answer is written from the
+        # evidence here, deterministically. "(no response)" after the user
+        # watched ten searches scroll past is the worst outcome in the app,
+        # and it must not be reachable.
+        if not final_text.strip():
+            final_text = _evidence_answer(question, evidence)
+        for out in emit_text(final_text):
+            yield out
         stalled = True
 
     if gated:

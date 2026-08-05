@@ -81,6 +81,16 @@ DEFAULTS = {
     "media_keys": {},
     "media_endpoints": {},
     "media_comfy_workflow": {},
+    # Semester planning: intake answers, courses, cached campus geometry and
+    # the last plan produced.
+    "planner_profile": {},
+    "planner_campus": {},
+    "planner_last_plan": {},
+    # Local webhooks. Off until asked for: this is the one door into Carrot
+    # that does not require the app's own session.
+    "webhooks_enabled": False,
+    "webhooks": [],
+    "webhook_targets": [],
     # Dual authentication: per-provider "api_key" or "subscription", the OAuth
     # client each installation registers, and the tokens a sign-in produced.
     "auth_modes": {},
@@ -157,6 +167,9 @@ SECRET_KEYS = {
     # Generation backends hold keys of their own, and an OAuth token is a
     # bearer credential — leaking one is leaking the account.
     "media_keys", "oauth_tokens",
+    # A hook's token is a credential that works without a session, so it must
+    # never come back out through the config endpoint.
+    "webhooks",
 }
 
 

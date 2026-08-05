@@ -100,9 +100,30 @@ def _resolve_tool(recipe: Recipe) -> Optional[str]:
     # the app instead of running the script.
     if recipe.language == "Python":
         if getattr(sys, "frozen", False):
-            return shutil.which("python3") or shutil.which("python")
-        return sys.executable or shutil.which("python3")
+            return _find_python()
+        return sys.executable or _find_python()
     return shutil.which(recipe.tool)
+
+
+def _find_python() -> Optional[str]:
+    """Locate a real Python interpreter, the way each platform actually names it.
+
+    `python3` is the Linux and macOS name and is usually absent on Windows,
+    where the executable is `python.exe` and the official installer also ships
+    the `py` launcher. Looking only for `python3` is why a perfectly good
+    Windows install reported "Python is not set up on this computer".
+    """
+    for name in ("python3", "python", "py"):
+        found = shutil.which(name)
+        if not found:
+            continue
+        # Windows ships an App Execution Alias at this path that is not an
+        # interpreter — it opens the Microsoft Store. Running it looks like a
+        # crash with no output, which is worse than saying Python is missing.
+        if "WindowsApps" in found and os.path.getsize(found) == 0:
+            continue
+        return found
+    return None
 
 
 def languages() -> List[Dict[str, Any]]:

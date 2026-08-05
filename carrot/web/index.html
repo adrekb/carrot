@@ -126,6 +126,48 @@
           </span>
           <span class="oc-tag">Paste a key</span>
         </button>
+        <button class="onboard-choice" onclick="onboardStep('subscription')">
+          <span class="oc-title">I want to use my own AI subscription</span>
+          <span class="oc-body">
+            You already pay for Claude Pro or ChatGPT Plus. Sign in with that
+            account instead of setting up separate developer billing.
+          </span>
+          <span class="oc-tag">Sign in</span>
+        </button>
+      </div>
+    </section>
+
+    <section class="onboard-step hidden" data-step="subscription">
+      <h2>Use the subscription you already pay for</h2>
+      <p class="onboard-lede muted">
+        If you have Claude Pro or Max, or ChatGPT Plus or Pro, you can sign in with
+        that account rather than creating a second, separately-billed developer one.
+      </p>
+      <div class="onboard-prose">
+        <p><b>How this works, precisely:</b></p>
+        <ul>
+          <li>Carrot uses the provider's <b>own sign-in page</b>, opened in your real
+              browser. It never sees your password.</li>
+          <li>It does <b>not</b> read your browser's cookies or drive the web app
+              behind your back. Those methods break constantly and violate the
+              providers' terms.</li>
+          <li>Sign-in needs this installation's OAuth client details. If your copy of
+              Carrot does not have them yet, it will say so plainly instead of
+              half-working — an API key is the reliable path until then.</li>
+        </ul>
+      </div>
+      <div class="onboard-field">
+        <label for="onboard-sub-provider">Which subscription?</label>
+        <select id="onboard-sub-provider">
+          <option value="anthropic">Anthropic — Claude Pro or Max</option>
+          <option value="openai">OpenAI — ChatGPT Plus or Pro</option>
+        </select>
+      </div>
+      <div id="onboard-sub-status" class="onboard-status"></div>
+      <div class="onboard-actions">
+        <button class="btn btn-ghost" onclick="onboardStep('choose')">Back</button>
+        <button class="btn btn-ghost" onclick="onboardStep('key')">Use an API key instead</button>
+        <button class="btn btn-primary" onclick="startOnboardingSignIn()">Sign in</button>
       </div>
     </section>
 
@@ -145,9 +187,11 @@
               A heavy day of use is typically a few dollars, not hundreds.</li>
           <li><b>Your questions leave this computer.</b> They go to that company's
               servers to be answered. That is the trade for a much stronger model.</li>
-          <li><b>It is not a subscription to a chat website.</b> Paying for
-              Claude.ai or ChatGPT Plus does <i>not</i> give you an API key — those
-              are separate products on separate billing.</li>
+          <li><b>It is not the same as a chat subscription.</b> Paying for
+              Claude.ai or ChatGPT Plus does <i>not</i> give you an API key — they
+              are separate products on separate billing. Carrot can use a
+              subscription directly instead; that is the third option on the
+              previous screen.</li>
           <li><b>Treat it like a password.</b> Anyone who has it can spend your
               money. Carrot stores it on this computer only.</li>
         </ul>
@@ -184,6 +228,45 @@
         <button class="btn btn-ghost" onclick="onboardStep('choose')">Back</button>
         <button class="btn btn-ghost" onclick="onboardStep('local')">Run locally instead</button>
         <button class="btn btn-primary" id="onboard-key-btn" onclick="saveOnboardingKey()">Check and save</button>
+      </div>
+    </section>
+
+    <!-- Last screen, always shown. Someone who has just been asked three
+         questions about billing has learned nothing about the app itself, and
+         "where is help" is the one thing they will need first. -->
+    <section class="onboard-step hidden" data-step="tour">
+      <h2>Where things are</h2>
+      <div class="onboard-tour">
+        <div class="tour-item">
+          <span class="tour-what">Chat</span>
+          <span class="tour-why">Ask anything. It can search the web, read files you
+            attach, and make charts and images right in the conversation.</span>
+        </div>
+        <div class="tour-item">
+          <span class="tour-what">Code</span>
+          <span class="tour-why">A real editor with a terminal, plus an agent that can
+            read and change files — in Plan mode it only proposes, in Act it edits.</span>
+        </div>
+        <div class="tour-item">
+          <span class="tour-what">Planner</span>
+          <span class="tour-why">Hand it a photo of your class schedule and it builds a
+            week around it, travel time and meals included.</span>
+        </div>
+        <div class="tour-item">
+          <span class="tour-what">Research</span>
+          <span class="tour-why">For questions worth a few minutes: many sources, every
+            claim checked, one cited report.</span>
+        </div>
+        <div class="tour-item highlight">
+          <span class="tour-what">Help</span>
+          <span class="tour-why">In the left sidebar under <b>More → Help</b>. Every
+            feature explained, in plain language. Start there when something is
+            confusing — that is what it is for.</span>
+        </div>
+      </div>
+      <div class="onboard-actions">
+        <button class="btn btn-ghost" onclick="finishOnboarding(false)">Close</button>
+        <button class="btn btn-primary" onclick="finishOnboarding(false, 'help')">Take me to Help</button>
       </div>
     </section>
   </div>
@@ -269,6 +352,7 @@
     <button class="nav-item sub" data-tab="search" onclick="switchTab('search')"><svg class="ico"><use href="#i-search"/></svg><span class="nav-label">Search</span></button>
     <button class="nav-item sub" data-tab="notes" onclick="switchTab('notes')"><svg class="ico"><use href="#i-note"/></svg><span class="nav-label">Notes</span></button>
     <button class="nav-item sub" data-tab="code" onclick="switchTab('code')"><svg class="ico"><use href="#i-terminal"/></svg><span class="nav-label">Code</span></button>
+    <button class="nav-item sub" data-tab="planner" onclick="switchTab('planner')"><svg class="ico"><use href="#i-cap"/></svg><span class="nav-label">Planner</span></button>
     <button class="nav-item sub" data-tab="goals" onclick="switchTab('goals')"><svg class="ico"><use href="#i-target"/></svg><span class="nav-label">Goals</span></button>
     <button class="nav-item sub" data-tab="reminders" onclick="switchTab('reminders')"><svg class="ico"><use href="#i-bell"/></svg><span class="nav-label">Reminders</span></button>
     <button class="nav-item sub" data-tab="workspaces" onclick="switchTab('workspaces')"><svg class="ico"><use href="#i-folder"/></svg><span class="nav-label">Workspaces</span></button>
@@ -477,6 +561,8 @@
           <span class="rules-chip hidden" id="rules-chip" title="Project rules are in effect">rules</span>
           <button class="btn btn-ghost" onclick="takeCheckpoint()"
                   title="Snapshot the workspace so everything after this can be undone in one step">Checkpoint</button>
+          <button class="btn btn-primary" onclick="toggleAgentSide()"
+                  title="Talk to the agent about this workspace">Agent</button>
         </div>
         <div class="editor-toolbar">
           <div id="code-tabs" class="code-tabs"></div>
@@ -531,6 +617,131 @@
             <div id="checkpoint-list" class="checkpoint-list"></div>
           </div>
         </div>
+      </div>
+
+      <!-- The agent itself. A Plan/Act switch with nowhere to talk to the
+           agent is a steering wheel with no car attached: this is the car. -->
+      <aside class="agent-side" id="agent-side">
+        <div class="agent-side-head">
+          <svg class="ico"><use href="#i-chip"/></svg>
+          <span class="side-label">Agent</span>
+          <span class="agent-mode-tag" id="agent-mode-tag">act</span>
+          <span class="spacer"></span>
+          <button class="icon-btn" title="New task" onclick="newAgentTask()"><svg class="ico"><use href="#i-plus"/></svg></button>
+          <button class="icon-btn" title="Hide the agent" onclick="toggleAgentSide()"><svg class="ico"><use href="#i-x"/></svg></button>
+        </div>
+        <div id="agent-log" class="agent-log">
+          <div class="agent-hello">
+            <p>Tell me what to build, fix or explain. I can see the files in
+               <span class="mono" id="agent-root-hint">your workspace</span>.</p>
+            <p class="muted small">In <strong>Plan</strong> I only read and propose.
+               In <strong>Act</strong> I can edit files and run commands.</p>
+          </div>
+        </div>
+        <div class="agent-compose">
+          <!-- Screenshots of an error, a design mock, a PDF spec: the things
+               you actually want to hand a coding agent. Images need a vision
+               model, so the tray says plainly when the current one cannot. -->
+          <div id="agent-attach-tray" class="attach-tray hidden"></div>
+          <textarea id="agent-input" rows="3" spellcheck="false"
+                    placeholder="Add a retry loop to client.py…  (paste a screenshot, or drop a file)"
+                    onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendAgentTask()}"></textarea>
+          <input type="file" id="agent-file-input" multiple hidden
+                 onchange="addAgentAttachments(this.files); this.value=''">
+          <div class="agent-compose-row">
+            <button class="icon-btn" title="Attach a file or image"
+                    onclick="document.getElementById('agent-file-input').click()">
+              <svg class="ico"><use href="#i-file-plus"/></svg>
+            </button>
+            <span class="muted small" id="agent-context-hint"></span>
+            <span class="spacer"></span>
+            <button class="btn btn-ghost" id="agent-stop" onclick="stopAgentTask()" hidden>Stop</button>
+            <button class="btn btn-primary" id="agent-send" onclick="sendAgentTask()">Send</button>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- Planner -->
+  <section id="view-planner" class="view">
+    <div class="page">
+      <div class="page-head">
+        <h2>Semester planner</h2>
+        <span class="muted small" id="planner-status"></span>
+      </div>
+
+      <!-- Step 1. Nobody volunteers where they live or when they sleep, and a
+           plan built without those is a beautiful schedule for a person who
+           does not exist. So it asks, one question at a time, and says why. -->
+      <div class="settings-card" id="planner-intake-card">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-help"/></svg>
+          <h3>1 · About you</h3>
+        </div>
+        <div id="planner-intake"><div class="empty">Loading…</div></div>
+      </div>
+
+      <!-- Step 2. -->
+      <div class="settings-card">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-image"/></svg>
+          <h3>2 · Your classes</h3>
+        </div>
+        <p class="muted small">
+          Photograph or screenshot your schedule and drop it here — a vision model reads
+          the grid. You can paste the text instead if you have it. Nothing is saved until
+          you have checked it: a misread room number would send you to the wrong building
+          all term.
+        </p>
+        <div id="planner-drop" class="planner-drop">
+          <input type="file" id="planner-file" accept="image/*" hidden
+                 onchange="readSyllabusFile(this.files[0]); this.value=''">
+          <button class="btn btn-primary" onclick="document.getElementById('planner-file').click()">
+            Choose a photo
+          </button>
+          <span class="muted small">or drop one here, or paste a screenshot</span>
+        </div>
+        <details class="planner-paste">
+          <summary>Paste the schedule as text instead</summary>
+          <textarea id="planner-text" rows="5" spellcheck="false"
+                    placeholder="COSC 30  Discrete Math  MWF 10:00-11:05  Kemeny 007"></textarea>
+          <button class="btn btn-ghost" onclick="readSyllabusText()">Read it</button>
+        </details>
+        <div id="planner-courses"></div>
+      </div>
+
+      <!-- Step 3. Travel time is the whole difference between a schedule and a
+           schedule you can actually walk. -->
+      <div class="settings-card">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-target"/></svg>
+          <h3>3 · Your campus</h3>
+        </div>
+        <p class="muted small">
+          Carrot needs to know roughly where each building is, or it cannot tell that
+          lunch is eleven minutes after a class on the other side of campus. It will look
+          them up; anything it is unsure of is listed so you can correct it.
+        </p>
+        <div class="settings-row">
+          <button class="btn btn-primary" onclick="lookupCampus()">Look up my buildings</button>
+          <span class="muted small" id="planner-campus-status"></span>
+        </div>
+        <div id="planner-buildings"></div>
+      </div>
+
+      <!-- Step 4. -->
+      <div class="settings-card">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-cap"/></svg>
+          <h3>4 · Your week</h3>
+        </div>
+        <div class="settings-row">
+          <button class="btn btn-primary" id="planner-build" onclick="buildPlan()">Build my week</button>
+          <span class="muted small" id="planner-build-status"></span>
+        </div>
+        <div id="planner-notes"></div>
+        <div id="planner-week" class="planner-week"></div>
       </div>
     </div>
   </section>
@@ -1146,6 +1357,48 @@
 
       <div class="settings-card">
         <div class="settings-head">
+          <svg class="ico"><use href="#i-pulse"/></svg>
+          <h3>Local webhooks</h3>
+        </div>
+        <p class="muted small">
+          Let Home Assistant, a Stream Deck macro, a Shortcut or a shell script on your
+          own network talk to Carrot. This is the only way into the app that does not
+          need its session, so it is off until you turn it on, and each hook does exactly
+          one named thing — a token that leaks cannot be turned into a shell.
+        </p>
+        <div class="settings-row">
+          <label class="switch">
+            <input type="checkbox" id="hooks-enabled" onchange="setHooksEnabled(this.checked)">
+            <span>Enable local webhooks</span>
+          </label>
+        </div>
+        <div id="hooks-panel"></div>
+        <details class="hook-add">
+          <summary>Create a hook</summary>
+          <div class="settings-row">
+            <input type="text" id="hook-id" placeholder="id (e.g. leaving-home)" spellcheck="false">
+            <select id="hook-action"></select>
+            <button class="btn btn-ghost" onclick="createHook()">Create</button>
+          </div>
+          <div id="hook-created" class="hook-created hidden"></div>
+        </details>
+        <details class="hook-add">
+          <summary>Send events to your smart home</summary>
+          <p class="muted small">
+            Carrot POSTs a small JSON payload when something happens. Targets have to be
+            on your own network — a public URL would turn your notifications into someone
+            else's feed.
+          </p>
+          <div class="settings-row">
+            <input type="text" id="target-url" placeholder="http://homeassistant.local:8123/api/webhook/carrot" spellcheck="false">
+            <button class="btn btn-ghost" onclick="addHookTarget()">Add</button>
+          </div>
+          <div id="hook-targets"></div>
+        </details>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-head">
           <svg class="ico"><use href="#i-chip"/></svg>
           <h3>Task Routing</h3>
         </div>
@@ -1317,5 +1570,6 @@
 <script src="/js/docagent.js"></script>
 <script src="/js/hub.js"></script>
 <script src="/js/studio.js"></script>
+<script src="/js/planner.js"></script>
 </body>
 </html>

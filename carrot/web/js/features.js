@@ -1243,6 +1243,13 @@ async function loadCoderState() {
         rules.classList.toggle('hidden', !state.has_rules);
         rules.title = `Project rules in effect (${state.rules_chars} characters)`;
     }
+    const tag = document.getElementById('agent-mode-tag');
+    if (tag) {
+        tag.textContent = state.mode;
+        tag.classList.toggle('plan', state.mode === 'plan');
+    }
+    const rootHint = document.getElementById('agent-root-hint');
+    if (rootHint && state.root) rootHint.textContent = state.root;
     const chip = document.getElementById('git-chip');
     if (chip) {
         const git = state.git || {};
@@ -1655,3 +1662,280 @@ function warnMissingToolchain(tc) {
         `\n\nYou can still write and save the file — come back and press Run once it is set up.`;
     document.getElementById('panel-status').textContent = `${tc.language} missing`;
 }
+
+// ---------- The agent panel ----------
+//
+// A Plan/Act switch with nowhere to talk to the agent is a steering wheel with
+// no car attached. This is the car: a conversation scoped to the code
+// workspace, streaming the same SSE the chat tab does, showing tool calls and
+// approval prompts inline so you can watch what it is doing to your files.
+
+let agentConversationId = null;
+let agentAbort = null;
+let agentAttachments = [];
+
+function toggleAgentSide(force) {
+    const side = document.getElementById('agent-side');
+    if (!side) return;
+    const hide = force === undefined ? !side.classList.contains('hidden') : !force;
+    side.classList.toggle('hidden', hide);
+    if (!hide) document.getElementById('agent-input')?.focus();
+}
+
+function newAgentTask() {
+    agentConversationId = null;
+    agentAttachments = [];
+    renderAgentTray();
+    const log = document.getElementById('agent-log');
+    log.innerHTML = '<div class="agent-hello"><p>New task. What should I do?</p></div>';
+    document.getElementById('agent-input')?.focus();
+}
+
+// ---------- Attachments ----------
+//
+// A screenshot of the error, a mock of the screen, a PDF of the spec. Images
+// only work with a vision model, so the tray says so rather than letting the
+// send fail with a 400 the user cannot interpret.
+
+async function addAgentAttachments(files) {
+    for (const file of Array.from(files || [])) {
+        if (file.size > (typeof ATTACH_MAX_BYTES !== 'undefined' ? ATTACH_MAX_BYTES : 10485760)) {
+            setCodeStatus(`${file.name} is too large`);
+            continue;
+        }
+        const data = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+        });
+        const isImage = (file.type || '').startsWith('image/');
+        agentAttachments.push({
+            name: file.name, mime: file.type, bytes: file.size, data,
+            thumb: isImage ? `data:${file.type};base64,${data}` : null,
+            image: isImage,
+        });
+    }
+    renderAgentTray();
+}
+
+function removeAgentAttachment(index) {
+    agentAttachments.splice(index, 1);
+    renderAgentTray();
+}
+
+function renderAgentTray() {
+    const tray = document.getElementById('agent-attach-tray');
+    if (!tray) return;
+    tray.classList.toggle('hidden', !agentAttachments.length);
+    tray.innerHTML = agentAttachments.map((a, i) => `
+        <div class="attach-chip">
+          ${a.thumb ? `<img src="${a.thumb}" alt="">` : '<span class="attach-doc"></span>'}
+          <span class="attach-name">${escHtml(a.name)}</span>
+          <button class="attach-x" onclick="removeAgentAttachment(${i})">&times;</button>
+        </div>`).join('');
+    warnIfNoVision();
+}
+
+// Checking before sending turns "400: gemma cannot read images" into a
+// sentence that appears while there is still time to switch models.
+async function warnIfNoVision() {
+    const hint = document.getElementById('agent-context-hint');
+    if (!hint) return;
+    if (!agentAttachments.some(a => a.image)) { hint.textContent = ''; return; }
+    try {
+        const data = await api('/api/models');
+        const model = data.chat_local === false ? data.chat_model : data.active_model;
+        const vision = /vision|llava|moondream|gemma|qwen2?-?vl|pixtral|gpt-4|claude|minicpm/i;
+        hint.textContent = vision.test(model || '')
+            ? '' : `${model} probably cannot read images — pick a vision model.`;
+    } catch (_) { hint.textContent = ''; }
+}
+
+function agentBubble(role, text) {
+    const log = document.getElementById('agent-log');
+    log.querySelector('.agent-hello')?.remove();
+    const wrap = document.createElement('div');
+    wrap.className = 'agent-msg ' + role;
+    const body = document.createElement('div');
+    body.className = 'agent-body';
+    body.textContent = text || '';
+    wrap.appendChild(body);
+    log.appendChild(wrap);
+    log.scrollTop = log.scrollHeight;
+    return { wrap, body };
+}
+
+function agentTrace(wrap, text, cls) {
+    let trace = wrap.querySelector('.agent-trace');
+    if (!trace) {
+        trace = document.createElement('div');
+        trace.className = 'agent-trace';
+        wrap.insertBefore(trace, wrap.firstChild);
+    }
+    const line = document.createElement('div');
+    line.className = 'agent-trace-line' + (cls ? ' ' + cls : '');
+    line.textContent = text;
+    trace.appendChild(line);
+    trace.scrollTop = trace.scrollHeight;
+    document.getElementById('agent-log').scrollTop = 1e9;
+}
+
+// What the agent is looking at right now. Sending the open file with the task
+// is the difference between "fix this" working and needing to paste a path.
+function agentContext() {
+    const parts = [];
+    if (typeof activeFilePath !== 'undefined' && activeFilePath) {
+        parts.push(`The file currently open is ${activeFilePath}.`);
+    }
+    return parts.join(' ');
+}
+
+function stopAgentTask() {
+    if (agentAbort) agentAbort.abort();
+}
+
+async function sendAgentTask() {
+    const input = document.getElementById('agent-input');
+    const task = input.value.trim();
+    if ((!task && !agentAttachments.length) || agentAbort) return;
+    const attachments = agentAttachments.slice();
+    input.value = '';
+    agentAttachments = [];
+    renderAgentTray();
+    agentBubble('you', task + (attachments.length
+        ? `\n[${attachments.map(a => a.name).join(', ')}]` : ''));
+
+    const { wrap, body } = agentBubble('agent', '');
+    body.innerHTML = '<span class="caret">&nbsp;</span>';
+    const send = document.getElementById('agent-send');
+    const stop = document.getElementById('agent-stop');
+    send.disabled = true;
+    stop.hidden = false;
+    agentAbort = new AbortController();
+
+    const context = agentContext();
+    let answer = '';
+    try {
+        const response = await fetch('/api/chat/stream', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
+            signal: agentAbort.signal,
+            body: JSON.stringify({
+                message: (context ? `${task}\n\n(${context})` : task)
+                    || 'What is in the attached file?',
+                attachments: attachments.map(a => ({ name: a.name, mime: a.mime, data: a.data })),
+                conversation_id: agentConversationId,
+                model: typeof currentModel !== 'undefined' ? currentModel : null,
+                provider: typeof currentProvider !== 'undefined' ? currentProvider : null,
+                // The agent works on files; a web search mid-task is rarely
+                // what was asked for and always costs a round.
+                search_mode: 'off',
+            }),
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const frames = buffer.split('\n\n');
+            buffer = frames.pop();
+            for (const frame of frames) {
+                const line = frame.split('\n').find(l => l.startsWith('data: '));
+                if (!line) continue;
+                let payload;
+                try { payload = JSON.parse(line.slice(6)); } catch (_) { continue; }
+
+                if (payload.conversation_id) agentConversationId = payload.conversation_id;
+                if (payload.tool) {
+                    agentTrace(wrap, `→ ${payload.tool.name}(${
+                        Object.entries(payload.tool.args || {})
+                            .map(([k, v]) => `${k}=${String(v).slice(0, 60)}`).join(', ')})`,
+                        payload.tool.rejected ? 'rejected' : '');
+                }
+                if (payload.tool_result) {
+                    agentTrace(wrap, `← ${String(payload.tool_result.result).slice(0, 300)}`, 'result');
+                }
+                // An approval prompt has to be answerable from here, or the
+                // agent silently blocks until it times out.
+                if (payload.approval) agentApproval(wrap, payload.approval);
+                if (payload.chunk) {
+                    answer += payload.chunk;
+                    body.textContent = answer;
+                    document.getElementById('agent-log').scrollTop = 1e9;
+                }
+                if (payload.error) agentTrace(wrap, 'error: ' + payload.error, 'rejected');
+            }
+        }
+    } catch (e) {
+        if (e.name !== 'AbortError') body.textContent = 'Failed: ' + e.message;
+        else agentTrace(wrap, 'stopped', 'rejected');
+    } finally {
+        agentAbort = null;
+        send.disabled = false;
+        stop.hidden = true;
+        if (!answer.trim() && body.querySelector('.caret')) body.textContent = '(done)';
+        // The agent just touched the workspace; the tree and git state are
+        // stale the instant it did.
+        loadCodeTree();
+        loadCoderState();
+    }
+}
+
+function agentApproval(wrap, request) {
+    const box = document.createElement('div');
+    box.className = 'agent-approval';
+    box.innerHTML = `<div class="approval-what">${escHtml(request.summary || request.tool || 'Allow this?')}</div>`;
+    const row = document.createElement('div');
+    row.className = 'approval-row';
+    for (const [label, allow] of [['Allow', true], ['Deny', false]]) {
+        const button = document.createElement('button');
+        button.className = allow ? 'btn btn-primary' : 'btn btn-ghost';
+        button.textContent = label;
+        button.onclick = async () => {
+            box.querySelectorAll('button').forEach(b => { b.disabled = true; });
+            try {
+                await api(`/api/agent/approvals/${encodeURIComponent(request.id)}`, {
+                    method: 'POST', body: JSON.stringify({ approved: allow }),
+                });
+                box.querySelector('.approval-what').textContent +=
+                    allow ? ' — allowed' : ' — denied';
+            } catch (e) {
+                box.querySelector('.approval-what').textContent = 'Could not answer: ' + e.message;
+            }
+        };
+        row.appendChild(button);
+    }
+    box.appendChild(row);
+    wrap.appendChild(box);
+    document.getElementById('agent-log').scrollTop = 1e9;
+}
+
+// Paste a screenshot straight into the agent, and drop files on the panel.
+// Handing an agent a picture of the error is how people actually work.
+document.addEventListener('paste', (event) => {
+    const side = document.getElementById('agent-side');
+    if (!side || side.classList.contains('hidden')) return;
+    if (!side.contains(document.activeElement)) return;
+    const files = Array.from(event.clipboardData?.files || []);
+    if (files.length) {
+        event.preventDefault();
+        addAgentAttachments(files);
+    }
+});
+
+document.addEventListener('DOMContentLoaded', () => {
+    const side = document.getElementById('agent-side');
+    if (!side) return;
+    side.addEventListener('dragover', (e) => { e.preventDefault(); side.classList.add('dropping'); });
+    side.addEventListener('dragleave', () => side.classList.remove('dropping'));
+    side.addEventListener('drop', (e) => {
+        e.preventDefault();
+        side.classList.remove('dropping');
+        addAgentAttachments(e.dataTransfer?.files);
+    });
+});

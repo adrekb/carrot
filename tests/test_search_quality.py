@@ -24,7 +24,7 @@ class TestNeverAnswerWithNothing:
         asked = {}
 
         def fake(resolved, messages, tools=None):
-            if "Stop searching and answer now" in messages[-1]["content"]:
+            if "QUESTION:" in messages[-1]["content"]:
                 asked["yes"] = True
                 asked["tools"] = tools
                 yield {"type": "text", "text": "Here is what I found."}
@@ -49,7 +49,7 @@ class TestNeverAnswerWithNothing:
 
     def test_the_answer_reaches_the_user(self):
         def fake(resolved, messages, tools=None):
-            if "Stop searching and answer now" in messages[-1]["content"]:
+            if "QUESTION:" in messages[-1]["content"]:
                 yield {"type": "text", "text": "The answer."}
                 return
             yield {"type": "thinking", "text": "..."}
@@ -223,3 +223,222 @@ class TestLogoVisibility:
         root = Path(__file__).resolve().parent.parent
         css = (root / "carrot" / "web" / "css" / "style.css").read_text(encoding="utf-8")
         assert ".chat-empty .logo-mask.big { color: #232329; }" not in css
+
+
+class TestNoResponseIsUnreachable:
+    """The reported bug, twice. The first fix re-asked with the same history —
+    which is exactly what had already overrun the model's context — so it
+    failed identically. This is the version that cannot fail."""
+
+    class Route:
+        model = "gemma4:e4b"
+
+        def as_dict(self):
+            return {}
+
+    def silent_run(self, second_pass_text=""):
+        """A model that reads pages, then says nothing. Twice."""
+        calls = {"n": 0}
+
+        def fake(resolved, messages, tools=None):
+            calls["n"] += 1
+            if tools:
+                yield {"type": "tool_calls", "calls": tool_call(
+                    "carrot__read_url", url="https://apnews.com/politics")}
+                return
+            if second_pass_text:
+                yield {"type": "text", "text": second_pass_text}
+            # Otherwise: nothing at all, the way an out-of-context model behaves.
+
+        return fake, calls
+
+    def run(self, fake, tool_result="Reuters: the story text"):
+        with patch.object(A.router_mod, "stream_events", fake), \
+             patch.object(A, "_run_tool", lambda n, a, c: iter([{"_tool_result": tool_result}])), \
+             patch.object(A, "_available_tools", lambda m: [{"name": "x"}]):
+            return list(A._agentic_chat_events(
+                [{"role": "user", "content": "recent american political news"}],
+                self.Route(), mode=A.SEARCH_MULTI))
+
+    def final_of(self, events):
+        return next(e["_final_text"] for e in events if "_final_text" in e)
+
+    def test_a_silent_model_still_produces_an_answer(self):
+        fake, _ = self.silent_run()
+        assert self.final_of(self.run(fake)).strip() != ""
+
+    def test_the_retry_does_not_resend_the_bloated_history(self):
+        # The whole reason the first fix failed: a model that ran out of room
+        # reading six pages has no more room when asked again with all six.
+        seen = {}
+
+        def fake(resolved, messages, tools=None):
+            if not tools:
+                seen["count"] = len(messages)
+                seen["chars"] = sum(len(str(m.get("content", ""))) for m in messages)
+                return
+                yield  # pragma: no cover
+            yield {"type": "tool_calls", "calls": tool_call("carrot__read_url", url="https://x")}
+
+        self.run(fake, tool_result="y" * 6000)
+        # One message, and bounded by the digest constants no matter how many
+        # rounds ran or how large each page was.
+        assert seen["count"] == 1
+        ceiling = A.EVIDENCE_CHARS * A.MAX_EVIDENCE_SOURCES + 2000
+        assert seen["chars"] < ceiling
+
+    def test_the_digest_carries_what_was_actually_read(self):
+        seen = {}
+
+        def fake(resolved, messages, tools=None):
+            if not tools:
+                seen["prompt"] = messages[0]["content"]
+                return
+                yield  # pragma: no cover
+            yield {"type": "tool_calls", "calls": tool_call(
+                "carrot__read_url", url="https://apnews.com/politics")}
+
+        self.run(fake, tool_result="AP reported the vote failed 51-49.")
+        assert "51-49" in seen["prompt"]
+        assert "apnews.com/politics" in seen["prompt"]
+
+    def test_a_second_pass_answer_is_used_when_there_is_one(self):
+        fake, _ = self.silent_run("Here is the summary you asked for.")
+        assert "summary you asked for" in self.final_of(self.run(fake))
+
+    def test_the_answer_reaches_the_browser_not_just_the_store(self):
+        fake, _ = self.silent_run()
+        chunks = "".join(e["chunk"] for e in self.run(fake) if "chunk" in e)
+        assert chunks.strip() != ""
+
+    def test_the_fallback_names_the_pages_that_were_read(self):
+        fake, _ = self.silent_run()
+        assert "apnews.com" in self.final_of(self.run(fake))
+
+    def test_the_fallback_shows_what_was_found(self):
+        fake, _ = self.silent_run()
+        assert "vote failed" in self.final_of(self.run(fake, tool_result="the vote failed 51-49"))
+
+    def test_a_crashing_retry_still_answers(self):
+        # A retry that raises must not become an exception the user sees
+        # instead of an answer.
+        def fake(resolved, messages, tools=None):
+            if not tools:
+                raise RuntimeError("context window exceeded")
+            yield {"type": "tool_calls", "calls": tool_call("carrot__read_url", url="https://x")}
+
+        assert self.final_of(self.run(fake)).strip() != ""
+
+    def test_a_turn_that_gathered_nothing_says_so_usefully(self):
+        answer = A._evidence_answer("anything", [])
+        assert "could not gather" in answer and "Research" in answer
+
+    def test_the_fallback_never_pretends_it_worked(self):
+        # Being honest that the write-up failed is the point; claiming an
+        # answer would be worse than "(no response)".
+        answer = A._evidence_answer("x", [
+            {"tool": "read_url", "source": "https://x", "text": "some text"}])
+        assert "could not write it up" in answer
+
+
+class TestBlockedAndIndexPages:
+    """From the reported trace: Politico and Cook Political returned 403 while
+    AP and NYT worked, and the pages that *did* load were section fronts with
+    no story text on them. Neither was Carrot refusing a source — one was the
+    site refusing Carrot, and the other was Carrot reading the wrong page."""
+
+    def test_the_fetcher_no_longer_announces_itself_as_a_bot(self):
+        # "Mozilla/5.0 (compatible; Carrot/1.0; local assistant)" is the exact
+        # shape bot management 403s.
+        assert "compatible; Carrot" not in websearch.USER_AGENT
+
+    def test_a_real_browser_header_set_is_sent(self):
+        # A request carrying only User-Agent is trivially fingerprinted.
+        for header in ("Accept", "Accept-Language", "User-Agent"):
+            assert header in websearch.BROWSER_HEADERS
+
+    def test_a_403_tells_the_model_not_to_retry(self):
+        # "HTTP 403" reads like a transient failure, and the model duly tried
+        # the same URL twice in one turn.
+        message = websearch._status_message(403, "https://www.politico.com/politics")
+        assert "Do not retry" in message and "politico.com" in message
+
+    def test_a_429_points_elsewhere_rather_than_at_a_retry(self):
+        assert "different source" in websearch._status_message(429, "https://x.com/a")
+
+    def test_a_404_is_not_described_as_a_block(self):
+        assert "does not exist" in websearch._status_message(404, "https://x.com/a")
+
+    def test_a_blocked_response_is_flagged_as_such(self):
+        assert websearch._status_message(451, "https://x.com/a").startswith("HTTP 451")
+
+
+class TestSectionFronts:
+    def index_links(self, count=40):
+        return [{"text": f"Senate passes the bill on measure {i}",
+                 "url": f"https://apnews.com/article/story-{i}"} for i in range(count)]
+
+    def test_a_page_of_links_with_no_prose_is_an_index(self):
+        assert websearch.looks_like_an_index("Politics\nMore\nSubscribe",
+                                              self.index_links()) is True
+
+    def test_an_article_is_not_an_index(self):
+        # Real prose, few links.
+        article = " ".join(["word"] * 900)
+        assert websearch.looks_like_an_index(article, self.index_links(5)) is False
+
+    def test_a_long_article_with_many_links_is_still_an_article(self):
+        article = " ".join(["word"] * 3000)
+        assert websearch.looks_like_an_index(article, self.index_links(40)) is False
+
+    def test_headlines_are_separated_from_navigation(self):
+        links = [
+            {"text": "Subscribe", "url": "https://apnews.com/subscribe"},
+            {"text": "Home", "url": "https://apnews.com/"},
+            {"text": "Senate rejects the funding bill in a late vote",
+             "url": "https://apnews.com/article/senate-funding-vote"},
+        ]
+        picked = websearch.headline_links(links, "https://apnews.com/politics")
+        assert len(picked) == 1 and "Senate rejects" in picked[0]["text"]
+
+    def test_offsite_links_are_dropped(self):
+        links = [{"text": "Read this excellent thing elsewhere entirely",
+                  "url": "https://example.com/a/b/c"}]
+        assert websearch.headline_links(links, "https://apnews.com/politics") == []
+
+    def test_shallow_links_are_dropped(self):
+        # A story lives below the section, not beside it.
+        links = [{"text": "Some fairly long section name here", "url": "https://apnews.com/world"}]
+        assert websearch.headline_links(links, "https://apnews.com/politics") == []
+
+    def test_duplicates_are_collapsed(self):
+        link = {"text": "Senate rejects the funding bill today",
+                "url": "https://apnews.com/article/x"}
+        assert len(websearch.headline_links([link, link], "https://apnews.com/politics")) == 1
+
+    def test_reading_an_index_returns_headlines_not_nav_furniture(self):
+        from carrot import agent_tools
+
+        page = {
+            "error": "", "final_url": "https://apnews.com/politics",
+            "text": "Politics\nMore\nSubscribe",
+            "links": self.index_links(),
+            "screening": {"tainted": False, "signals": []},
+        }
+        with patch.object(websearch, "fetch", return_value=page):
+            out = agent_tools._tool_read_url("https://apnews.com/politics")
+        assert "section index" in out
+        assert "apnews.com/article/story-0" in out
+
+    def test_reading_a_real_article_is_unchanged(self):
+        from carrot import agent_tools
+
+        page = {
+            "error": "", "final_url": "https://apnews.com/article/x",
+            "text": " ".join(["the vote failed"] * 400),
+            "links": [],
+            "screening": {"tainted": False, "signals": []},
+        }
+        with patch.object(websearch, "fetch", return_value=page):
+            out = agent_tools._tool_read_url("https://apnews.com/article/x")
+        assert "section index" not in out and "the vote failed" in out
