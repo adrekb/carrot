@@ -17,6 +17,7 @@ Two rules shape what is here:
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from typing import Any, Dict, List, Optional
 
@@ -47,7 +48,7 @@ def is_repo(root: str) -> bool:
         return False
 
 
-def _run(args: List[str], cwd: str) -> str:
+def _run(args: List[str], cwd: str, env: Optional[Dict[str, str]] = None) -> str:
     """One git invocation. No shell, ever."""
     try:
         proc = subprocess.run(
@@ -56,6 +57,7 @@ def _run(args: List[str], cwd: str) -> str:
             capture_output=True,
             text=True,
             timeout=TIMEOUT_SECONDS,
+            env={**os.environ, **env} if env else None,
         )
     except FileNotFoundError:
         raise GitError("git is not installed, or not on PATH")
@@ -191,3 +193,93 @@ def checkout(root: str, name: str) -> str:
         raise GitError("name a branch to switch to")
     _run(["checkout", clean], cwd=root)
     return f"switched to {clean}"
+
+
+# ===== Checkpoints, backed by git's own object store =====
+#
+# A checkpoint wants to be atomic, cheap, and complete. Git already provides
+# exactly that: a tree object is a content-addressed snapshot of the whole
+# worktree, and restoring one is two plumbing commands. Copying files into a
+# database duplicates work git has already done far better.
+#
+# The one hazard is the index. `git add -A` against the user's real index would
+# quietly stage their work, so every checkpoint operation runs against a private
+# index file under .carrot/ via GIT_INDEX_FILE. The user's staged changes are
+# never touched.
+
+CHECKPOINT_DIR = ".carrot"
+CHECKPOINT_INDEX = "checkpoint.index"
+
+
+def checkpoint_index_path(root: str) -> str:
+    folder = os.path.join(root, CHECKPOINT_DIR)
+    os.makedirs(folder, exist_ok=True)
+    # Carrot's own state is not part of the user's project. Without this the
+    # private index would be swept into the snapshot by `add -A`, and into the
+    # user's next commit by `stage` — a tool leaving its scratch files in
+    # someone's history is unforgivable.
+    ignore = os.path.join(folder, ".gitignore")
+    if not os.path.exists(ignore):
+        try:
+            with open(ignore, "w", encoding="utf-8") as handle:
+                handle.write("# Carrot's checkpoint state — not part of your project.\n*\n")
+        except OSError:
+            pass
+    return os.path.join(folder, CHECKPOINT_INDEX)
+
+
+def _private_index(root: str) -> Dict[str, str]:
+    return {"GIT_INDEX_FILE": checkpoint_index_path(root)}
+
+
+def write_tree(root: str) -> Dict[str, Any]:
+    """Snapshot the worktree as a git tree object, without staging anything.
+
+    Returns the tree sha and the HEAD it was taken from. Both are needed:
+    the tree restores file contents, and HEAD tells the UI where the run
+    started from.
+    """
+    _require_repo(root)
+    env = _private_index(root)
+    # Seed the private index from HEAD when there is one, so the snapshot is a
+    # diff against real history rather than a from-scratch add.
+    try:
+        _run(["read-tree", "HEAD"], cwd=root, env=env)
+    except GitError:
+        pass  # A repo with no commits yet: an empty index is correct.
+    _run(["add", "-A", "--", "."], cwd=root, env=env)
+    tree = _run(["write-tree"], cwd=root, env=env).strip()
+    head = ""
+    try:
+        head = _run(["rev-parse", "HEAD"], cwd=root).strip()
+    except GitError:
+        pass
+    return {"tree": tree, "head": head}
+
+
+def restore_tree(root: str, tree: str) -> Dict[str, Any]:
+    """Put the worktree back to a tree, and delete anything created since.
+
+    `checkout-index -a -f` rewrites every tracked file; `clean -fd` removes the
+    ghost files a nine-step rabbit hole leaves behind. Without the second step
+    "restore" would mean "mostly restore", which is what makes people stop
+    trusting undo.
+    """
+    _require_repo(root)
+    if not re.fullmatch(r"[0-9a-f]{7,64}", tree or ""):
+        raise GitError("that does not look like a checkpoint")
+    env = _private_index(root)
+    before = {c["path"] for c in status(root)["changes"]}
+    _run(["read-tree", tree], cwd=root, env=env)
+    _run(["checkout-index", "-a", "-f"], cwd=root, env=env)
+    # Never clean the checkpoint state itself, and never touch .git.
+    _run(["clean", "-fd", "-e", CHECKPOINT_DIR], cwd=root, env=env)
+    after = {c["path"] for c in status(root)["changes"]}
+    return {"tree": tree, "reverted": sorted(before - after), "remaining": sorted(after)}
+
+
+def tree_files(root: str, tree: str) -> List[str]:
+    """What a checkpoint contains, for the panel to show a count."""
+    _require_repo(root)
+    raw = _run(["ls-tree", "-r", "--name-only", tree], cwd=root)
+    return [line for line in raw.splitlines() if line]

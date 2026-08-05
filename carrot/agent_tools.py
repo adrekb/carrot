@@ -532,9 +532,13 @@ def _tool_edit_file(path: str, edits: str = "", conversation_id: Optional[str] =
         blocks = coder_mod.parse_edit_blocks(edits)
         after = coder_mod.apply_edits(before, blocks)
     except coder_mod.EditError as exc:
-        # A failed edit is reported, never partially applied. The model can
-        # read the file again and retry with the exact text.
-        return f"error: {exc}"
+        # A failed edit is reported, never partially applied — and reported as
+        # structured coordinates rather than prose. "Edit failed" makes a small
+        # model panic and rewrite the whole file; "line 42 expected X, found Y"
+        # makes it fix the block.
+        import json as _json
+
+        return _json.dumps({**exc.payload, "path": path})
 
     if after == before:
         return f"{path} already matches the requested edit — nothing changed."
@@ -553,6 +557,37 @@ def _tool_edit_file(path: str, edits: str = "", conversation_id: Optional[str] =
         f"applied {len(blocks)} edit(s) to {path}. Revert with journal entry "
         f"{entry_id}.\n\n{diff[:4000]}"
     )
+
+
+def _tool_run_recipe(recipe: str, values: Optional[Dict[str, Any]] = None, **_) -> str:
+    """Expand a saved recipe, validating its parameters before anything runs.
+
+    The schema barrier is the point: an omitted `{{path}}` is caught here, on
+    this machine, and returned as a structured validation error the model can
+    fix on its next turn. Without it the model would either be handed a prompt
+    containing the literal text `{{path}}` — which looks like it worked — or
+    would go on to generate a file path out of nothing.
+    """
+    import json as _json
+
+    from . import coder as coder_mod
+
+    try:
+        return coder_mod.render_recipe(recipe, values or {})
+    except KeyError:
+        known = [r["id"] for r in coder_mod.recipes()]
+        return _json.dumps({
+            "error": f"No recipe named '{recipe}'.",
+            "available": known,
+        })
+    except ValueError as exc:
+        spec = coder_mod.get_recipe(recipe) or {}
+        return _json.dumps({
+            "error": str(exc),
+            "recipe": recipe,
+            "parameters": spec.get("parameters", []),
+            "required": coder_mod.required_parameters(recipe),
+        })
 
 
 def _tool_generate_image(prompt: str, backend: str = "", conversation_id: Optional[str] = None,
@@ -861,6 +896,27 @@ TOOLS: Dict[str, Dict[str, Any]] = {
                 "edits": {"type": "string", "description": "One or more SEARCH/REPLACE blocks"},
             },
             "required": ["path", "edits"],
+        },
+    },
+    "run_recipe": {
+        "handler": _tool_run_recipe,
+        "mutating": False,
+        "risk": "low",
+        "description": (
+            "Expand one of the user's saved recipes into the instructions to "
+            "follow. Supply every parameter the recipe declares — a missing one "
+            "is rejected with the list of what is required."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "recipe": {"type": "string", "description": "The recipe's id"},
+                "values": {
+                    "type": "object",
+                    "description": "Parameter name to value, e.g. {\"path\": \"src/\"}",
+                },
+            },
+            "required": ["recipe"],
         },
     },
     "generate_image": {

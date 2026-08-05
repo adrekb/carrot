@@ -21,6 +21,10 @@ router = APIRouter(prefix="/api/coder", tags=["coder"])
 
 class ModeRequest(BaseModel):
     mode: str
+    # Switching to Act from a planning conversation compacts that conversation
+    # into an implementation brief instead of dragging the transcript along.
+    conversation_id: Optional[str] = None
+    compact: Optional[bool] = True
 
 
 class CheckpointRequest(BaseModel):
@@ -84,8 +88,53 @@ async def set_mode(req: ModeRequest):
     mode = coder_mod.normalize_mode(req.mode)
     if mode != (req.mode or "").strip().lower():
         raise HTTPException(status_code=400, detail=f"unknown mode: {req.mode}")
+    previous = coder_mod.normalize_mode(get_config().get("coder_mode"))
     set_config("coder_mode", mode)
-    return {"mode": mode, "guidance": coder_mod.MODE_PREAMBLE[mode]}
+
+    compacted = ""
+    if previous == coder_mod.MODE_PLAN and mode == coder_mod.MODE_ACT and req.compact:
+        compacted = _compact_for(req.conversation_id or "")
+    # Going back to Plan discards the brief: it described a plan that is now
+    # being reconsidered, and carrying it into the new plan would anchor it.
+    if mode == coder_mod.MODE_PLAN:
+        coder_mod.clear_snapshot(req.conversation_id or "")
+
+    return {
+        "mode": mode,
+        "guidance": coder_mod.MODE_PREAMBLE[mode],
+        "compacted": bool(compacted),
+        "brief": compacted,
+    }
+
+
+def _compact_for(conversation_id: str) -> str:
+    """Compress the planning conversation into an implementation brief.
+
+    Never raises: a failed compaction falls back to the old behaviour of
+    carrying the history, which is worse but not broken. Being stuck in Plan
+    mode because a summariser hiccuped would be far worse than either.
+    """
+    if not conversation_id:
+        return ""
+    try:
+        from carrot import conversation as conv_mod, router as router_mod
+
+        conversation = conv_mod.get_conversation(conversation_id) or {}
+        history = conversation.get("messages") or []
+        if len(coder_mod.plan_messages(history)) < 2:
+            return ""  # Nothing was planned; there is nothing to compact.
+        resolved = router_mod.route(task="summarize")
+        brief = coder_mod.compact_plan(history, resolved, router_mod.stream_events)
+    except Exception:
+        return ""
+    if brief:
+        coder_mod.store_snapshot(conversation_id, brief)
+    return brief
+
+
+@router.get("/brief/{conversation_id}")
+async def get_brief(conversation_id: str):
+    return {"brief": coder_mod.snapshot_for(conversation_id)}
 
 
 @router.get("/rules")

@@ -884,8 +884,8 @@ async def calendar_refresh():
 
 # ===== Chat =====
 
-def _coder_context():
-    """Mode guidance plus the workspace's own rules, as system messages.
+def _coder_context(conversation_id: str = ""):
+    """Mode guidance, the compacted plan, and the workspace's own rules.
 
     Only emitted when there is something to say: a chat about dinner should not
     carry a plan/act preamble, and an empty rules block is noise in every turn.
@@ -895,6 +895,16 @@ def _coder_context():
     mode = coder_mod.normalize_mode(cfg.get("coder_mode"))
     if mode == coder_mod.MODE_PLAN:
         blocks.append({"role": "system", "content": coder_mod.MODE_PREAMBLE[mode]})
+    else:
+        # The brief replaces the planning transcript rather than joining it:
+        # by Act time the reading and grepping has served its purpose, and
+        # carrying it forward spends the window on transcript.
+        brief = coder_mod.snapshot_for(conversation_id)
+        if brief:
+            blocks.append({
+                "role": "system",
+                "content": f"{coder_mod.SNAPSHOT_HEADER}\n\n{brief}",
+            })
     if cfg.get("agent_tools_enabled", True):
         rules = coder_mod.load_rules(agent_mod.workspace_root())
         if rules:
@@ -934,7 +944,7 @@ def _prepare_history(conv, message, skill_slug, extra_system=None, mode=None,
     # carries. A repo already set up for Cline, Continue, Goose or Cursor is
     # already set up for Carrot — its rules are read, not re-authored.
     try:
-        history.extend(_coder_context())
+        history.extend(_coder_context(conv.get("id", "") if conv else ""))
     except Exception:
         pass
 
@@ -1177,6 +1187,20 @@ def _run_tool(name, args, conversation_id):
     pushes events onto a queue this generator drains, so the SSE stream stays
     live for the whole wait.
     """
+    # Removing a tool's declaration is the first line of defence, but a small
+    # model will still emit a call for a name it saw in training and was never
+    # offered. Reject it here, structured, so it reads as a protocol error and
+    # gets corrected rather than apologised for.
+    try:
+        refusal = coder_mod.reject_tool(
+            name, config.get_config().get("coder_mode")
+        )
+    except Exception:
+        refusal = None
+    if refusal:
+        yield {"_tool_result": json.dumps(refusal)}
+        return
+
     events = queue.Queue()
     outcome = {}
 

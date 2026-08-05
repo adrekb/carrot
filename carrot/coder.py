@@ -100,9 +100,16 @@ MODE_PREAMBLE = {
 #
 # Order matters: the more Carrot-specific and the more standard files come
 # first, so a repo carrying several of them reads sensibly top to bottom.
+# Ordered by authority, most authoritative first. A file written *for Carrot*
+# outranks one written for another tool, and the local repo's own convention
+# outranks a vendor default. This order is the conflict-resolution rule: when
+# two files say incompatible things about the same topic, the earlier one wins
+# and the later one is dropped rather than both being shipped to confuse the
+# model.
 RULE_FILES = (
-    "AGENTS.md",
+    "CARROT.md",
     ".carrotrules",
+    "AGENTS.md",
     "CLAUDE.md",
     ".clinerules",
     ".continuerules",
@@ -110,19 +117,46 @@ RULE_FILES = (
     ".cursorrules",
     ".github/copilot-instructions.md",
 )
-RULES_DIRS = (".clinerules", ".continue/rules", ".carrot/rules")
+RULES_DIRS = (".carrot/rules", ".clinerules", ".continue/rules")
 MAX_RULES_CHARS = 24000
+
+# Topics a rule can be *about*. Two rules that hit the same topic with opposite
+# instructions cannot both be followed, so the lower-authority one is dropped.
+# Deliberately narrow: these are the conventions that actually collide in
+# practice, and inventing more would start discarding rules that do not clash.
+CONFLICT_TOPICS = (
+    ("indent", ("tab", "space", "indent")),
+    ("quotes", ("single quote", "double quote")),
+    ("semicolons", ("semicolon",)),
+    ("test-runner", ("pytest", "unittest", "jest", "vitest", "mocha")),
+    ("package-manager", ("npm", "yarn", "pnpm", "bun")),
+    ("line-length", ("line length", "columns", "char limit", "characters per line")),
+    ("comments", ("comment",)),
+    ("commit-style", ("commit message", "conventional commit")),
+)
 
 
 def load_rules(root: str) -> str:
-    """Every project rules file this repo carries, concatenated and labelled.
+    """Compile every rules file this repo carries into one optimized block.
+
+    Concatenating five vendors' rule files was the obvious first version and
+    the wrong one: a small model given eight hundred lines of overlapping
+    instruction attends to none of them. So the files are *compiled* —
+    deduplicated line by line, conflicting instructions resolved by the
+    authority order above, and flattened into a single directive list with no
+    per-file headers to spend attention on.
 
     A repo already configured for Cline, Continue, Goose, Cursor or Copilot
-    needs no extra file to be configured for Carrot.
+    still needs no extra file to be configured for Carrot.
     """
+    return compile_rules(collect_rules(root))
+
+
+def collect_rules(root: str) -> List[Dict[str, str]]:
+    """Read every rules file present, in authority order."""
     if not root or not os.path.isdir(root):
-        return ""
-    chunks: List[str] = []
+        return []
+    found: List[Dict[str, str]] = []
     seen: set = set()
 
     def take(path: str, label: str) -> None:
@@ -136,7 +170,7 @@ def load_rules(root: str) -> str:
         except OSError:
             return
         if body:
-            chunks.append(f"--- {label} ---\n{body}")
+            found.append({"source": label, "body": body})
 
     for name in RULE_FILES:
         take(os.path.join(root, name), name)
@@ -148,16 +182,81 @@ def load_rules(root: str) -> str:
         for name in sorted(os.listdir(full)):
             if name.endswith((".md", ".txt", ".mdc")):
                 take(os.path.join(full, name), f"{folder}/{name}")
+    return found
 
-    if not chunks:
+
+def _directives(body: str) -> List[str]:
+    """Split a rules file into individual instructions.
+
+    Headings and horizontal rules are structure, not instruction, and carrying
+    them into a flattened list is pure token cost.
+    """
+    lines = []
+    for raw in body.replace("\r\n", "\n").split("\n"):
+        line = raw.strip()
+        if not line or line.startswith("#") or set(line) <= set("-=*_"):
+            continue
+        line = re.sub(r"^[-*+]\s+|^\d+[.)]\s+", "", line)
+        if line:
+            lines.append(line)
+    return lines
+
+
+def _normalize_rule(text: str) -> str:
+    """A comparison key: punctuation and casing are not the instruction."""
+    return re.sub(r"[^a-z0-9 ]+", " ", text.lower()).strip()
+
+
+def _topic_of(text: str) -> Optional[str]:
+    lowered = text.lower()
+    for topic, markers in CONFLICT_TOPICS:
+        if any(marker in lowered for marker in markers):
+            return topic
+    return None
+
+
+def compile_rules(collected: List[Dict[str, str]]) -> str:
+    """Deduplicate, resolve conflicts by authority, and flatten."""
+    kept: List[Dict[str, str]] = []
+    seen_text: set = set()
+    claimed_topics: Dict[str, str] = {}
+    dropped: List[str] = []
+
+    for entry in collected:
+        for directive in _directives(entry["body"]):
+            key = _normalize_rule(directive)
+            if not key or key in seen_text:
+                continue  # The same instruction from five vendors is one rule.
+            topic = _topic_of(directive)
+            if topic and topic in claimed_topics:
+                # A higher-authority file already ruled on this. Shipping both
+                # is how a model ends up choosing at random.
+                if claimed_topics[topic] != entry["source"]:
+                    dropped.append(f"{topic} ({entry['source']})")
+                    continue
+            seen_text.add(key)
+            if topic:
+                claimed_topics.setdefault(topic, entry["source"])
+            kept.append({"text": directive, "source": entry["source"]})
+
+    if not kept:
         return ""
-    text = "\n\n".join(chunks)
-    if len(text) > MAX_RULES_CHARS:
-        text = text[:MAX_RULES_CHARS] + "\n\n[rules truncated]"
-    return (
-        "Project rules, from the repository's own instruction files. Follow "
-        "them; they outrank your general habits.\n\n" + text
+
+    body = "\n".join(f"- {rule['text']}" for rule in kept)
+    if len(body) > MAX_RULES_CHARS:
+        body = body[:MAX_RULES_CHARS] + "\n- [rules truncated]"
+    sources = ", ".join(dict.fromkeys(e["source"] for e in collected))
+    header = (
+        "Project rules, compiled from this repository's own instruction files "
+        f"({sources}). They outrank your general habits. Duplicates have been "
+        "merged and conflicts resolved in favour of the most specific file, so "
+        "every line below applies.\n\n"
     )
+    footer = (
+        f"\n\n[{len(dropped)} lower-priority rule(s) dropped as conflicting: "
+        f"{', '.join(dict.fromkeys(dropped))}]" if dropped else ""
+    )
+    return header + body + footer
 
 
 # ===== Search/replace edits =====
@@ -172,7 +271,18 @@ REPLACE_CLOSE = re.compile(r"^>{5,9} REPLACE\s*$|^\+{5,9} REPLACE\s*$", re.M)
 
 
 class EditError(ValueError):
-    """A block was malformed, or matched zero or many times."""
+    """A block was malformed, or matched zero or many times.
+
+    Carries a structured payload as well as a message. A generic "edit failed"
+    makes a small open-weights model panic and rewrite the whole file from
+    scratch; compiler-grade coordinates — which line, what was expected, what
+    is actually there — make it fix the block instead. That difference is the
+    whole reason this class exists rather than a bare ValueError.
+    """
+
+    def __init__(self, message: str, **payload):
+        super().__init__(message)
+        self.payload = {"status": "REJECTED", "reason": message, **payload}
 
 
 def parse_edit_blocks(text: str) -> List[Tuple[str, str]]:
@@ -241,16 +351,59 @@ def apply_edits(content: str, blocks: List[Tuple[str, str]]) -> str:
         if count > 1:
             raise EditError(
                 f"block {index} matches {count} places — include more surrounding "
-                f"context so it identifies exactly one"
+                f"context so it identifies exactly one",
+                block=index, matches=count, fix="add_context",
             )
         loosened = _loose_replace(result, search, replace)
         if loosened is None:
-            raise EditError(
-                f"block {index} does not match the file. Read the file again and "
-                f"copy the exact text you want to replace."
-            )
+            raise EditError(**_rejection(result, search, index))
         result = loosened
     return result
+
+
+def _rejection(content: str, search: str, index: int) -> Dict[str, Any]:
+    """Say exactly where the block stopped matching, and against what.
+
+    "Does not match" tells the model nothing it did not already know. Naming
+    the line, what it expected there, and what is actually there turns a
+    guess-again into a one-token correction.
+    """
+    lines = content.replace("\r\n", "\n").split("\n")
+    wanted = search.replace("\r\n", "\n").split("\n")
+    first = wanted[0].strip()
+
+    # Find where the block *starts* to match, then the first line that diverges.
+    for start, line in enumerate(lines):
+        if line.strip() != first:
+            continue
+        for offset, expected in enumerate(wanted):
+            actual = lines[start + offset] if start + offset < len(lines) else None
+            if actual is None:
+                return {
+                    "message": (
+                        f"block {index} ran past the end of the file at line "
+                        f"{start + offset + 1}"
+                    ),
+                    "block": index, "line": start + offset + 1,
+                    "expected": expected, "found": None, "fix": "reread_file",
+                }
+            if actual.rstrip() != expected.rstrip():
+                return {
+                    "message": (
+                        f"block {index} rejected: line {start + offset + 1} "
+                        f"expected {expected.strip()!r}, found {actual.strip()!r}"
+                    ),
+                    "block": index, "line": start + offset + 1,
+                    "expected": expected, "found": actual, "fix": "correct_block",
+                }
+    return {
+        "message": (
+            f"block {index} rejected: no line in the file matches its first line "
+            f"{first!r}. Read the file again and copy the exact text."
+        ),
+        "block": index, "line": None, "expected": wanted[0], "found": None,
+        "fix": "reread_file",
+    }
 
 
 def _normalize(text: str) -> str:
@@ -326,16 +479,34 @@ def snapshot(root: str) -> Dict[str, str]:
 
 
 def create_checkpoint(root: str, label: str = "", conversation_id: Optional[str] = None) -> Dict[str, Any]:
-    """Snapshot the workspace so this point can be returned to."""
-    files = snapshot(root)
+    """Snapshot the workspace so this point can be returned to.
+
+    In a git repository the snapshot is a git tree object written through a
+    private index — content-addressed, atomic, and effectively free, because
+    git has already done the work. Outside one it falls back to copying the
+    text files into the database, which is the only option but is slower and
+    bounded. Either way the caller gets the same shape back.
+    """
     entry_id = str(uuid.uuid4())[:12]
+    tree, head, files = "", "", {}
+    try:
+        from . import gitops
+
+        if gitops.is_repo(root):
+            written = gitops.write_tree(root)
+            tree, head = written["tree"], written["head"]
+    except Exception:
+        tree = ""  # Any git trouble at all falls back to the copy.
+    if not tree:
+        files = snapshot(root)
+
     conn = get_db()
     conn.execute(
         """INSERT INTO coder_checkpoints
-           (id, label, root, files, conversation_id, created_at)
-           VALUES (?, ?, ?, ?, ?, ?)""",
+           (id, label, root, files, conversation_id, created_at, tree, head)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
         (entry_id, label or "checkpoint", root, json.dumps(files),
-         conversation_id, datetime.now(timezone.utc).isoformat()),
+         conversation_id, datetime.now(timezone.utc).isoformat(), tree, head),
     )
     # Keep the table bounded; the oldest checkpoint is the least useful one.
     conn.execute(
@@ -345,13 +516,20 @@ def create_checkpoint(root: str, label: str = "", conversation_id: Optional[str]
     )
     conn.commit()
     conn.close()
-    return {"id": entry_id, "label": label or "checkpoint", "files": len(files)}
+    return {
+        "id": entry_id,
+        "label": label or "checkpoint",
+        "files": len(files),
+        "backend": "git" if tree else "snapshot",
+        "tree": tree,
+        "head": head,
+    }
 
 
 def list_checkpoints(limit: int = 30) -> List[Dict[str, Any]]:
     conn = get_db()
     rows = conn.execute(
-        """SELECT id, label, root, conversation_id, created_at,
+        """SELECT id, label, root, conversation_id, created_at, tree, head,
                   length(files) AS size
            FROM coder_checkpoints ORDER BY created_at DESC LIMIT ?""",
         (limit,),
@@ -376,6 +554,21 @@ def restore_checkpoint(checkpoint_id: str) -> Dict[str, Any]:
         raise KeyError(f"no such checkpoint: {checkpoint_id}")
 
     root = row["root"]
+    tree = row["tree"] if "tree" in row.keys() else ""
+    if tree:
+        from . import gitops
+
+        result = gitops.restore_tree(root, tree)
+        return {
+            "id": checkpoint_id,
+            "backend": "git",
+            # `clean -fd` is what wipes the ghost files a rabbit hole leaves;
+            # the caller is told so rather than having to infer it.
+            "restored": result["reverted"],
+            "removed": [],
+            "purged": True,
+        }
+
     files = json.loads(row["files"])
     restored, removed = [], []
     for rel, body in files.items():
@@ -472,6 +665,20 @@ def delete_recipe(recipe_id: str) -> bool:
 PARAM_PATTERN = re.compile(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}")
 
 
+def required_parameters(recipe_id: str) -> List[str]:
+    """Every placeholder the prompt uses that has no default.
+
+    Returned with the validation error so the model is told what to supply
+    rather than having to guess from the failure.
+    """
+    recipe = get_recipe(recipe_id) or {}
+    defaults = {
+        p["name"] for p in recipe.get("parameters", [])
+        if p.get("default") is not None
+    }
+    return sorted(set(PARAM_PATTERN.findall(recipe.get("prompt", ""))) - defaults)
+
+
 def render_recipe(recipe_id: str, values: Optional[Dict[str, Any]] = None) -> str:
     """Substitute ``{{name}}`` placeholders, refusing to run half-filled.
 
@@ -495,3 +702,117 @@ def render_recipe(recipe_id: str, values: Optional[Dict[str, Any]] = None) -> st
     if missing:
         raise ValueError("missing recipe parameters: " + ", ".join(missing))
     return PARAM_PATTERN.sub(lambda m: str(supplied[m.group(1)]), recipe["prompt"])
+
+
+# ===== Plan -> Act handoff =====
+#
+# Switching to Act with the planning conversation still attached is the most
+# expensive mistake in this whole flow. A plan is produced by reading files,
+# grepping, and thinking out loud; by the time it is agreed, the history is
+# mostly tool output that has already served its purpose. Carrying it forward
+# spends the context window on transcript and buries the plan itself.
+#
+# So the transition compacts: the planning turns are compressed into a dense
+# architectural snapshot, the verbose middle is dropped, and Act starts from
+# the snapshot with the write tools restored.
+
+COMPACTION_PROMPT = (
+    "Compress the planning conversation above into an implementation brief for "
+    "the engineer who will now carry it out. Write it as terse structured notes, "
+    "not prose, and include exactly these sections:\n"
+    "GOAL — one sentence.\n"
+    "FILES — each file to change and what changes in it.\n"
+    "APPROACH — the ordered steps.\n"
+    "CONSTRAINTS — anything agreed that limits the implementation.\n"
+    "OPEN — anything still undecided, or 'none'.\n"
+    "Include no commentary, no restating of the conversation, and nothing you "
+    "were not actually told. If the plan is incomplete, say so under OPEN "
+    "rather than inventing the missing part."
+)
+MAX_COMPACTION_INPUT = 24000
+SNAPSHOT_HEADER = "Implementation brief, compacted from the planning session:"
+
+
+def plan_messages(history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The parts of a conversation worth compacting.
+
+    System messages are re-derived every turn, so they are not part of the plan
+    and would only dilute the compaction input.
+    """
+    return [m for m in history if m.get("role") in ("user", "assistant") and m.get("content")]
+
+
+def compact_plan(history: List[Dict[str, Any]], resolved: Any, stream_events) -> str:
+    """Ask the model to compress its own plan into a brief.
+
+    Returns an empty string on any failure. A failed compaction must never
+    block the switch to Act — the worst case is the old behaviour, which is
+    carrying the full history, not a user stuck in Plan mode.
+    """
+    turns = plan_messages(history)
+    if not turns:
+        return ""
+    transcript = "\n\n".join(
+        f"{m['role'].upper()}: {m['content']}" for m in turns
+    )[-MAX_COMPACTION_INPUT:]
+    try:
+        parts = []
+        for event in stream_events(
+            resolved,
+            [{"role": "user", "content": f"{transcript}\n\n---\n\n{COMPACTION_PROMPT}"}],
+            tools=None,
+        ):
+            if event.get("type") in ("text", "content"):
+                parts.append(event.get("text", ""))
+        return "".join(parts).strip()
+    except Exception:
+        return ""
+
+
+def store_snapshot(conversation_id: str, snapshot_text: str) -> bool:
+    """Keep the brief for the Act turns that follow."""
+    if not (conversation_id and snapshot_text.strip()):
+        return False
+    stored = dict(get_config().get("coder_snapshots", {}) or {})
+    stored[conversation_id] = snapshot_text.strip()
+    # One brief per conversation, and only the recent ones — an unbounded map
+    # in config would grow forever for a feature nobody reads twice.
+    if len(stored) > 20:
+        stored = dict(list(stored.items())[-20:])
+    set_config("coder_snapshots", stored)
+    return True
+
+
+def snapshot_for(conversation_id: str) -> str:
+    return (get_config().get("coder_snapshots", {}) or {}).get(conversation_id or "", "")
+
+
+def clear_snapshot(conversation_id: str) -> None:
+    stored = dict(get_config().get("coder_snapshots", {}) or {})
+    if stored.pop(conversation_id or "", None) is not None:
+        set_config("coder_snapshots", stored)
+
+
+# ===== Client-side tool rejection =====
+
+def reject_tool(name: str, mode: str) -> Optional[Dict[str, Any]]:
+    """Refuse a write tool called in plan mode, before it can run.
+
+    Removing the declaration is the first line of defence, but a model can
+    still emit a call for a tool it was never offered — small models do it
+    constantly, having seen the name in their training data. The rejection is
+    structured rather than prose so the model reads it as a protocol error and
+    corrects, instead of apologising and trying again.
+    """
+    if normalize_mode(mode) != MODE_PLAN or _bare(name) not in WRITE_TOOLS:
+        return None
+    return {
+        "status": "REJECTED",
+        "reason": f"{_bare(name)} is not available in PLAN mode",
+        "tool": name,
+        "fix": (
+            "Finish the plan instead. Say which files you would change and how; "
+            "the user switches to ACT mode when they agree, and the write tools "
+            "come back then."
+        ),
+    }

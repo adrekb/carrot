@@ -71,6 +71,9 @@ DEFAULTS = {
     # write tools away so a change can be agreed before anything moves.
     "coder_mode": "act",
     "coder_recipes": [],
+    # Implementation briefs, one per conversation, written when Plan hands off
+    # to Act so the transcript can be dropped.
+    "coder_snapshots": {},
     # Image and video generation. Empty backend means "pick the best set-up
     # one, preferring on-device" rather than a hardcoded cloud default.
     "media_backend_image": "",

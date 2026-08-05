@@ -5,6 +5,7 @@ actually connected: that plan mode reaches the tool list the model is offered,
 that project rules reach the system prompt, and that git refuses the things it
 should refuse rather than shelling out to something clever.
 """
+import json
 import os
 import subprocess
 
@@ -131,7 +132,10 @@ class TestEditFileTool:
         out = agent_tools._tool_edit_file(
             "a.py", "------- SEARCH\nabsent\n=======\nnew\n+++++++ REPLACE"
         )
-        assert out.startswith("error:")
+        # Structured, not prose: a generic "edit failed" makes a small model
+        # panic and rewrite the whole file.
+        payload = json.loads(out)
+        assert payload["status"] == "REJECTED" and payload["path"] == "a.py"
         assert (tmp_path / "a.py").read_text() == "original\n"
 
     def test_editing_a_missing_file_points_at_write_file(self, isolated_db, tmp_path, monkeypatch):

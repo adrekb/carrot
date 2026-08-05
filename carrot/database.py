@@ -230,13 +230,18 @@ CREATE INDEX IF NOT EXISTS idx_file_journal_created ON file_journal(created_at D
 -- above reverses one write; this reverses a whole train of thought, which is
 -- what you want when the agent went wrong nine steps ago. `files` is a JSON
 -- map of relative path -> contents, text files only.
+-- `tree` is a git tree object when the workspace is a repository, which
+-- makes the snapshot atomic and free; `files` is the fallback copy for a
+-- workspace that is not under version control. Exactly one is populated.
 CREATE TABLE IF NOT EXISTS coder_checkpoints (
     id TEXT PRIMARY KEY,
     label TEXT DEFAULT '',
     root TEXT NOT NULL,
     files TEXT NOT NULL DEFAULT '{}',
     conversation_id TEXT,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    tree TEXT DEFAULT '',
+    head TEXT DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_coder_checkpoints_created ON coder_checkpoints(created_at DESC);
@@ -494,9 +499,29 @@ def _migrate_fts(conn):
         conn.commit()
 
 
+# Columns added to tables that already exist in the wild. CREATE TABLE IF NOT
+# EXISTS does nothing for an existing table, so a new column has to be added
+# explicitly or an upgraded install reads a schema it does not have.
+ADDED_COLUMNS = (
+    ("coder_checkpoints", "tree", "TEXT DEFAULT ''"),
+    ("coder_checkpoints", "head", "TEXT DEFAULT ''"),
+)
+
+
+def _migrate_columns(conn):
+    for table, column, spec in ADDED_COLUMNS:
+        try:
+            existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        except sqlite3.Error:
+            continue
+        if existing and column not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {spec}")
+
+
 def init_db():
     conn = get_db()
     conn.executescript(SCHEMA)
     _migrate_fts(conn)
+    _migrate_columns(conn)
     conn.commit()
     conn.close()

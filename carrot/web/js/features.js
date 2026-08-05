@@ -1255,14 +1255,38 @@ async function loadCoderState() {
 }
 
 async function setCoderMode(mode) {
+    let result;
+    if (mode === 'act') setCodeStatus('compacting the plan…');
     try {
-        await api('/api/coder/mode', { method: 'PUT', body: JSON.stringify({ mode }) });
+        result = await api('/api/coder/mode', {
+            method: 'PUT',
+            // Plan -> Act compacts the planning conversation into an
+            // implementation brief, so Act starts from the decisions rather
+            // than from the transcript that produced them.
+            body: JSON.stringify({ mode, conversation_id: currentConversationId }),
+        });
     } catch (e) {
         setCodeStatus('could not switch mode: ' + e.message);
         return;
     }
     loadCoderState();
-    setCodeStatus(mode === 'plan' ? 'Plan mode — writes are off' : 'Act mode — writes are on');
+    if (result.compacted) {
+        setCodeStatus('Act mode — plan compacted into a brief');
+        showBrief(result.brief);
+    } else {
+        setCodeStatus(mode === 'plan' ? 'Plan mode — writes are off' : 'Act mode — writes are on');
+    }
+}
+
+// The brief is what Act will actually work from, so it is shown rather than
+// applied invisibly: a compaction that dropped something important is only
+// catchable if you can see it.
+function showBrief(text) {
+    if (!text) return;
+    showCodePanel('output');
+    clearRunOffer();
+    document.getElementById('run-output').textContent =
+        'Implementation brief (this is what Act works from):\n\n' + text;
 }
 
 async function takeCheckpoint() {
@@ -1297,8 +1321,12 @@ async function loadCheckpoints() {
     for (const item of items) {
         const row = document.createElement('div');
         row.className = 'checkpoint-row';
+        // A git-backed checkpoint restores atomically and purges ghost files;
+        // a copied one is bounded. Saying which is which is honest about it.
+        const backed = item.tree ? 'git' : 'snapshot';
         row.innerHTML = `
             <span class="cp-label">${escHtml(item.label || 'checkpoint')}</span>
+            <span class="tag">${backed}</span>
             <span class="cp-when">${escHtml((item.created_at || '').replace('T', ' ').slice(0, 16))}</span>`;
         const restore = document.createElement('button');
         restore.className = 'btn btn-ghost';
@@ -1317,8 +1345,13 @@ async function restoreCheckpoint(id, label) {
     try {
         const result = await api(`/api/coder/checkpoints/${encodeURIComponent(id)}/restore`,
             { method: 'POST' });
-        setCodeStatus(`restored ${result.restored.length} file(s), removed ${result.removed.length}`);
+        setCodeStatus(result.purged
+            ? `restored ${result.restored.length} file(s), workspace purged to that point`
+            : `restored ${result.restored.length} file(s), removed ${result.removed.length}`);
         loadCodeTree();
+        // Keep the panel honest the moment the workspace moves under it.
+        loadCheckpoints();
+        loadCoderState();
         if (activeFilePath) openFile(activeFilePath);
     } catch (e) {
         setCodeStatus('could not restore: ' + e.message);
