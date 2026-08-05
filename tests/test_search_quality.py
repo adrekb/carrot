@@ -339,3 +339,106 @@ class TestNoResponseIsUnreachable:
         answer = A._evidence_answer("x", [
             {"tool": "read_url", "source": "https://x", "text": "some text"}])
         assert "could not write it up" in answer
+
+
+class TestBlockedAndIndexPages:
+    """From the reported trace: Politico and Cook Political returned 403 while
+    AP and NYT worked, and the pages that *did* load were section fronts with
+    no story text on them. Neither was Carrot refusing a source — one was the
+    site refusing Carrot, and the other was Carrot reading the wrong page."""
+
+    def test_the_fetcher_no_longer_announces_itself_as_a_bot(self):
+        # "Mozilla/5.0 (compatible; Carrot/1.0; local assistant)" is the exact
+        # shape bot management 403s.
+        assert "compatible; Carrot" not in websearch.USER_AGENT
+
+    def test_a_real_browser_header_set_is_sent(self):
+        # A request carrying only User-Agent is trivially fingerprinted.
+        for header in ("Accept", "Accept-Language", "User-Agent"):
+            assert header in websearch.BROWSER_HEADERS
+
+    def test_a_403_tells_the_model_not_to_retry(self):
+        # "HTTP 403" reads like a transient failure, and the model duly tried
+        # the same URL twice in one turn.
+        message = websearch._status_message(403, "https://www.politico.com/politics")
+        assert "Do not retry" in message and "politico.com" in message
+
+    def test_a_429_points_elsewhere_rather_than_at_a_retry(self):
+        assert "different source" in websearch._status_message(429, "https://x.com/a")
+
+    def test_a_404_is_not_described_as_a_block(self):
+        assert "does not exist" in websearch._status_message(404, "https://x.com/a")
+
+    def test_a_blocked_response_is_flagged_as_such(self):
+        assert websearch._status_message(451, "https://x.com/a").startswith("HTTP 451")
+
+
+class TestSectionFronts:
+    def index_links(self, count=40):
+        return [{"text": f"Senate passes the bill on measure {i}",
+                 "url": f"https://apnews.com/article/story-{i}"} for i in range(count)]
+
+    def test_a_page_of_links_with_no_prose_is_an_index(self):
+        assert websearch.looks_like_an_index("Politics\nMore\nSubscribe",
+                                              self.index_links()) is True
+
+    def test_an_article_is_not_an_index(self):
+        # Real prose, few links.
+        article = " ".join(["word"] * 900)
+        assert websearch.looks_like_an_index(article, self.index_links(5)) is False
+
+    def test_a_long_article_with_many_links_is_still_an_article(self):
+        article = " ".join(["word"] * 3000)
+        assert websearch.looks_like_an_index(article, self.index_links(40)) is False
+
+    def test_headlines_are_separated_from_navigation(self):
+        links = [
+            {"text": "Subscribe", "url": "https://apnews.com/subscribe"},
+            {"text": "Home", "url": "https://apnews.com/"},
+            {"text": "Senate rejects the funding bill in a late vote",
+             "url": "https://apnews.com/article/senate-funding-vote"},
+        ]
+        picked = websearch.headline_links(links, "https://apnews.com/politics")
+        assert len(picked) == 1 and "Senate rejects" in picked[0]["text"]
+
+    def test_offsite_links_are_dropped(self):
+        links = [{"text": "Read this excellent thing elsewhere entirely",
+                  "url": "https://example.com/a/b/c"}]
+        assert websearch.headline_links(links, "https://apnews.com/politics") == []
+
+    def test_shallow_links_are_dropped(self):
+        # A story lives below the section, not beside it.
+        links = [{"text": "Some fairly long section name here", "url": "https://apnews.com/world"}]
+        assert websearch.headline_links(links, "https://apnews.com/politics") == []
+
+    def test_duplicates_are_collapsed(self):
+        link = {"text": "Senate rejects the funding bill today",
+                "url": "https://apnews.com/article/x"}
+        assert len(websearch.headline_links([link, link], "https://apnews.com/politics")) == 1
+
+    def test_reading_an_index_returns_headlines_not_nav_furniture(self):
+        from carrot import agent_tools
+
+        page = {
+            "error": "", "final_url": "https://apnews.com/politics",
+            "text": "Politics\nMore\nSubscribe",
+            "links": self.index_links(),
+            "screening": {"tainted": False, "signals": []},
+        }
+        with patch.object(websearch, "fetch", return_value=page):
+            out = agent_tools._tool_read_url("https://apnews.com/politics")
+        assert "section index" in out
+        assert "apnews.com/article/story-0" in out
+
+    def test_reading_a_real_article_is_unchanged(self):
+        from carrot import agent_tools
+
+        page = {
+            "error": "", "final_url": "https://apnews.com/article/x",
+            "text": " ".join(["the vote failed"] * 400),
+            "links": [],
+            "screening": {"tainted": False, "signals": []},
+        }
+        with patch.object(websearch, "fetch", return_value=page):
+            out = agent_tools._tool_read_url("https://apnews.com/article/x")
+        assert "section index" not in out and "the vote failed" in out

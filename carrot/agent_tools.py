@@ -483,6 +483,21 @@ def _tool_read_url(url: str, **_) -> str:
     page = websearch.fetch(url)
     if page["error"]:
         return f"error: {page['error']}"
+
+    # A section front is a list of headlines with no article in it. Returning
+    # its text is returning nav furniture, which is why a model that lands on
+    # one reads it again and then reads three more like it. Hand back the
+    # headlines and their links so the next step is obvious.
+    if websearch.looks_like_an_index(page["text"], page["links"]):
+        headlines = websearch.headline_links(page["links"], page["final_url"])
+        if headlines:
+            listing = "\n".join(f"- {item['text']} — {item['url']}" for item in headlines)
+            return policy.wrap_untrusted(
+                f"This is a section index, not an article — it has no story text "
+                f"to quote. The headlines on it, with links:\n\n{listing}\n\n"
+                f"Read one of these for the actual story.",
+                origin=page["final_url"], screening=page["screening"],
+            )
     return policy.wrap_untrusted(page["text"], origin=page["final_url"], screening=page["screening"])
 
 
