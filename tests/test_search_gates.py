@@ -250,3 +250,80 @@ class TestResearchHandoff:
     def test_never_offered_outside_multi_turn(self):
         result = drive([("Answer.", [])], A.SEARCH_SINGLE)
         assert not result["research_offered"]
+
+
+class TestGateCountersActuallyCount:
+    """The root cause of every "(no response)" report.
+
+    Tools are offered to the model namespaced as `carrot__web_search`, but the
+    counters compared against the bare name. So `searches` and `reads` stayed
+    at zero no matter what the model did: the gate could never be satisfied,
+    every turn burned all three nudges telling a model that had just read six
+    pages that it had not searched yet, and every turn ended stalled.
+    """
+
+    class Route:
+        def as_dict(self):
+            return {}
+
+    def run(self, tool_names, mode=A.SEARCH_MULTI):
+        """A model that makes the given calls, one per round, then answers."""
+        remaining = list(tool_names)
+
+        def fake(resolved, messages, tools=None):
+            if remaining:
+                name = remaining.pop(0)
+                yield {"type": "tool_calls", "calls": [
+                    {"id": name, "function": {"name": name, "arguments": {
+                        "query": "recent american political news",
+                        "url": "https://apnews.com/politics",
+                    }}}]}
+                return
+            yield {"type": "text", "text": "Here is the answer."}
+
+        with patch.object(A.router_mod, "stream_events", fake), \
+             patch.object(A, "_run_tool", lambda n, a, c: iter([{"_tool_result": "page text"}])), \
+             patch.object(A, "_available_tools", lambda m: [{"name": "x"}]):
+            return list(A._agentic_chat_events(
+                [{"role": "user", "content": "recent american political news"}],
+                self.Route(), mode=mode))
+
+    def test_a_namespaced_search_counts_as_a_search(self):
+        events = self.run(["carrot__web_search", "carrot__web_search", "carrot__read_url"])
+        # Gates met, so no nudge should ever have been emitted.
+        assert not [e for e in events if "gate" in e]
+
+    def test_the_answer_survives_when_the_gates_are_met(self):
+        events = self.run(["carrot__web_search", "carrot__web_search", "carrot__read_url"])
+        final = next(e["_final_text"] for e in events if "_final_text" in e)
+        assert final == "Here is the answer."
+
+    def test_a_genuinely_thin_turn_still_gets_nudged(self):
+        # The gate must keep working — this is not a matter of disabling it.
+        events = self.run(["carrot__read_url"])
+        assert [e for e in events if "gate" in e]
+
+    def test_research_is_not_suggested_after_a_properly_researched_turn(self):
+        # Offering to escalate a turn that did the work is noise.
+        events = self.run(["carrot__web_search", "carrot__web_search", "carrot__read_url"])
+        assert not [e for e in events if "suggest_research" in e]
+
+    def test_query_drift_is_detected_on_a_namespaced_call(self):
+        # Same prefix bug: the drift check never fired either.
+        def fake(resolved, messages, tools=None):
+            if not any(m.get("role") == "tool" for m in messages):
+                yield {"type": "tool_calls", "calls": [{
+                    "id": "1",
+                    "function": {"name": "carrot__web_search",
+                                 "arguments": {"query": "banana bread recipe"}},
+                }]}
+                return
+            yield {"type": "text", "text": "done"}
+
+        with patch.object(A.router_mod, "stream_events", fake), \
+             patch.object(A, "_run_tool", lambda n, a, c: iter([{"_tool_result": "x"}])), \
+             patch.object(A, "_available_tools", lambda m: [{"name": "x"}]):
+            events = list(A._agentic_chat_events(
+                [{"role": "user", "content": "who won the senate race in Ohio"}],
+                self.Route(), mode=A.SEARCH_MULTI))
+        assert any(e.get("tool", {}).get("rejected") for e in events if "tool" in e)

@@ -1388,9 +1388,17 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mo
                 except json.JSONDecodeError:
                     args = {}
 
+            # Tools are offered to the model namespaced as `carrot__web_search`,
+            # so every comparison below has to be against the bare name. Getting
+            # this wrong meant the gate counters never incremented: the model
+            # searched, read six pages, and was told after each one that it had
+            # not searched yet — which is exactly the thrashing users saw, and
+            # why the turn always ended stalled with nothing written.
+            bare = name.split("__", 1)[-1]
+
             # A query about something else cannot answer the question asked.
             # Refuse it and say why, instead of spending a round on it.
-            if name == "web_search" and _query_drifted(question, str(args.get("query", ""))):
+            if bare == "web_search" and _query_drifted(question, str(args.get("query", ""))):
                 correction = QUERY_DRIFT_CORRECTION.format(
                     query=str(args.get("query", "")), question=question[:200])
                 yield {"tool": {"name": name, "args": args, "rejected": True}}
@@ -1407,15 +1415,11 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mo
                     result = event["_tool_result"]
                 else:
                     yield event
-            if name == "web_search":
+            if bare == "web_search":
                 searches += 1
-            elif name == "read_url":
+            elif bare == "read_url":
                 reads += 1
             yield {"tool_result": {"name": name, "result": result[:2000]}}
-            # Tools reach the model namespaced as `carrot__read_url`, so the
-            # bare name is what to match — comparing the full one silently
-            # collected no evidence at all.
-            bare = name.split("__", 1)[-1]
             if bare in ("web_search", "read_url") and not result.startswith("error:"):
                 evidence.append({
                     "tool": bare,
