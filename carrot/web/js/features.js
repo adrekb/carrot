@@ -1209,7 +1209,7 @@ function showCodePanel(which) {
 }
 
 function clearCodePanel() {
-    if (codePanelTab === 'output') document.getElementById('panel-output').textContent = '';
+    if (codePanelTab === 'output') { document.getElementById('run-output').textContent = ''; clearRunOffer(); }
     else if (codePanelTab === 'terminal') document.getElementById('term-log').innerHTML = '';
     else if (codePanelTab === 'git') document.getElementById('git-diff').textContent = '';
     document.getElementById('panel-status').textContent = '';
@@ -1390,9 +1390,10 @@ async function runCurrentFile() {
     // Running stale bytes is the classic way to debug the wrong program.
     if (dirtyFiles.has(activeFilePath)) await saveCurrentFile();
 
-    const out = document.getElementById('panel-output');
+    const out = document.getElementById('run-output');
     const status = document.getElementById('panel-status');
     showCodePanel('output');
+    clearRunOffer();
     out.textContent = `running ${activeFilePath}…\n`;
     status.textContent = 'running';
     const runBtn = document.getElementById('run-btn');
@@ -1410,11 +1411,135 @@ async function runCurrentFile() {
         out.textContent = `${r.language || ''} · ${stage}\n\n${r.output || ''}`;
         status.textContent = r.missing_tool ? `needs ${r.missing_tool}`
             : `${r.language || ''} · ${r.ok ? 'ok' : 'failed'}`;
+        // The one line that matters is usually buried in the traceback, so it
+        // gets lifted out and given a button.
+        if (r.missing_tool) showToolchainOffer(r);
+        else if (r.missing_package) showPackageOffer(r.missing_package);
     } catch (e) {
         out.textContent = 'Could not run: ' + e.message;
         status.textContent = 'error';
     } finally {
         if (runBtn) runBtn.disabled = false;
+    }
+}
+
+// ---------- "you're missing something" offers ----------
+//
+// The interesting line of a failed run is one line in fifty, and the fix is
+// usually one command. Both get lifted out of the output and given a button.
+// Nothing installs itself: the command is shown next to the button, because
+// running an installer on someone's machine without saying which one is not a
+// convenience, it is a surprise.
+
+function clearRunOffer() {
+    const host = document.getElementById('run-offer');
+    if (!host) return;
+    host.innerHTML = '';
+    host.classList.add('hidden');
+}
+
+function runOfferHost() {
+    const host = document.getElementById('run-offer');
+    host.innerHTML = '';
+    host.classList.remove('hidden');
+    return host;
+}
+
+// A missing language is not something Carrot can install for you — that is an
+// installer with a licence screen — so this offers the official download page.
+function showToolchainOffer(result) {
+    const host = runOfferHost();
+    const title = document.createElement('div');
+    title.className = 'offer-title';
+    title.textContent = `${result.language || 'That language'} is not installed on this computer`;
+    host.appendChild(title);
+
+    const body = document.createElement('div');
+    body.className = 'offer-body';
+    body.textContent = `Run needs ${result.missing_tool}. Install it, then press Run again — `
+        + `your file is saved and waiting.`;
+    host.appendChild(body);
+
+    if (result.help_url) {
+        const link = document.createElement('button');
+        link.className = 'btn btn-primary';
+        link.textContent = `Get ${result.missing_tool}`;
+        link.onclick = () => {
+            if (window.carrot?.openExternal) window.carrot.openExternal(result.help_url);
+            else window.open(result.help_url, '_blank', 'noopener');
+        };
+        host.appendChild(link);
+        const url = document.createElement('code');
+        url.className = 'offer-cmd';
+        url.textContent = result.help_url;
+        host.appendChild(url);
+    }
+}
+
+function showPackageOffer(offer) {
+    const host = runOfferHost();
+    const title = document.createElement('div');
+    title.className = 'offer-title';
+    title.textContent = offer.installable
+        ? `${offer.missing} is not installed`
+        : `${offer.missing} is missing`;
+    host.appendChild(title);
+
+    const body = document.createElement('div');
+    body.className = 'offer-body';
+    // `import cv2` needing `opencv-python` is the single most useful sentence
+    // in this whole feature, so it goes above the button.
+    body.textContent = offer.note ? `${offer.message} ${offer.note}` : offer.message;
+    host.appendChild(body);
+
+    if (!offer.installable) return;
+    if (!offer.available) {
+        const why = document.createElement('div');
+        why.className = 'offer-body';
+        why.textContent = `${offer.manager_label} is not on this computer, so Carrot cannot `
+            + `install it for you.`;
+        host.appendChild(why);
+        return;
+    }
+
+    const button = document.createElement('button');
+    button.className = 'btn btn-primary';
+    button.textContent = `Install ${offer.package}`;
+    button.onclick = () => installMissingPackage(offer, button);
+    host.appendChild(button);
+
+    const cmd = document.createElement('code');
+    cmd.className = 'offer-cmd';
+    cmd.textContent = offer.command;
+    host.appendChild(cmd);
+}
+
+async function installMissingPackage(offer, button) {
+    const out = document.getElementById('run-output');
+    button.disabled = true;
+    button.textContent = `Installing ${offer.package}…`;
+    let result;
+    try {
+        result = await api('/api/files/install', {
+            method: 'POST',
+            body: JSON.stringify({ package: offer.package, manager: offer.manager }),
+        });
+    } catch (e) {
+        button.disabled = false;
+        button.textContent = `Install ${offer.package}`;
+        out.textContent = 'Could not install: ' + (e.detail || e.message);
+        return;
+    }
+    out.textContent = `${result.command}\n\n${result.output || ''}`;
+    if (result.ok) {
+        clearRunOffer();
+        setCodeStatus(`installed ${offer.package} — running again`);
+        // The reason anyone pressed the button was to get their program to
+        // run, so finish the job rather than making them press Run again.
+        runCurrentFile();
+    } else {
+        button.disabled = false;
+        button.textContent = `Try again`;
     }
 }
 
@@ -1488,7 +1613,9 @@ function wireTerminal() {
 // Shown when a new file's language has no toolchain on this machine.
 function warnMissingToolchain(tc) {
     showCodePanel('output');
-    const out = document.getElementById('panel-output');
+    const out = document.getElementById('run-output');
+    clearRunOffer();
+    showToolchainOffer({ language: tc.language, missing_tool: tc.install, help_url: tc.help_url });
     out.textContent =
         `${tc.language} is not installed on this computer, so Run will not work yet.\n\n` +
         `Install ${tc.install}` + (tc.help_url ? `\n  ${tc.help_url}` : '') +

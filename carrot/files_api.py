@@ -347,6 +347,27 @@ async def files_run(req: RunRequest):
     return runner.run_file(req.path, timeout=timeout)
 
 
+class InstallRequest(BaseModel):
+    package: str
+    manager: str
+
+
+@router.post("/install")
+async def files_install(req: InstallRequest):
+    """Install one package the last run said was missing.
+
+    Only ever reached by the user clicking the offer that a failed run
+    produced — the name is re-validated here regardless, since an endpoint has
+    no way to know which button called it.
+    """
+    from carrot import packages
+
+    result = packages.install(req.package, req.manager, cwd=get_root())
+    if not result["ok"] and "not a valid package name" in result["output"]:
+        raise HTTPException(status_code=400, detail=result["output"])
+    return result
+
+
 @router.get("/languages")
 async def files_languages():
     """What the Run button can do here, and what is missing."""

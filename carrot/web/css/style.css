@@ -4087,3 +4087,54 @@ td, th, .si-sub, .small, .editor-status {
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
 }
+
+/* ===== "You're missing something" offers =====
+   Sits above the run output. The point is that the one line that matters is
+   otherwise buried in fifty lines of traceback, so this has to read as an
+   answer rather than as more output — hence the card, not more monospace. */
+#panel-output { display: flex; flex-direction: column; gap: 0; }
+.run-output {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--mono);
+}
+.run-offer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--accent-line);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+}
+.run-offer.hidden { display: none; }
+.offer-title {
+  flex-basis: 100%;
+  font-family: var(--sans);
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+.offer-body {
+  flex-basis: 100%;
+  font-family: var(--sans);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--muted);
+  white-space: normal;
+}
+.offer-cmd {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  padding: 3px 8px;
+  border-radius: 5px;
+  background: var(--card);
+  color: var(--muted);
+  white-space: nowrap;
+  overflow-x: auto;
+  max-width: 100%;
+}

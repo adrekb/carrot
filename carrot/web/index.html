@@ -499,7 +499,12 @@
             <button class="icon-btn" title="Clear" onclick="clearCodePanel()"><svg class="ico"><use href="#i-trash"/></svg></button>
             <button class="icon-btn" title="Hide" onclick="toggleCodePanel()"><svg class="ico"><use href="#i-x"/></svg></button>
           </div>
-          <pre id="panel-output" class="panel-body"></pre>
+          <div id="panel-output" class="panel-body">
+            <!-- A missing package or toolchain gets a one-click answer above
+                 the output, because the line that matters is buried in it. -->
+            <div id="run-offer" class="run-offer hidden"></div>
+            <pre id="run-output" class="run-output"></pre>
+          </div>
           <div id="panel-terminal" class="panel-body hidden">
             <div id="term-log" class="term-log"></div>
             <div class="term-input-row">
