@@ -431,6 +431,11 @@ async function addHookTarget() {
 // under a confident paragraph would waste the whole exercise.
 
 let consensusState = null;
+// The models this machine can actually reach, from the same endpoint the
+// composer's picker uses. Typing a model name by hand was the wrong answer to
+// a question the app already knows: a typo produced a panel member that failed
+// at debate time rather than at pick time.
+let availableModels = [];
 
 async function loadConsensusPanel() {
     const host = document.getElementById('consensus-panel');
@@ -441,16 +446,41 @@ async function loadConsensusPanel() {
         host.innerHTML = `<div class="empty error">${escHtml(e.message)}</div>`;
         return;
     }
-    const judge = document.getElementById('consensus-judge');
-    if (judge) judge.value = consensusState.synthesiser?.model || '';
+    await loadAvailableModels();
+    renderPanelMembers(host);
+    renderPanelAdder();
+    renderJudgePicker();
+    renderPanelSuggestion();
 
     // The composer button only appears once a debate is actually possible.
     document.getElementById('debate-btn')?.classList.toggle('hidden', !consensusState.ready);
+}
 
+async function loadAvailableModels() {
+    try {
+        const data = await api('/api/models');
+        availableModels = [
+            ...(data.installed || []).map(m => ({
+                model: m.name, provider: 'ollama', group: 'On this machine',
+            })),
+            ...(data.remote || []).flatMap(group => (group.models || []).map(name => ({
+                model: name, provider: group.provider, group: group.label,
+            }))),
+        ];
+    } catch (_) {
+        availableModels = [];
+    }
+}
+
+function memberKey(member) {
+    return `${member.provider || 'ollama'}::${member.model}`;
+}
+
+function renderPanelMembers(host) {
     host.innerHTML = '';
     if (!consensusState.panel.length) {
-        host.innerHTML = `<div class="empty">No panel yet — add at least `
-            + `${consensusState.min_members} models.</div>`;
+        host.innerHTML = `<div class="empty">No panel yet — pick at least `
+            + `${consensusState.min_members} models below.</div>`;
         return;
     }
     consensusState.panel.forEach((member, index) => {
@@ -467,12 +497,85 @@ async function loadConsensusPanel() {
         row.appendChild(remove);
         host.appendChild(row);
     });
-    if (consensusState.panel.length < consensusState.min_members) {
-        const note = document.createElement('div');
-        note.className = 'muted small';
-        note.textContent = 'One model cannot debate itself — add another.';
-        host.appendChild(note);
+}
+
+function renderPanelAdder() {
+    const select = document.getElementById('consensus-add');
+    if (!select) return;
+    const chosen = new Set(consensusState.panel.map(memberKey));
+    const groups = {};
+    for (const entry of availableModels) {
+        if (chosen.has(memberKey(entry))) continue;   // already on the panel
+        (groups[entry.group] ||= []).push(entry);
     }
+    const full = consensusState.panel.length >= consensusState.max_members;
+    select.disabled = full;
+    select.innerHTML = `<option value="">${
+        full ? `Panel is full (${consensusState.max_members} models)` : 'Add a model to the panel…'
+    }</option>`;
+    for (const [group, entries] of Object.entries(groups)) {
+        const optgroup = document.createElement('optgroup');
+        optgroup.label = group;
+        for (const entry of entries) {
+            const option = document.createElement('option');
+            option.value = memberKey(entry);
+            option.textContent = entry.model;
+            optgroup.appendChild(option);
+        }
+        select.appendChild(optgroup);
+    }
+    if (!availableModels.length) {
+        select.innerHTML = '<option value="">No models found — pull one, or add a provider key</option>';
+        select.disabled = true;
+    }
+}
+
+function renderJudgePicker() {
+    const select = document.getElementById('consensus-judge');
+    if (!select) return;
+    const current = consensusState.synthesiser?.model || '';
+    // Only panel members: a judge that never saw the debate is not a judge.
+    select.innerHTML = '<option value="">The first model on the panel</option>';
+    for (const member of consensusState.panel) {
+        const option = document.createElement('option');
+        option.value = memberKey(member);
+        option.textContent = `${member.model} (${member.provider || 'on-device'})`;
+        option.selected = member.model === current;
+        select.appendChild(option);
+    }
+}
+
+// A panel of two models from the same family agrees for the same reasons, so
+// the suggestion deliberately pairs different ones when it can see them.
+function renderPanelSuggestion() {
+    const host = document.getElementById('consensus-suggest');
+    if (!host) return;
+    host.innerHTML = '';
+    if (consensusState.panel.length >= consensusState.min_members) return;
+    const local = availableModels.filter(m => m.provider === 'ollama');
+    if (local.length < 2) return;
+
+    const family = name => (name || '').split(/[:\-.]/)[0].toLowerCase();
+    let pair = null;
+    for (let i = 0; i < local.length && !pair; i++) {
+        for (let j = i + 1; j < local.length; j++) {
+            if (family(local[i].model) !== family(local[j].model)) {
+                pair = [local[i], local[j]];
+                break;
+            }
+        }
+    }
+    if (!pair) return;
+
+    const button = document.createElement('button');
+    button.className = 'btn btn-ghost';
+    button.textContent = `Use ${pair[0].model} and ${pair[1].model}`;
+    button.onclick = () => savePanel(pair.map(p => ({ model: p.model, provider: p.provider })));
+    const note = document.createElement('div');
+    note.className = 'muted small';
+    note.textContent = 'Suggested because they are different families, so they tend to '
+        + 'be wrong about different things:';
+    host.append(note, button);
 }
 
 async function savePanel(members) {
@@ -485,19 +588,20 @@ async function savePanel(members) {
     }
 }
 
-function addPanelMember() {
-    const model = document.getElementById('consensus-model').value.trim();
-    const provider = document.getElementById('consensus-provider').value.trim();
-    if (!model) return;
-    document.getElementById('consensus-model').value = '';
-    document.getElementById('consensus-provider').value = '';
+function addPanelMember(select) {
+    const value = select?.value;
+    if (!value) return;
+    select.value = '';
+    const [provider, model] = value.split('::');
     savePanel([...(consensusState?.panel || []), { model, provider }]);
 }
 
-async function saveSynthesiser(model) {
+async function saveSynthesiser(value) {
+    const [provider, model] = (value || '').split('::');
     try {
         await api('/api/consensus/synthesiser',
-            { method: 'PUT', body: JSON.stringify({ model: model.trim() }) });
+            { method: 'PUT', body: JSON.stringify({ model: model || '', provider: provider || '' }) });
+        loadConsensusPanel();
     } catch (e) {
         alert(e.detail || e.message);
     }

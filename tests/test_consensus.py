@@ -356,6 +356,39 @@ class TestTheInterface:
     def test_the_settings_copy_is_honest_about_the_cost(self):
         assert "as many\n          tokens" in self.read("index.html")
 
+    def test_models_are_picked_not_typed(self):
+        # Typing a model name by hand was the wrong answer to a question the
+        # app already knows: a typo produced a panel member that failed at
+        # debate time rather than at pick time.
+        html = self.read("index.html")
+        assert '<select id="consensus-add"' in html
+        assert '<select id="consensus-judge"' in html
+        assert 'input type="text" id="consensus-model"' not in html
+
+    def test_the_picker_offers_local_and_remote_models(self):
+        js = self.read("js", "studio.js")
+        assert "'/api/models'" in js
+        assert "data.installed" in js and "data.remote" in js
+
+    def test_models_already_on_the_panel_are_not_offered_twice(self):
+        assert "if (chosen.has(memberKey(entry))) continue;" in self.read("js", "studio.js")
+
+    def test_the_picker_stops_at_the_panel_ceiling(self):
+        assert "Panel is full" in self.read("js", "studio.js")
+
+    def test_the_judge_can_only_be_a_panel_member(self):
+        # A judge that never saw the debate is not a judge.
+        assert "not a judge" in self.read("js", "studio.js")
+
+    def test_a_pairing_is_suggested_from_different_families(self):
+        # Two models from one family agree for the same reasons.
+        js = self.read("js", "studio.js")
+        assert "function renderPanelSuggestion" in js
+        assert "wrong about different things" in js
+
+    def test_no_models_at_all_says_what_to_do(self):
+        assert "pull one, or add a provider key" in self.read("js", "studio.js")
+
     def test_disagreement_renders_above_the_answer(self):
         js = self.read("js", "studio.js")
         render = js.split("function renderDebate")[1]

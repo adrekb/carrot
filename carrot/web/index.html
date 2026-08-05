@@ -1370,15 +1370,17 @@
           than a mode you leave on.
         </p>
         <div id="consensus-panel"></div>
+        <div id="consensus-suggest"></div>
         <div class="settings-row">
-          <input type="text" id="consensus-model" placeholder="model name (e.g. qwen2.5-coder)" spellcheck="false">
-          <input type="text" id="consensus-provider" placeholder="provider (blank = on-device)" spellcheck="false">
-          <button class="btn btn-ghost" onclick="addPanelMember()">Add to panel</button>
+          <!-- The same list the composer's model picker uses: everything you
+               have pulled, plus every model from a provider you configured. -->
+          <select id="consensus-add" onchange="addPanelMember(this)">
+            <option value="">Add a model to the panel…</option>
+          </select>
         </div>
         <div class="settings-row">
           <label class="muted small" for="consensus-judge">Which model writes the final answer</label>
-          <input type="text" id="consensus-judge" placeholder="blank = the first on the panel"
-                 spellcheck="false" onchange="saveSynthesiser(this.value)">
+          <select id="consensus-judge" onchange="saveSynthesiser(this.value)"></select>
         </div>
       </div>
 
