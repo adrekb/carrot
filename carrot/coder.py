@@ -85,16 +85,25 @@ MODE_PREAMBLE = {
         "change, what the change is, and what could go wrong. Ask about anything "
         "genuinely ambiguous instead of guessing. The user switches you to ACT "
         "mode when the plan is right.\n\n"
-        "If you need answers before the plan is safe to carry out, end your "
-        "reply with a fenced block tagged `carrot-questions` containing JSON: "
-        "a list of objects with \"question\", and \"options\" holding two to "
-        "four short concrete choices. The user answers these as a form rather "
-        "than by typing prose back at you, so every option has to stand alone "
-        "and mean something on its own — \"a running score in the corner\", not "
-        "\"option A\". Ask at most four, only about things that change what you "
-        "would write, and put your first choice first: skipping the form "
-        "accepts it. Write the questions in the prose too, for anyone reading "
-        "the plan on its own."
+        "If you need answers before the plan is safe to carry out, you must "
+        "ALSO end the reply with a carrot-questions block. Questions written "
+        "only as prose cannot be answered — the user gets buttons, and prose "
+        "questions produce no buttons, so they are ignored and you will be "
+        "made to guess. Copy this shape exactly:\n\n"
+        "```carrot-questions\n"
+        "[\n"
+        '  {"question": "How should the scoreboard look?",\n'
+        '   "options": ["Just the numbers", "Labelled for each player"]},\n'
+        '  {"question": "When does a game end?",\n'
+        '   "options": ["First to 10", "Play until quit"]}\n'
+        "]\n"
+        "```\n\n"
+        "At most four questions, two to four options each, and every option a "
+        "concrete choice that stands on its own — \"a running score in the "
+        "corner\", never \"option A\". Put the one you would pick first: "
+        "skipping the form accepts it. Ask only about things that change what "
+        "you would write. Keep the questions in your prose as well, for anyone "
+        "reading the plan on its own."
     ),
     MODE_ACT: (
         "You are in ACT mode, and you have the tools to change the workspace: "
@@ -120,19 +129,89 @@ MODE_PREAMBLE = {
 # lifted out into a form with buttons, which can also be skipped — and skipping
 # is not silence, it accepts the model's own first option for each, because
 # "just pick something sensible" is what skipping means.
-# Deliberately loose about the fence, because two live runs of gemma4:e4b
-# produced two different shapes and neither was the one asked for. The first
-# left the closing fence off entirely — the block ends the reply, so a model
-# that stops after the JSON never writes it. The second put the tag on the line
-# *after* the fence rather than as its info string. A form that only appears
-# when the model formats its fence exactly right is a form that mostly does not
-# appear, and the JSON either side of it was perfectly good both times.
-QUESTIONS_FENCE = re.compile(
-    r"```[ \t]*(?:\r?\n)?[ \t]*carrot-questions[ \t]*\r?\n(.*?)(?:```|\Z)",
-    re.S | re.I)
+# Three live runs of gemma4:e4b produced three different wrappings, none of
+# them the one asked for:
+#
+#     ```carrot-questions        ```                    `carrot-questions`
+#     [ ... ]                    carrot-questions
+#     (no closing fence)         [ ... ]                ```json
+#                                ```                    [ ... ]
+#                                                       ```
+#
+# The JSON was well-formed every time; only the packaging moved. So nothing
+# here matches on fences at all. It finds the marker, then takes the next
+# JSON array after it, wherever that is. Matching the decoration was always
+# going to be a losing game against a model that decorates differently each
+# run, and a form that appears only when the fence is exactly right is a form
+# that mostly does not appear.
+QUESTIONS_MARKER = re.compile(r"carrot-questions", re.I)
 
 MAX_QUESTIONS = 4
 MAX_OPTIONS = 4
+
+
+def _next_json_array(text: str, start: int):
+    """The first balanced ``[...]`` at or after ``start``, and where it ends.
+
+    Bracket counting rather than a regex, because the options are prose and
+    contain brackets; and string-aware, so a `"]"` inside an option does not
+    close the array early.
+    """
+    open_at = text.find("[", start)
+    if open_at < 0:
+        return None, -1
+    depth, in_string, escaped = 0, False, False
+    for i in range(open_at, len(text)):
+        char = text[i]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "[":
+            depth += 1
+        elif char == "]":
+            depth -= 1
+            if depth == 0:
+                return text[open_at:i + 1], i + 1
+    # Unterminated: the reply stopped mid-block. Close it and let json decide.
+    return text[open_at:] + "]" * depth, len(text)
+
+
+# A backslash before two or more letters is a LaTeX command, not a JSON escape.
+# Asked for a magnetic field simulation, the model offered "Magnetostatics
+# ($\nabla \cdot B = 0$)" — where `\c` is invalid JSON and kills the parse, and
+# `\n` is *valid* JSON, so a stricter reading silently turns `\nabla` into a
+# newline followed by "abla". Both are wrong, and the second is worse for being
+# quiet. Physics, maths and Windows paths all put backslashes in prose.
+#
+# One pass, not two. Escaping LaTeX commands and then invalid escapes in
+# sequence re-reads the backslashes the first pass inserted: `\cdot` became
+# `\\cdot`, whose second backslash then looked invalid again and turned into
+# `\\\cdot`, which parses no better than what it started with.
+_STRAY_BACKSLASH = re.compile(r'\\(?:(?=[a-zA-Z]{2,})|(?!["\\/bfnrtu]))')
+
+
+def _loads_forgiving(body: str):
+    """``json.loads``, retried once with stray backslashes escaped."""
+    try:
+        return json.loads(body)
+    except (ValueError, TypeError):
+        pass
+    try:
+        return json.loads(_STRAY_BACKSLASH.sub(r"\\\\", body))
+    except (ValueError, TypeError):
+        return None
+
+
+def _one_line(value: Any) -> str:
+    """Collapse whitespace: these are button labels, never paragraphs."""
+    return " ".join(str(value or "").split())
 
 
 def parse_questions(text: str) -> List[Dict[str, Any]]:
@@ -141,13 +220,13 @@ def parse_questions(text: str) -> List[Dict[str, Any]]:
     Anything malformed returns ``[]`` rather than raising: a model that writes
     a broken block should cost the user a form, not the plan it is attached to.
     """
-    match = QUESTIONS_FENCE.search(text or "")
-    if not match:
+    marker = QUESTIONS_MARKER.search(text or "")
+    if not marker:
         return []
-    try:
-        raw = json.loads(match.group(1))
-    except (ValueError, TypeError):
+    body, _ = _next_json_array(text, marker.end())
+    if not body:
         return []
+    raw = _loads_forgiving(body)
     if not isinstance(raw, list):
         return []
 
@@ -155,9 +234,9 @@ def parse_questions(text: str) -> List[Dict[str, Any]]:
     for item in raw[:MAX_QUESTIONS]:
         if not isinstance(item, dict):
             continue
-        prompt = str(item.get("question") or "").strip()
-        options = [str(o).strip() for o in (item.get("options") or [])
-                   if str(o).strip()]
+        prompt = _one_line(item.get("question"))
+        options = [_one_line(o) for o in (item.get("options") or [])
+                   if _one_line(o)]
         # A question with nothing to pick between is prose, not a form field.
         if not prompt or len(options) < 2:
             continue
@@ -166,8 +245,35 @@ def parse_questions(text: str) -> List[Dict[str, Any]]:
 
 
 def strip_questions(text: str) -> str:
-    """The plan without the machine-readable block, for display."""
-    return QUESTIONS_FENCE.sub("", text or "").rstrip()
+    """The plan without the machine-readable block, for display.
+
+    Cuts from the start of the line carrying the marker to the end of the JSON
+    array, then eats a trailing fence if the array was inside one. Showing the
+    user raw JSON as well as the form is worse than not asking.
+    """
+    text = text or ""
+    marker = QUESTIONS_MARKER.search(text)
+    if not marker:
+        return text.rstrip()
+
+    body, end = _next_json_array(text, marker.end())
+    if not body:
+        return text.rstrip()
+
+    # Back up over any fence or backticks opening the block, to the line start.
+    start = text.rfind("\n", 0, marker.start()) + 1
+    head = text[:start].rstrip()
+    while True:
+        previous = head.rstrip()
+        stripped = previous.rsplit("\n", 1)[-1].strip()
+        if stripped.startswith("```") and stripped.strip("`").strip() == "":
+            head = previous[:previous.rfind("\n")] if "\n" in previous else ""
+            continue
+        break
+
+    tail = text[end:]
+    tail = re.sub(r"^\s*```[a-zA-Z]*\s*", "", tail)
+    return (head.rstrip() + "\n" + tail.lstrip()).strip()
 
 
 def answers_message(pairs: List[Dict[str, str]]) -> str:

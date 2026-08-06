@@ -568,4 +568,7 @@ class TestTheQuestionFormIsWiredUp:
 
     def test_the_raw_block_is_stripped_from_what_is_displayed(self):
         js = self.read("js", "features.js")
-        assert "QUESTIONS_FENCE" in js and "replace(QUESTIONS_FENCE" in js
+        assert "function stripQuestions" in js
+        assert "stripQuestions(answer)" in js, (
+            "the answer is rendered without stripping, so the user sees the raw "
+            "JSON as well as the form built from it")

@@ -1904,7 +1904,7 @@ async function sendAgentTask() {
                     // The questions block is machine-readable scaffolding for
                     // the form below; showing the user raw JSON as well is
                     // worse than not asking.
-                    body.innerHTML = mdToHtml(answer.replace(QUESTIONS_FENCE, ''));
+                    body.innerHTML = mdToHtml(stripQuestions(answer));
                     document.getElementById('agent-log').scrollTop = 1e9;
                 }
                 if (payload.error) agentTrace(wrap, 'error: ' + payload.error, 'rejected');
@@ -1931,10 +1931,39 @@ async function sendAgentTask() {
 // answers folded in, so most of the time nobody did, and Act guessed. Skip is
 // a real answer, not silence — it takes the model's first option for each,
 // which is what "just pick something sensible" means.
-// Kept in step with QUESTIONS_FENCE in coder.py, which has the reasoning: the
-// closing fence is optional and the tag may sit on the line after the opening
-// one, because live models produced both.
-const QUESTIONS_FENCE = /```[ \t]*(?:\r?\n)?[ \t]*carrot-questions[ \t]*\r?\n[\s\S]*?(?:```|$)/gi;
+// Display-side twin of strip_questions in coder.py, and see that for why it
+// does not match on fences: three live runs wrapped the block three different
+// ways. Find the marker, find the array after it, cut from the marker's line
+// to the end of that array plus any fence it was sitting in.
+const QUESTIONS_MARKER = /carrot-questions/i;
+
+function stripQuestions(text) {
+    const marker = QUESTIONS_MARKER.exec(text || '');
+    if (!marker) return text || '';
+
+    const open = text.indexOf('[', marker.index + marker[0].length);
+    if (open < 0) return text;
+
+    let depth = 0, inString = false, escaped = false, end = -1;
+    for (let i = open; i < text.length; i++) {
+        const c = text[i];
+        if (inString) {
+            if (escaped) escaped = false;
+            else if (c === '\\') escaped = true;
+            else if (c === '"') inString = false;
+            continue;
+        }
+        if (c === '"') inString = true;
+        else if (c === '[') depth++;
+        else if (c === ']' && --depth === 0) { end = i + 1; break; }
+    }
+    if (end < 0) end = text.length;          // reply stopped mid-block
+
+    let head = text.slice(0, text.lastIndexOf('\n', marker.index) + 1);
+    head = head.replace(/(?:^|\n)[ \t]*```[a-zA-Z]*[ \t]*\n?$/, '\n');
+    const tail = text.slice(end).replace(/^\s*```[a-zA-Z]*\s*/, '');
+    return (head.trimEnd() + '\n' + tail.trimStart()).trim();
+}
 
 function agentQuestions(wrap, questions) {
     if (!questions || !questions.length) return;

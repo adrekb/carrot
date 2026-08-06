@@ -407,3 +407,69 @@ class TestClarifyingQuestionsBecomeAForm:
         # The loose fence must not start swallowing ordinary fenced code.
         assert coder.parse_questions("```python\nx = 1\n```") == []
         assert coder.parse_questions("```\njust text\n```") == []
+
+    def test_an_inline_marker_with_a_separate_json_fence(self):
+        """The third shape, from "create a simulation for magnetic fields".
+
+        The marker came back as inline code on its own line, followed by a
+        blank line and then an ordinary ```json fence holding the array. Three
+        runs, three wrappings, all with good JSON — which is why nothing in the
+        parser matches on fences any more. It finds the marker and takes the
+        next array.
+        """
+        text = ('Could you clarify?\n'
+                '`carrot-questions`\n\n'
+                '```json\n'
+                '[{"question": "Primary goal?",\n'
+                '  "options": ["Field lines", "Lorentz force", "Maxwell"]}]\n'
+                '```\n')
+        questions = coder.parse_questions(text)
+        assert len(questions) == 1
+        assert questions[0]["options"] == ["Field lines", "Lorentz force", "Maxwell"]
+
+        shown = coder.strip_questions(text)
+        assert "carrot-questions" not in shown
+        assert "options" not in shown
+        assert "Could you clarify?" in shown
+
+    def test_a_bracket_inside_an_option_does_not_end_the_array(self):
+        # The options are prose. Counting brackets naively, or matching to the
+        # first "]", truncates any option containing one.
+        text = ('carrot-questions\n'
+                '[{"question": "q", "options": ["a [x] b", "plain"]}]')
+        assert coder.parse_questions(text)[0]["options"] == ["a [x] b", "plain"]
+
+    def test_a_marker_with_no_array_after_it_is_not_a_form(self):
+        assert coder.parse_questions("carrot-questions\nnothing here") == []
+
+    def test_latex_in_an_option_does_not_kill_the_form(self):
+        r"""From "create a simulation for magnetic fields".
+
+        The model offered "Magnetostatics ($\nabla \cdot B = 0$)". `\c` is not
+        a valid JSON escape and killed the parse outright; `\n` *is* one, so a
+        stricter reading would have quietly turned `\nabla` into a newline and
+        the word "abla". Physics, maths and Windows paths all put backslashes
+        in prose, and none of them should cost the user the form.
+        """
+        text = ('carrot-questions\n'
+                r'[{"question": "Which law?",'
+                r' "options": ["Biot-Savart", "Magnetostatics ($\nabla \cdot B = 0$)"]}]')
+        questions = coder.parse_questions(text)
+        assert len(questions) == 1
+        assert questions[0]["options"][1] == r"Magnetostatics ($\nabla \cdot B = 0$)"
+
+    def test_a_real_newline_escape_still_works(self):
+        # The repair must not start mangling legitimately escaped JSON. The
+        # \\n here is a two-character escape *inside* the JSON, not a newline
+        # in this file — a literal newline inside a JSON string is invalid.
+        text = ('carrot-questions\n'
+                '[{"question": "Two\\nlines?", "options": ["a", "b"]}]')
+        # Collapsed to one line because these are button labels.
+        assert coder.parse_questions(text)[0]["question"] == "Two lines?"
+
+    def test_labels_are_single_line(self):
+        text = ('carrot-questions\n'
+                '[{"question": "  spaced   out  ", "options": ["a\\n\\nb", "c"]}]')
+        question = coder.parse_questions(text)[0]
+        assert question["question"] == "spaced out"
+        assert question["options"][0] == "a b"
