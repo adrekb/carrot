@@ -7,7 +7,10 @@ should refuse rather than shelling out to something clever.
 """
 import json
 import os
+import re
 import subprocess
+import threading
+import time
 
 import pytest
 
@@ -328,15 +331,98 @@ class TestAgentPanel:
     def test_approval_prompts_are_answerable_from_the_panel(self):
         # Otherwise a mutating tool blocks silently until it times out.
         js = self.read("js", "features.js")
-        assert "payload.approval" in js and "/api/agent/approvals/" in js
+        assert "/api/agent/approvals/" in js
+
+    def test_the_panel_listens_for_the_event_the_server_actually_sends(self):
+        """It listened for `payload.approval`, which nothing has ever sent.
+
+        The event is `approval_request`. So the card was never built: the panel
+        sat on a turn waiting for a click that could not happen, and ended at
+        the timeout ten minutes later. The old assertion here was
+        `"payload.approval" in js`, which is a *substring* of the correct
+        `payload.approval_request` — it passed before the fix and after it, and
+        could never have failed. So this asks the server what it emits instead
+        of asking the file what it says.
+        """
+        from carrot import agent_tools
+
+        emitted = []
+
+        def emit(event):
+            emitted.append(event)
+            request = event.get("approval_request")
+            if request:
+                agent_tools.resolve_approval(request["id"], "allow")
+
+        agent_tools.request_approval(
+            "write_file", {"path": "a.txt", "content": "x"}, "Write a.txt",
+            "low", emit)
+
+        keys = {k for event in emitted for k in event}
+        assert "approval_request" in keys, "the flow changed; this test is stale"
+
+        js = self.read("js", "features.js")
+        listened = {k for k in keys if f"payload.{k}" in js}
+        assert "approval_request" in listened, (
+            f"the panel does not handle approval_request; server sends {keys}"
+        )
+
+    def test_the_panel_answers_in_the_shape_the_endpoint_accepts(self, client):
+        """It POSTed {approved: true}. The endpoint requires {decision: ...}.
+
+        So even once the card rendered, the only button that could unblock the
+        turn would have been rejected before reaching the gate. Sending the
+        real body at the real endpoint is the only way to catch that.
+        """
+        from carrot import agent_tools
+
+        holder = {}
+
+        def emit(event):
+            request = event.get("approval_request")
+            if request:
+                holder["id"] = request["id"]
+
+        # daemon, and released in `finally`: a blocked request_approval waits
+        # APPROVAL_TIMEOUT_SECONDS, so an assertion that fires before the POST
+        # would otherwise hang the whole suite for ten minutes.
+        thread = threading.Thread(
+            target=agent_tools.request_approval,
+            args=("write_file", {"path": "a.txt", "content": "x"},
+                  "Write a.txt", "low", emit),
+            daemon=True)
+        thread.start()
+        try:
+            for _ in range(50):
+                if holder.get("id"):
+                    break
+                time.sleep(0.05)
+            assert holder.get("id"), "no approval was raised"
+
+            js = self.read("js", "features.js")
+            body = re.search(r"JSON\.stringify\(\{\s*decision:[^}]*\}\)", js)
+            assert body, "the panel no longer sends a `decision`; it will 422"
+
+            resp = client.post(f"/api/agent/approvals/{holder['id']}",
+                               json={"decision": "allow"})
+            assert resp.status_code == 200, resp.text
+        finally:
+            if holder.get("id"):
+                agent_tools.resolve_approval(holder["id"], "deny")
+            thread.join(timeout=5)
 
     def test_the_task_can_be_stopped(self):
         js = self.read("js", "features.js")
         assert "AbortController" in js and "function stopAgentTask" in js
 
     def test_the_tree_refreshes_after_the_agent_touches_files(self):
-        js = self.read("js", "features.js").split("async function sendAgentTask")[1][:5000]
-        assert "loadCodeTree();" in js and "loadCoderState();" in js
+        # Bounded by the end of the function rather than the first 5000
+        # characters of it: that window was an accident of how long the body
+        # happened to be, and adding comments to it broke the test without
+        # changing any behaviour. A top-level `}` on its own line ends it.
+        js = self.read("js", "features.js")
+        body = js.split("async function sendAgentTask")[1].split("\n}\n")[0]
+        assert "loadCodeTree();" in body and "loadCoderState();" in body
 
     def test_attachments_are_supported(self):
         html, js = self.read("index.html"), self.read("js", "features.js")

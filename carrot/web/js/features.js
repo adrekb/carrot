@@ -1271,7 +1271,19 @@ async function setCoderMode(mode) {
             // Plan -> Act compacts the planning conversation into an
             // implementation brief, so Act starts from the decisions rather
             // than from the transcript that produced them.
-            body: JSON.stringify({ mode, conversation_id: currentConversationId }),
+            //
+            // It has to be the *agent panel's* conversation. These buttons sit
+            // in the Code tab and govern the panel, but this sent
+            // currentConversationId — which belongs to the chat tab. So the
+            // plan you had just written was never the thing compacted: Act
+            // started from an unrelated chat, or from nothing at all, and the
+            // brief came back empty. Fall back to the chat only when the panel
+            // has not been used yet, which is the one case where there is no
+            // plan of its own to carry.
+            body: JSON.stringify({
+                mode,
+                conversation_id: agentConversationId || currentConversationId,
+            }),
         });
     } catch (e) {
         setCodeStatus('could not switch mode: ' + e.message);
@@ -1759,7 +1771,9 @@ function agentBubble(role, text) {
     const wrap = document.createElement('div');
     wrap.className = 'agent-msg ' + role;
     const body = document.createElement('div');
-    body.className = 'agent-body';
+    // `md` carries the heading, list and code-block styling the chat bubbles
+    // already have; without it the rendered markdown is unstyled run-on text.
+    body.className = 'agent-body md';
     body.textContent = text || '';
     wrap.appendChild(body);
     log.appendChild(wrap);
@@ -1867,10 +1881,26 @@ async function sendAgentTask() {
                 }
                 // An approval prompt has to be answerable from here, or the
                 // agent silently blocks until it times out.
-                if (payload.approval) agentApproval(wrap, payload.approval);
+                //
+                // It read `payload.approval`, which the server has never sent —
+                // the event is `approval_request`, as the chat trace in app.js
+                // has always had it. So the card was never built, the panel sat
+                // with a spinner on a turn that was waiting on a click nobody
+                // could make, and it ended ten minutes later at the timeout.
+                if (payload.approval_request) agentApproval(wrap, payload.approval_request);
+                // And clear it when it is answered from anywhere — including a
+                // timeout, which otherwise leaves live-looking buttons behind.
+                if (payload.approval_resolved) {
+                    agentApprovalResolved(wrap, payload.approval_resolved);
+                }
                 if (payload.chunk) {
                     answer += payload.chunk;
-                    body.textContent = answer;
+                    // Through mdToHtml, the same renderer the chat trace uses,
+                    // rather than textContent. A plan is mostly headings, lists
+                    // and fenced code, and as plain text it arrived as a wall
+                    // with literal ### and ``` in it — which reads as the model
+                    // formatting badly when it is the panel not rendering.
+                    body.innerHTML = mdToHtml(answer);
                     document.getElementById('agent-log').scrollTop = 1e9;
                 }
                 if (payload.error) agentTrace(wrap, 'error: ' + payload.error, 'rejected');
@@ -1894,6 +1924,7 @@ async function sendAgentTask() {
 function agentApproval(wrap, request) {
     const box = document.createElement('div');
     box.className = 'agent-approval';
+    box.dataset.approvalId = request.id || '';
     box.innerHTML = `<div class="approval-what">${escHtml(request.summary || request.tool || 'Allow this?')}</div>`;
     const row = document.createElement('div');
     row.className = 'approval-row';
@@ -1904,11 +1935,18 @@ function agentApproval(wrap, request) {
         button.onclick = async () => {
             box.querySelectorAll('button').forEach(b => { b.disabled = true; });
             try {
+                // The endpoint takes {decision: "allow"|"deny"}. This sent
+                // {approved: true}, which has no `decision` at all and is
+                // rejected before it reaches the gate — so the one button that
+                // could have unblocked the turn could not have worked either.
                 await api(`/api/agent/approvals/${encodeURIComponent(request.id)}`, {
-                    method: 'POST', body: JSON.stringify({ approved: allow }),
+                    method: 'POST',
+                    body: JSON.stringify({ decision: allow ? 'allow' : 'deny' }),
                 });
-                box.querySelector('.approval-what').textContent +=
-                    allow ? ' — allowed' : ' — denied';
+                // Both this and the approval_resolved event annotate the card,
+                // and either can land first, so the wording is applied through
+                // one idempotent helper rather than appended twice.
+                annotateApproval(box, allow ? 'allow' : 'deny');
             } catch (e) {
                 box.querySelector('.approval-what').textContent = 'Could not answer: ' + e.message;
             }
@@ -1918,6 +1956,25 @@ function agentApproval(wrap, request) {
     box.appendChild(row);
     wrap.appendChild(box);
     document.getElementById('agent-log').scrollTop = 1e9;
+}
+
+// Says how the prompt ended, once. The button that answers it and the
+// approval_resolved event that confirms it both arrive, in either order, so
+// this has to be safe to call twice — it read "— allowed — allowed" when it
+// was not.
+function annotateApproval(box, decision) {
+    if (!box || box.dataset.answered) return;
+    box.dataset.answered = decision;
+    box.querySelectorAll('button').forEach(b => { b.disabled = true; });
+    const what = box.querySelector('.approval-what');
+    if (!what) return;
+    const said = { allow: 'allowed', deny: 'denied', timeout: 'not answered' };
+    what.textContent += ` — ${said[decision] || decision}`;
+}
+
+function agentApprovalResolved(wrap, resolved) {
+    const box = wrap.querySelector(`.agent-approval[data-approval-id="${CSS.escape(resolved.id || '')}"]`);
+    annotateApproval(box, resolved.decision);
 }
 
 // Paste a screenshot straight into the agent, and drop files on the panel.
