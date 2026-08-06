@@ -35,6 +35,19 @@ TOOL_PREFIX = "carrot"
 # minutes is long enough to notice, and the timeout is a backstop against a
 # closed tab rather than a deadline for the user.
 APPROVAL_TIMEOUT_SECONDS = 600
+
+# The three ways a gated call ends without running. They are constants because
+# the tool runner picks its wording from *which* of them happened, and matching
+# on a substring of a sentence would quietly stop working the day the sentence
+# is reworded.
+DENIED_REASON = "the user denied this action"
+NO_CHANNEL_REASON = "approval required but no interactive channel is attached"
+
+
+def timeout_reason() -> str:
+    return f"approval timed out after {APPROVAL_TIMEOUT_SECONDS}s"
+
+
 MAX_READ_CHARS = 20000
 MAX_LIST_ENTRIES = 300
 MAX_GREP_MATCHES = 100
@@ -181,7 +194,7 @@ def request_approval(
     if remember_allowed and not confirm_phrase and tool in _session_allowed:
         return True, "allowed for this session", True
     if emit is None:
-        return False, "approval required but no interactive channel is attached", False
+        return False, NO_CHANNEL_REASON, False
 
     request = ApprovalRequest(
         tool, arguments, summary, risk,
@@ -198,10 +211,10 @@ def request_approval(
         _pending.pop(request.id, None)
     if not answered:
         emit({"approval_resolved": {"id": request.id, "decision": "timeout"}})
-        return False, f"approval timed out after {APPROVAL_TIMEOUT_SECONDS}s", False
+        return False, timeout_reason(), False
     emit({"approval_resolved": {"id": request.id, "decision": request.decision}})
     if request.decision != "allow":
-        return False, "the user denied this action", False
+        return False, DENIED_REASON, False
     return True, "approved", request.remembered
 
 
@@ -1233,12 +1246,51 @@ def ollama_tools(enabled: Optional[List[str]] = None) -> List[Dict[str, Any]]:
     ]
 
 
-NOT_APPROVED_TEMPLATE = (
-    "not-run: {reason}. Do not call {tool} again — a second identical call "
-    "will stop at the same prompt. Tell the user the action is waiting on "
-    "their approval, and that Settings → Security has a switch to stop asking "
-    "for routine actions. Then answer as best you can without the tool."
+# One template per outcome, because they call for different things to be said.
+# The shared one told the model to report the action as "waiting on your
+# approval" whatever had happened — which is a lie after a refusal, where
+# nothing is waiting and the answer will not change.
+#
+# Every one of them states that nothing changed and forbids describing the
+# action as done. A denied write_file was answered with "I have created the
+# file hello.txt": the refusal was reported to the model correctly and it
+# narrated the success it had intended anyway. Saying "not-run" is evidently
+# not enough; it has to be told, in words, not to claim it.
+_NO_CLAIM = (
+    "Nothing was changed. Do not tell the user you did it and do not describe "
+    "the result as though it happened."
 )
+
+DENIED_TEMPLATE = (
+    "not-run: the user refused this {tool} call. " + _NO_CLAIM + " Do not call "
+    "{tool} again — the answer will be the same. Say plainly that the action "
+    "was declined, then answer as best you can without the tool."
+)
+
+TIMEOUT_TEMPLATE = (
+    "not-run: {reason}. " + _NO_CLAIM + " Do not call {tool} again — a second "
+    "identical call will stop at the same prompt. Say the action is still "
+    "waiting on the user's approval, and that Settings → Security has a switch "
+    "to stop asking for routine actions. Then answer as best you can without "
+    "the tool."
+)
+
+NO_CHANNEL_TEMPLATE = (
+    "not-run: {tool} needs approval and there is nowhere to ask for it here. "
+    + _NO_CLAIM + " Do not call {tool} again. Say the action needs approving "
+    "from the Carrot window, then answer as best you can without the tool."
+)
+
+
+def not_approved_message(reason: str, tool: str) -> str:
+    """What the model is told when a gated call did not run."""
+    if reason == DENIED_REASON:
+        template = DENIED_TEMPLATE
+    elif reason == NO_CHANNEL_REASON:
+        template = NO_CHANNEL_TEMPLATE
+    else:
+        template = TIMEOUT_TEMPLATE
+    return template.format(reason=reason, tool=tool)
 
 
 def _risk_of(name: str, spec: Dict[str, Any], arguments: Dict[str, Any]) -> str:
@@ -1307,7 +1359,7 @@ def run_tool(
             # which is how one unanswered prompt became two identical calls and
             # four minutes of dead air. This tells it the call is finished and
             # what to say instead.
-            return NOT_APPROVED_TEMPLATE.format(reason=reason, tool=name)
+            return not_approved_message(reason, name)
 
     started = time.time()
     try:

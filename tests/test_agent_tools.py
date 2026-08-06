@@ -145,7 +145,11 @@ def test_mutating_tool_denied_without_a_channel(workspace):
     """No UI attached means no way to ask, so the call is refused, not hung."""
     config.set_config("agent_require_approval", True)
     result = agent_tools.call("carrot__write_file", {"path": "x.txt", "content": "y"})
-    assert "approval required" in result
+    # "not-run:" is the contract with the model — it is what distinguishes a
+    # call that is finished from one worth retrying. The exact adjective is
+    # wording and differs per outcome; this is the part that must hold.
+    assert result.startswith("not-run:")
+    assert "approval" in result
     assert not (workspace / "x.txt").exists()
 
 
@@ -183,7 +187,7 @@ def test_approval_allows_the_write(workspace):
 def test_denial_blocks_the_write(workspace):
     config.set_config("agent_require_approval", True)
     result, _ = _call_with_decision("deny", workspace)
-    assert "denied" in result
+    assert result.startswith("not-run:")
     assert not (workspace / "gated.txt").exists()
 
 
@@ -370,18 +374,82 @@ class TestAnUnansweredPromptDoesNotBecomeALoop:
         assert "write_file" in result
 
     def test_the_user_is_told_how_to_stop_being_asked(self, isolated_db, monkeypatch):
+        # Driven by a timeout, which is what this hint is for. It used to be
+        # driven by a refusal only because both shared one template; offering
+        # "here is how to stop asking" to someone who just deliberately said no
+        # is the wrong reply to the wrong event.
         monkeypatch.setattr(agent_tools, "_request_approval",
-                            lambda *a, **k: (False, "the user denied this action"))
+                            lambda *a, **k: (False, agent_tools.timeout_reason()))
         result = agent_tools.run_tool("write_file", self.spec(),
                                       {"path": "snake.py", "content": "x"})
         assert "Settings" in result
 
     def test_the_reason_survives_into_the_message(self, isolated_db, monkeypatch):
         monkeypatch.setattr(agent_tools, "_request_approval",
-                            lambda *a, **k: (False, "the user denied this action"))
+                            lambda *a, **k: (False, agent_tools.DENIED_REASON))
         result = agent_tools.run_tool("write_file", self.spec(),
                                       {"path": "snake.py", "content": "x"})
-        assert "denied" in result
+        assert "refused" in result
+
+
+class TestARefusedCallIsNotReportedAsDone:
+    """A denied write_file was answered with "I have created the file
+    hello.txt". Nothing had been created.
+
+    The refusal reached the model correctly — the failure is that the message
+    only said the call did not run, and left it to infer what to say. It
+    narrated the success it had been about to describe. So every one of these
+    messages now states that nothing changed and forbids claiming otherwise,
+    and a refusal no longer borrows the timeout's "waiting on your approval",
+    which was simply untrue: nothing is pending and the answer will not change.
+    """
+
+    def spec(self):
+        return {"handler": lambda **kw: "wrote it",
+                "mutating": True, "risk": "high"}
+
+    def outcomes(self):
+        return [agent_tools.DENIED_REASON,
+                agent_tools.NO_CHANNEL_REASON,
+                agent_tools.timeout_reason()]
+
+    def test_no_outcome_lets_the_model_claim_it_happened(self, isolated_db, monkeypatch):
+        for reason in self.outcomes():
+            monkeypatch.setattr(agent_tools, "_request_approval",
+                                lambda *a, _r=reason, **k: (False, _r))
+            result = agent_tools.run_tool("write_file", self.spec(),
+                                          {"path": "snake.py", "content": "x"})
+            lowered = result.lower()
+            assert "nothing was changed" in lowered, reason
+            assert "do not tell the user you did it" in lowered, reason
+
+    def test_a_refusal_is_not_described_as_pending(self, isolated_db, monkeypatch):
+        monkeypatch.setattr(agent_tools, "_request_approval",
+                            lambda *a, **k: (False, agent_tools.DENIED_REASON))
+        result = agent_tools.run_tool("write_file", self.spec(),
+                                      {"path": "snake.py", "content": "x"})
+        assert "waiting" not in result.lower(), (
+            "a refused call is not waiting on anything — saying so invites the "
+            "model to tell the user it is about to happen"
+        )
+
+    def test_a_timeout_still_is_described_as_pending(self, isolated_db, monkeypatch):
+        # The distinction only matters if the other side of it still holds.
+        monkeypatch.setattr(agent_tools, "_request_approval",
+                            lambda *a, **k: (False, agent_tools.timeout_reason()))
+        result = agent_tools.run_tool("write_file", self.spec(),
+                                      {"path": "snake.py", "content": "x"})
+        assert "waiting" in result.lower()
+
+    def test_an_unrecognised_reason_still_gets_the_guard(self, isolated_db, monkeypatch):
+        # A new outcome added later must not silently fall through to a message
+        # that permits claiming success.
+        monkeypatch.setattr(agent_tools, "_request_approval",
+                            lambda *a, **k: (False, "something nobody has written yet"))
+        result = agent_tools.run_tool("write_file", self.spec(),
+                                      {"path": "snake.py", "content": "x"})
+        assert "nothing was changed" in result.lower()
+        assert "do not tell the user you did it" in result.lower()
 
 
 class TestRiskIsAboutTheCallNotTheTool:
