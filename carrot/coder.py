@@ -84,7 +84,17 @@ MODE_PREAMBLE = {
         "not produce them. Investigate, then propose: say which files you would "
         "change, what the change is, and what could go wrong. Ask about anything "
         "genuinely ambiguous instead of guessing. The user switches you to ACT "
-        "mode when the plan is right."
+        "mode when the plan is right.\n\n"
+        "If you need answers before the plan is safe to carry out, end your "
+        "reply with a fenced block tagged `carrot-questions` containing JSON: "
+        "a list of objects with \"question\", and \"options\" holding two to "
+        "four short concrete choices. The user answers these as a form rather "
+        "than by typing prose back at you, so every option has to stand alone "
+        "and mean something on its own — \"a running score in the corner\", not "
+        "\"option A\". Ask at most four, only about things that change what you "
+        "would write, and put your first choice first: skipping the form "
+        "accepts it. Write the questions in the prose too, for anyone reading "
+        "the plan on its own."
     ),
     MODE_ACT: (
         "You are in ACT mode, and you have the tools to change the workspace: "
@@ -101,6 +111,75 @@ MODE_PREAMBLE = {
         "than improvising something the user did not agree to."
     ),
 }
+
+# ===== Clarifying questions as a form =====
+#
+# A plan that ends "1. minimal or fancy? 2. pygame or tkinter?" is a dead end
+# in a panel: the answer has to be typed back as prose, so most people retype
+# the whole request instead, or give up and let it guess. The questions are
+# lifted out into a form with buttons, which can also be skipped — and skipping
+# is not silence, it accepts the model's own first option for each, because
+# "just pick something sensible" is what skipping means.
+# Deliberately loose about the fence, because two live runs of gemma4:e4b
+# produced two different shapes and neither was the one asked for. The first
+# left the closing fence off entirely — the block ends the reply, so a model
+# that stops after the JSON never writes it. The second put the tag on the line
+# *after* the fence rather than as its info string. A form that only appears
+# when the model formats its fence exactly right is a form that mostly does not
+# appear, and the JSON either side of it was perfectly good both times.
+QUESTIONS_FENCE = re.compile(
+    r"```[ \t]*(?:\r?\n)?[ \t]*carrot-questions[ \t]*\r?\n(.*?)(?:```|\Z)",
+    re.S | re.I)
+
+MAX_QUESTIONS = 4
+MAX_OPTIONS = 4
+
+
+def parse_questions(text: str) -> List[Dict[str, Any]]:
+    """The clarifying questions in a plan, as a form. ``[]`` if there are none.
+
+    Anything malformed returns ``[]`` rather than raising: a model that writes
+    a broken block should cost the user a form, not the plan it is attached to.
+    """
+    match = QUESTIONS_FENCE.search(text or "")
+    if not match:
+        return []
+    try:
+        raw = json.loads(match.group(1))
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(raw, list):
+        return []
+
+    questions = []
+    for item in raw[:MAX_QUESTIONS]:
+        if not isinstance(item, dict):
+            continue
+        prompt = str(item.get("question") or "").strip()
+        options = [str(o).strip() for o in (item.get("options") or [])
+                   if str(o).strip()]
+        # A question with nothing to pick between is prose, not a form field.
+        if not prompt or len(options) < 2:
+            continue
+        questions.append({"question": prompt, "options": options[:MAX_OPTIONS]})
+    return questions
+
+
+def strip_questions(text: str) -> str:
+    """The plan without the machine-readable block, for display."""
+    return QUESTIONS_FENCE.sub("", text or "").rstrip()
+
+
+def answers_message(pairs: List[Dict[str, str]]) -> str:
+    """The follow-up turn a filled-in form becomes."""
+    lines = [f"{p.get('question', '').strip()} — {p.get('answer', '').strip()}"
+             for p in pairs if p.get("answer")]
+    if not lines:
+        return ""
+    return ("Answers to your questions:\n"
+            + "\n".join(f"- {line}" for line in lines)
+            + "\n\nGo ahead on that basis.")
+
 
 # What a turn looks like when the model ignored all of that: a fenced block
 # long enough to be a file, and not one call to a write tool.

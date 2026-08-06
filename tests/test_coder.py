@@ -294,3 +294,116 @@ class TestRecipes:
     def test_an_unknown_recipe_raises(self, isolated_db):
         with pytest.raises(KeyError):
             coder.render_recipe("ghost", {})
+
+
+class TestClarifyingQuestionsBecomeAForm:
+    """A plan ending "1. minimal or fancy? 2. pygame or tkinter?" is a dead end.
+
+    Answering it means retyping the request with the answers folded in, so
+    mostly nobody does and Act guesses. The questions come back as structured
+    options the panel can render as buttons.
+
+    The parsing is deliberately forgiving: a model that writes a malformed
+    block should cost the user the form, never the plan it is attached to.
+    """
+
+    BLOCK = (
+        "Here is the plan.\n\n"
+        "```carrot-questions\n"
+        '[{"question": "How should the scoreboard look?",\n'
+        '  "options": ["Just the numbers", "Labelled Player 1 / Player 2"]}]\n'
+        "```"
+    )
+
+    def test_questions_are_lifted_out_with_their_options(self):
+        questions = coder.parse_questions(self.BLOCK)
+        assert len(questions) == 1
+        assert questions[0]["question"] == "How should the scoreboard look?"
+        assert questions[0]["options"] == ["Just the numbers",
+                                           "Labelled Player 1 / Player 2"]
+
+    def test_the_block_is_not_shown_to_the_user(self):
+        # Raw JSON on screen is worse than not asking.
+        assert "carrot-questions" not in coder.strip_questions(self.BLOCK)
+        assert "Here is the plan." in coder.strip_questions(self.BLOCK)
+
+    @pytest.mark.parametrize("text", [
+        "a plan with no questions at all",
+        "```carrot-questions\n[{not json]\n```",
+        '```carrot-questions\n{"not": "a list"}\n```',
+        '```carrot-questions\n[{"question": "x", "options": ["only one"]}]\n```',
+        '```carrot-questions\n[{"options": ["a", "b"]}]\n```',
+    ])
+    def test_a_broken_block_costs_the_form_and_nothing_else(self, text):
+        # Never raises: the caller is mid-stream with the answer already sent.
+        assert coder.parse_questions(text) == []
+
+    def test_a_question_with_one_option_is_prose_not_a_field(self):
+        # Rendering a form with a single button to press is worse than the
+        # paragraph it replaced.
+        one = '```carrot-questions\n[{"question": "x", "options": ["only"]}]\n```'
+        assert coder.parse_questions(one) == []
+
+    def test_the_form_is_bounded(self):
+        many = ", ".join(
+            '{"question": "q%d", "options": ["a", "b", "c", "d", "e", "f"]}' % i
+            for i in range(9))
+        questions = coder.parse_questions(
+            "```carrot-questions\n[" + many + "]\n```")
+        assert len(questions) <= coder.MAX_QUESTIONS
+        assert all(len(q["options"]) <= coder.MAX_OPTIONS for q in questions)
+
+    def test_plan_mode_is_told_how_to_ask(self):
+        # The form only ever appears if the preamble asks for the block.
+        assert "carrot-questions" in coder.MODE_PREAMBLE[coder.MODE_PLAN]
+
+    def test_answers_become_a_turn_that_names_both_sides(self):
+        message = coder.answers_message([
+            {"question": "Scoreboard?", "answer": "Just the numbers"}])
+        assert "Scoreboard?" in message and "Just the numbers" in message
+
+    def test_unanswered_questions_are_left_out(self):
+        message = coder.answers_message([
+            {"question": "Scoreboard?", "answer": "Just the numbers"},
+            {"question": "Win condition?", "answer": ""}])
+        assert "Win condition?" not in message
+
+    def test_answering_nothing_is_not_an_empty_instruction(self):
+        # Otherwise Act receives "Answers to your questions:" and no answers.
+        assert coder.answers_message([]) == ""
+        assert coder.answers_message([{"question": "q", "answer": ""}]) == ""
+
+    def test_an_unterminated_block_still_produces_the_form(self):
+        """gemma4:e4b left the closing fence off on the very first real run.
+
+        The block is the last thing in the reply, so a model that stops after
+        the JSON never writes the fence. Requiring it meant the form appeared
+        only when the model remembered, which is most of the time not.
+        """
+        text = ("Here is the plan.\n\n```carrot-questions\n"
+                '[{"question": "Sound effects?", "options": ["No", "Yes"]}]')
+        questions = coder.parse_questions(text)
+        assert len(questions) == 1
+        assert questions[0]["options"] == ["No", "Yes"]
+        assert "carrot-questions" not in coder.strip_questions(text)
+
+    def test_the_tag_may_sit_on_the_line_after_the_fence(self):
+        """The second live run put it there instead of on the fence line.
+
+        Two runs of the same model produced two different shapes, so the fence
+        is matched loosely. The JSON was well-formed both times; only the
+        packaging varied, and that is not worth losing the form over.
+        """
+        text = ('Plan.\n\n```\ncarrot-questions\n'
+                '[{"question": "Graphical or text?",'
+                ' "options": ["graphical (Pygame)", "text-based (terminal)"]}]\n```')
+        questions = coder.parse_questions(text)
+        assert len(questions) == 1
+        assert questions[0]["options"] == ["graphical (Pygame)",
+                                           "text-based (terminal)"]
+        assert "carrot-questions" not in coder.strip_questions(text)
+
+    def test_a_plain_code_block_is_not_mistaken_for_the_form(self):
+        # The loose fence must not start swallowing ordinary fenced code.
+        assert coder.parse_questions("```python\nx = 1\n```") == []
+        assert coder.parse_questions("```\njust text\n```") == []

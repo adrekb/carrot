@@ -1740,6 +1740,17 @@ def _chat_stream_response(req, conv, history, skill, resolved, prelude=None, mod
         except Exception:
             # Bookkeeping must never cost the user the answer they can see.
             LOG.exception("could not store the assistant turn")
+        # Clarifying questions travel as their own event rather than being
+        # re-parsed from the prose in the browser: the parsing rules — what
+        # counts as a usable option, what a malformed block does — are worth
+        # having one tested copy of, and it is Python that has the tests.
+        # Guarded because a broken block must cost the form, never the answer.
+        try:
+            questions = coder_mod.parse_questions(final_text)
+            if questions:
+                yield f"data: {json.dumps({'questions': questions})}\n\n"
+        except Exception:
+            LOG.exception("could not parse clarifying questions")
         yield f"data: {json.dumps({'done': True, 'conversation_id': req.conversation_id})}\n\n"
 
     return StreamingResponse(stream(), media_type="text/event-stream")

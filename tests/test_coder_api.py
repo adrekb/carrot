@@ -11,6 +11,7 @@ import re
 import subprocess
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -518,3 +519,53 @@ class TestPythonIsFound:
 
         with patch.object(runner.shutil, "which", return_value=None):
             assert runner._find_python() is None
+
+
+class TestTheQuestionFormIsWiredUp:
+    """Parsed in Python, rendered in the panel, and it has to cross that gap.
+
+    The approval card is the cautionary tale: it listened for an event nobody
+    sent, and the test asserted a substring that could not fail. So these check
+    the event name the server actually emits against the one the panel reads.
+    """
+
+    def read(self, *parts):
+        from pathlib import Path
+        return Path(__file__).resolve().parents[1].joinpath(
+            "carrot", "web", *parts).read_text(encoding="utf-8")
+
+    def test_the_server_emits_questions_under_the_name_the_panel_reads(self):
+        server = Path(A.__file__).read_text(encoding="utf-8")
+        assert "'questions': questions" in server or '"questions"' in server
+        js = self.read("js", "features.js")
+        assert "payload.questions" in js, "the panel never sees the event"
+
+    def test_a_broken_block_cannot_cost_the_answer(self):
+        # The parse sits in the SSE body, after the 200 and the headers have
+        # gone out: an exception there is a closed socket, not an error
+        # response, and the user gets a turn that ends with no text at all.
+        lines = Path(A.__file__).read_text(encoding="utf-8").splitlines()
+        at = next(i for i, line in enumerate(lines)
+                  if "parse_questions(final_text)" in line)
+        before = "\n".join(lines[max(0, at - 4):at])
+        after = "\n".join(lines[at:at + 6])
+        assert "try:" in before, "parse_questions is not inside a try"
+        assert "except" in after, "the try around parse_questions has no except"
+
+    def test_answering_switches_to_act(self):
+        # The whole point: the form is the moment Act was waiting for, so the
+        # user should not have to find the mode button afterwards.
+        js = self.read("js", "features.js")
+        submit = js.split("async function submitAgentQuestions")[1].split("\n}\n")[0]
+        assert "setCoderMode('act')" in submit
+        assert "sendAgentTask()" in submit
+
+    def test_skipping_answers_rather_than_saying_nothing(self):
+        # Skip means "pick something sensible", so it submits the model's own
+        # first option for each rather than sending an empty turn.
+        js = self.read("js", "features.js")
+        assert "q.options[0]" in js
+
+    def test_the_raw_block_is_stripped_from_what_is_displayed(self):
+        js = self.read("js", "features.js")
+        assert "QUESTIONS_FENCE" in js and "replace(QUESTIONS_FENCE" in js

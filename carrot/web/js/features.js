@@ -1893,6 +1893,7 @@ async function sendAgentTask() {
                 if (payload.approval_resolved) {
                     agentApprovalResolved(wrap, payload.approval_resolved);
                 }
+                if (payload.questions) agentQuestions(wrap, payload.questions);
                 if (payload.chunk) {
                     answer += payload.chunk;
                     // Through mdToHtml, the same renderer the chat trace uses,
@@ -1900,7 +1901,10 @@ async function sendAgentTask() {
                     // and fenced code, and as plain text it arrived as a wall
                     // with literal ### and ``` in it — which reads as the model
                     // formatting badly when it is the panel not rendering.
-                    body.innerHTML = mdToHtml(answer);
+                    // The questions block is machine-readable scaffolding for
+                    // the form below; showing the user raw JSON as well is
+                    // worse than not asking.
+                    body.innerHTML = mdToHtml(answer.replace(QUESTIONS_FENCE, ''));
                     document.getElementById('agent-log').scrollTop = 1e9;
                 }
                 if (payload.error) agentTrace(wrap, 'error: ' + payload.error, 'rejected');
@@ -1919,6 +1923,111 @@ async function sendAgentTask() {
         loadCodeTree();
         loadCoderState();
     }
+}
+
+// The clarifying questions at the end of a plan, as a form.
+//
+// As prose they were a dead end: answering meant retyping the request with the
+// answers folded in, so most of the time nobody did, and Act guessed. Skip is
+// a real answer, not silence — it takes the model's first option for each,
+// which is what "just pick something sensible" means.
+// Kept in step with QUESTIONS_FENCE in coder.py, which has the reasoning: the
+// closing fence is optional and the tag may sit on the line after the opening
+// one, because live models produced both.
+const QUESTIONS_FENCE = /```[ \t]*(?:\r?\n)?[ \t]*carrot-questions[ \t]*\r?\n[\s\S]*?(?:```|$)/gi;
+
+function agentQuestions(wrap, questions) {
+    if (!questions || !questions.length) return;
+    if (wrap.querySelector('.agent-questions')) return;   // one form per turn
+
+    const box = document.createElement('div');
+    box.className = 'agent-questions';
+    const head = document.createElement('div');
+    head.className = 'questions-head';
+    head.textContent = 'Before it starts — answer what matters, skip the rest.';
+    box.appendChild(head);
+
+    const chosen = new Map();
+    questions.forEach((q, i) => {
+        const field = document.createElement('div');
+        field.className = 'question';
+        const label = document.createElement('div');
+        label.className = 'question-text';
+        label.textContent = q.question;
+        field.appendChild(label);
+
+        const row = document.createElement('div');
+        row.className = 'question-options';
+        q.options.forEach((option, j) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'question-option';
+            button.textContent = option;
+            // The first option is pre-selected, so the form already reads as
+            // the answer you get by skipping it.
+            if (j === 0) { button.classList.add('on'); chosen.set(i, option); }
+            button.onclick = () => {
+                row.querySelectorAll('.question-option').forEach(b => b.classList.remove('on'));
+                button.classList.add('on');
+                chosen.set(i, option);
+                custom.value = '';
+            };
+            row.appendChild(button);
+        });
+        field.appendChild(row);
+
+        const custom = document.createElement('input');
+        custom.type = 'text';
+        custom.className = 'question-custom';
+        custom.placeholder = 'or say something else…';
+        custom.oninput = () => {
+            if (!custom.value.trim()) return;
+            row.querySelectorAll('.question-option').forEach(b => b.classList.remove('on'));
+            chosen.set(i, custom.value.trim());
+        };
+        field.appendChild(custom);
+        box.appendChild(field);
+    });
+
+    const actions = document.createElement('div');
+    actions.className = 'questions-actions';
+
+    const go = document.createElement('button');
+    go.className = 'btn btn-primary';
+    go.textContent = 'Build it';
+    go.onclick = () => submitAgentQuestions(box, questions, chosen);
+
+    const skip = document.createElement('button');
+    skip.className = 'btn btn-ghost';
+    skip.textContent = 'Skip — just pick sensible defaults';
+    skip.onclick = () => {
+        questions.forEach((q, i) => chosen.set(i, q.options[0]));
+        submitAgentQuestions(box, questions, chosen);
+    };
+
+    actions.append(go, skip);
+    box.appendChild(actions);
+    wrap.appendChild(box);
+    document.getElementById('agent-log').scrollTop = 1e9;
+}
+
+async function submitAgentQuestions(box, questions, chosen) {
+    box.querySelectorAll('button, input').forEach(el => { el.disabled = true; });
+    const pairs = questions.map((q, i) => ({ question: q.question, answer: chosen.get(i) || '' }));
+    const summary = pairs.filter(p => p.answer)
+        .map(p => `${p.question} — ${p.answer}`).join('; ');
+    box.querySelector('.questions-head').textContent = summary || 'Using the defaults.';
+
+    // Answering a plan is the moment Act was waiting for, so the mode switch
+    // happens here rather than leaving the user to find the button. It runs
+    // first: the answers are the follow-up turn, and they have to arrive with
+    // the write tools already available or the model just re-plans.
+    await setCoderMode('act');
+    const input = document.getElementById('agent-input');
+    input.value = 'Answers to your questions:\n'
+        + pairs.filter(p => p.answer).map(p => `- ${p.question} — ${p.answer}`).join('\n')
+        + '\n\nGo ahead on that basis.';
+    sendAgentTask();
 }
 
 function agentApproval(wrap, request) {
