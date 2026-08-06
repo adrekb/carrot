@@ -550,17 +550,34 @@ function showSources(assistantEl, contentEl, sources) {
     if (!rail) {
         rail = document.createElement('div');
         rail.className = 'source-cards';
+        rail._seen = [];
         assistantEl.insertBefore(rail, contentEl);
     }
-    // Three, and no more. A search returns six; showing all of them pushed the
-    // answer far enough down that it looked like there wasn't one. The rest
-    // are not lost — everything the answer actually used is cited inline.
-    const MAX_CARDS = 3;
-    const already = new Set([...rail.querySelectorAll('a')].map(a => a.href));
+
+    // Every source from every round is kept, and the three shown are chosen
+    // from all of them each time. Filling the row first-come put the three
+    // index pages from an opening broad search on screen and left the dated
+    // article a later round found — the one the answer actually quoted — off
+    // it. Articles first, then original order within each group.
+    const known = new Set(rail._seen.map(s => s.url));
     for (const source of sources) {
-        if (rail.childElementCount >= MAX_CARDS) break;
-        if (!source.url || already.has(source.url)) continue;
-        already.add(source.url);
+        if (source && source.url && !known.has(source.url)) {
+            known.add(source.url);
+            rail._seen.push(source);
+        }
+    }
+    // Three, and no more. A search returns six per round; showing all of them
+    // pushed the answer far enough down that it looked like there wasn't one.
+    // The rest are not lost — everything the answer used is cited inline.
+    const MAX_CARDS = 3;
+    const best = rail._seen
+        .map((s, i) => [s.kind === 'front' ? 1 : 0, i, s])
+        .sort((a, b) => a[0] - b[0] || a[1] - b[1])
+        .slice(0, MAX_CARDS)
+        .map(triple => triple[2]);
+
+    rail.textContent = '';
+    for (const source of best) {
         const card = document.createElement('a');
         card.className = 'source-card';
         card.href = source.url;
@@ -573,7 +590,7 @@ function showSources(assistantEl, contentEl, sources) {
             catch (_) { return source.url; }
         })();
         card.innerHTML =
-            `<div class="source-site">${escHtml(site)}`
+            `<div class="source-site"><span class="source-name">${escHtml(site)}</span>`
             + (source.kind === 'front' ? '<span class="source-index">index</span>' : '')
             + `</div>`
             + `<div class="source-title">${escHtml(source.title || source.url)}</div>`

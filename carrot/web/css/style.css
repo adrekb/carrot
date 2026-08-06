@@ -4277,6 +4277,9 @@ td, th, .si-sub, .small, .editor-status {
   color: var(--muted);
   margin-bottom: 4px;
 }
+/* The outlet gets whatever room is left after the badge, and ellipsises
+   rather than pushing it out of the card. */
+.source-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .source-index {
   font-size: 9.5px;
   text-transform: uppercase;

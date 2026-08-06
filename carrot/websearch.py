@@ -357,10 +357,17 @@ def site_name(url: str) -> str:
         return ""
     known = {
         "bbc.co.uk": "BBC", "bbc.com": "BBC", "apnews.com": "AP News",
+        "abcnews.go.com": "ABC News", "whitehouse.gov": "The White House",
+        "nypost.com": "New York Post", "thehill.com": "The Hill",
+        "cnbc.com": "CNBC", "usatoday.com": "USA Today", "pbs.org": "PBS",
+        "cbsnews.com": "CBS News", "foxnews.com": "Fox News",
+        "latimes.com": "LA Times", "time.com": "TIME", "vox.com": "Vox",
+        "theatlantic.com": "The Atlantic", "foreignpolicy.com": "Foreign Policy",
+        "reason.com": "Reason", "semafor.com": "Semafor", "thedailybeast.com": "The Daily Beast",
         "theguardian.com": "The Guardian", "nytimes.com": "The New York Times",
         "washingtonpost.com": "The Washington Post", "reuters.com": "Reuters",
         "wsj.com": "The Wall Street Journal", "ft.com": "Financial Times",
-        "nbcnews.com": "NBC News", "abcnews.go.com": "ABC News",
+        "nbcnews.com": "NBC News",
         "cnn.com": "CNN", "npr.org": "NPR", "aljazeera.com": "Al Jazeera",
         "politico.com": "POLITICO", "axios.com": "Axios",
         "bloomberg.com": "Bloomberg", "scmp.com": "SCMP",

@@ -603,10 +603,28 @@ class TestTheSourceCardsDoNotHideTheAnswer:
         js = self.read("js", "app.js")
         body = js.split("function showSources")[1].split("\n}\n")[0]
         assert "MAX_CARDS = 3" in body
-        assert "break" in body, "the cap is declared but never enforced"
+        assert "slice(0, MAX_CARDS)" in body, (
+            "the cap is declared but never applied to what gets drawn")
 
     def test_the_cards_sit_above_the_answer_not_inside_it(self):
         # insertBefore(rail, contentEl): appending would bury them under a
         # streaming answer that grows past them.
         js = self.read("js", "app.js")
         assert "insertBefore(rail, contentEl)" in js
+
+    def test_a_later_article_displaces_an_early_index_page(self):
+        """The cards showed the wrong three.
+
+        A multi-turn search opens broad — the first round came back as three
+        section fronts — and finds the dated article two rounds later. Filling
+        the row first-come put the fronts on screen and left the BBC piece the
+        answer actually quoted off it. Every round's sources are kept and the
+        three shown are chosen from all of them, articles first.
+        """
+        js = self.read("js", "app.js")
+        body = js.split("function showSources")[1].split("\n}\n")[0]
+        assert "rail._seen" in body, "sources from earlier rounds are discarded"
+        assert "'front' ? 1 : 0" in body, "articles are not preferred over indexes"
+        assert "rail.textContent = ''" in body, (
+            "the row is appended to rather than redrawn, so an early index page "
+            "can never be displaced")
