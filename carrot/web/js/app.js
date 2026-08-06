@@ -552,8 +552,13 @@ function showSources(assistantEl, contentEl, sources) {
         rail.className = 'source-cards';
         assistantEl.insertBefore(rail, contentEl);
     }
+    // Three, and no more. A search returns six; showing all of them pushed the
+    // answer far enough down that it looked like there wasn't one. The rest
+    // are not lost — everything the answer actually used is cited inline.
+    const MAX_CARDS = 3;
     const already = new Set([...rail.querySelectorAll('a')].map(a => a.href));
     for (const source of sources) {
+        if (rail.childElementCount >= MAX_CARDS) break;
         if (!source.url || already.has(source.url)) continue;
         already.add(source.url);
         const card = document.createElement('a');

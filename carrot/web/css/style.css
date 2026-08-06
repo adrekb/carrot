@@ -4240,19 +4240,27 @@ td, th, .si-sub, .small, .editor-status {
 .approval-what { font-size: 12.5px; color: var(--text); margin-bottom: 8px; }
 .approval-row { display: flex; gap: 8px; }
 
-/* The sources behind an answer, above it. Scrolls sideways rather than
-   wrapping into a wall — it is a rail of three or four, not a bibliography. */
+/* The sources behind an answer, above it.
+ *
+ * A grid of three that share the width, not a scrolling rail. The rail was
+ * wrong twice: a sideways scrollbar in the middle of a conversation reads as
+ * something to operate, and cards wide enough to need one pushed the answer
+ * far enough down the page that it looked like there wasn't one. Three fixed
+ * columns, each taking a third of whatever room there is, and the answer stays
+ * where the eye already is. minmax(0,1fr) rather than 1fr so a long headline
+ * cannot force a column wider than its share. */
 .source-cards {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
-  overflow-x: auto;
-  padding-bottom: 6px;
   margin-bottom: 10px;
-  scrollbar-width: thin;
+}
+@media (max-width: 720px) {
+  .source-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 .source-card {
-  flex: 0 0 190px;
   display: block;
+  min-width: 0;
   padding: 9px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -4280,10 +4288,10 @@ td, th, .si-sub, .small, .editor-status {
 .source-title {
   font-size: 12.5px;
   line-height: 1.35;
-  /* Three lines then ellipsis: headlines vary wildly and a rail of cards
-     with different heights reads as broken. */
+  /* Two lines then ellipsis. Headlines vary wildly and cards of different
+     heights in one row read as broken; two is enough to tell them apart. */
   display: -webkit-box;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }

@@ -575,3 +575,38 @@ class TestAnIndexPageIsNotTheStory:
         # "Cite the URL" produced answers containing no links at all.
         assert "markdown links" in A.SEARCH_PREAMBLE
         assert "index page" in A.SEARCH_PREAMBLE
+
+
+class TestTheSourceCardsDoNotHideTheAnswer:
+    """First attempt was a sideways-scrolling rail of six wide cards.
+
+    Two things wrong with it. A horizontal scrollbar in the middle of a
+    conversation reads as a control to operate rather than a list to glance
+    at; and six cards wide enough to need one pushed the answer far enough
+    down the page that it looked like there was no answer at all — which is
+    exactly how it was reported.
+    """
+
+    def read(self, *parts):
+        from pathlib import Path
+        return Path(__file__).resolve().parents[1].joinpath(
+            "carrot", "web", *parts).read_text(encoding="utf-8")
+
+    def test_the_cards_do_not_scroll_sideways(self):
+        css = self.read("css", "style.css")
+        block = css.split(".source-cards {")[1].split("}")[0]
+        assert "overflow-x" not in block, "the rail scrolls again"
+        assert "grid" in block, "a fixed row of columns, not a flexible rail"
+
+    def test_the_row_is_bounded_so_the_answer_stays_visible(self):
+        # A search returns six; three is a glance, six is a wall.
+        js = self.read("js", "app.js")
+        body = js.split("function showSources")[1].split("\n}\n")[0]
+        assert "MAX_CARDS = 3" in body
+        assert "break" in body, "the cap is declared but never enforced"
+
+    def test_the_cards_sit_above_the_answer_not_inside_it(self):
+        # insertBefore(rail, contentEl): appending would bury them under a
+        # streaming answer that grows past them.
+        js = self.read("js", "app.js")
+        assert "insertBefore(rail, contentEl)" in js
