@@ -495,15 +495,39 @@ def _tool_search_conversations(query: str, **_) -> str:
     )
 
 
-def _tool_web_search(query: str, **_) -> str:
+def _tool_web_search(query: str, emit=None, **_) -> str:
     from . import websearch
 
     results = websearch.search(query, max_results=6)
     if not results:
         return "no results (the search backend may be unreachable)"
-    return "\n".join(
-        f"- {r['title']} — {r['url']}\n  {r['snippet'][:220]}" for r in results
-    )
+
+    # Sideband, on the same channel approvals use. The model gets prose; the
+    # browser gets the structured version, which is what a citation and a
+    # source card are built from. Returning only a string is why the UI could
+    # never say where an answer came from.
+    if emit:
+        try:
+            emit({"sources": [
+                {"title": r["title"], "url": r["url"], "site": r.get("site", ""),
+                 "date": r.get("date", ""), "kind": r.get("kind", "")}
+                for r in results
+            ]})
+        except Exception:
+            LOG.warning("could not emit sources for %r", query[:60])
+
+    lines = []
+    for r in results:
+        # The kind and the date are in front of the model on purpose: without
+        # them it read nytimes.com/section/politics and summarised the site's
+        # navigation, having no way to know it was holding an index.
+        marks = [m for m in (r.get("site", ""), r.get("date", ""),
+                             "index page" if r.get("kind") == "front" else "") if m]
+        head = f"- {r['title']} — {r['url']}"
+        if marks:
+            head += f"\n  [{' · '.join(marks)}]"
+        lines.append(f"{head}\n  {r['snippet'][:220]}")
+    return "\n".join(lines)
 
 
 def _tool_current_datetime(**_) -> str:
@@ -956,7 +980,10 @@ TOOLS: Dict[str, Dict[str, Any]] = {
         "handler": _tool_web_search,
         "mutating": False,
         "risk": "low",
-        "description": "Search the web. Returns titles, URLs and snippets — use read_url to read one.",
+        "wants_emit": True,
+        "description": "Search the web. Returns titles, URLs, snippets, the site and the "
+                       "date, and marks index pages. Use read_url to read a result — "
+                       "prefer a dated article over an index page.",
         "parameters": {
             "type": "object",
             "properties": {"query": {"type": "string"}},
@@ -1415,7 +1442,13 @@ def run_tool(
 
     started = time.time()
     try:
-        result = spec["handler"](conversation_id=conversation_id, **arguments)
+        # A tool opts in to the event channel rather than every handler taking
+        # an `emit` it ignores. web_search uses it to send the browser the
+        # structured results behind the prose it hands the model.
+        call_args = dict(arguments)
+        if spec.get("wants_emit"):
+            call_args["emit"] = emit
+        result = spec["handler"](conversation_id=conversation_id, **call_args)
     except PermissionError as exc:
         return f"error: {exc}"
     except TypeError as exc:

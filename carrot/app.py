@@ -1160,6 +1160,21 @@ SEARCH_PREAMBLE = (
     "outlets, official and academic sites, project documentation. Results are "
     "already ordered with those first. If the only results are sites you do "
     "not recognise, say that rather than reporting their contents as fact.\n"
+    # Asked for recent US politics, it read nytimes.com/section/politics and
+    # summarised the site's navigation — "The New York Times (covering US,
+    # World News)" — because that is what is on a front page. Results now say
+    # which are index pages; this says what to do about it.
+    "Results marked 'index page' are a section front or a homepage. They list "
+    "headlines, they are not the story: read a dated article instead. If only "
+    "index pages came back, search again with the month and year in the query "
+    "before falling back to reading one.\n"
+    # "Cite the URL" produced answers with no links in them at all. The
+    # research assistant has always said this the concrete way; chat now does.
+    "Cite inline as markdown links — [The Guardian](https://...) — on the "
+    "sentence the fact came from, not gathered at the end. Every claim you "
+    "took from a page gets one. Name the outlet and the date when it matters. "
+    "Answer the question that was asked in your own words: a list of what each "
+    "source covers is a description of the search, not an answer.\n"
 )
 
 MULTI_SEARCH_DIRECTIVE = (

@@ -4240,6 +4240,55 @@ td, th, .si-sub, .small, .editor-status {
 .approval-what { font-size: 12.5px; color: var(--text); margin-bottom: 8px; }
 .approval-row { display: flex; gap: 8px; }
 
+/* The sources behind an answer, above it. Scrolls sideways rather than
+   wrapping into a wall — it is a rail of three or four, not a bibliography. */
+.source-cards {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 6px;
+  margin-bottom: 10px;
+  scrollbar-width: thin;
+}
+.source-card {
+  flex: 0 0 190px;
+  display: block;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  text-decoration: none;
+  color: var(--text);
+}
+.source-card:hover { border-color: var(--accent-line); }
+.source-site {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.source-index {
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 4px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+.source-title {
+  font-size: 12.5px;
+  line-height: 1.35;
+  /* Three lines then ellipsis: headlines vary wildly and a rail of cards
+     with different heights reads as broken. */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.source-date { font-size: 11px; color: var(--muted); margin-top: 5px; }
+
 /* Clarifying questions, as a form rather than a paragraph to reply to. */
 .agent-questions {
   border: 1px solid var(--border);

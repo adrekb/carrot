@@ -481,3 +481,97 @@ class TestTheFilterCannotEmptyAPage:
             results = websearch.search("RTX 4090 benchmark results")
         assert len(results) == 1
         assert "4090" in results[0]["title"]
+
+
+class TestAnIndexPageIsNotTheStory:
+    """Asked for "recent us politics news", six of six results were section
+    fronts, the model read nytimes.com/section/politics, and answered with the
+    site's navigation: "The New York Times (covering US, World News, etc.)".
+
+    A front is not a bad source, it is the wrong kind of page to answer from,
+    and nothing in a result said which was which. Adding the month to the same
+    query returns four dated articles out of six, so the information was always
+    reachable — the search just could not tell the difference.
+    """
+
+    ARTICLES = [
+        "https://www.theguardian.com/us-news/2026/aug/05/michigan-senate-primary-results",
+        "https://reuters.com/world/china/china-purges-third-politburo-member-2026-07-14",
+        "https://www.newyorker.com/magazine/2026/08/10/the-future-made-in-china",
+    ]
+    FRONTS = [
+        "https://apnews.com/",
+        "https://www.nytimes.com/section/politics",
+        "https://www.nbcnews.com/politics",
+        "https://www.bbc.com/news/world/asia/china",
+    ]
+
+    @pytest.mark.parametrize("url", ARTICLES)
+    def test_articles_are_recognised(self, url):
+        assert websearch.page_kind(url) == "article"
+
+    @pytest.mark.parametrize("url", FRONTS)
+    def test_fronts_are_recognised(self, url):
+        assert websearch.page_kind(url) == "front"
+
+    def test_articles_outrank_fronts_within_a_tier(self):
+        mixed = [{"title": "", "url": u, "snippet": ""}
+                 for u in self.FRONTS + self.ARTICLES]
+        ordered = [r["url"] for r in websearch.rank_results(mixed)]
+        assert all(websearch.page_kind(u) == "article" for u in ordered[:3])
+
+    def test_source_quality_still_wins(self):
+        # An article on a content farm must not outrank a real outlet's front:
+        # ordering by page shape alone would be a worse bug than the one this
+        # fixes.
+        results = [{"title": "", "url": "https://apnews.com/", "snippet": ""},
+                   {"title": "", "url": "https://freemovies123.example/a-b-c-d", "snippet": ""}]
+        assert websearch.rank_results(results)[0]["url"] == "https://apnews.com/"
+
+    @pytest.mark.parametrize("url,expected", [
+        ("https://www.theguardian.com/us-news/2026/aug/05/michigan", "2026-08-05"),
+        ("https://reuters.com/world/china/purge-2026-07-14", "2026-07-14"),
+        ("https://www.newyorker.com/magazine/2026/08/10/china", "2026-08-10"),
+        ("https://apnews.com/", ""),
+        ("https://example.com/2026/99/99/nope", ""),
+    ])
+    def test_the_date_comes_off_the_url(self, url, expected):
+        # Free, right far more often than not, and the difference between a
+        # card that says "5 Aug 2026" and one that says nothing.
+        assert websearch.date_from_url(url) == expected
+
+    def test_the_site_is_named_as_a_person_would(self):
+        assert websearch.site_name("https://www.theguardian.com/x") == "The Guardian"
+        assert websearch.site_name("https://apnews.com/") == "AP News"
+        # Unknown domains still get something printable rather than a blank.
+        assert websearch.site_name("https://some-local-paper.co/x") == "Some Local Paper"
+
+    def test_the_model_is_told_which_results_are_indexes(self):
+        # It cannot prefer an article if the results all look alike.
+        with patch.object(websearch, "search", return_value=[
+            {"title": "Politics", "url": "https://apnews.com/", "snippet": "s",
+             "site": "AP News", "date": "", "kind": "front"},
+        ]):
+            shown = agent_tools._tool_web_search("us politics")
+        assert "index page" in shown
+        assert "AP News" in shown
+
+    def test_the_browser_is_sent_the_structured_sources(self):
+        # The trace listed URLs as debug output nobody reads. A card needs the
+        # outlet and the date, and re-deriving them in JavaScript would put the
+        # rules in two places.
+        events = []
+        with patch.object(websearch, "search", return_value=[
+            {"title": "El-Sayed wins", "url": "https://www.theguardian.com/us-news/2026/aug/05/x",
+             "snippet": "s", "site": "The Guardian", "date": "2026-08-05", "kind": "article"},
+        ]):
+            agent_tools._tool_web_search("michigan primary", emit=events.append)
+        sources = [e["sources"] for e in events if "sources" in e]
+        assert sources, "nothing was emitted for the browser to render"
+        assert sources[0][0]["site"] == "The Guardian"
+        assert sources[0][0]["date"] == "2026-08-05"
+
+    def test_the_directive_asks_for_inline_links(self):
+        # "Cite the URL" produced answers containing no links at all.
+        assert "markdown links" in A.SEARCH_PREAMBLE
+        assert "index page" in A.SEARCH_PREAMBLE

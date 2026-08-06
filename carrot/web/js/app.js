@@ -537,6 +537,46 @@ function clearChatEmpty() {
     if (empty) empty.remove();
 }
 
+// The sources behind an answer, as cards above it.
+//
+// The trace has always listed the URLs, but as debug output in a collapsed
+// panel — so an answer that had read four outlets looked exactly like one it
+// made up. These say the same thing where it can be read: outlet, headline,
+// date, clickable. Rendered when the search returns, before the answer starts,
+// because watching the sources arrive is most of the reassurance.
+function showSources(assistantEl, contentEl, sources) {
+    if (!sources || !sources.length) return;
+    let rail = assistantEl.querySelector('.source-cards');
+    if (!rail) {
+        rail = document.createElement('div');
+        rail.className = 'source-cards';
+        assistantEl.insertBefore(rail, contentEl);
+    }
+    const already = new Set([...rail.querySelectorAll('a')].map(a => a.href));
+    for (const source of sources) {
+        if (!source.url || already.has(source.url)) continue;
+        already.add(source.url);
+        const card = document.createElement('a');
+        card.className = 'source-card';
+        card.href = source.url;
+        card.target = '_blank';
+        card.rel = 'noopener noreferrer';
+        // Its own hostname, not a remote favicon service: a card that phones
+        // out to fetch an icon leaks every source the user was shown.
+        const site = source.site || (() => {
+            try { return new URL(source.url).hostname.replace(/^www\./, ''); }
+            catch (_) { return source.url; }
+        })();
+        card.innerHTML =
+            `<div class="source-site">${escHtml(site)}`
+            + (source.kind === 'front' ? '<span class="source-index">index</span>' : '')
+            + `</div>`
+            + `<div class="source-title">${escHtml(source.title || source.url)}</div>`
+            + (source.date ? `<div class="source-date">${escHtml(source.date)}</div>` : '');
+        rail.appendChild(card);
+    }
+}
+
 function appendMessage(role, content) {
     clearChatEmpty();
     const messagesEl = document.getElementById('chat-messages');
@@ -880,6 +920,11 @@ async function streamTurn(url, payload, skill) {
                                  + ' Settings → Security can stop the asking.', 'error');
                     }
                 }
+                // What the answer is about to be built from, shown before the
+                // answer arrives. The trace already listed the URLs, but as
+                // debug output nobody reads — these are the sources as a
+                // person would want them: outlet, headline, date, clickable.
+                if (payload.sources) showSources(assistantEl, contentEl, payload.sources);
                 if (payload.thinking) {
                     ensureThink();
                     thinkBody.textContent += payload.thinking;

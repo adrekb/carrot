@@ -207,6 +207,14 @@ def search(query: str, max_results: int = 6, region: str = "wt-wt") -> List[Dict
     results = rank_results(results)
     for item in results:
         item["source_rank"] = source_rank(item["url"])
+        # Carried on every result so the model can prefer an article over an
+        # index, and so a citation can be drawn without fetching the page
+        # again. A result used to be title/url/snippet and nothing else, which
+        # is why nothing downstream could say where an answer came from or
+        # when it was written.
+        item["kind"] = page_kind(item["url"])
+        item["site"] = site_name(item["url"])
+        item["date"] = date_from_url(item["url"])
     return results
 
 
@@ -273,11 +281,112 @@ def source_rank(url: str) -> int:
     return 1
 
 
+# ===== What kind of page this is =====
+#
+# Asked for "recent us politics news", six of six results were section fronts:
+# nytimes.com/section/politics, nbcnews.com/politics, apnews.com. The model
+# read one and summarised the navigation — "The New York Times (covering US,
+# World News)" — because that is genuinely what is on a front page. Add the
+# month to the same query and four of six come back as dated articles.
+#
+# A front is not a bad source, it is the wrong kind of page to answer from, and
+# nothing in the result told anyone which was which.
+
+# /2026/aug/05/slug, /2026-07-14, /2026/07/14/, and Reuters' trailing
+# -2026-07-14, which is why the year may be preceded by a hyphen and not only
+# a slash.
+_DATE_IN_PATH = re.compile(
+    r"[/-](20\d{2})[/-]"
+    r"(0?[1-9]|1[0-2]|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)"
+    r"(?:[a-z]*)[/-](0?[1-9]|[12]\d|3[01])(?=[/-]|$)",
+    re.I,
+)
+_MONTHS = {m: i for i, m in enumerate(
+    ["jan", "feb", "mar", "apr", "may", "jun",
+     "jul", "aug", "sep", "oct", "nov", "dec"], start=1)}
+
+
+def date_from_url(url: str) -> str:
+    """The publication date a news URL carries, as ISO, or ``""``.
+
+    Not a substitute for reading the page, but it is free, it is right far more
+    often than not, and it is the difference between a card that says "5 Aug
+    2026" and one that says nothing.
+    """
+    match = _DATE_IN_PATH.search(url or "")
+    if not match:
+        return ""
+    year, raw_month, day = match.groups()
+    if raw_month.isdigit():
+        month = int(raw_month)
+    else:
+        month = _MONTHS.get(raw_month.lower()[:3], 0)
+    if not 1 <= month <= 12:
+        return ""
+    return f"{int(year):04d}-{month:02d}-{int(day):02d}"
+
+
+def page_kind(url: str) -> str:
+    """``"article"`` or ``"front"``.
+
+    A front is a homepage or a section index: little or no path, no date, and
+    no slug. An article has somewhere to be.
+    """
+    try:
+        path = urlparse(url or "").path.strip("/")
+    except Exception:
+        return "front"
+    if not path:
+        return "front"                      # bare domain
+    if date_from_url(url):
+        return "article"                    # dated URLs are articles
+    segments = [s for s in path.split("/") if s]
+    last = segments[-1].lower()
+    # A slug: several words, or long enough that it is a headline not a label.
+    slugish = last.count("-") >= 2 or last.count("_") >= 2 or len(last) > 24
+    if slugish:
+        return "article"
+    # /news/, /politics/, /world/asia/china — labels, however many levels deep.
+    return "front"
+
+
+def site_name(url: str) -> str:
+    """A domain as a person would write it: bbc.com -> BBC, theguardian.com -> The Guardian."""
+    host = domain_of(url)
+    if not host:
+        return ""
+    known = {
+        "bbc.co.uk": "BBC", "bbc.com": "BBC", "apnews.com": "AP News",
+        "theguardian.com": "The Guardian", "nytimes.com": "The New York Times",
+        "washingtonpost.com": "The Washington Post", "reuters.com": "Reuters",
+        "wsj.com": "The Wall Street Journal", "ft.com": "Financial Times",
+        "nbcnews.com": "NBC News", "abcnews.go.com": "ABC News",
+        "cnn.com": "CNN", "npr.org": "NPR", "aljazeera.com": "Al Jazeera",
+        "politico.com": "POLITICO", "axios.com": "Axios",
+        "bloomberg.com": "Bloomberg", "scmp.com": "SCMP",
+        "newyorker.com": "The New Yorker", "economist.com": "The Economist",
+    }
+    if host in known:
+        return known[host]
+    label = host.rsplit(".", 2)[0] if host.count(".") > 1 else host.split(".")[0]
+    return label.replace("-", " ").title()
+
+
 def rank_results(results: List[Dict[str, str]]) -> List[Dict[str, str]]:
-    """Sort by source quality, keeping the backend's order within a tier."""
-    return [item for _, _, item in
-            sorted(((source_rank(r["url"]), i, r) for i, r in enumerate(results)),
-                   key=lambda triple: (triple[0], triple[1]))]
+    """Sort by source quality, then by having something to say.
+
+    Source quality stays the primary key — an article on a content farm should
+    not outrank the front page of Reuters. Within a tier an article beats an
+    index, because the index cannot answer the question and the model reads
+    from the top.
+    """
+    def key(pair):
+        index, item = pair
+        return (source_rank(item["url"]),
+                0 if page_kind(item["url"]) == "article" else 1,
+                index)
+
+    return [item for _, item in sorted(enumerate(results), key=key)]
 
 
 # ===== Fetch =====
