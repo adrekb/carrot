@@ -1,16 +1,24 @@
 {
   "name": "carrot-desktop",
-  "version": "0.2.0",
+  "version": "0.3.1",
   "description": "Carrot - A local-first AI assistant with speech, hybrid search, notes, and planning",
   "main": "main.js",
   "scripts": {
     "start": "electron . --dev",
-    "package": "electron-builder --win --dir",
-    "dist": "electron-builder --win --x64 --publish=never"
+    "package": "electron-builder --dir",
+    "dist": "electron-builder --publish=never"
   },
-  "keywords": ["carrot", "ai", "assistant", "local", "ollama", "speech"],
+  "keywords": [
+    "carrot",
+    "ai",
+    "assistant",
+    "local",
+    "ollama",
+    "speech"
+  ],
   "author": "Carrot Community",
   "license": "MIT",
+  "homepage": "https://github.com/ar3116-sketch/carrot",
   "devDependencies": {
     "electron": "^30.0.0",
     "electron-builder": "^24.9.1"
@@ -18,10 +26,6 @@
   "build": {
     "appId": "com.carrot.ai",
     "productName": "Carrot",
-    "win": {
-      "target": "nsis",
-      "icon": "public/icon.ico"
-    },
     "directories": {
       "output": "dist"
     },
@@ -30,11 +34,60 @@
       "preload.js",
       "public/**/*"
     ],
-    "extraFiles": [
+    "extraResources": [
       {
-        "from": "../assets/ollama-setup.exe",
-        "to": "assets/ollama-setup.exe"
+        "from": "../dist/backend/carrot-backend",
+        "to": "backend/carrot-backend"
+      },
+      {
+        "from": "../dist/pw-browsers",
+        "to": "pw-browsers"
       }
-    ]
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "public/icon.ico",
+      "extraResources": [
+        {
+          "from": "../assets/ollama-setup.exe",
+          "to": "assets/ollama-setup.exe"
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false,
+      "include": "build/installer.nsh"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "public/icon.png",
+      "category": "public.app-category.productivity"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "icon": "public/icon.png",
+      "category": "Utility",
+      "maintainer": "Carrot Community <carrot@users.noreply.github.com>"
+    },
+    "deb": {
+      "depends": [
+        "libnotify4",
+        "libxtst6",
+        "libnss3",
+        "libatspi2.0-0",
+        "libgtk-3-0",
+        "libsecret-1-0",
+        "libportaudio2"
+      ]
+    }
   }
 }

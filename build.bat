@@ -1,40 +1,21 @@
 @echo off
 echo ============================================
-echo  Carrot Desktop App - Build Script
+echo  Carrot Desktop App - Build Script (Windows)
 echo ============================================
 echo.
 
-echo [1/6] Installing Python dependencies...
+echo [1/3] Installing Python dependencies...
 pip install -e . --quiet
+pip install pyinstaller --quiet
 
-echo [2/6] Downloading bundled Ollama installer...
+echo [2/3] Building one-click installer (backend freeze + Electron)...
 python scripts\build_installer.py
 
-echo [3/6] Building offline editor bundles (Monaco, Milkdown)...
-cd webvendor
-call npm install --quiet
-call npm run build
-cd ..
-
-echo [4/6] Installing Node.js dependencies...
-cd gui
-npm install --quiet
-cd ..
-
-echo [5/6] Building Electron desktop app...
-cd gui
-npm run dist
-cd ..
-
-echo [6/6] Done!
+echo [3/3] Done!
 echo.
-echo To run Carrot:
-echo   - Web UI:    python -m carrot.app   (then open http://127.0.0.1:8181)
-echo   - Desktop:   cd gui ^&^& npm start
-echo   - CLI:       python -m carrot.main search "5 months ago bench press"
-echo.
-echo Installer output: gui\dist\Carrot Setup.exe
-echo On first launch Carrot installs Ollama and pulls gemma4:e4b automatically.
+echo Installer output: gui\dist\Carrot Setup 0.3.0.exe
+echo On first launch Carrot installs Ollama (CUDA + ROCm included) and
+echo pulls the model chosen on the setup splash.
 echo.
 
 pause

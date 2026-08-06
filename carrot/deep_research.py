@@ -17,7 +17,6 @@ import time
 from datetime import datetime, timedelta
 
 import httpx
-from duckduckgo_search import DDGS
 
 from carrot.database import get_db
 from carrot.ollama_client import OllamaClient, ThinkTagStreamFilter
@@ -117,16 +116,13 @@ def derive_intents(client: OllamaClient, model: str, activity: dict) -> list:
 # ===== researcher =====
 
 def search_topic(topic: str, max_results: int = RESULTS_PER_TOPIC) -> list:
-    """DuckDuckGo search for one topic; returns [{title, url, snippet}]."""
-    try:
-        with DDGS() as ddgs:
-            results = list(ddgs.text(topic, max_results=max_results))
-        return [
-            {"title": r.get("title", ""), "url": r.get("href", ""), "snippet": r.get("body", "")}
-            for r in results
-        ]
-    except Exception:
-        return []
+    """Web search for one topic; returns [{title, url, snippet}].
+
+    Goes through carrot.websearch so this gets the same relevance
+    filtering, junk-URL rejection, and Wikipedia fallback as Research.
+    """
+    from carrot import websearch
+    return websearch.search_all(topic, max_results=max_results)
 
 
 def fetch_page_text(url: str, max_chars: int = PAGE_CHARS) -> str:

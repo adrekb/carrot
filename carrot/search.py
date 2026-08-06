@@ -134,7 +134,15 @@ def classify_query(query: str) -> Dict[str, Any]:
     return client.classify_query(query)
 
 
-def search_conversations(query: str, limit: int = 20, hybrid_weight: float = 0.5):
+def search_conversations(query: str, limit: int = 20, hybrid_weight: float = 0.5,
+                        workspace_id: str = ""):
+    """Search past messages, optionally restricted to one workspace.
+
+    The workspace filter is a subquery on the conversation id rather than a
+    post-filter, so the FTS limit applies to results the caller can actually
+    see — otherwise scoping to a small project would return two hits out of a
+    sixty-row candidate window.
+    """
     time_info = parse_time_offset(query)
     if time_info:
         keywords = extract_keywords(query)
@@ -157,6 +165,12 @@ def search_conversations(query: str, limit: int = 20, hybrid_weight: float = 0.5
     if not keywords:
         return {"results": [], "query": query, "time_range": None}
 
+    from . import workspaces as workspaces_mod
+
+    scope_sql, scope_params = workspaces_mod.scope_clause(
+        workspaces_mod.KIND_CONVERSATION, workspace_id, "m.conversation_id"
+    )
+
     conn = get_db()
     if time_info:
         rows = conn.execute(
@@ -168,10 +182,11 @@ def search_conversations(query: str, limit: int = 20, hybrid_weight: float = 0.5
             WHERE m.messages_fts MATCH ?
               AND m.timestamp >= ?
               AND m.timestamp <= ?
+            """ + scope_sql + """
             ORDER BY rank
             LIMIT ?
             """,
-            (keywords, start, end, limit * 3),
+            (keywords, start, end, *scope_params, limit * 3),
         ).fetchall()
     else:
         rows = conn.execute(
@@ -181,10 +196,11 @@ def search_conversations(query: str, limit: int = 20, hybrid_weight: float = 0.5
             FROM messages_fts m
             JOIN conversations c ON m.conversation_id = c.id
             WHERE m.messages_fts MATCH ?
+            """ + scope_sql + """
             ORDER BY rank
             LIMIT ?
             """,
-            (keywords, limit * 3),
+            (keywords, *scope_params, limit * 3),
         ).fetchall()
 
     fts_results = []

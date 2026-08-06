@@ -2,6 +2,15 @@
 let currentTab = 'dashboard';
 let currentConversationId = null;
 let currentModel = null;
+// The provider that serves `currentModel`. Sent with every turn so the server
+// never has to guess: a name like "mistral-medium" is a hosted model to one
+// provider and a pulled tag to Ollama, and guessing wrong routed chat to a
+// model that was not there.
+let currentProvider = null;
+// A chat that is answered but not remembered. Per-conversation rather than a
+// global setting, because the reason to want one is usually a single question
+// rather than a change of policy.
+let temporaryChat = false;
 let speakReplies = false;
 let mediaRecorder = null;
 let recordedChunks = [];
@@ -18,19 +27,46 @@ function escHtml(str) {
     return d.innerHTML;
 }
 
+// The backend injects the session token into this page's <head>. It is the
+// only way to obtain it, and the same-origin policy is what keeps another
+// origin from reading it — so every API call has to carry it.
+const CARROT_TOKEN = (document.querySelector('meta[name="carrot-token"]') || {}).content || '';
+
+function authHeaders(extra = {}) {
+    const headers = { 'Content-Type': 'application/json', ...extra };
+    if (CARROT_TOKEN) headers['X-Carrot-Token'] = CARROT_TOKEN;
+    return headers;
+}
+
+// EventSource cannot set headers, so SSE URLs carry the token as a query param.
+function tokenUrl(path) {
+    if (!CARROT_TOKEN) return path;
+    return path + (path.includes('?') ? '&' : '?') + 'carrot_token=' + encodeURIComponent(CARROT_TOKEN);
+}
+
 async function api(path, options = {}) {
     const resp = await fetch(path, {
-        headers: { 'Content-Type': 'application/json' },
         ...options,
+        headers: authHeaders(options.headers || {}),
     });
     if (!resp.ok) {
         let detail = resp.statusText;
+        let raw = null;
         try {
             const d = (await resp.json()).detail;
+            raw = d;
             if (typeof d === 'string') detail = d;
+            else if (d && d.message) detail = d.message;
             else if (d) detail = Array.isArray(d) ? (d[0] && d[0].msg ? d.map(x => x.msg).join('; ') : JSON.stringify(d)) : String(d);
         } catch (_) {}
-        throw new Error(detail);
+        // Carry the status and the structured detail: a 428 is the backend
+        // asking for confirmation, not a failure, and the caller needs the
+        // reasons to show. Losing them turned an object detail into
+        // "[object Object]".
+        const err = new Error(detail);
+        err.status = resp.status;
+        err.detail = raw;
+        throw err;
     }
     return resp.json();
 }
@@ -80,11 +116,20 @@ function switchTab(tab) {
         chats: loadConversations,
         notes: loadNotes,
         code: loadCodeTab,
+        planner: loadPlanner,
         goals: loadGoals,
         reminders: loadReminders,
         assignments: loadAssignments,
         extensions: loadExtensions,
+        hub: loadHub,
+        research: () => loadResearch(),
+        agent: () => loadAgent(),
+        workspaces: () => loadWorkspaces(),
+        help: () => loadHelp(),
         leaderboard: loadLeaderboard,
+        memory: () => loadMemory(),
+        files: () => loadIndex(),
+        inbox: () => refreshNotifications(),
     };
     if (loaders[tab]) loaders[tab]();
 }
@@ -168,6 +213,17 @@ function clearActiveSkill() {
 }
 
 // ===== Status / engine =====
+async function showBuildVersion() {
+    try {
+        const h = await api('/api/health');
+        const el = document.getElementById('brand-sub');
+        if (el && h.version) {
+            el.textContent = `v${h.version}`;
+            el.title = `Carrot ${h.version} · assets ${h.assets || '?'}`;
+        }
+    } catch (_) { /* leave the placeholder */ }
+}
+
 async function refreshStatus() {
     const dot = document.getElementById('engine-dot');
     const label = document.getElementById('engine-label');
@@ -233,9 +289,19 @@ async function setRecapTime(value) {
 async function loadModels() {
     try {
         const data = await api('/api/models');
-        currentModel = data.active_model;
+        // The label has to show what chat *actually* runs on. `active_model` is
+        // only the Ollama default, so reading it here made a pinned cloud model
+        // silently revert to the local one in the picker on every refresh.
+        if (data.chat_local === false && data.chat_model) {
+            currentModel = data.chat_model;
+            currentProvider = data.chat_provider || null;
+        } else {
+            currentModel = data.active_model;
+            currentProvider = 'ollama';
+        }
         document.getElementById('model-label').textContent = currentModel;
         renderModelPop(data);
+        renderEmptyStateLine();
     } catch (_) {
         document.getElementById('model-label').textContent = 'no engine';
     }
@@ -244,21 +310,77 @@ async function loadModels() {
 function renderModelPop(data) {
     const installedEl = document.getElementById('model-installed');
     const suggestedEl = document.getElementById('model-suggested');
+    const remoteEl = document.getElementById('model-remote');
     installedEl.innerHTML = '';
     suggestedEl.innerHTML = '';
+    if (remoteEl) remoteEl.innerHTML = '';
+
+    // A local model is "current" only when chat isn't pinned to a provider.
+    const localActive = data.chat_local !== false ? data.active_model : null;
 
     if (!data.installed.length) {
         installedEl.innerHTML = '<div class="empty" style="padding:4px 9px">No models installed yet.</div>';
     }
     for (const m of data.installed) {
         const row = document.createElement('div');
-        row.className = 'model-row' + (m.name === data.active_model ? ' active' : '');
+        row.className = 'model-row' + (m.name === localActive ? ' active' : '');
         row.innerHTML = `
             <span class="m-name">${escHtml(m.name)}</span>
             <span class="m-meta">${escHtml(m.parameter_size || '')} ${fmtBytes(m.size)}</span>
-            ${m.name === data.active_model ? '<svg class="ico m-check"><use href="#i-check"/></svg>' : ''}`;
+            ${m.name === localActive ? '<svg class="ico m-check"><use href="#i-check"/></svg>' : ''}`;
         row.onclick = () => selectModel(m.name);
         installedEl.appendChild(row);
+    }
+
+    // Models from providers you've configured — the key is already saved,
+    // so they belong in the same picker as the local ones.
+    if (remoteEl) {
+        for (const group of (data.remote || [])) {
+            const head = document.createElement('div');
+            head.className = 'pop-section';
+            head.textContent = group.label;
+            remoteEl.appendChild(head);
+
+            for (const name of group.models) {
+                const isActive = data.chat_local === false
+                    && data.chat_provider === group.provider && data.chat_model === name;
+                const row = document.createElement('div');
+                row.className = 'model-row' + (isActive ? ' active' : '');
+                row.innerHTML = `
+                    <span class="m-name">${escHtml(name)}</span>
+                    <span class="m-meta">cloud</span>
+                    ${isActive ? '<svg class="ico m-check"><use href="#i-check"/></svg>' : ''}`;
+                row.onclick = () => selectRemoteModel(group.provider, name);
+                remoteEl.appendChild(row);
+            }
+
+            // Listing can fail while the provider still works fine. Say why,
+            // and let the model be named by hand instead of dead-ending.
+            if (group.error) {
+                const why = document.createElement('div');
+                why.className = 'model-note';
+                why.textContent = /401|403|unauthor/i.test(group.error)
+                    ? 'Key rejected — check it in Settings → Providers.'
+                    : `Could not list models: ${group.error}`.slice(0, 120);
+                remoteEl.appendChild(why);
+            }
+            if (group.error || !group.models.length) {
+                const row = document.createElement('div');
+                row.className = 'pop-custom';
+                row.innerHTML = `
+                    <input type="text" placeholder="type a ${escHtml(group.label)} model name"
+                           id="remote-custom-${escHtml(group.provider)}">
+                    <button class="btn btn-ghost">Use</button>`;
+                const input = row.querySelector('input');
+                const use = () => {
+                    const name = input.value.trim();
+                    if (name) selectRemoteModel(group.provider, name);
+                };
+                input.onkeydown = (e) => { if (e.key === 'Enter') use(); };
+                row.querySelector('button').onclick = use;
+                remoteEl.appendChild(row);
+            }
+        }
     }
 
     const notInstalled = data.suggested.filter(m => !m.installed);
@@ -281,15 +403,64 @@ function renderModelPop(data) {
     }
 }
 
+// Popovers above the command bar are clamped to the space that actually
+// exists. A fixed max-height ran off the top of the screen on short
+// windows, leaving options you could see but never scroll to.
+function fitPopoverAbove(popId, anchorId, gap = 10, floor = 170) {
+    const pop = document.getElementById(popId);
+    const anchor = document.getElementById(anchorId);
+    if (!pop || !anchor) return;
+    const room = anchor.getBoundingClientRect().top - gap - 14;
+    pop.style.maxHeight = Math.max(floor, Math.min(460, room)) + 'px';
+}
+
 function toggleModelPop() {
-    document.getElementById('model-pop').classList.toggle('hidden');
+    const pop = document.getElementById('model-pop');
+    const opening = pop.classList.contains('hidden');
+    pop.classList.toggle('hidden');
+    if (opening) fitPopoverAbove('model-pop', 'model-btn');
+}
+
+// Re-clamp on resize so a popover left open stays reachable.
+window.addEventListener('resize', () => {
+    if (!document.getElementById('model-pop')?.classList.contains('hidden')) {
+        fitPopoverAbove('model-pop', 'model-btn');
+    }
+    if (!document.getElementById('search-pop')?.classList.contains('hidden')) {
+        fitPopoverAbove('search-pop', 'search-btn');
+    }
+});
+
+// Picking a cloud model pins the 'chat' task to that provider — the same
+// mechanism the Task Routing table uses, so the two never disagree.
+async function selectRemoteModel(provider, model) {
+    try {
+        await api('/api/router/route', {
+            method: 'PUT',
+            body: JSON.stringify({ task: 'chat', provider, model }),
+        });
+        currentModel = model;
+        currentProvider = provider;
+        document.getElementById('model-label').textContent = model;
+        renderEmptyStateLine();
+        document.getElementById('model-pop').classList.add('hidden');
+        loadModels();
+        refreshStatus();
+        if (typeof loadRouting === 'function') loadRouting();
+    } catch (e) {
+        alert('Could not switch to that model: ' + e.message);
+    }
 }
 
 async function selectModel(name) {
     try {
+        // Selecting a local model also releases any cloud pin on chat.
+        await api('/api/router/route/chat', { method: 'DELETE' }).catch(() => {});
         await api('/api/models/select', { method: 'POST', body: JSON.stringify({ model: name }) });
         currentModel = name;
+        currentProvider = 'ollama';
         document.getElementById('model-label').textContent = name;
+        renderEmptyStateLine();
         document.getElementById('model-pop').classList.add('hidden');
         loadModels();
         refreshStatus();
@@ -318,7 +489,7 @@ async function pullModel(name) {
     try {
         const resp = await fetch('/api/models/pull', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: authHeaders(),
             body: JSON.stringify({ model: name }),
         });
         if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).detail || resp.statusText);
@@ -366,6 +537,68 @@ function clearChatEmpty() {
     if (empty) empty.remove();
 }
 
+// The sources behind an answer, as cards above it.
+//
+// The trace has always listed the URLs, but as debug output in a collapsed
+// panel — so an answer that had read four outlets looked exactly like one it
+// made up. These say the same thing where it can be read: outlet, headline,
+// date, clickable. Rendered when the search returns, before the answer starts,
+// because watching the sources arrive is most of the reassurance.
+function showSources(assistantEl, contentEl, sources) {
+    if (!sources || !sources.length) return;
+    let rail = assistantEl.querySelector('.source-cards');
+    if (!rail) {
+        rail = document.createElement('div');
+        rail.className = 'source-cards';
+        rail._seen = [];
+        assistantEl.insertBefore(rail, contentEl);
+    }
+
+    // Every source from every round is kept, and the three shown are chosen
+    // from all of them each time. Filling the row first-come put the three
+    // index pages from an opening broad search on screen and left the dated
+    // article a later round found — the one the answer actually quoted — off
+    // it. Articles first, then original order within each group.
+    const known = new Set(rail._seen.map(s => s.url));
+    for (const source of sources) {
+        if (source && source.url && !known.has(source.url)) {
+            known.add(source.url);
+            rail._seen.push(source);
+        }
+    }
+    // Three, and no more. A search returns six per round; showing all of them
+    // pushed the answer far enough down that it looked like there wasn't one.
+    // The rest are not lost — everything the answer used is cited inline.
+    const MAX_CARDS = 3;
+    const best = rail._seen
+        .map((s, i) => [s.kind === 'front' ? 1 : 0, i, s])
+        .sort((a, b) => a[0] - b[0] || a[1] - b[1])
+        .slice(0, MAX_CARDS)
+        .map(triple => triple[2]);
+
+    rail.textContent = '';
+    for (const source of best) {
+        const card = document.createElement('a');
+        card.className = 'source-card';
+        card.href = source.url;
+        card.target = '_blank';
+        card.rel = 'noopener noreferrer';
+        // Its own hostname, not a remote favicon service: a card that phones
+        // out to fetch an icon leaks every source the user was shown.
+        const site = source.site || (() => {
+            try { return new URL(source.url).hostname.replace(/^www\./, ''); }
+            catch (_) { return source.url; }
+        })();
+        card.innerHTML =
+            `<div class="source-site"><span class="source-name">${escHtml(site)}</span>`
+            + (source.kind === 'front' ? '<span class="source-index">index</span>' : '')
+            + `</div>`
+            + `<div class="source-title">${escHtml(source.title || source.url)}</div>`
+            + (source.date ? `<div class="source-date">${escHtml(source.date)}</div>` : '');
+        rail.appendChild(card);
+    }
+}
+
 function appendMessage(role, content) {
     clearChatEmpty();
     const messagesEl = document.getElementById('chat-messages');
@@ -383,16 +616,206 @@ function appendMessage(role, content) {
 async function sendChat() {
     const input = document.getElementById('cmd-input');
     const msg = input.value.trim();
-    if (!msg) return;
+    // An attachment on its own is a valid turn ("what is this?").
+    if (!msg && !pendingAttachments.length) return;
+    const attachments = pendingAttachments.slice();
     input.value = '';
     hideSkillPop();
     switchTab('workspace');
-    appendMessage('user', msg);
+    appendMessage('user', msg + (attachments.length
+        ? `\n\n_${attachments.map(a => a.name).join(', ')}_` : ''));
+    clearAttachments();
     if (!currentConversationId) {
-        document.getElementById('chat-title').textContent = msg.slice(0, 42);
+        document.getElementById('chat-title').textContent = (msg || attachments[0].name).slice(0, 42);
     }
 
-    const skill = activeSkill;
+    await streamTurn('/api/chat/stream', {
+        message: msg || 'What is in the attached file?',
+        attachments: attachments.map(a => ({ name: a.name, mime: a.mime, data: a.data })),
+        conversation_id: currentConversationId,
+        model: currentModel,
+        provider: currentProvider,
+        temporary: temporaryChat,
+        skill: activeSkill ? activeSkill.slug : null,
+        search_mode: currentSearchMode,
+    }, activeSkill);
+}
+
+// ===== Attachments =====
+// Images go to the model as images (vision models only — the server says so
+// plainly rather than dropping them); PDFs and text files are extracted
+// server-side and folded into the prompt, so they work with any model.
+
+let pendingAttachments = [];
+const ATTACH_MAX_BYTES = 20 * 1024 * 1024;
+
+function attachIcon(mime, name) {
+    if ((mime || '').startsWith('image/')) return 'i-image';
+    if ((mime || '') === 'application/pdf' || /\.pdf$/i.test(name || '')) return 'i-file-pdf';
+    return 'i-doc';
+}
+
+function renderAttachTray() {
+    const tray = document.getElementById('attach-tray');
+    if (!tray) return;
+    tray.classList.toggle('hidden', !pendingAttachments.length);
+    tray.innerHTML = pendingAttachments.map((a, i) => `
+        <span class="attach-chip">
+          ${a.thumb
+            ? `<img src="${a.thumb}" alt="">`
+            : `<svg class="ico"><use href="#${attachIcon(a.mime, a.name)}"/></svg>`}
+          <span class="attach-name" title="${escHtml(a.name)}">${escHtml(a.name)}</span>
+          <span class="attach-size">${fmtBytes(a.bytes)}</span>
+          <button class="attach-x" title="Remove" onclick="removeAttachment(${i})">
+            <svg class="ico"><use href="#i-x"/></svg>
+          </button>
+        </span>`).join('');
+}
+
+function removeAttachment(index) {
+    pendingAttachments.splice(index, 1);
+    renderAttachTray();
+}
+
+function clearAttachments() {
+    pendingAttachments = [];
+    renderAttachTray();
+}
+
+async function addAttachments(files) {
+    for (const file of Array.from(files || [])) {
+        if (file.size > ATTACH_MAX_BYTES) {
+            alert(`${file.name} is too large (limit ${fmtBytes(ATTACH_MAX_BYTES)}).`);
+            continue;
+        }
+        const data = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+        });
+        const isImage = (file.type || '').startsWith('image/');
+        pendingAttachments.push({
+            name: file.name, mime: file.type, bytes: file.size, data,
+            thumb: isImage ? `data:${file.type};base64,${data}` : null,
+        });
+    }
+    renderAttachTray();
+}
+
+// Paste a screenshot straight into the composer, and drop files anywhere.
+document.addEventListener('paste', (e) => {
+    if (!e.clipboardData || currentTab !== 'workspace') return;
+    const files = Array.from(e.clipboardData.files || []);
+    if (files.length) { e.preventDefault(); addAttachments(files); }
+});
+// The drag overlay is switched on by a class, and every way a drag can end
+// has to switch it off again. Missing one of them used to leave a full-window
+// element on screen that swallowed clicks and keystrokes app-wide, with
+// nothing visible to explain it. The overlay is `pointer-events: none` now so
+// a miss is harmless, and these make a miss unlikely as well.
+function stopDropping() {
+    document.body.classList.remove('dropping');
+}
+document.addEventListener('dragover', (e) => {
+    if (e.dataTransfer && e.dataTransfer.types.includes('Files')) {
+        e.preventDefault();
+        document.body.classList.add('dropping');
+    }
+});
+document.addEventListener('dragleave', (e) => {
+    // relatedTarget is null when the pointer leaves the window — but not
+    // reliably, and not at all in some Chromium builds. Falling back to the
+    // pointer being outside the viewport catches the rest.
+    if (e.relatedTarget === null
+        || e.clientX <= 0 || e.clientY <= 0
+        || e.clientX >= window.innerWidth || e.clientY >= window.innerHeight) {
+        stopDropping();
+    }
+});
+// A drag cancelled with Escape, or released outside the window, fires neither
+// drop nor a useful dragleave. This is the one event that always arrives.
+document.addEventListener('dragend', stopDropping);
+window.addEventListener('blur', stopDropping);
+document.addEventListener('mousedown', stopDropping);
+document.addEventListener('drop', (e) => {
+    // Cleared before the early return, not after it: dropping something that
+    // is not a file — a text selection, a link — used to leave the overlay up.
+    stopDropping();
+    if (!e.dataTransfer || !e.dataTransfer.files.length) return;
+    e.preventDefault();
+    switchTab('workspace');
+    addAttachments(e.dataTransfer.files);
+});
+
+// ===== Search mode =====
+// Three postures for one question: never reach the web, reach it once, or keep
+// going until the gaps are closed. The choice is sent with the turn and also
+// saved, so it is both a per-message override and a default.
+
+let currentSearchMode = null;
+let searchModes = [];
+
+async function loadSearchModes() {
+    try {
+        const body = await api('/api/chat/search-modes');
+        searchModes = body.modes || [];
+        currentSearchMode = currentSearchMode || body.current;
+        renderSearchModes();
+    } catch (e) {
+        console.warn('search modes failed', e);
+    }
+}
+
+function searchModeLabel(id) {
+    const mode = searchModes.find(m => m.id === id);
+    return mode ? mode.label : 'Search';
+}
+
+function renderSearchModes() {
+    const label = document.getElementById('search-label');
+    if (label) label.textContent = searchModeLabel(currentSearchMode);
+
+    const button = document.getElementById('search-btn');
+    if (button) button.classList.toggle('search-off', currentSearchMode === 'off');
+
+    const list = document.getElementById('search-mode-list');
+    if (!list) return;
+    list.innerHTML = searchModes.map(mode => `
+        <button class="pop-item${mode.id === currentSearchMode ? ' active' : ''}"
+                onclick="setSearchMode('${escHtml(mode.id)}')">
+            <span class="pop-item-name">${escHtml(mode.label)}</span>
+            <span class="pop-item-sub">${escHtml(mode.help)}</span>
+        </button>`).join('');
+}
+
+function toggleSearchPop() {
+    const pop = document.getElementById('search-pop');
+    if (!pop) return;
+    const opening = pop.classList.contains('hidden');
+    pop.classList.toggle('hidden');
+    if (opening) fitPopoverAbove('search-pop', 'search-btn');
+}
+
+async function setSearchMode(id) {
+    currentSearchMode = id;
+    renderSearchModes();
+    document.getElementById('search-pop').classList.add('hidden');
+    // Persist as the default too — a user who turns search off for a private
+    // conversation means it, and should not have to turn it off again.
+    try {
+        await api('/api/config/chat_search_mode', {
+            method: 'PUT', body: JSON.stringify(id),
+        });
+    } catch (e) {
+        console.warn('could not save search mode', e);
+    }
+}
+
+// Renders one streamed turn into the chat view. Shared by the chat box and by
+// "send to agent" in Notes, so both get the same tool trace, reasoning panel
+// and approval prompts without duplicating any of it.
+async function streamTurn(url, payload, skill) {
     const assistantEl = appendMessage('assistant', '');
     const contentEl = assistantEl.querySelector('.content');
     contentEl.innerHTML = '<span class="caret">&nbsp;</span>';
@@ -433,15 +856,10 @@ async function sendChat() {
     }
 
     try {
-        const resp = await fetch('/api/chat/stream', {
+        const resp = await fetch(url, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                message: msg,
-                conversation_id: currentConversationId,
-                model: currentModel,
-                skill: skill ? skill.slug : null,
-            }),
+            headers: authHeaders(),
+            body: JSON.stringify(payload),
         });
         if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).detail || resp.statusText);
 
@@ -449,6 +867,7 @@ async function sendChat() {
         const decoder = new TextDecoder();
         let buffer = '';
         let full = '';
+        const pendingArtifacts = [];
         while (true) {
             const { done, value } = await reader.read();
             if (done) break;
@@ -458,15 +877,76 @@ async function sendChat() {
                 const raw = buffer.slice(0, idx).trim();
                 buffer = buffer.slice(idx + 2);
                 if (!raw.startsWith('data:')) continue;
-                const payload = JSON.parse(raw.slice(5).trim());
+                // One malformed frame used to throw out of the whole read loop
+                // and discard every token that had already arrived. Skip it.
+                let payload;
+                try {
+                    payload = JSON.parse(raw.slice(5).trim());
+                } catch (err) {
+                    continue;
+                }
                 const box = document.getElementById('chat-messages');
                 if (payload.skill) toolLine('skill active: ' + payload.skill.name, 'intent');
+                if (payload.route) {
+                    // Always say where the answer came from — local vs hosted is
+                    // the single most important thing to be honest about here.
+                    const where = payload.route.local ? 'on-device' : payload.route.provider;
+                    toolLine(`${payload.route.model} (${where})`, 'intent');
+                }
+                if (payload.document) {
+                    // A doc send reports what it actually attached, before any
+                    // tokens arrive — a citation that silently failed is worse
+                    // than useless, so failures are shown too.
+                    for (const ref of payload.document.references || []) {
+                        toolLine(`${ref.raw} ${ref.ok ? '✓' : '✗'} ${ref.detail}`,
+                                 ref.ok ? 'search' : 'error');
+                    }
+                    for (const warning of payload.document.warnings || []) {
+                        toolLine(warning, 'error');
+                    }
+                }
                 if (payload.tool) {
-                    toolLine(`tool → ${payload.tool.name}(${JSON.stringify(payload.tool.args)})`, 'search');
+                    // A rejected call used to print exactly like a real one and
+                    // then show no result — four of those in a row is what a
+                    // dead turn looked like from the outside, with nothing on
+                    // screen to say why. Say why.
+                    const kind = payload.tool.rejected ? 'error' : 'search';
+                    const why = payload.tool.rejected
+                        ? `  ✗ not run: ${payload.tool.reason || 'refused'}` : '';
+                    toolLine(`tool → ${payload.tool.name}(${JSON.stringify(payload.tool.args)})${why}`, kind);
+                }
+                if (payload.provider_error) {
+                    toolLine(`${payload.route ? '' : ''}provider stopped the turn: `
+                             + payload.provider_error.message, 'error');
                 }
                 if (payload.tool_result) {
-                    toolLine(`  ← ${String(payload.tool_result.result).slice(0, 160)}`, 'stage');
+                    const raw = String(payload.tool_result.result);
+                    // show_artifact answers with a marker the UI swaps for the
+                    // rendered thing; the raw marker is noise in the trace.
+                    for (const id of artifactIdsIn(raw)) pendingArtifacts.push(id);
+                    toolLine(`  ← ${stripArtifactMarkers(raw).slice(0, 160)}`, 'stage');
                 }
+                if (payload.approval_request) {
+                    // The line goes in the trace first, because that is where
+                    // the user is looking. The card is in the corner and can
+                    // be read past — and a card read past is a turn that dies
+                    // at the timeout with nothing on screen explaining why.
+                    toolLine(`  ⏸ waiting for you: ${payload.approval_request.summary}`
+                             + ' — see the card, bottom right', 'intent');
+                    showApprovalPrompt(payload.approval_request);
+                }
+                if (payload.approval_resolved) {
+                    dismissApprovalPrompt(payload.approval_resolved.id);
+                    if (payload.approval_resolved.decision === 'timeout') {
+                        toolLine('  ⏸ nobody answered, so that action did not run.'
+                                 + ' Settings → Security can stop the asking.', 'error');
+                    }
+                }
+                // What the answer is about to be built from, shown before the
+                // answer arrives. The trace already listed the URLs, but as
+                // debug output nobody reads — these are the sources as a
+                // person would want them: outlet, headline, date, clickable.
+                if (payload.sources) showSources(assistantEl, contentEl, payload.sources);
                 if (payload.thinking) {
                     ensureThink();
                     thinkBody.textContent += payload.thinking;
@@ -486,7 +966,20 @@ async function sendChat() {
         }
         finishThink();
         contentEl.classList.add('md');
-        contentEl.innerHTML = full ? mdToHtml(full) : '(no response)';
+        // "(no response)" told the user nothing. The backend now guarantees
+        // text on every path, so reaching here means the connection itself
+        // died mid-turn — say that, since it is the one thing the browser
+        // knows and the server never will.
+        contentEl.innerHTML = full ? mdToHtml(full) : mdToHtml(
+            'The connection to Carrot ended before any answer arrived. The '
+            + 'backend may have restarted — check that it is running, then ask '
+            + 'again. Anything the turn found is in the trace above.');
+        // Charts and diagrams land under the finished answer, in the order the
+        // model produced them.
+        if (pendingArtifacts.length && typeof mountArtifacts === 'function') {
+            mountArtifacts(contentEl.parentElement,
+                           pendingArtifacts.map(id => `[[carrot:artifact:${id}]]`).join(' '));
+        }
         if (speakReplies && full) speakText(full);
     } catch (e) {
         contentEl.textContent = e.message;
@@ -503,8 +996,9 @@ function newChat() {
     messagesEl.innerHTML = `
         <div class="chat-empty" id="chat-empty">
             <span class="logo-mask big"></span>
-            <p>Everything runs on your machine. Ask anything below.</p>
+            <p id="chat-empty-line">Ask anything below.</p>
         </div>`;
+    renderEmptyStateLine();
     switchTab('workspace');
     focusCmd();
 }
@@ -688,7 +1182,20 @@ async function openConversation(convId) {
     const messagesEl = document.getElementById('chat-messages');
     messagesEl.innerHTML = '';
     document.getElementById('chat-title').textContent = conv.title || 'Untitled';
-    for (const m of conv.messages) appendMessage(m.role, m.content);
+    const rendered = conv.messages.map(m => appendMessage(m.role, m.content));
+    // Charts made earlier in this conversation are part of it — reopening a
+    // chat and finding the figures gone would make them feel disposable.
+    if (typeof mountArtifacts === 'function') {
+        try {
+            const { artifacts } = await api(`/api/conversations/${convId}/artifacts`);
+            const last = rendered[rendered.length - 1];
+            const host = last && last.querySelector('.content');
+            if (host && artifacts && artifacts.length) {
+                mountArtifacts(host.parentElement,
+                    artifacts.map(a => `[[carrot:artifact:${a.id}]]`).join(' '));
+            }
+        } catch (_) { /* older conversation, or none stored */ }
+    }
     switchTab('workspace');
 }
 
@@ -926,12 +1433,35 @@ async function runTerminal() {
     if (!cmd) return;
     input.value = '';
     termAppend(`$ ${cmd}\n`, 't-cmd');
+    await executeTerminal(cmd, false);
+}
+
+// The server answers 428 for commands it judges destructive. That is a
+// question, not a failure — ask, then re-send with confirm set.
+async function executeTerminal(cmd, confirm) {
     try {
-        const resp = await api('/api/terminal/execute', {
+        const resp = await fetch('/api/terminal/execute', {
             method: 'POST',
-            body: JSON.stringify({ command: cmd }),
+            headers: authHeaders(),
+            body: JSON.stringify({ command: cmd, confirm: !!confirm }),
         });
-        termAppend((resp.output || '') + '\n');
+
+        if (resp.status === 428) {
+            const detail = (await resp.json()).detail || {};
+            const reasons = (detail.reasons || []).join(', ');
+            termAppend(`⚠ ${reasons || 'this command looks destructive'}\n`, 't-warn');
+            if (window.confirm(`This command ${reasons || 'looks destructive'}.\n\n${cmd}\n\nRun it anyway?`)) {
+                return executeTerminal(cmd, true);
+            }
+            termAppend('cancelled\n', 't-err');
+            return;
+        }
+        if (!resp.ok) {
+            const detail = (await resp.json().catch(() => ({}))).detail;
+            throw new Error(typeof detail === 'string' ? detail : resp.statusText);
+        }
+        const data = await resp.json();
+        termAppend((data.output || '') + '\n');
     } catch (e) {
         termAppend('error: ' + e.message + '\n', 't-err');
     }
@@ -1047,7 +1577,7 @@ async function runRecap() {
     try {
         const resp = await fetch('/api/recap/run/stream', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: authHeaders(),
             body: JSON.stringify({}),
         });
         if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).detail || resp.statusText);
@@ -1197,49 +1727,211 @@ async function checkBootstrap() {
     } catch (_) { hideSplash(); }
 }
 
-function showSplash(s) {
+let splashModel = null; // model picked on the splash; null = stock default
+let splashHub = null;   // /api/hub payload, reused by the in-splash catalog
+
+async function showSplash(s) {
     document.getElementById('splash').classList.remove('hidden');
     const status = document.getElementById('splash-status');
     if (!s.ollama_installed) status.textContent = 'Ollama is not installed. Carrot can set it up for you.';
-    else if (!s.model_pulled) status.textContent = `Ollama is ready — now pull ${s.default_model}.`;
+    else if (!s.model_pulled) status.textContent = 'Ollama is ready — pick a model that fits your machine.';
     document.getElementById('splash-btn').classList.remove('hidden');
+    document.getElementById('splash-skip').classList.remove('hidden');
+    // Hardware-based picks from the Hub. New users shouldn't have to know
+    // which model or quantization suits their specs — show what fits, let
+    // experienced users skip, and link the full daily catalog.
+    try {
+        const hub = await api('/api/hub');
+        renderSplashPicks(hub);
+    } catch (_) { /* no picks — the default-model path still works */ }
+}
+
+function renderSplashPicks(hub) {
+    splashHub = hub;
+    const specsEl = document.getElementById('splash-specs');
+    const picksEl = document.getElementById('splash-picks');
+    const link = document.getElementById('splash-hub-link');
+    const s = hub.specs || {};
+    specsEl.textContent = `Detected: ${hubSpecLine(s)} — ${s.model_budget_gb} GB usable for models`;
+    specsEl.classList.remove('hidden');
+    link.classList.remove('hidden');
+
+    const recs = hub.recommendations || {};
+    if (!recs.best) return;
+    const picks = [{ role: 'Recommended', m: recs.best }];
+    if (recs.light && recs.light.id !== recs.best.id) picks.push({ role: 'Light & fast', m: recs.light });
+    const coding = (recs.by_use_case || {}).coding;
+    if (coding && !picks.some(p => p.m.id === coding.id)) picks.push({ role: 'For coding', m: coding });
+
+    picksEl.innerHTML = '';
+    picksEl.classList.remove('hidden');
+    for (const p of picks) {
+        const card = document.createElement('button');
+        card.type = 'button';
+        card.className = 'splash-pick';
+        card.dataset.model = p.m.id;
+        card.innerHTML = `
+            <span class="splash-pick-role">${escHtml(p.role)}</span>
+            <strong>${escHtml(p.m.label || p.m.id)}</strong>
+            <span class="muted small">${p.m.download_gb} GB · ${escHtml(p.m.quant || '')}${p.m.est_tps ? ` · ~${p.m.est_tps} tok/s` : ''} · ${escHtml(p.m.blurb || '')}</span>`;
+        card.onclick = () => {
+            splashModel = p.m.id;
+            picksEl.querySelectorAll('.splash-pick').forEach(el =>
+                el.classList.toggle('selected', el.dataset.model === splashModel));
+        };
+        picksEl.appendChild(card);
+    }
+    // Preselect the recommendation so plain "Set up now" does the right thing.
+    splashModel = recs.best.id;
+    picksEl.querySelector('.splash-pick').classList.add('selected');
 }
 
 function hideSplash() { document.getElementById('splash').classList.add('hidden'); }
 
-async function runBootstrap() {
+// The full catalog, right on the setup screen — including the models that
+// do NOT fit, each saying why. Seeing "needs 12 GB, you have 3.9" is more
+// reassuring than a short list with no explanation.
+function toggleSplashCatalog() {
+    const el = document.getElementById('splash-catalog');
+    const link = document.getElementById('splash-hub-link');
+    if (!el.classList.contains('hidden')) {
+        el.classList.add('hidden');
+        link.textContent = 'See every model and why some won\'t run here →';
+        return;
+    }
+    if (!splashHub) return;
+    const budget = (splashHub.specs || {}).model_budget_gb || 0;
+    const fitOrder = { great: 0, good: 1, tight: 2, too_big: 3 };
+    const models = [...(splashHub.models || [])].sort((a, b) =>
+        (fitOrder[a.fit] - fitOrder[b.fit]) || (a.min_mem_gb - b.min_mem_gb));
+    // Compact badge text — the full wording would squeeze out model names.
+    const SHORT_FIT = { great: 'Great', good: 'Good', tight: 'Tight', too_big: 'Too big' };
+    el.innerHTML = models.map(m => {
+        const why = m.fit === 'too_big'
+            ? `needs ${m.min_mem_gb} GB, you have ${budget}`
+            : (m.fit === 'tight'
+                ? `needs ${m.min_mem_gb} GB — slow`
+                : `${m.download_gb} GB${m.est_tps ? ` · ~${m.est_tps} tok/s` : ''}`);
+        return `
+          <button type="button" class="splash-cat-row fit-${m.fit}"
+                  ${m.fit === 'too_big' ? 'disabled' : `onclick="pickSplashModel('${escHtml(m.id)}')"`}>
+            <span class="splash-cat-name">${escHtml(m.label || m.id)}</span>
+            <span class="fit-badge fit-${m.fit}">${SHORT_FIT[m.fit] || m.fit}</span>
+            <span class="splash-cat-why">${escHtml(why)}</span>
+          </button>`;
+    }).join('');
+    el.classList.remove('hidden');
+    link.textContent = 'Hide the full catalog ←';
+}
+
+function pickSplashModel(id) {
+    splashModel = id;
+    // Reflect the choice in both the picks row and the catalog list.
+    document.querySelectorAll('#splash-picks .splash-pick').forEach(el =>
+        el.classList.toggle('selected', el.dataset.model === id));
+    document.querySelectorAll('#splash-catalog .splash-cat-row').forEach(el =>
+        el.classList.toggle('selected', el.textContent.trim().startsWith(
+            (splashHub.models.find(m => m.id === id) || {}).label || id)));
+    const status = document.getElementById('splash-status');
+    if (status) status.textContent = `${id} selected — press Set up now.`;
+}
+
+function skipModelChoice() {
+    // Experienced users: no picker, stock default, straight to setup.
+    splashModel = null;
+    runBootstrap();
+}
+
+function splashFailed(message) {
+    const btn = document.getElementById('splash-btn');
+    document.getElementById('splash-status').textContent = message;
+    document.getElementById('splash-detail').textContent = '';
+    btn.textContent = 'Retry';
+    btn.classList.remove('hidden');
+    document.getElementById('splash-skip').classList.remove('hidden');
+    document.getElementById('splash-picks').classList.remove('hidden');
+    document.getElementById('splash-hub-link').classList.remove('hidden');
+}
+
+// Setup streams over SSE so the bar tracks the actual download. A model
+// is gigabytes; a bar that jumps 30% -> 100% just looks frozen.
+function runBootstrap() {
     const btn = document.getElementById('splash-btn');
     const status = document.getElementById('splash-status');
+    const detail = document.getElementById('splash-detail');
     const bar = document.getElementById('splash-bar');
     btn.classList.add('hidden');
-    status.textContent = 'Installing Ollama and pulling the default model… this may take a while.';
-    bar.style.width = '30%';
-    try {
-        const result = await api('/api/bootstrap/run', { method: 'POST' });
-        bar.style.width = '100%';
-        if (result.error) {
-            status.textContent = result.error;
-            btn.classList.remove('hidden');
-        } else {
+    document.getElementById('splash-skip').classList.add('hidden');
+    document.getElementById('splash-picks').classList.add('hidden');
+    document.getElementById('splash-catalog').classList.add('hidden');
+    document.getElementById('splash-hub-link').classList.add('hidden');
+    status.textContent = 'Setting up…';
+    detail.textContent = '';
+    bar.style.width = '2%';
+
+    const url = tokenUrl('/api/bootstrap/stream'
+        + (splashModel ? `?model=${encodeURIComponent(splashModel)}` : ''));
+    const src = new EventSource(url);
+    let started = Date.now();
+
+    src.onmessage = (ev) => {
+        let p;
+        try { p = JSON.parse(ev.data); } catch (_) { return; }
+
+        if (p.type === 'status' || p.type === 'install') {
+            status.textContent = p.message || '';
+        } else if (p.type === 'download') {
+            // Downloading the Ollama installer itself.
+            const pct = p.total ? Math.round(p.downloaded / p.total * 100) : 0;
+            status.textContent = 'Downloading Ollama…';
+            bar.style.width = Math.max(pct * 0.2, 2) + '%';   // installer = first 20%
+            detail.textContent = `${fmtBytes(p.downloaded)} of ${fmtBytes(p.total)}`;
+        } else if (p.type === 'pull') {
+            status.textContent = `Downloading ${p.model || 'model'}…`;
+            if (p.total && p.completed != null) {
+                const pct = Math.round(p.completed / p.total * 100);
+                bar.style.width = (20 + pct * 0.8) + '%';      // model = remaining 80%
+                const secs = (Date.now() - started) / 1000;
+                const rate = secs > 2 ? ` · ${fmtBytes(p.completed / secs)}/s` : '';
+                detail.textContent = `${fmtBytes(p.completed)} of ${fmtBytes(p.total)} (${pct}%)${rate}`;
+            } else if (p.status) {
+                detail.textContent = p.status;
+            }
+        } else if (p.type === 'error') {
+            detail.textContent = p.message || '';
+        } else if (p.type === 'done') {
+            src.close();
+            if (p.error) { splashFailed(p.error); return; }
+            bar.style.width = '100%';
             status.textContent = 'Setup complete. Launching Carrot…';
+            detail.textContent = '';
             setTimeout(() => { hideSplash(); refreshStatus(); loadModels(); }, 900);
         }
-    } catch (e) {
-        status.textContent = e.message;
-        btn.classList.remove('hidden');
-    }
+    };
+
+    src.onerror = () => {
+        src.close();
+        splashFailed('Lost contact with Carrot during setup. Press Retry.');
+    };
 }
 
 // ===== Init =====
 document.addEventListener('DOMContentLoaded', async () => {
     await loadRecapConfig();
     await refreshStatus();
+    showBuildVersion();
     loadModels();
     loadSkillCatalog();
-    checkBootstrap();
+    loadSearchModes();
+    loadWorkspaces();
+    // Onboarding decides whether the bootstrap splash runs at all.
+    maybeShowOnboarding();
     switchTab('dashboard');
     loadTerminalHistory();
     setInterval(refreshStatus, 15000);
+    // The council chip lives in the composer, so its state has to be known
+    // from the first paint rather than only after a visit to Settings.
+    if (typeof loadConsensusPanel === 'function') loadConsensusPanel();
 
     // Ctrl+K focuses the command bar
     document.addEventListener('keydown', e => {
@@ -1259,3 +1951,254 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!cmdbar.contains(e.target)) hideSkillPop();
     });
 });
+
+// ===== First-run onboarding =====
+// Runs in front of the bootstrap splash. "Which kind of setup do you want"
+// and "which model should I download" are different questions, and asking
+// them together is what made first run confusing: a new user was shown a
+// list of quantized model names before anyone had explained what a model is.
+
+const ONBOARD_KEY_PAGES = {
+    anthropic: 'https://console.anthropic.com/settings/keys',
+    openai: 'https://platform.openai.com/api-keys',
+    openrouter: 'https://openrouter.ai/keys',
+    groq: 'https://console.groq.com/keys',
+    together: 'https://api.together.xyz/settings/api-keys',
+    deepseek: 'https://platform.deepseek.com/api_keys',
+    mistral: 'https://console.mistral.ai/api-keys',
+};
+
+function onboardStep(step) {
+    document.querySelectorAll('#onboard .onboard-step').forEach(el => {
+        el.classList.toggle('hidden', el.dataset.step !== step);
+    });
+    // Choosing to run locally used to close the whole flow immediately, which
+    // meant most people never saw where anything was. It goes to the tour now,
+    // and the model download starts behind it.
+    if (step === 'local') { startLocalSetup(); return; }
+    if (step === 'key') onboardLoadProviders();
+    if (step === 'subscription') onboardCheckSubscription();
+}
+
+let onboardingBootstrapStarted = false;
+
+function startLocalSetup() {
+    onboardingBootstrapStarted = true;
+    onboardStep('tour');
+}
+
+// ---------- "I want to use my own AI subscription" ----------
+//
+// Most people who reach this screen are already paying one of these companies
+// every month. Being told to go create a second, separately-billed developer
+// account is the worst five minutes in the app, and it is where people stop.
+
+async function onboardCheckSubscription() {
+    const status = document.getElementById('onboard-sub-status');
+    const select = document.getElementById('onboard-sub-provider');
+    if (!status || !select) return;
+    status.textContent = '';
+    try {
+        const state = await api(`/api/auth/status/${encodeURIComponent(select.value)}`);
+        if (state.signed_in) {
+            status.textContent = `Already signed in to ${select.value}.`;
+        } else if (!state.oauth_configured) {
+            // Saying so beats a button that fails for reasons nobody can see.
+            status.textContent = 'This copy of Carrot does not have sign-in details for '
+                + 'that provider yet, so an API key is the reliable path for now.';
+        }
+    } catch (_) { /* the screen still works without this */ }
+}
+
+async function startOnboardingSignIn() {
+    const select = document.getElementById('onboard-sub-provider');
+    const status = document.getElementById('onboard-sub-status');
+    const provider = select.value;
+    status.textContent = 'Opening the sign-in page…';
+    try {
+        await api(`/api/auth/mode/${encodeURIComponent(provider)}`,
+            { method: 'PUT', body: JSON.stringify({ mode: 'subscription' }) });
+        const started = await api(`/api/auth/login/${encodeURIComponent(provider)}`,
+            { method: 'POST' });
+        if (window.carrot?.openExternal) window.carrot.openExternal(started.url);
+        else window.open(started.url, '_blank', 'noopener');
+        status.textContent = 'Finish signing in in your browser, then come back here.';
+        pollOnboardingSignIn(provider, status);
+    } catch (e) {
+        status.textContent = e.detail || e.message;
+    }
+}
+
+function pollOnboardingSignIn(provider, status) {
+    let tries = 0;
+    const timer = setInterval(async () => {
+        tries += 1;
+        try {
+            const state = await api(`/api/auth/status/${encodeURIComponent(provider)}`);
+            if (state.signed_in) {
+                clearInterval(timer);
+                status.textContent = 'Signed in.';
+                onboardStep('tour');
+            }
+        } catch (_) { clearInterval(timer); }
+        if (tries > 90) clearInterval(timer);
+    }, 2000);
+}
+
+async function onboardLoadProviders() {
+    const select = document.getElementById('onboard-provider');
+    if (select.dataset.loaded) return;
+    select.dataset.loaded = '1';
+    // The hosted ones only. Offering "LM Studio (local)" on the screen for
+    // people who chose the cloud path is just noise.
+    let options = [
+        { id: 'anthropic', label: 'Anthropic (Claude)' },
+        { id: 'openai', label: 'OpenAI (GPT)' },
+    ];
+    try {
+        const body = await api('/api/router/providers');
+        for (const preset of (body.presets || [])) {
+            if (/local/i.test(preset.label || '')) continue;
+            if (!options.some(o => o.id === preset.id)) {
+                options.push({ id: preset.id, label: preset.label });
+            }
+        }
+    } catch (_) { /* the two built-ins are enough to get started */ }
+    select.innerHTML = options
+        .map(o => `<option value="${escHtml(o.id)}">${escHtml(o.label)}</option>`).join('');
+    onboardProviderChanged();
+}
+
+function onboardProviderChanged() {
+    const id = document.getElementById('onboard-provider').value;
+    const link = document.getElementById('onboard-key-link');
+    const url = ONBOARD_KEY_PAGES[id];
+    link.href = url || '#';
+    link.classList.toggle('hidden', !url);
+}
+
+async function saveOnboardingKey() {
+    const provider = document.getElementById('onboard-provider').value;
+    const key = document.getElementById('onboard-key').value.trim();
+    const status = document.getElementById('onboard-key-status');
+    const button = document.getElementById('onboard-key-btn');
+    if (!key) { status.textContent = 'Paste a key first.'; status.className = 'onboard-status bad'; return; }
+
+    button.disabled = true;
+    status.className = 'onboard-status';
+    status.textContent = 'Checking the key…';
+    try {
+        await api(`/api/router/providers/${encodeURIComponent(provider)}/key`, {
+            method: 'PUT', body: JSON.stringify({ api_key: key }),
+        });
+        // Saving a key that does not work is worse than not saving one: the
+        // failure surfaces later, in the middle of an answer. /test exists for
+        // exactly this and reports the provider's own error — listing models
+        // is not a check, because it falls back to a cached list and returns
+        // an `error` field rather than failing, so a garbage key looked fine.
+        const probe = await api(`/api/router/providers/${encodeURIComponent(provider)}/test`,
+                                { method: 'POST' });
+        if (!probe.ok) {
+            status.className = 'onboard-status bad';
+            status.textContent = 'That key did not work: ' + (probe.error || 'the provider rejected it');
+            return;
+        }
+        status.className = 'onboard-status good';
+        status.textContent = probe.models
+            ? `Working — ${probe.models} models available.`
+            : 'Working.';
+        await api(`/api/router/providers/${encodeURIComponent(provider)}/enabled`, {
+            method: 'PUT', body: JSON.stringify({ enabled: true }),
+        }).catch(() => {});
+        // Everyone ends on the tour, whichever path they took.
+        setTimeout(() => onboardStep('tour'), 1200);
+    } catch (e) {
+        status.className = 'onboard-status bad';
+        status.textContent = 'That key did not work: ' + e.message;
+    } finally {
+        button.disabled = false;
+    }
+}
+
+async function finishOnboarding(skipped, goTo) {
+    document.getElementById('onboard').classList.add('hidden');
+    try {
+        await api('/api/config/onboarding_done', { method: 'PUT', body: JSON.stringify(true) });
+    } catch (_) { /* it is only a "do not show again" flag */ }
+    if (goTo && typeof switchTab === 'function') {
+        // Landing on Help rather than being told where it is: the difference
+        // between knowing a page exists and having seen it.
+        switchTab(goTo);
+        return;
+    }
+    // Hand over to the model-download splash unless they skipped outright, or
+    // already chose a cloud provider and need no local model.
+    if (!skipped && onboardingBootstrapStarted && typeof checkBootstrap === 'function') {
+        checkBootstrap();
+    }
+}
+
+async function maybeShowOnboarding() {
+    let done = false;
+    try {
+        done = !!(await api('/api/config')).onboarding_done;
+    } catch (_) { done = true; }        // cannot ask: do not block the app
+    if (done) { checkBootstrap(); return; }
+    document.getElementById('onboard').classList.remove('hidden');
+    onboardStep('welcome');
+}
+
+// ===== Temporary chats =====
+//
+// No memory extraction, no rolling summary, no workspace filing, and deleted
+// on the next start. The banner is not decoration: a mode that silently
+// changes whether you are being remembered is a mode people forget they are
+// in, and the whole value here is knowing.
+
+function toggleTemporaryChat() {
+    // Switching mode mid-conversation would be a lie either way — the earlier
+    // turns are already remembered, or already not — so it starts a new one.
+    if (currentConversationId) newChat();
+    temporaryChat = !temporaryChat;
+    renderTemporaryState();
+}
+
+function renderTemporaryState() {
+    document.getElementById('temp-btn')?.classList.toggle('on', temporaryChat);
+    let banner = document.getElementById('temp-banner');
+    if (!temporaryChat) {
+        banner?.remove();
+        return;
+    }
+    if (banner) return;
+    const log = document.getElementById('chat-log') || document.getElementById('messages');
+    if (!log) return;
+    banner = document.createElement('div');
+    banner.id = 'temp-banner';
+    banner.className = 'temp-banner';
+    banner.innerHTML = `
+      <strong>Temporary chat.</strong> Nothing here is saved to memory, summarised,
+      or filed in a workspace, and the whole conversation is deleted when Carrot
+      next starts. Attachments you send are still processed normally.`;
+    log.prepend(banner);
+}
+
+// A new chat inherits the mode you are in, so the banner has to follow it.
+document.addEventListener('DOMContentLoaded', renderTemporaryState);
+
+// ===== "Everything runs on your machine" — only when it does =====
+//
+// The empty state used to say that unconditionally. With a hosted model
+// selected it was simply false, and a privacy claim that is false in the one
+// place people read it is worse than no claim at all.
+
+function renderEmptyStateLine() {
+    const line = document.getElementById('chat-empty-line');
+    if (!line) return;
+    const local = currentProvider === 'ollama' || currentProvider === null;
+    line.textContent = local
+        ? 'Everything runs on your machine. Ask anything below.'
+        : `Answers come from ${currentModel || 'a hosted model'} over the internet. `
+          + 'Ask anything below.';
+    line.classList.toggle('cloud', !local);
+}

@@ -22,6 +22,246 @@ Exposed via `GET /api/bootstrap/status` and `POST /api/bootstrap/run`; the web U
 ## Frontend: Glassmorphism Dashboard
 The web UI (`carrot/web/`) is a single-page glassmorphism dashboard: an animated aurora background with translucent, blurred panels and carrot-orange accents. A sidebar navigates between views (chat, search, terminal, notes, goals, reminders, recap, assignments, status, leaderboard). Chat streams tokens over SSE (`/api/chat/stream`), supports voice input (mic → whisper) and read-aloud replies (Kokoro). The Electron shell (`gui/main.js`) spawns the FastAPI backend and loads this UI from `http://127.0.0.1:8181`.
 
+## Memory Architecture
+
+Conversation search answers *"what did I say"*. Memory answers *"what is true about
+me"*. Three layers cooperate:
+
+**1. Structured memory (`memory.py`).** After each turn the model is asked to extract
+durable facts — preferences, decisions, stable attributes, ongoing projects. Three
+rules make this trustworthy rather than a hallucination store:
+
+- *Provenance is mandatory.* Every memory records the message and conversation it came
+  from. A memory with no source cannot be checked, so it is not worth keeping.
+- *Supersede, never overwrite.* A new value for an existing `(kind, subject)` marks the
+  old row `superseded` and links forward. History stays intact.
+- *The user is the authority.* Memories can be edited, pinned, or rejected from the
+  Memory tab; rejected subjects are excluded from future extraction.
+
+Relevant memories (plus anything pinned) are injected as a system block at the top of
+each chat turn.
+
+**2. Rolling summaries (`summarize.py`).** Chat history used to be a hard
+`messages[-20:]` slice, so long conversations silently forgot their own beginning.
+Everything older than the recent window is now folded into an incremental summary —
+each pass summarizes only the newly-aged-out messages, so cost stays flat no matter how
+long the conversation runs.
+
+**3. Vector store (`vectors.py`).** One table, namespaced by content type
+(`message` / `memory` / `chunk`), storing embeddings as packed float32 blobs rather
+than JSON — a 768-dim vector costs ~3KB instead of ~15KB. Search uses `sqlite-vec`
+when the extension is installed and a single numpy matmul otherwise. Embedding runs on
+a background worker so writes never block on Ollama, and `backfill` catches up anything
+written while the model was unavailable.
+
+## Local Document Index
+
+`indexer.py` extends recall past the chat box. Configured folders are walked, text is
+extracted (markdown/code direct, HTML via BeautifulSoup with scripts stripped, PDF via
+pypdf), chunked at ~1200 characters with 150 characters of overlap on paragraph
+boundaries, and written to `documents` / `document_chunks` — indexed into FTS5 by
+trigger and embedded through the same vector store.
+
+Scans are incremental: files are fingerprinted by `(size, mtime, sha1-of-head)` and
+re-read only when that changes, so a rescan of an unchanged tree costs one stat per
+file and no parsing. Vanished files are pruned. `node_modules`, `.git`, virtualenvs and
+similar are never walked.
+
+## Agent Tools
+
+`agent_tools.py` exposes native tools to the chat loop alongside MCP: `read_file`,
+`write_file`, `list_dir`, `search_files`, `run_command`, plus recall tools over memory,
+documents and past conversations. Two safety properties hold for all of them:
+
+- **Mutating tools ask first.** The tool runs on a worker thread and pushes an approval
+  prompt onto the SSE stream, blocking until the user answers or the request times out.
+  Read-only tools run unattended.
+- **File writes are reversible.** Every write journals the previous contents before
+  touching disk, so any edit can be reverted with its unified diff shown first.
+
+All paths resolve against a workspace root and refuse to escape it.
+
+## Workspaces
+
+`workspaces.py`. Folder → Workspace → content, where "content" is chats,
+memories, documents, notes, research runs and agent runs.
+
+Two structural decisions:
+
+**Membership lives in one table**, `workspace_items(kind, item_id, workspace_id)`,
+rather than a `workspace_id` column on six others. Adding a new kind of thing to
+a workspace is then a string constant plus one `file_item` call at its creation
+site, not a migration. It also means the scoping predicate is written once —
+`scope_clause()` returns a SQL fragment and its params, or `("", [])` when there
+is nothing to scope to, so every call site is the same two lines whether or not
+a workspace is active.
+
+**One home per item**, enforced by the primary key on `(kind, item_id)`. A
+many-to-many would be more expressive and much worse to use: "which workspace is
+this in" needs a single answer for the UI to be comprehensible, and moving an
+item should be one upsert rather than a set difference.
+
+A workspace *scopes*, it does not contain. Filing changes what
+`search_conversations`, `search_documents` and `memory.search` return, and
+nothing else — no file moves, no copies. `resolve_scope(None)` means "whatever
+is active", which is what makes a workspace behave like a mode rather than a
+filter that has to be re-applied on every screen; `"all"` opts out explicitly.
+
+Auto-filing happens at the creation sites (`create_conversation`,
+`memory.create`, `create_note`, both `create_run`s, the indexer's first insert)
+rather than at the API layer, so every path that opens a conversation gets it.
+Memories inherit their source conversation's workspace rather than the active
+one — extraction runs on a background thread and would otherwise land wherever
+the user drifted to while it ran. Documents are filed only on first index, so a
+rescan cannot move a document the user has since put somewhere else.
+
+Deletion is never destructive: `delete_workspace` cascades the membership rows
+only, and `delete_folder` re-parents its workspaces to the top level. Folder
+re-parenting walks up from the proposed parent and refuses a cycle, because a
+cycle here hangs every tree render.
+
+## Help and tutorial
+
+`help.py` holds topics (markdown, searchable with title > summary > body
+weighting) and a tutorial whose steps each carry a *check* run against the live
+install — Ollama reachable, a workspace existing, documents indexed, a site
+allowed. `done` is derived on every request and never stored, so a step
+un-ticks itself when the thing is undone. A check that raises returns
+`done: None` — rendered as "unknown" — rather than failing the step; a red cross
+for something that could not be measured is worse than admitting it.
+
+## Doc to Agent
+
+`doc_agent.py` turns a note into a send. Three inline reference kinds make the note
+self-describing — `@/file/` (read at send time), `@/model/provider/id` (the route), and
+`@/to/destination[/option]` (where it goes).
+
+Destinations are the newer half. `@/to` resolves to one of three pipelines, and the
+picker beside the Send button is an *override* rather than a second source of truth:
+parsing a note moves the picker, and touching the picker pins it for that note until
+another is opened. An unknown option is reported rather than silently corrected —
+someone who wrote `@/to/research/exhaustive` had an expectation, and quietly running a
+"standard" depth meets none of it.
+
+The destination also picks the routing task, so an unpinned research note lands on
+whatever model the user assigned to `research` rather than on their chat model.
+
+Citations follow the note wherever it goes. To Research they are *seeded evidence*:
+added to the run's `SourceStore` before planning, so they take `S1`, `S2` …, every
+sub-question researcher reads them in its first round, and claims drawn from them go
+through the same verification pass as anything fetched from the web. To the Agent they
+are appended as background context.
+
+## Chat Search Modes
+
+`chat_search_mode` (off | single | multi) governs whether a chat turn can reach the web.
+The mode both filters the tool list and injects a directive, and the filtering is the
+part that matters: removing `web_search` and `read_url` from the schema is what makes
+"off" mean off, because an instruction not to search is a request while an absent tool
+is a fact. Non-web tools are unaffected in every mode — turning search off must not cost
+the user their file and memory tools.
+
+Multi-turn additionally offers `start_research` and doubles the tool-round budget, since
+search → read → notice a gap → search again is several rounds on its own.
+
+## Carrot Research
+
+`research.py` is a multi-agent pipeline whose organising idea is that a research answer
+is worth exactly as much as the evidence you can put your finger on:
+
+```
+plan ──▶ researcher × N (parallel) ──▶ verify ──▶ synthesize
+          │                              │
+          └── search → read → extract    └── every claim re-checked
+              → reflect on gaps → repeat     against the stored source text
+```
+
+- **Evidence is stored before it is used.** Pages land in `research_sources` with their
+  full text; findings reference sources by id, and a claim citing an id that was never
+  stored is dropped rather than repaired. The writer only ever sees findings that carry
+  a real id, so a citation can be wrong but cannot be invented.
+- **Sub-questions are independent agents.** Each owns its search budget and reads its own
+  pages on a worker thread, interleaving trace events through a shared queue. One dead end
+  costs one thread.
+- **Reflection is a real loop.** After extraction a researcher is asked what it still
+  cannot answer; the gaps become the next round's queries.
+- **Verification is a separate pass.** The model sees the claim and the cited source text
+  and nothing else — no question, no narrative to defend. `unsupported` and `contradicted`
+  claims never reach synthesis.
+- **Local corpus is a first-class source.** Indexed documents, past conversations and
+  memories are searched alongside the web and cited identically.
+
+Every structured call has a deterministic fallback, because a 4B local model returns
+imperfect JSON often enough that a run has to degrade to a shallower result rather than
+crash.
+
+## Carrot Agent
+
+`agent.py` runs `plan → observe → decide one action → policy → execute → observe`. One
+action per iteration, always re-observed, with no path from the model to the mouse that
+skips the gate — the executor takes an already-approved decision as an argument rather
+than deciding for itself.
+
+`browser.py` is the surface it drives. It never emits a coordinate: every observation is
+a numbered map of the visible interactive elements, built from the DOM and accessibility
+attributes, and every action names one of those numbers. That buys three things a
+screenshot-and-coordinates agent cannot offer — an approval prompt that describes what
+will actually be clicked, a risk judgement made against the real button caption before
+the click, and credential fields that are structurally identifiable and therefore
+maskable. Playwright's sync API is thread-confined, so the session owns a dedicated
+thread and every operation is a closure posted to it, which also serialises actions.
+
+`desktop.py` separates two things that are usually conflated: *asking the OS to open
+something* is a bounded request the OS validates, and is on by default behind an
+approval; *taking the mouse* is unbounded and is off until switched on.
+
+## The Policy Kernel
+
+`policy.py` is the one component that never asks the model what it thinks. Every action
+from either agent returns allow, approve, or deny.
+
+- **Irreversible actions always ask.** `remember_allowed=False` travels with the prompt
+  and is re-checked server-side, so a client cannot record a "don't ask again" for one.
+- **Critical intent needs a typed phrase.** Purchase, transfer and deletion patterns are
+  matched against the *label of the thing being acted on* — a button's caption, not the
+  model's description of its own intent.
+- **Secrets are name-only to the model.** `reveal()` is the single function returning a
+  value, called one call deep inside the keyboard layer; `redact()` scrubs any value that
+  leaked into text as defence in depth.
+- **Taint tracking.** Reading flagged content clears the run's remembered approvals and
+  forces individual confirmation thereafter. Untrusted text cannot expand permissions.
+- **SSRF containment.** Every resolved address must be public, checked on each redirect
+  hop — a name returning one routable and one loopback address is rebinding, not a site.
+- **Budgets and a kill switch** live on the per-run `RunContext`, not globally, so
+  allowing something in one task does not carry into the next.
+
+`agent_steps` is the audit trail: action, decision, reason, observation — secrets stripped
+before the row is written.
+
+## Model Routing
+
+`router.py` maps a *task* to a model rather than hardcoding one. Small local models
+handle classification, extraction and summarization; chat and code get the configured
+default; and — only if the user attaches an API key and opts in — the hardest reasoning
+and coding work can escalate to a frontier model through the Anthropic SDK. High-volume
+tasks are excluded from escalation by construction.
+
+The cloud path translates Ollama-shaped history and tool schemas into Anthropic content
+blocks and emits the same typed events back, so the agentic loop is provider-agnostic
+and written once. Every turn announces which provider and model served it.
+
+## Security Model
+
+Binding to `127.0.0.1` keeps Carrot off the network, but not away from the machine —
+any page open in the browser can reach `http://127.0.0.1:8181`, including the endpoint
+that runs shell commands. Two defences:
+
+- **A session token** minted at startup and injected into the app's own HTML. Every
+  `/api` call must present it via `X-Carrot-Token` (or `?carrot_token=` for SSE, which
+  cannot set headers). A cross-origin page cannot read the HTML to obtain it.
+- **Destructive-command screening** (`security.py`): commands matching known-destructive
+  patterns return `428` until re-sent with `confirm=true`.
+
 ## Core Features
 
 ### 1. Conversation Search (Carrot Recall)
@@ -113,7 +353,16 @@ carrot/
 │   ├── goals.py               # Goal tracking
 │   ├── reminders.py           # Reminder system
 │   ├── notes.py               # Note management
-│   ├── leaderboard.py         # Crowd-sourced hardware/model directory
+│   ├── leaderboard.py         # Hardware/model directory (local table)
+│   ├── vectors.py             # Unified packed-float32 vector store + backfill
+│   ├── memory.py              # Structured long-term memory with provenance
+│   ├── summarize.py           # Rolling conversation summaries
+│   ├── indexer.py             # Local document index (md/code/html/pdf)
+│   ├── agent_tools.py         # Built-in agent tools, approval gate, undo journal
+│   ├── router.py              # Task -> model routing, optional cloud escalation
+│   ├── security.py            # Session token + destructive-command screening
+│   ├── proactive.py           # Background watcher and notifications
+│   ├── backup.py              # Full export / import
 │   ├── speech/
 │   │   ├── whisper_stt.py     # Voice input (whisper.cpp)
 │   │   └── kokoro_tts.py      # Voice output (Kokoro-82M)
@@ -210,7 +459,195 @@ CREATE TABLE config (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+
+-- Unified vector store. Embeddings are packed float32 blobs, not JSON, and are
+-- keyed by (namespace, ref_id) so messages, memories and document chunks share
+-- one table and one search path.
+CREATE TABLE vectors (
+    namespace TEXT NOT NULL,       -- 'message' | 'memory' | 'chunk'
+    ref_id TEXT NOT NULL,
+    model TEXT,
+    dim INTEGER,
+    embedding BLOB,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (namespace, ref_id)
+);
+
+-- Structured memory. Provenance is mandatory; updates supersede rather than
+-- overwrite, so the history of a belief survives.
+CREATE TABLE memories (
+    id TEXT PRIMARY KEY,
+    kind TEXT,                     -- fact | preference | decision | attribute | relationship | project
+    subject TEXT,
+    content TEXT NOT NULL,
+    confidence REAL,
+    status TEXT,                   -- active | superseded | rejected
+    pinned INTEGER DEFAULT 0,
+    source_message_id INTEGER,
+    source_conversation_id TEXT,
+    superseded_by TEXT,
+    created_at TEXT, updated_at TEXT
+);
+
+CREATE TABLE conversation_summaries (
+    conversation_id TEXT PRIMARY KEY,
+    summary TEXT,
+    covered_through INTEGER,       -- highest message id absorbed so far
+    message_count INTEGER,
+    updated_at TEXT
+);
+
+-- Indexed local files. `hash` is a sha1 of the file head, enough to detect an
+-- edit without reading the whole file on every scan.
+CREATE TABLE documents (
+    id TEXT PRIMARY KEY,
+    path TEXT NOT NULL UNIQUE,
+    title TEXT, ext TEXT,
+    size INTEGER, mtime REAL, hash TEXT,
+    chunk_count INTEGER, char_count INTEGER,
+    indexed_at TEXT
+);
+
+CREATE TABLE document_chunks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id TEXT REFERENCES documents(id) ON DELETE CASCADE,
+    ordinal INTEGER,
+    content TEXT NOT NULL,
+    created_at TEXT
+);
+
+CREATE TABLE notifications (
+    id TEXT PRIMARY KEY,
+    kind TEXT, title TEXT, body TEXT,
+    severity TEXT,                 -- info | warning | urgent
+    dedupe_key TEXT,               -- suppresses repeat notifications
+    read INTEGER DEFAULT 0,
+    dismissed INTEGER DEFAULT 0,
+    created_at TEXT, metadata TEXT
+);
+
+-- Undo journal for agent file writes. before_content is the full prior file
+-- (NULL when the agent created it), which is what makes revert possible.
+CREATE TABLE file_journal (
+    id TEXT PRIMARY KEY,
+    path TEXT NOT NULL,
+    operation TEXT,                -- create | edit
+    before_content TEXT,
+    after_content TEXT,
+    reverted INTEGER DEFAULT 0,
+    conversation_id TEXT,
+    created_at TEXT
+);
+
+-- Carrot Research. Sources hold the full text that was read, so verification is
+-- a lookup against stored evidence rather than a second guess.
+CREATE TABLE research_runs (
+    id TEXT PRIMARY KEY,
+    question TEXT NOT NULL,
+    status TEXT,                   -- running | complete | failed | cancelled
+    depth TEXT,                    -- quick | standard | deep
+    plan TEXT,                     -- JSON array of sub-questions
+    report TEXT,
+    error TEXT,
+    conversation_id TEXT,
+    created_at TEXT,
+    finished_at TEXT
+);
+
+CREATE TABLE research_sources (
+    id TEXT PRIMARY KEY,
+    run_id TEXT REFERENCES research_runs(id) ON DELETE CASCADE,
+    ordinal INTEGER,               -- the number behind its [S3] citation label
+    kind TEXT,                     -- web | document | conversation | memory
+    title TEXT,
+    locator TEXT,                  -- URL, or path#chunk, or memory:id
+    snippet TEXT,
+    content TEXT,
+    tainted INTEGER DEFAULT 0,     -- this page attempted prompt injection
+    created_at TEXT
+);
+
+CREATE TABLE research_findings (
+    id TEXT PRIMARY KEY,
+    run_id TEXT REFERENCES research_runs(id) ON DELETE CASCADE,
+    subquestion TEXT,
+    claim TEXT,
+    source_ids TEXT,               -- JSON array into research_sources
+    confidence REAL,
+    verdict TEXT,                  -- unchecked | supported | partial | unsupported | contradicted
+    created_at TEXT
+);
+
+-- Carrot Agent. Budgets are stored with the run so an inspected run shows the
+-- limits it actually operated under, not today's config.
+CREATE TABLE agent_runs (
+    id TEXT PRIMARY KEY,
+    task TEXT NOT NULL,
+    status TEXT,                   -- running | complete | needs_input | cancelled | budget_exceeded | failed
+    surface TEXT,                  -- browser | desktop | both
+    plan TEXT,
+    result TEXT,
+    error TEXT,
+    budget TEXT,                   -- JSON snapshot
+    steps_used INTEGER,
+    conversation_id TEXT,
+    created_at TEXT,
+    finished_at TEXT
+);
+
+-- The audit trail. Arguments are stored post-redaction: a secret value is never
+-- written here, only the name of the vault entry that was used.
+CREATE TABLE agent_steps (
+    id TEXT PRIMARY KEY,
+    run_id TEXT REFERENCES agent_runs(id) ON DELETE CASCADE,
+    ordinal INTEGER,
+    action TEXT,
+    arguments TEXT,                -- JSON, redacted
+    rationale TEXT,
+    risk TEXT,                     -- none | low | medium | high | critical
+    decision TEXT,                 -- allow | approve | deny
+    decision_reason TEXT,
+    observation TEXT,
+    screenshot TEXT,
+    tainted INTEGER DEFAULT 0,
+    created_at TEXT
+);
+
+-- Workspaces. `folders` groups workspaces and is distinct from `chat_folders`,
+-- which tidies conversations *inside* one.
+CREATE TABLE folders (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    parent_id TEXT REFERENCES folders(id) ON DELETE SET NULL,
+    position INTEGER DEFAULT 0,
+    created_at TEXT
+);
+
+CREATE TABLE workspaces (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    folder_id TEXT REFERENCES folders(id) ON DELETE SET NULL,
+    color TEXT,
+    position INTEGER DEFAULT 0,
+    archived INTEGER DEFAULT 0,
+    created_at TEXT
+);
+
+-- Membership for every content type, keyed so an item has exactly one home.
+-- Deleting a workspace cascades these rows and nothing else, which is what
+-- makes "delete the grouping, keep the content" true rather than aspirational.
+CREATE TABLE workspace_items (
+    kind TEXT NOT NULL,        -- conversation | memory | document | note | research | agent
+    item_id TEXT NOT NULL,
+    workspace_id TEXT REFERENCES workspaces(id) ON DELETE CASCADE,
+    added_at TEXT,
+    PRIMARY KEY (kind, item_id)
+);
 ```
+
+Plus two more content-storing FTS5 indexes kept in sync by triggers:
+`memories_fts(content, subject)` and `chunks_fts(content)`.
 
 ## Search Implementation Detail
 

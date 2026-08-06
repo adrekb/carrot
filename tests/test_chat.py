@@ -77,3 +77,51 @@ def test_status_reports_model(client, monkeypatch):
     assert data["default_model"] == "gemma4:e4b"
     assert data["model_loaded"] is True
     assert "bootstrap_complete" in data
+
+
+class TestStreamingDoesNotBlockTheServer:
+    """One chat turn used to starve every other request in the process.
+
+    The SSE bodies were ``async def`` generators whose contents are entirely
+    synchronous — blocking HTTP to the provider, and a blocking queue drain in
+    ``_run_tool`` while a tool waits on approval. Inside an ``async def`` that
+    all runs on the event loop, so for as long as the model was thinking the
+    server answered nothing else: /api/health went from 0.01s to hard timeouts
+    for the whole turn.
+
+    Approvals could not complete at all, which is why the agent could never
+    write a file. Answering a prompt is itself an HTTP call, so the turn could
+    not finish until it was answered and it could not be answered until the
+    turn finished.
+
+    Starlette only threadpools a body that is *not* already async, and it
+    records that by wrapping it in ``iterate_in_threadpool``. Asserting on the
+    wrapper is asserting the property — that the blocking work was moved off
+    the loop — rather than on the shape of the source.
+    """
+
+    def _threadpooled(self, response):
+        return getattr(response.body_iterator, "__qualname__", "") == "iterate_in_threadpool"
+
+    def test_the_chat_stream_body_is_run_off_the_event_loop(self):
+        from carrot import app as app_mod
+        # The generator is lazy: building the response runs none of the body,
+        # so no request or conversation has to be faked to inspect it.
+        resp = app_mod._chat_stream_response(
+            req=None, conv=None, history=None, skill=None, resolved=None)
+        assert self._threadpooled(resp), (
+            "the chat SSE body is async, so its blocking calls run on the "
+            "event loop and stall every other request for the whole turn"
+        )
+
+    def test_the_shared_sse_helper_is_run_off_the_event_loop(self):
+        from carrot import app as app_mod
+
+        def events():
+            yield {"chunk": "x"}
+
+        resp = app_mod._sse(events())
+        assert self._threadpooled(resp), (
+            "research and agent streams share this helper; async here stalls "
+            "the server for the length of a research run"
+        )

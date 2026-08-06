@@ -98,12 +98,24 @@ def create_note(title: str, content: str = "", folder: str = None):
     full_content = frontmatter + content
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(full_content)
+
+    try:
+        from . import workspaces as workspaces_mod
+
+        workspaces_mod.file_item(workspaces_mod.KIND_NOTE, note_id)
+    except Exception:
+        pass
+
     return {"id": note_id, "title": title, "folder": folder or "", "path": filepath}
 
 
 def update_note(note_id: str, content: str, folder: str = None, title: str = None):
     """Replace a note's body (and optionally title) while preserving frontmatter."""
     filepath = get_note_path(note_id)
+    if folder:
+        candidate = os.path.join(NOTES_DIR, folder, f"{note_id}.md")
+        if os.path.exists(candidate):
+            filepath = candidate
     if not os.path.exists(filepath):
         return None
     with open(filepath, "r", encoding="utf-8") as f:

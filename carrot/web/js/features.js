@@ -142,6 +142,11 @@ async function openNote(noteId) {
     await mountEditor(note.body || '');
     updateWordCount(note.body || '');
     setNoteStatus('');
+    // Read the note's own @/to and @/file lines now rather than waiting for a
+    // keystroke — opening a note you wrote last week should already show where
+    // it goes, which is the whole point of writing the destination into it.
+    if (typeof resetDocDestination === 'function') resetDocDestination();
+    if (typeof refreshDocReferences === 'function') refreshDocReferences();
 }
 
 async function mountEditor(markdown) {
@@ -275,7 +280,17 @@ async function loadCodeTab() {
         document.getElementById('code-root-label').textContent = r.root.split(/[\\/]/).pop() || r.root;
         document.getElementById('code-root-label').title = r.root;
     } catch (_) {}
+    // Label the open button for the editor actually installed.
+    try {
+        const ed = await api('/api/files/editors');
+        const btn = document.getElementById('open-editor-btn');
+        if (btn && (ed.editors || []).length) {
+            btn.textContent = ed.editors[0] === 'cursor' ? 'Open in Cursor' : 'Open in VS Code';
+        }
+    } catch (_) {}
+    wireTerminal();
     loadCodeTree();
+    loadCoderState();
 }
 
 async function loadCodeTree() {
@@ -293,22 +308,39 @@ async function loadCodeTree() {
     }
 }
 
+// The directory the next "New file"/"New folder" lands in: whatever is
+// selected in the tree, or the workspace root.
+let selectedDir = '';
+
 function renderTreeEntries(parent, entries, depth) {
     for (const entry of entries) {
         const row = document.createElement('div');
         row.className = 'tree-row' + (entry.is_dir ? ' dir' : ' file');
         row.style.paddingLeft = (8 + depth * 14) + 'px';
+        row.dataset.path = entry.path;
+        row.dataset.isDir = entry.is_dir ? '1' : '';
+        row.draggable = true;
         row.innerHTML = `<span class="tree-caret">${entry.is_dir ? '▸' : ''}</span><span class="tree-name">${escHtml(entry.name)}</span>`;
         parent.appendChild(row);
+
+        row.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            showTreeMenu(e.clientX, e.clientY, entry);
+        });
+        wireTreeDrag(row, entry);
+
         if (entry.is_dir) {
             const childBox = document.createElement('div');
             childBox.className = 'tree-children hidden';
             parent.appendChild(childBox);
+            row.dataset.depth = depth;
             let loaded = false;
             row.onclick = async () => {
-                const open = childBox.classList.toggle('hidden');
-                row.querySelector('.tree-caret').textContent = open ? '▸' : '▾';
-                if (!loaded && !open) {
+                selectTreeRow(row, entry);
+                const nowHidden = childBox.classList.toggle('hidden');
+                row.querySelector('.tree-caret').textContent = nowHidden ? '▸' : '▾';
+                if (!loaded && !nowHidden) {
                     loaded = true;
                     try {
                         const data = await api(`/api/files/tree?path=${encodeURIComponent(entry.path)}`);
@@ -319,12 +351,248 @@ function renderTreeEntries(parent, entries, depth) {
                 }
             };
         } else {
-            row.onclick = () => openFile(entry.path);
+            row.onclick = () => { selectTreeRow(row, entry); openFile(entry.path); };
         }
     }
 }
 
-async function openFile(path) {
+function selectTreeRow(row, entry) {
+    document.querySelectorAll('#code-tree .tree-row.selected')
+        .forEach(el => el.classList.remove('selected'));
+    row.classList.add('selected');
+    // New items go inside a selected folder, or beside a selected file.
+    selectedDir = entry.is_dir ? entry.path
+        : entry.path.split('/').slice(0, -1).join('/');
+}
+
+// ---------- create / rename / delete ----------
+
+async function createEntry(isDir, parentPath) {
+    const where = parentPath !== undefined ? parentPath : selectedDir;
+    const name = (await inlineTextPrompt({
+        title: isDir ? 'New folder' : 'New file',
+        placeholder: isDir ? 'folder name' : 'name.ext',
+        action: 'Create',
+    })).trim();
+    if (!name) return;
+    try {
+        const r = await api('/api/files/create', {
+            method: 'POST',
+            body: JSON.stringify({ path: where, name, is_dir: isDir }),
+        });
+        await loadCodeTree();
+        if (!isDir) openFile(r.path);
+        setCodeStatus(`created ${r.path}`);
+        // Say up front if the language cannot run here. Discovering that
+        // after writing a program is a bad order to learn it in.
+        const tc = r.toolchain || {};
+        if (tc.language && !tc.available) warnMissingToolchain(tc);
+    } catch (e) {
+        setCodeStatus('could not create: ' + e.message);
+    }
+}
+
+async function renameEntry(entry) {
+    const name = (await inlineTextPrompt({
+        title: `Rename ${entry.name}`, value: entry.name,
+        placeholder: 'new name', action: 'Rename',
+    })).trim();
+    if (!name || name === entry.name) return;
+    try {
+        const r = await api('/api/files/rename', {
+            method: 'POST',
+            body: JSON.stringify({ path: entry.path, new_name: name }),
+        });
+        // An open tab still points at the old path; move it with the file.
+        if (openFiles[entry.path]) {
+            openFiles[r.path] = openFiles[entry.path];
+            delete openFiles[entry.path];
+            if (activeFilePath === entry.path) activeFilePath = r.path;
+            if (dirtyFiles.has(entry.path)) {
+                dirtyFiles.delete(entry.path);
+                dirtyFiles.add(r.path);
+            }
+            renderCodeTabs();
+        }
+        await loadCodeTree();
+        setCodeStatus(`renamed to ${name}`);
+    } catch (e) {
+        setCodeStatus('could not rename: ' + e.message);
+    }
+}
+
+async function deleteEntry(entry) {
+    const what = entry.is_dir ? `folder "${entry.name}" and everything in it` : `"${entry.name}"`;
+    if (!confirm(`Delete ${what}? This cannot be undone.`)) return;
+    try {
+        await api('/api/files/delete', {
+            method: 'POST', body: JSON.stringify({ path: entry.path }),
+        });
+        // Close any tab whose file just went away, discarding its model.
+        for (const open of Object.keys(openFiles)) {
+            if (open === entry.path || open.startsWith(entry.path + '/')) closeFile(open, true);
+        }
+        await loadCodeTree();
+        setCodeStatus(`deleted ${entry.name}`);
+    } catch (e) {
+        setCodeStatus('could not delete: ' + e.message);
+    }
+}
+
+// ---------- drag to move ----------
+
+let dragPath = null;
+
+function wireTreeDrag(row, entry) {
+    row.addEventListener('dragstart', (e) => {
+        dragPath = entry.path;
+        e.dataTransfer.effectAllowed = 'move';
+        // Firefox refuses to start a drag without data set.
+        try { e.dataTransfer.setData('text/plain', entry.path); } catch (_) {}
+        e.stopPropagation();
+    });
+    row.addEventListener('dragend', () => {
+        dragPath = null;
+        document.querySelectorAll('#code-tree .drop-target')
+            .forEach(el => el.classList.remove('drop-target'));
+    });
+    if (!entry.is_dir) return;                 // only folders accept a drop
+    row.addEventListener('dragover', (e) => {
+        if (!dragPath || dragPath === entry.path) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        row.classList.add('drop-target');
+    });
+    row.addEventListener('dragleave', () => row.classList.remove('drop-target'));
+    row.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        row.classList.remove('drop-target');
+        const moving = dragPath;
+        dragPath = null;
+        if (!moving || moving === entry.path) return;
+        await moveEntry(moving, entry.path);
+    });
+}
+
+async function moveEntry(path, destDir) {
+    try {
+        const r = await api('/api/files/move', {
+            method: 'POST', body: JSON.stringify({ path, dest_dir: destDir }),
+        });
+        if (openFiles[path]) {
+            openFiles[r.path] = openFiles[path];
+            delete openFiles[path];
+            if (activeFilePath === path) activeFilePath = r.path;
+            renderCodeTabs();
+        }
+        await loadCodeTree();
+        setCodeStatus(`moved to ${destDir || 'workspace root'}`);
+    } catch (e) {
+        setCodeStatus('could not move: ' + e.message);
+    }
+}
+
+// ---------- context menu ----------
+
+function showTreeMenu(x, y, entry) {
+    closeTreeMenu();
+    const menu = document.createElement('div');
+    menu.className = 'tree-menu';
+    menu.id = 'tree-menu';
+    const items = [];
+    if (entry.is_dir) {
+        items.push(['New file', () => createEntry(false, entry.path)]);
+        items.push(['New folder', () => createEntry(true, entry.path)]);
+    } else {
+        items.push(['Open', () => openFile(entry.path)]);
+    }
+    items.push(['Rename…', () => renameEntry(entry)]);
+    items.push(['Delete', () => deleteEntry(entry)]);
+
+    for (const [label, action] of items) {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'tree-menu-item' + (label === 'Delete' ? ' danger' : '');
+        item.textContent = label;
+        item.onclick = () => { closeTreeMenu(); action(); };
+        menu.appendChild(item);
+    }
+    document.body.appendChild(menu);
+    // Keep it on screen when right-clicking near an edge.
+    const box = menu.getBoundingClientRect();
+    menu.style.left = Math.min(x, window.innerWidth - box.width - 8) + 'px';
+    menu.style.top = Math.min(y, window.innerHeight - box.height - 8) + 'px';
+    setTimeout(() => document.addEventListener('click', closeTreeMenu, { once: true }), 0);
+}
+
+function closeTreeMenu() {
+    const existing = document.getElementById('tree-menu');
+    if (existing) existing.remove();
+}
+
+// ---------- find in files ----------
+
+let codeSearchTimer = null;
+
+function toggleCodeSearch() {
+    const box = document.getElementById('code-search');
+    const hidden = box.classList.toggle('hidden');
+    if (!hidden) {
+        const input = document.getElementById('code-search-input');
+        input.focus();
+        input.select();
+        if (!input.dataset.wired) {
+            input.dataset.wired = '1';
+            input.addEventListener('input', () => {
+                clearTimeout(codeSearchTimer);
+                // Debounced: every keystroke would otherwise walk the tree.
+                codeSearchTimer = setTimeout(runCodeSearch, 250);
+            });
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') toggleCodeSearch();
+            });
+        }
+    }
+}
+
+async function runCodeSearch() {
+    const query = document.getElementById('code-search-input').value.trim();
+    const out = document.getElementById('code-search-results');
+    if (!query) { out.innerHTML = ''; return; }
+    out.innerHTML = '<div class="empty" style="padding:6px">Searching…</div>';
+    try {
+        const data = await api(`/api/files/search?q=${encodeURIComponent(query)}`);
+        if (!data.hits.length) {
+            out.innerHTML = '<div class="empty" style="padding:6px">No matches.</div>';
+            return;
+        }
+        out.innerHTML = '';
+        for (const hit of data.hits) {
+            const row = document.createElement('div');
+            row.className = 'code-hit';
+            row.innerHTML = `<div class="code-hit-path">${escHtml(hit.path)}:${hit.line}</div>`
+                          + `<div class="code-hit-text">${escHtml(hit.text.trim())}</div>`;
+            row.onclick = () => openFile(hit.path, hit.line);
+            out.appendChild(row);
+        }
+        if (data.truncated) {
+            const note = document.createElement('div');
+            note.className = 'empty';
+            note.style.padding = '6px';
+            note.textContent = 'More matches than shown — narrow the search.';
+            out.appendChild(note);
+        }
+    } catch (e) {
+        out.innerHTML = `<div class="empty" style="padding:6px">${escHtml(e.message)}</div>`;
+    }
+}
+
+// Files with unsaved edits. Shown as a dot on the tab, and checked before
+// anything closes one.
+const dirtyFiles = new Set();
+
+async function openFile(path, line) {
     const monaco = await ensureMonaco();
     ensureMonacoEditor(monaco);
     let model = openFiles[path];
@@ -338,33 +606,74 @@ async function openFile(path) {
             return;
         }
         model = monaco.editor.createModel(content, langForPath(path));
+        // Mark dirty on every edit so the tab dot and the close guard are
+        // driven by the editor itself rather than a timer.
+        model.onDidChangeContent(() => {
+            if (!dirtyFiles.has(path)) {
+                dirtyFiles.add(path);
+                renderCodeTabs();
+            }
+        });
         openFiles[path] = model;
     }
     activeFilePath = path;
     monacoEditor.setModel(model);
     document.getElementById('code-empty').classList.add('hidden');
     document.getElementById('code-editor-host').classList.remove('hidden');
+    if (line) {
+        try {
+            monacoEditor.revealLineInCenter(line);
+            monacoEditor.setPosition({ lineNumber: line, column: 1 });
+            monacoEditor.focus();
+        } catch (_) { /* model not laid out yet; not worth failing the open */ }
+    }
     renderCodeTabs();
     setCodeStatus('');
 }
 
-function ensureMonacoEditor(monaco) {
-    if (monacoEditor) return;
+// Monaco paints its own chrome, so it does not inherit the page's theme —
+// left alone it stays dark on a light page, which is the one part of the UI
+// that would not follow the appearance setting.
+function monacoThemeName() {
+    return document.documentElement.getAttribute('data-theme') === 'light'
+        ? 'carrot-light' : 'carrot-dark';
+}
+
+function defineMonacoThemes(monaco) {
+    const accent = getComputedStyle(document.documentElement)
+        .getPropertyValue('--accent').trim() || '#f4813f';
     monaco.editor.defineTheme('carrot-dark', {
         base: 'vs-dark',
         inherit: true,
         rules: [],
         colors: {
-            'editor.background': '#1a1712',
-            'editor.foreground': '#e8e2d6',
-            'editorLineNumber.foreground': '#5c5344',
-            'editorCursor.foreground': '#e8912b',
-            'editor.selectionBackground': '#3a3122',
+            'editor.background': '#16181e',
+            'editor.foreground': '#eceef4',
+            'editorLineNumber.foreground': '#69707f',
+            'editorCursor.foreground': accent,
+            'editor.selectionBackground': '#2b3040',
         },
     });
+    monaco.editor.defineTheme('carrot-light', {
+        base: 'vs',
+        inherit: true,
+        rules: [],
+        colors: {
+            'editor.background': '#fbfaf8',
+            'editor.foreground': '#1c1a18',
+            'editorLineNumber.foreground': '#a8a29a',
+            'editorCursor.foreground': accent,
+            'editor.selectionBackground': '#f0e5da',
+        },
+    });
+}
+
+function ensureMonacoEditor(monaco) {
+    if (monacoEditor) return;
+    defineMonacoThemes(monaco);
     monacoEditor = monaco.editor.create(document.getElementById('code-editor-host'), {
         model: null,
-        theme: 'carrot-dark',
+        theme: monacoThemeName(),
         automaticLayout: true,
         fontSize: 13,
         minimap: { enabled: false },
@@ -373,6 +682,14 @@ function ensureMonacoEditor(monaco) {
     monacoEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, saveCurrentFile);
 }
 
+// theme.js fires this whenever the appearance changes, including when the OS
+// flips and the mode is "Match system".
+window.addEventListener('carrot-theme', () => {
+    if (!window.monaco || !monacoEditor) return;
+    defineMonacoThemes(window.monaco);
+    window.monaco.editor.setTheme(monacoThemeName());
+});
+
 function renderCodeTabs() {
     const bar = document.getElementById('code-tabs');
     bar.innerHTML = '';
@@ -380,14 +697,22 @@ function renderCodeTabs() {
         const tab = document.createElement('div');
         tab.className = 'code-tab' + (path === activeFilePath ? ' active' : '');
         const name = path.split('/').pop();
-        tab.innerHTML = `<span class="ct-name">${escHtml(name)}</span><span class="ct-close">×</span>`;
+        const dirty = dirtyFiles.has(path);
+        if (dirty) tab.classList.add('dirty');
+        tab.title = path;
+        tab.innerHTML = `<span class="ct-name">${escHtml(name)}</span>`
+                      + `<span class="ct-close">${dirty ? '●' : '×'}</span>`;
         tab.querySelector('.ct-name').onclick = () => openFile(path);
         tab.querySelector('.ct-close').onclick = (e) => { e.stopPropagation(); closeFile(path); };
         bar.appendChild(tab);
     }
 }
 
-function closeFile(path) {
+function closeFile(path, force) {
+    if (!force && dirtyFiles.has(path)) {
+        if (!confirm(`${path.split('/').pop()} has unsaved changes. Close it anyway?`)) return;
+    }
+    dirtyFiles.delete(path);
     const model = openFiles[path];
     if (model) { try { model.dispose(); } catch (_) {} delete openFiles[path]; }
     if (activeFilePath === path) {
@@ -411,9 +736,32 @@ async function saveCurrentFile() {
             method: 'POST',
             body: JSON.stringify({ path: activeFilePath, content }),
         });
+        dirtyFiles.delete(activeFilePath);
+        renderCodeTabs();
         setCodeStatus('saved ' + activeFilePath.split('/').pop());
     } catch (e) {
         setCodeStatus('save failed: ' + e.message);
+    }
+}
+
+async function sendNoteToObsidian() {
+    if (!currentNoteId) { alert('Open a note first.'); return; }
+    const status = document.getElementById('note-status');
+    try {
+        await saveNoteNow();
+        const r = await api('/api/interop/obsidian/send', {
+            method: 'POST',
+            body: JSON.stringify({ note_id: currentNoteId }),
+        });
+        if (status) status.textContent = 'saved to your vault ✓';
+    } catch (e) {
+        if (e.message && e.message.includes('vault')) {
+            if (confirm('No Obsidian vault is set yet. Open Settings to point Carrot at your vault folder?')) {
+                switchTab('settings');
+            }
+        } else {
+            alert(e.message);
+        }
     }
 }
 
@@ -429,8 +777,60 @@ async function openInVSCode() {
     }
 }
 
+// window.prompt() is disabled in Electron and silently returns null, which
+// is why this button appeared to do nothing. Use the native folder chooser
+// when the shell offers one, and an inline field in a plain browser.
+async function askForFolder(current) {
+    if (window.carrotAPI && window.carrotAPI.pickDirectory) {
+        const picked = await window.carrotAPI.pickDirectory({
+            title: 'Choose your workspace folder', defaultPath: current,
+        });
+        return picked && picked.path ? picked.path : '';
+    }
+    return await inlineTextPrompt({
+        title: 'Workspace folder',
+        value: current,
+        placeholder: 'absolute path to a folder',
+        action: 'Use folder',
+    });
+}
+
+// Shared replacement for window.prompt(). Every caller in the app goes
+// through here — the native dialog is unavailable in Electron.
+function inlineTextPrompt({ title, value, placeholder, action } = {}) {
+    return new Promise((resolve) => {
+        const host = document.createElement('div');
+        host.className = 'path-prompt';
+        host.innerHTML = `
+            <div class="path-prompt-card">
+              <div class="path-prompt-title"></div>
+              <input type="text" spellcheck="false">
+              <div class="row">
+                <button class="btn btn-primary"></button>
+                <button class="btn btn-ghost">Cancel</button>
+              </div>
+            </div>`;
+        host.querySelector('.path-prompt-title').textContent = title || 'Enter a value';
+        host.querySelector('.btn-primary').textContent = action || 'OK';
+        const input = host.querySelector('input');
+        input.placeholder = placeholder || '';
+        input.value = value || '';
+        const done = (value) => { host.remove(); resolve(value); };
+        host.querySelector('.btn-primary').onclick = () => done(input.value.trim());
+        host.querySelector('.btn-ghost').onclick = () => done('');
+        input.onkeydown = (e) => {
+            if (e.key === 'Enter') done(input.value.trim());
+            if (e.key === 'Escape') done('');
+        };
+        host.onclick = (e) => { if (e.target === host) done(''); };
+        document.body.appendChild(host);
+        input.focus();
+        input.select();
+    });
+}
+
 async function changeCodeRoot() {
-    const folder = prompt('Workspace folder (absolute path):', codeRoot);
+    const folder = await askForFolder(codeRoot);
     if (!folder) return;
     try {
         const r = await api('/api/files/root', { method: 'POST', body: JSON.stringify({ root: folder }) });
@@ -453,6 +853,7 @@ function setCodeStatus(msg) {
 let editingSkillSlug = null;
 
 async function loadExtensions() {
+    loadPacks();
     loadSkillsList();
     loadMcpList();
 }
@@ -632,4 +1033,1187 @@ async function refreshMcpTools() {
     } catch (e) {
         marks.forEach(m => m.textContent = 'tools: ' + e.message);
     }
+}
+
+
+// ===== Code tab keyboard =====
+// Ctrl+S is muscle memory; without it the browser's own save dialog appears
+// over the app, which is worse than doing nothing.
+document.addEventListener('keydown', (e) => {
+    const codeVisible = !document.getElementById('view-code')?.classList.contains('hidden')
+        && document.getElementById('view-code')?.offsetParent !== null;
+    if (!codeVisible) return;
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && !e.shiftKey && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        saveCurrentFile();
+    } else if (mod && e.shiftKey && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        toggleCodeSearch();
+    }
+});
+
+// ================================================================
+// Artifacts — charts, diagrams and images shown inside the chat
+// ================================================================
+// The content is markup the *model* wrote. It never touches the app document:
+// it goes into an iframe with `sandbox="allow-scripts"` and deliberately
+// without `allow-same-origin`, which puts it in an opaque origin. Script
+// inside can animate a chart; it cannot read the session token, the
+// conversation, or anything in storage. srcdoc rather than a src URL so the
+// artifact route does not have to be reachable without the session token.
+
+const ARTIFACT_MARKER = /\[\[carrot:artifact:([a-f0-9]{4,32})\]\]/g;
+
+function artifactIdsIn(text) {
+    const ids = [];
+    let match;
+    ARTIFACT_MARKER.lastIndex = 0;
+    while ((match = ARTIFACT_MARKER.exec(String(text || '')))) ids.push(match[1]);
+    return ids;
+}
+
+function stripArtifactMarkers(text) {
+    return String(text || '').replace(ARTIFACT_MARKER, '').trim();
+}
+
+async function renderArtifact(id, host) {
+    let artifact;
+    try {
+        artifact = await api(`/api/artifacts/${id}`);
+    } catch (e) {
+        return;                       // trimmed or deleted; nothing to show
+    }
+    const card = document.createElement('figure');
+    card.className = 'artifact';
+    card.dataset.artifactId = id;
+
+    const head = document.createElement('figcaption');
+    head.className = 'artifact-head';
+    head.innerHTML = `<span class="artifact-title">${escHtml(artifact.title || artifact.kind)}</span>`
+                   + `<span class="artifact-kind">${escHtml(artifact.kind)}</span>`;
+    const expand = document.createElement('button');
+    expand.className = 'artifact-btn';
+    expand.textContent = 'Open';
+    expand.onclick = () => openArtifactFull(artifact);
+    head.appendChild(expand);
+    card.appendChild(head);
+
+    if (artifact.kind === 'markdown') {
+        // Markdown already goes through the sanitizing renderer, and it cannot
+        // carry script, so it can be shown inline and pick up the app's type.
+        const body = document.createElement('div');
+        body.className = 'artifact-body md';
+        body.innerHTML = mdToHtml(artifact.content);
+        card.appendChild(body);
+    } else if (artifact.kind === 'mermaid') {
+        const body = document.createElement('pre');
+        body.className = 'artifact-body artifact-mermaid';
+        body.textContent = artifact.content;
+        card.appendChild(body);
+    } else {
+        card.appendChild(artifactFrame(artifact));
+    }
+    host.appendChild(card);
+}
+
+function artifactFrame(artifact) {
+    const frame = document.createElement('iframe');
+    frame.className = 'artifact-frame';
+    // allow-scripts WITHOUT allow-same-origin. Granting both together would
+    // undo the sandbox entirely — the frame could reach into this document.
+    frame.setAttribute('sandbox', 'allow-scripts');
+    frame.setAttribute('referrerpolicy', 'no-referrer');
+    frame.loading = 'lazy';
+    frame.srcdoc = artifact.document;
+    // Images and charts vary wildly in height; grow to fit rather than
+    // scrolling a 200px window. Cross-origin means asking, not measuring.
+    frame.style.height = artifact.kind === 'image' ? '320px' : '380px';
+    return frame;
+}
+
+function openArtifactFull(artifact) {
+    const host = document.createElement('div');
+    host.className = 'artifact-modal';
+    host.innerHTML = `
+        <div class="artifact-modal-card">
+          <div class="artifact-head">
+            <span class="artifact-title">${escHtml(artifact.title || artifact.kind)}</span>
+            <button class="artifact-btn" data-close>Close</button>
+          </div>
+        </div>`;
+    const card = host.querySelector('.artifact-modal-card');
+    if (artifact.kind === 'markdown') {
+        const body = document.createElement('div');
+        body.className = 'artifact-body md';
+        body.innerHTML = mdToHtml(artifact.content);
+        card.appendChild(body);
+    } else {
+        const frame = artifactFrame(artifact);
+        frame.style.height = '70vh';
+        card.appendChild(frame);
+    }
+    const close = () => host.remove();
+    host.querySelector('[data-close]').onclick = close;
+    host.onclick = (e) => { if (e.target === host) close(); };
+    document.addEventListener('keydown', function esc(e) {
+        if (e.key === 'Escape') { close(); document.removeEventListener('keydown', esc); }
+    });
+    document.body.appendChild(host);
+}
+
+// Called after a message finishes rendering: swap any markers the model's
+// tool results left behind for the rendered thing.
+async function mountArtifacts(messageEl, text) {
+    const ids = artifactIdsIn(text);
+    if (!ids.length) return;
+    let host = messageEl.querySelector('.artifact-host');
+    if (!host) {
+        host = document.createElement('div');
+        host.className = 'artifact-host';
+        messageEl.appendChild(host);
+    }
+    for (const id of ids) {
+        if (host.querySelector(`[data-artifact-id="${id}"]`)) continue;   // already shown
+        await renderArtifact(id, host);
+    }
+}
+
+// ================================================================
+// Code tab — Run and terminal
+// ================================================================
+let codePanelTab = 'output';
+const termHistory = [];
+let termHistoryIndex = -1;
+
+function toggleCodePanel(force) {
+    const panel = document.getElementById('code-panel');
+    if (!panel) return;
+    const show = force === undefined ? panel.classList.contains('hidden') : force;
+    panel.classList.toggle('hidden', !show);
+    if (show && codePanelTab === 'terminal') document.getElementById('term-input')?.focus();
+}
+
+function showCodePanel(which) {
+    codePanelTab = which;
+    document.querySelectorAll('#code-panel .panel-tab').forEach(tab => {
+        tab.classList.toggle('active', tab.dataset.panel === which);
+    });
+    ['output', 'terminal', 'git', 'checkpoints'].forEach(name => {
+        document.getElementById('panel-' + name)?.classList.toggle('hidden', which !== name);
+    });
+    toggleCodePanel(true);
+    if (which === 'terminal') document.getElementById('term-input')?.focus();
+    if (which === 'git') loadGitPanel();
+    if (which === 'checkpoints') loadCheckpoints();
+}
+
+function clearCodePanel() {
+    if (codePanelTab === 'output') { document.getElementById('run-output').textContent = ''; clearRunOffer(); }
+    else if (codePanelTab === 'terminal') document.getElementById('term-log').innerHTML = '';
+    else if (codePanelTab === 'git') document.getElementById('git-diff').textContent = '';
+    document.getElementById('panel-status').textContent = '';
+}
+
+// ---------- The coding agent: plan/act, git, checkpoints ----------
+//
+// Plan mode is enforced server-side by removing the write tools, not by asking
+// the model to hold back. This is just the switch and its readout — but the
+// readout matters: someone who thinks they are in Plan and is actually in Act
+// is exactly the person who gets a surprise commit.
+
+let coderMode = 'act';
+
+async function loadCoderState() {
+    let state;
+    try {
+        state = await api('/api/coder/state');
+    } catch (_) { return; }
+    coderMode = state.mode;
+    document.getElementById('mode-plan')?.classList.toggle('on', state.mode === 'plan');
+    document.getElementById('mode-act')?.classList.toggle('on', state.mode === 'act');
+    // One status word above the editor, saying what the agent may do. It is
+    // deliberately a sentence rather than a mode name: "act" told the user
+    // nothing about whether their files were at risk.
+    const status = document.getElementById('mode-status');
+    if (status) {
+        status.textContent = state.mode === 'plan'
+            ? 'Plan — the agent reads and proposes, nothing on disk moves'
+            : 'Act — the agent can create, edit, move and delete files, and run commands';
+        status.classList.toggle('is-act', state.mode === 'act');
+    }
+    const rules = document.getElementById('rules-chip');
+    if (rules) {
+        rules.classList.toggle('hidden', !state.has_rules);
+        rules.title = `Project rules in effect (${state.rules_chars} characters)`;
+    }
+    loadAgentModelPicker();
+
+    const rootHint = document.getElementById('agent-root-hint');
+    if (rootHint && state.root) rootHint.textContent = state.root;
+    const chip = document.getElementById('git-chip');
+    if (chip) {
+        const git = state.git || {};
+        chip.classList.toggle('hidden', !git.repo);
+        if (git.repo) {
+            const n = (git.changes || []).length;
+            chip.textContent = `${git.branch || 'HEAD'}${n ? ` · ${n}` : ''}`;
+        }
+    }
+}
+
+async function setCoderMode(mode) {
+    let result;
+    if (mode === 'act') setCodeStatus('compacting the plan…');
+    try {
+        result = await api('/api/coder/mode', {
+            method: 'PUT',
+            // Plan -> Act compacts the planning conversation into an
+            // implementation brief, so Act starts from the decisions rather
+            // than from the transcript that produced them.
+            //
+            // It has to be the *agent panel's* conversation. These buttons sit
+            // in the Code tab and govern the panel, but this sent
+            // currentConversationId — which belongs to the chat tab. So the
+            // plan you had just written was never the thing compacted: Act
+            // started from an unrelated chat, or from nothing at all, and the
+            // brief came back empty. Fall back to the chat only when the panel
+            // has not been used yet, which is the one case where there is no
+            // plan of its own to carry.
+            body: JSON.stringify({
+                mode,
+                conversation_id: agentConversationId || currentConversationId,
+            }),
+        });
+    } catch (e) {
+        setCodeStatus('could not switch mode: ' + e.message);
+        return;
+    }
+    loadCoderState();
+    if (result.compacted) {
+        setCodeStatus('Act mode — plan compacted into a brief');
+        showBrief(result.brief);
+    } else {
+        setCodeStatus(mode === 'plan' ? 'Plan mode — writes are off' : 'Act mode — writes are on');
+    }
+}
+
+// The brief is what Act will actually work from, so it is shown rather than
+// applied invisibly: a compaction that dropped something important is only
+// catchable if you can see it.
+function showBrief(text) {
+    if (!text) return;
+    showCodePanel('output');
+    clearRunOffer();
+    document.getElementById('run-output').textContent =
+        'Implementation brief (this is what Act works from):\n\n' + text;
+}
+
+async function takeCheckpoint() {
+    try {
+        const made = await api('/api/coder/checkpoints', {
+            method: 'POST',
+            body: JSON.stringify({ label: activeFilePath ? `before editing ${activeFilePath}` : '' }),
+        });
+        setCodeStatus(`checkpoint saved (${made.files} files)`);
+        if (codePanelTab === 'checkpoints') loadCheckpoints();
+    } catch (e) {
+        setCodeStatus('could not checkpoint: ' + e.message);
+    }
+}
+
+async function loadCheckpoints() {
+    const host = document.getElementById('checkpoint-list');
+    if (!host) return;
+    let items = [];
+    try {
+        items = (await api('/api/coder/checkpoints')).checkpoints || [];
+    } catch (e) {
+        host.innerHTML = `<div class="empty">Could not load checkpoints: ${escHtml(e.message)}</div>`;
+        return;
+    }
+    if (!items.length) {
+        host.innerHTML = '<div class="empty">No checkpoints yet. Take one before a big change '
+            + 'and you can undo the whole thing in one step.</div>';
+        return;
+    }
+    host.innerHTML = '';
+    for (const item of items) {
+        const row = document.createElement('div');
+        row.className = 'checkpoint-row';
+        // A git-backed checkpoint restores atomically and purges ghost files;
+        // a copied one is bounded. Saying which is which is honest about it.
+        const backed = item.tree ? 'git' : 'snapshot';
+        row.innerHTML = `
+            <span class="cp-label">${escHtml(item.label || 'checkpoint')}</span>
+            <span class="tag">${backed}</span>
+            <span class="cp-when">${escHtml((item.created_at || '').replace('T', ' ').slice(0, 16))}</span>`;
+        const restore = document.createElement('button');
+        restore.className = 'btn btn-ghost';
+        restore.textContent = 'Restore';
+        restore.onclick = () => restoreCheckpoint(item.id, item.label);
+        row.appendChild(restore);
+        host.appendChild(row);
+    }
+}
+
+async function restoreCheckpoint(id, label) {
+    // Restoring throws away work that came after it, so it asks first — and
+    // says what it will do, not just "are you sure".
+    if (!confirm(`Restore "${label || id}"?\n\nEvery change made after this point `
+        + `is undone, and files created since are deleted.`)) return;
+    try {
+        const result = await api(`/api/coder/checkpoints/${encodeURIComponent(id)}/restore`,
+            { method: 'POST' });
+        setCodeStatus(result.purged
+            ? `restored ${result.restored.length} file(s), workspace purged to that point`
+            : `restored ${result.restored.length} file(s), removed ${result.removed.length}`);
+        loadCodeTree();
+        // Keep the panel honest the moment the workspace moves under it.
+        loadCheckpoints();
+        loadCoderState();
+        if (activeFilePath) openFile(activeFilePath);
+    } catch (e) {
+        setCodeStatus('could not restore: ' + e.message);
+    }
+}
+
+async function loadGitPanel() {
+    const changes = document.getElementById('git-changes');
+    const branch = document.getElementById('git-branch');
+    if (!changes) return;
+    let state;
+    try {
+        state = await api('/api/coder/git/status');
+    } catch (e) {
+        branch.textContent = '';
+        changes.innerHTML = `<div class="empty">${escHtml(e.detail || e.message)}</div>`;
+        return;
+    }
+    branch.textContent = state.branch
+        + (state.ahead ? ` ↑${state.ahead}` : '') + (state.behind ? ` ↓${state.behind}` : '');
+    if (state.clean) {
+        changes.innerHTML = '<div class="empty">Working tree clean.</div>';
+        document.getElementById('git-diff').textContent = '';
+        return;
+    }
+    changes.innerHTML = '';
+    for (const change of state.changes) {
+        const row = document.createElement('div');
+        row.className = 'git-change';
+        row.innerHTML = `<span class="git-code">${escHtml(change.code)}</span>
+                         <span class="git-path">${escHtml(change.path)}</span>`;
+        row.onclick = () => showGitDiff(change.path);
+        changes.appendChild(row);
+    }
+    showGitDiff('');
+}
+
+async function showGitDiff(path) {
+    const host = document.getElementById('git-diff');
+    try {
+        const body = await api('/api/coder/git/diff?path=' + encodeURIComponent(path || ''));
+        host.textContent = body.diff;
+    } catch (e) {
+        host.textContent = e.detail || e.message;
+    }
+}
+
+async function commitChanges() {
+    const input = document.getElementById('git-message');
+    const message = input.value.trim();
+    if (!message) { setCodeStatus('a commit needs a message'); return; }
+    try {
+        const result = await api('/api/coder/git/commit', {
+            method: 'POST', body: JSON.stringify({ message }),
+        });
+        input.value = '';
+        setCodeStatus(`committed ${result.head ? result.head.sha : ''}`);
+        loadGitPanel();
+        loadCoderState();
+    } catch (e) {
+        setCodeStatus('could not commit: ' + (e.detail || e.message));
+    }
+}
+
+// ---------- Run ----------
+
+async function runCurrentFile() {
+    if (!activeFilePath) { setCodeStatus('open a file first'); return; }
+    // Running stale bytes is the classic way to debug the wrong program.
+    if (dirtyFiles.has(activeFilePath)) await saveCurrentFile();
+
+    const out = document.getElementById('run-output');
+    const status = document.getElementById('panel-status');
+    showCodePanel('output');
+    clearRunOffer();
+    out.textContent = `running ${activeFilePath}…\n`;
+    status.textContent = 'running';
+    const runBtn = document.getElementById('run-btn');
+    if (runBtn) runBtn.disabled = true;
+
+    try {
+        const r = await api('/api/files/run', {
+            method: 'POST',
+            body: JSON.stringify({ path: activeFilePath }),
+        });
+        // A compiler error is a build-stage failure, and saying which stage
+        // failed is the difference between "my code is wrong" and "my
+        // toolchain is wrong".
+        const stage = r.stage === 'build' ? 'compile failed' : (r.ok ? 'finished' : 'exited non-zero');
+        out.textContent = `${r.language || ''} · ${stage}\n\n${r.output || ''}`;
+        status.textContent = r.missing_tool ? `needs ${r.missing_tool}`
+            : `${r.language || ''} · ${r.ok ? 'ok' : 'failed'}`;
+        // The one line that matters is usually buried in the traceback, so it
+        // gets lifted out and given a button.
+        if (r.missing_tool) showToolchainOffer(r);
+        else if (r.missing_package) showPackageOffer(r.missing_package);
+    } catch (e) {
+        out.textContent = 'Could not run: ' + e.message;
+        status.textContent = 'error';
+    } finally {
+        if (runBtn) runBtn.disabled = false;
+    }
+}
+
+// ---------- "you're missing something" offers ----------
+//
+// The interesting line of a failed run is one line in fifty, and the fix is
+// usually one command. Both get lifted out of the output and given a button.
+// Nothing installs itself: the command is shown next to the button, because
+// running an installer on someone's machine without saying which one is not a
+// convenience, it is a surprise.
+
+function clearRunOffer() {
+    const host = document.getElementById('run-offer');
+    if (!host) return;
+    host.innerHTML = '';
+    host.classList.add('hidden');
+}
+
+function runOfferHost() {
+    const host = document.getElementById('run-offer');
+    host.innerHTML = '';
+    host.classList.remove('hidden');
+    return host;
+}
+
+// A missing language is not something Carrot can install for you — that is an
+// installer with a licence screen — so this offers the official download page.
+function showToolchainOffer(result) {
+    const host = runOfferHost();
+    const title = document.createElement('div');
+    title.className = 'offer-title';
+    title.textContent = `${result.language || 'That language'} is not installed on this computer`;
+    host.appendChild(title);
+
+    const body = document.createElement('div');
+    body.className = 'offer-body';
+    body.textContent = `Run needs ${result.missing_tool}. Install it, then press Run again — `
+        + `your file is saved and waiting.`;
+    host.appendChild(body);
+
+    if (result.help_url) {
+        const link = document.createElement('button');
+        link.className = 'btn btn-primary';
+        link.textContent = `Get ${result.missing_tool}`;
+        link.onclick = () => {
+            if (window.carrot?.openExternal) window.carrot.openExternal(result.help_url);
+            else window.open(result.help_url, '_blank', 'noopener');
+        };
+        host.appendChild(link);
+        const url = document.createElement('code');
+        url.className = 'offer-cmd';
+        url.textContent = result.help_url;
+        host.appendChild(url);
+    }
+}
+
+function showPackageOffer(offer) {
+    const host = runOfferHost();
+    const title = document.createElement('div');
+    title.className = 'offer-title';
+    title.textContent = offer.installable
+        ? `${offer.missing} is not installed`
+        : `${offer.missing} is missing`;
+    host.appendChild(title);
+
+    const body = document.createElement('div');
+    body.className = 'offer-body';
+    // `import cv2` needing `opencv-python` is the single most useful sentence
+    // in this whole feature, so it goes above the button.
+    body.textContent = offer.note ? `${offer.message} ${offer.note}` : offer.message;
+    host.appendChild(body);
+
+    if (!offer.installable) return;
+    if (!offer.available) {
+        const why = document.createElement('div');
+        why.className = 'offer-body';
+        why.textContent = `${offer.manager_label} is not on this computer, so Carrot cannot `
+            + `install it for you.`;
+        host.appendChild(why);
+        return;
+    }
+
+    const button = document.createElement('button');
+    button.className = 'btn btn-primary';
+    button.textContent = `Install ${offer.package}`;
+    button.onclick = () => installMissingPackage(offer, button);
+    host.appendChild(button);
+
+    const cmd = document.createElement('code');
+    cmd.className = 'offer-cmd';
+    cmd.textContent = offer.command;
+    host.appendChild(cmd);
+}
+
+async function installMissingPackage(offer, button) {
+    const out = document.getElementById('run-output');
+    button.disabled = true;
+    button.textContent = `Installing ${offer.package}…`;
+    let result;
+    try {
+        result = await api('/api/files/install', {
+            method: 'POST',
+            body: JSON.stringify({ package: offer.package, manager: offer.manager }),
+        });
+    } catch (e) {
+        button.disabled = false;
+        button.textContent = `Install ${offer.package}`;
+        out.textContent = 'Could not install: ' + (e.detail || e.message);
+        return;
+    }
+    out.textContent = `${result.command}\n\n${result.output || ''}`;
+    if (result.ok) {
+        clearRunOffer();
+        setCodeStatus(`installed ${offer.package} — running again`);
+        // The reason anyone pressed the button was to get their program to
+        // run, so finish the job rather than making them press Run again.
+        runCurrentFile();
+    } else {
+        button.disabled = false;
+        button.textContent = `Try again`;
+    }
+}
+
+// ---------- terminal ----------
+
+function termLine(text, kind) {
+    const log = document.getElementById('term-log');
+    const line = document.createElement('div');
+    line.className = 'term-line' + (kind ? ' ' + kind : '');
+    line.textContent = text;
+    log.appendChild(line);
+    log.scrollTop = log.scrollHeight;
+    return line;
+}
+
+async function runTerminalCommand(command, confirmed) {
+    const status = document.getElementById('panel-status');
+    status.textContent = 'running';
+    try {
+        const r = await api('/api/terminal/execute', {
+            method: 'POST',
+            body: JSON.stringify({ command, cwd: codeRoot, confirm: !!confirmed }),
+        });
+        termLine(r.output || '(no output)', r.success ? '' : 'bad');
+        status.textContent = r.success ? '' : `exit ${r.returncode}`;
+    } catch (e) {
+        // 428 is the backend asking for a second look at a destructive
+        // command, not a failure — re-send once the user agrees.
+        const detail = e.detail || {};
+        if (e.status === 428 || detail.needs_confirmation) {
+            const why = (detail.reasons || []).join('; ') || detail.message || 'this looks destructive';
+            if (confirm(`${why}\n\nRun anyway?\n\n${command}`)) {
+                return runTerminalCommand(command, true);
+            }
+            termLine('cancelled', 'bad');
+            status.textContent = '';
+            return;
+        }
+        termLine(e.message, 'bad');
+        status.textContent = 'error';
+    }
+}
+
+function wireTerminal() {
+    const input = document.getElementById('term-input');
+    if (!input || input.dataset.wired) return;
+    input.dataset.wired = '1';
+    input.addEventListener('keydown', async (e) => {
+        if (e.key === 'Enter') {
+            const command = input.value.trim();
+            if (!command) return;
+            termHistory.push(command);
+            termHistoryIndex = termHistory.length;
+            input.value = '';
+            termLine('$ ' + command, 'cmd');
+            await runTerminalCommand(command, false);
+        } else if (e.key === 'ArrowUp') {
+            if (!termHistory.length) return;
+            e.preventDefault();
+            termHistoryIndex = Math.max(0, termHistoryIndex - 1);
+            input.value = termHistory[termHistoryIndex] || '';
+        } else if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            termHistoryIndex = Math.min(termHistory.length, termHistoryIndex + 1);
+            input.value = termHistory[termHistoryIndex] || '';
+        }
+    });
+}
+
+
+// Shown when a new file's language has no toolchain on this machine.
+function warnMissingToolchain(tc) {
+    showCodePanel('output');
+    const out = document.getElementById('run-output');
+    clearRunOffer();
+    showToolchainOffer({ language: tc.language, missing_tool: tc.install, help_url: tc.help_url });
+    out.textContent =
+        `${tc.language} is not installed on this computer, so Run will not work yet.\n\n` +
+        `Install ${tc.install}` + (tc.help_url ? `\n  ${tc.help_url}` : '') +
+        `\n\nYou can still write and save the file — come back and press Run once it is set up.`;
+    document.getElementById('panel-status').textContent = `${tc.language} missing`;
+}
+
+// ---------- The agent panel ----------
+//
+// A Plan/Act switch with nowhere to talk to the agent is a steering wheel with
+// no car attached. This is the car: a conversation scoped to the code
+// workspace, streaming the same SSE the chat tab does, showing tool calls and
+// approval prompts inline so you can watch what it is doing to your files.
+
+let agentConversationId = null;
+let agentAbort = null;
+let agentAttachments = [];
+
+function toggleAgentSide(force) {
+    const side = document.getElementById('agent-side');
+    if (!side) return;
+    const hide = force === undefined ? !side.classList.contains('hidden') : !force;
+    side.classList.toggle('hidden', hide);
+    if (!hide) document.getElementById('agent-input')?.focus();
+}
+
+function newAgentTask() {
+    agentConversationId = null;
+    agentAttachments = [];
+    renderAgentTray();
+    const log = document.getElementById('agent-log');
+    log.innerHTML = '<div class="agent-hello"><p>New task. What should I do?</p></div>';
+    document.getElementById('agent-input')?.focus();
+}
+
+// ---------- Attachments ----------
+//
+// A screenshot of the error, a mock of the screen, a PDF of the spec. Images
+// only work with a vision model, so the tray says so rather than letting the
+// send fail with a 400 the user cannot interpret.
+
+async function addAgentAttachments(files) {
+    for (const file of Array.from(files || [])) {
+        if (file.size > (typeof ATTACH_MAX_BYTES !== 'undefined' ? ATTACH_MAX_BYTES : 10485760)) {
+            setCodeStatus(`${file.name} is too large`);
+            continue;
+        }
+        const data = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+        });
+        const isImage = (file.type || '').startsWith('image/');
+        agentAttachments.push({
+            name: file.name, mime: file.type, bytes: file.size, data,
+            thumb: isImage ? `data:${file.type};base64,${data}` : null,
+            image: isImage,
+        });
+    }
+    renderAgentTray();
+}
+
+function removeAgentAttachment(index) {
+    agentAttachments.splice(index, 1);
+    renderAgentTray();
+}
+
+function renderAgentTray() {
+    const tray = document.getElementById('agent-attach-tray');
+    if (!tray) return;
+    tray.classList.toggle('hidden', !agentAttachments.length);
+    tray.innerHTML = agentAttachments.map((a, i) => `
+        <div class="attach-chip">
+          ${a.thumb ? `<img src="${a.thumb}" alt="">` : '<span class="attach-doc"></span>'}
+          <span class="attach-name">${escHtml(a.name)}</span>
+          <button class="attach-x" onclick="removeAgentAttachment(${i})">&times;</button>
+        </div>`).join('');
+    warnIfNoVision();
+}
+
+// Checking before sending turns "400: gemma cannot read images" into a
+// sentence that appears while there is still time to switch models.
+async function warnIfNoVision() {
+    const hint = document.getElementById('agent-context-hint');
+    if (!hint) return;
+    if (!agentAttachments.some(a => a.image)) { hint.textContent = ''; return; }
+    try {
+        const data = await api('/api/models');
+        const model = data.chat_local === false ? data.chat_model : data.active_model;
+        const vision = /vision|llava|moondream|gemma|qwen2?-?vl|pixtral|gpt-4|claude|minicpm/i;
+        hint.textContent = vision.test(model || '')
+            ? '' : `${model} probably cannot read images — pick a vision model.`;
+    } catch (_) { hint.textContent = ''; }
+}
+
+function agentBubble(role, text) {
+    const log = document.getElementById('agent-log');
+    log.querySelector('.agent-hello')?.remove();
+    const wrap = document.createElement('div');
+    wrap.className = 'agent-msg ' + role;
+    const body = document.createElement('div');
+    // `md` carries the heading, list and code-block styling the chat bubbles
+    // already have; without it the rendered markdown is unstyled run-on text.
+    body.className = 'agent-body md';
+    body.textContent = text || '';
+    wrap.appendChild(body);
+    log.appendChild(wrap);
+    log.scrollTop = log.scrollHeight;
+    return { wrap, body };
+}
+
+function agentTrace(wrap, text, cls) {
+    let trace = wrap.querySelector('.agent-trace');
+    if (!trace) {
+        trace = document.createElement('div');
+        trace.className = 'agent-trace';
+        wrap.insertBefore(trace, wrap.firstChild);
+    }
+    const line = document.createElement('div');
+    line.className = 'agent-trace-line' + (cls ? ' ' + cls : '');
+    line.textContent = text;
+    trace.appendChild(line);
+    trace.scrollTop = trace.scrollHeight;
+    document.getElementById('agent-log').scrollTop = 1e9;
+}
+
+// What the agent is looking at right now. Sending the open file with the task
+// is the difference between "fix this" working and needing to paste a path.
+function agentContext() {
+    const parts = [];
+    if (typeof activeFilePath !== 'undefined' && activeFilePath) {
+        parts.push(`The file currently open is ${activeFilePath}.`);
+    }
+    return parts.join(' ');
+}
+
+function stopAgentTask() {
+    if (agentAbort) agentAbort.abort();
+}
+
+async function sendAgentTask() {
+    const input = document.getElementById('agent-input');
+    const task = input.value.trim();
+    if ((!task && !agentAttachments.length) || agentAbort) return;
+    const attachments = agentAttachments.slice();
+    input.value = '';
+    agentAttachments = [];
+    renderAgentTray();
+    agentBubble('you', task + (attachments.length
+        ? `\n[${attachments.map(a => a.name).join(', ')}]` : ''));
+
+    const { wrap, body } = agentBubble('agent', '');
+    body.innerHTML = '<span class="caret">&nbsp;</span>';
+    const send = document.getElementById('agent-send');
+    const stop = document.getElementById('agent-stop');
+    send.disabled = true;
+    stop.hidden = false;
+    agentAbort = new AbortController();
+
+    const context = agentContext();
+    let answer = '';
+    try {
+        const response = await fetch('/api/chat/stream', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
+            signal: agentAbort.signal,
+            body: JSON.stringify({
+                message: (context ? `${task}\n\n(${context})` : task)
+                    || 'What is in the attached file?',
+                attachments: attachments.map(a => ({ name: a.name, mime: a.mime, data: a.data })),
+                conversation_id: agentConversationId,
+                // The agent's own pick, falling back to the composer's when
+                // it is set to "Same as chat".
+                model: agentModel ? agentModel.model
+                    : (typeof currentModel !== 'undefined' ? currentModel : null),
+                provider: agentModel ? agentModel.provider
+                    : (typeof currentProvider !== 'undefined' ? currentProvider : null),
+                // Single search, not off. "Off" removes web_search and read_url
+                // from the tool list outright, so the agent could not look up
+                // an API it did not know or paste an error message into a
+                // search — the two things a coding agent most needs the web
+                // for. Single rather than multi: it may check a fact, not go
+                // researching instead of working.
+                search_mode: 'single',
+                // This is the coding panel, so this turn gets the plan/act
+                // preamble and the workspace rules. Ordinary chat does not:
+                // one global coder_mode was being applied to every message in
+                // the app, so a question about the news arrived dressed as a
+                // coding task.
+                coder: true,
+            }),
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const frames = buffer.split('\n\n');
+            buffer = frames.pop();
+            for (const frame of frames) {
+                const line = frame.split('\n').find(l => l.startsWith('data: '));
+                if (!line) continue;
+                let payload;
+                try { payload = JSON.parse(line.slice(6)); } catch (_) { continue; }
+
+                if (payload.conversation_id) agentConversationId = payload.conversation_id;
+                if (payload.tool) {
+                    agentTrace(wrap, `→ ${payload.tool.name}(${
+                        Object.entries(payload.tool.args || {})
+                            .map(([k, v]) => `${k}=${String(v).slice(0, 60)}`).join(', ')})`,
+                        payload.tool.rejected ? 'rejected' : '');
+                }
+                if (payload.tool_result) {
+                    agentTrace(wrap, `← ${String(payload.tool_result.result).slice(0, 300)}`, 'result');
+                }
+                // An approval prompt has to be answerable from here, or the
+                // agent silently blocks until it times out.
+                //
+                // It read `payload.approval`, which the server has never sent —
+                // the event is `approval_request`, as the chat trace in app.js
+                // has always had it. So the card was never built, the panel sat
+                // with a spinner on a turn that was waiting on a click nobody
+                // could make, and it ended ten minutes later at the timeout.
+                if (payload.approval_request) agentApproval(wrap, payload.approval_request);
+                // And clear it when it is answered from anywhere — including a
+                // timeout, which otherwise leaves live-looking buttons behind.
+                if (payload.approval_resolved) {
+                    agentApprovalResolved(wrap, payload.approval_resolved);
+                }
+                if (payload.questions) agentQuestions(wrap, payload.questions);
+                if (payload.chunk) {
+                    answer += payload.chunk;
+                    // Through mdToHtml, the same renderer the chat trace uses,
+                    // rather than textContent. A plan is mostly headings, lists
+                    // and fenced code, and as plain text it arrived as a wall
+                    // with literal ### and ``` in it — which reads as the model
+                    // formatting badly when it is the panel not rendering.
+                    // The questions block is machine-readable scaffolding for
+                    // the form below; showing the user raw JSON as well is
+                    // worse than not asking.
+                    body.innerHTML = mdToHtml(stripQuestions(answer));
+                    document.getElementById('agent-log').scrollTop = 1e9;
+                }
+                if (payload.error) agentTrace(wrap, 'error: ' + payload.error, 'rejected');
+            }
+        }
+    } catch (e) {
+        if (e.name !== 'AbortError') body.textContent = 'Failed: ' + e.message;
+        else agentTrace(wrap, 'stopped', 'rejected');
+    } finally {
+        agentAbort = null;
+        send.disabled = false;
+        stop.hidden = true;
+        if (!answer.trim() && body.querySelector('.caret')) body.textContent = '(done)';
+        // The agent just touched the workspace; the tree and git state are
+        // stale the instant it did.
+        loadCodeTree();
+        loadCoderState();
+    }
+}
+
+// The clarifying questions at the end of a plan, as a form.
+//
+// As prose they were a dead end: answering meant retyping the request with the
+// answers folded in, so most of the time nobody did, and Act guessed. Skip is
+// a real answer, not silence — it takes the model's first option for each,
+// which is what "just pick something sensible" means.
+// Display-side twin of strip_questions in coder.py, and see that for why it
+// does not match on fences: three live runs wrapped the block three different
+// ways. Find the marker, find the array after it, cut from the marker's line
+// to the end of that array plus any fence it was sitting in.
+const QUESTIONS_MARKER = /carrot-questions/i;
+
+function stripQuestions(text) {
+    const marker = QUESTIONS_MARKER.exec(text || '');
+    if (!marker) return text || '';
+
+    const open = text.indexOf('[', marker.index + marker[0].length);
+    if (open < 0) return text;
+
+    let depth = 0, inString = false, escaped = false, end = -1;
+    for (let i = open; i < text.length; i++) {
+        const c = text[i];
+        if (inString) {
+            if (escaped) escaped = false;
+            else if (c === '\\') escaped = true;
+            else if (c === '"') inString = false;
+            continue;
+        }
+        if (c === '"') inString = true;
+        else if (c === '[') depth++;
+        else if (c === ']' && --depth === 0) { end = i + 1; break; }
+    }
+    if (end < 0) end = text.length;          // reply stopped mid-block
+
+    let head = text.slice(0, text.lastIndexOf('\n', marker.index) + 1);
+    head = head.replace(/(?:^|\n)[ \t]*```[a-zA-Z]*[ \t]*\n?$/, '\n');
+    const tail = text.slice(end).replace(/^\s*```[a-zA-Z]*\s*/, '');
+    return (head.trimEnd() + '\n' + tail.trimStart()).trim();
+}
+
+function agentQuestions(wrap, questions) {
+    if (!questions || !questions.length) return;
+    if (wrap.querySelector('.agent-questions')) return;   // one form per turn
+
+    const box = document.createElement('div');
+    box.className = 'agent-questions';
+    const head = document.createElement('div');
+    head.className = 'questions-head';
+    head.textContent = 'Before it starts — answer what matters, skip the rest.';
+    box.appendChild(head);
+
+    const chosen = new Map();
+    questions.forEach((q, i) => {
+        const field = document.createElement('div');
+        field.className = 'question';
+        const label = document.createElement('div');
+        label.className = 'question-text';
+        label.textContent = q.question;
+        field.appendChild(label);
+
+        const row = document.createElement('div');
+        row.className = 'question-options';
+        q.options.forEach((option, j) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'question-option';
+            button.textContent = option;
+            // The first option is pre-selected, so the form already reads as
+            // the answer you get by skipping it.
+            if (j === 0) { button.classList.add('on'); chosen.set(i, option); }
+            button.onclick = () => {
+                row.querySelectorAll('.question-option').forEach(b => b.classList.remove('on'));
+                button.classList.add('on');
+                chosen.set(i, option);
+                custom.value = '';
+            };
+            row.appendChild(button);
+        });
+        field.appendChild(row);
+
+        const custom = document.createElement('input');
+        custom.type = 'text';
+        custom.className = 'question-custom';
+        custom.placeholder = 'or say something else…';
+        custom.oninput = () => {
+            if (!custom.value.trim()) return;
+            row.querySelectorAll('.question-option').forEach(b => b.classList.remove('on'));
+            chosen.set(i, custom.value.trim());
+        };
+        field.appendChild(custom);
+        box.appendChild(field);
+    });
+
+    const actions = document.createElement('div');
+    actions.className = 'questions-actions';
+
+    const go = document.createElement('button');
+    go.className = 'btn btn-primary';
+    go.textContent = 'Build it';
+    go.onclick = () => submitAgentQuestions(box, questions, chosen);
+
+    const skip = document.createElement('button');
+    skip.className = 'btn btn-ghost';
+    skip.textContent = 'Skip — just pick sensible defaults';
+    skip.onclick = () => {
+        questions.forEach((q, i) => chosen.set(i, q.options[0]));
+        submitAgentQuestions(box, questions, chosen);
+    };
+
+    actions.append(go, skip);
+    box.appendChild(actions);
+    wrap.appendChild(box);
+    document.getElementById('agent-log').scrollTop = 1e9;
+}
+
+async function submitAgentQuestions(box, questions, chosen) {
+    box.querySelectorAll('button, input').forEach(el => { el.disabled = true; });
+    const pairs = questions.map((q, i) => ({ question: q.question, answer: chosen.get(i) || '' }));
+    const summary = pairs.filter(p => p.answer)
+        .map(p => `${p.question} — ${p.answer}`).join('; ');
+    box.querySelector('.questions-head').textContent = summary || 'Using the defaults.';
+
+    // Answering a plan is the moment Act was waiting for, so the mode switch
+    // happens here rather than leaving the user to find the button. It runs
+    // first: the answers are the follow-up turn, and they have to arrive with
+    // the write tools already available or the model just re-plans.
+    await setCoderMode('act');
+    const input = document.getElementById('agent-input');
+    input.value = 'Answers to your questions:\n'
+        + pairs.filter(p => p.answer).map(p => `- ${p.question} — ${p.answer}`).join('\n')
+        + '\n\nGo ahead on that basis.';
+    sendAgentTask();
+}
+
+function agentApproval(wrap, request) {
+    const box = document.createElement('div');
+    box.className = 'agent-approval';
+    box.dataset.approvalId = request.id || '';
+    box.innerHTML = `<div class="approval-what">${escHtml(request.summary || request.tool || 'Allow this?')}</div>`;
+    const row = document.createElement('div');
+    row.className = 'approval-row';
+    for (const [label, allow] of [['Allow', true], ['Deny', false]]) {
+        const button = document.createElement('button');
+        button.className = allow ? 'btn btn-primary' : 'btn btn-ghost';
+        button.textContent = label;
+        button.onclick = async () => {
+            box.querySelectorAll('button').forEach(b => { b.disabled = true; });
+            try {
+                // The endpoint takes {decision: "allow"|"deny"}. This sent
+                // {approved: true}, which has no `decision` at all and is
+                // rejected before it reaches the gate — so the one button that
+                // could have unblocked the turn could not have worked either.
+                await api(`/api/agent/approvals/${encodeURIComponent(request.id)}`, {
+                    method: 'POST',
+                    body: JSON.stringify({ decision: allow ? 'allow' : 'deny' }),
+                });
+                // Both this and the approval_resolved event annotate the card,
+                // and either can land first, so the wording is applied through
+                // one idempotent helper rather than appended twice.
+                annotateApproval(box, allow ? 'allow' : 'deny');
+            } catch (e) {
+                box.querySelector('.approval-what').textContent = 'Could not answer: ' + e.message;
+            }
+        };
+        row.appendChild(button);
+    }
+    box.appendChild(row);
+    wrap.appendChild(box);
+    document.getElementById('agent-log').scrollTop = 1e9;
+}
+
+// Says how the prompt ended, once. The button that answers it and the
+// approval_resolved event that confirms it both arrive, in either order, so
+// this has to be safe to call twice — it read "— allowed — allowed" when it
+// was not.
+function annotateApproval(box, decision) {
+    if (!box || box.dataset.answered) return;
+    box.dataset.answered = decision;
+    box.querySelectorAll('button').forEach(b => { b.disabled = true; });
+    const what = box.querySelector('.approval-what');
+    if (!what) return;
+    const said = { allow: 'allowed', deny: 'denied', timeout: 'not answered' };
+    what.textContent += ` — ${said[decision] || decision}`;
+}
+
+function agentApprovalResolved(wrap, resolved) {
+    const box = wrap.querySelector(`.agent-approval[data-approval-id="${CSS.escape(resolved.id || '')}"]`);
+    annotateApproval(box, resolved.decision);
+}
+
+// Paste a screenshot straight into the agent, and drop files on the panel.
+// Handing an agent a picture of the error is how people actually work.
+document.addEventListener('paste', (event) => {
+    const side = document.getElementById('agent-side');
+    if (!side || side.classList.contains('hidden')) return;
+    if (!side.contains(document.activeElement)) return;
+    const files = Array.from(event.clipboardData?.files || []);
+    if (files.length) {
+        event.preventDefault();
+        addAgentAttachments(files);
+    }
+});
+
+document.addEventListener('DOMContentLoaded', () => {
+    const side = document.getElementById('agent-side');
+    if (!side) return;
+    side.addEventListener('dragover', (e) => { e.preventDefault(); side.classList.add('dropping'); });
+    side.addEventListener('dragleave', () => side.classList.remove('dropping'));
+    side.addEventListener('drop', (e) => {
+        e.preventDefault();
+        side.classList.remove('dropping');
+        addAgentAttachments(e.dataTransfer?.files);
+    });
+});
+
+
+// The status word above the editor is a pointer, not a control: clicking it
+// opens the agent panel, which is where the one Plan/Act switch lives.
+function revealAgentMode() {
+    const side = document.getElementById('agent-side');
+    if (side && side.classList.contains('hidden') && typeof toggleAgentSide === 'function') {
+        toggleAgentSide();
+    }
+    const target = document.getElementById('mode-plan');
+    if (!target) return;
+    target.parentElement.classList.add('flash');
+    setTimeout(() => target.parentElement.classList.remove('flash'), 1200);
+}
+
+
+// ---------- The agent's own model ----------
+//
+// It used to take whatever the chat composer happened to be set to, with
+// nothing on screen saying which model that was. The coding agent is the one
+// place the choice matters most — a 4B local model and a frontier model are
+// not interchangeable at editing a file — and it was the one place you could
+// neither see nor make it.
+
+let agentModel = null;      // {provider, model}, or null to follow the composer
+
+function agentModelKey(entry) {
+    return `${entry.provider || 'ollama'}::${entry.model}`;
+}
+
+async function loadAgentModelPicker() {
+    const select = document.getElementById('agent-model');
+    if (!select) return;
+    if (typeof loadAvailableModels === 'function' && !(availableModels || []).length) {
+        await loadAvailableModels();
+    }
+    const groups = {};
+    for (const entry of (typeof availableModels !== 'undefined' ? availableModels : [])) {
+        (groups[entry.group] = groups[entry.group] || []).push(entry);
+    }
+    const saved = localStorage.getItem('carrot-agent-model') || '';
+    // "Same as chat" stays the default, because that is what it did before and
+    // silently changing which model runs someone's agent is not an upgrade.
+    let html = '<option value="">Same as chat</option>';
+    for (const [label, entries] of Object.entries(groups)) {
+        html += `<optgroup label="${escHtml(label)}">`;
+        for (const entry of entries) {
+            const key = agentModelKey(entry);
+            html += `<option value="${escHtml(key)}"${key === saved ? ' selected' : ''}>`
+                  + `${escHtml(entry.model)}</option>`;
+        }
+        html += '</optgroup>';
+    }
+    select.innerHTML = html;
+    applyAgentModel(saved);
+}
+
+function setAgentModel(key) {
+    if (key) localStorage.setItem('carrot-agent-model', key);
+    else localStorage.removeItem('carrot-agent-model');
+    applyAgentModel(key);
+}
+
+function applyAgentModel(key) {
+    if (!key) { agentModel = null; return; }
+    const [provider, ...rest] = key.split('::');
+    agentModel = { provider, model: rest.join('::') };
 }

@@ -34,7 +34,7 @@ WIDGET_CATALOG: List[Dict[str, Any]] = [
     {
         "type": "calendar",
         "name": "Calendar",
-        "desc": "Month view highlighting today and your upcoming reminders.",
+        "desc": "Month view with your reminders — and your Google Calendar, connected in Settings with one paste.",
         "slot": "canvas",
         "needs_setup": False,
     },

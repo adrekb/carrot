@@ -3,44 +3,276 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="dark">
 <title>Carrot AI</title>
 <link rel="icon" type="image/png" href="/assets/logo.png">
 <link rel="stylesheet" href="/css/style.css">
+<!-- Loaded here, synchronously and before the body, so the chosen theme is
+     on <html> for the very first paint. Deferring it flashes dark. -->
+<script src="/js/theme.js"></script>
 </head>
 <body>
 
 <!-- SVG icon sprite -->
 <svg xmlns="http://www.w3.org/2000/svg" style="display:none">
-  <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></symbol>
-  <symbol id="i-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1M12 18v4"/></symbol>
-  <symbol id="i-speaker" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></symbol>
-  <symbol id="i-speaker-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M23 9l-6 6M17 9l6 6"/></symbol>
-  <symbol id="i-send" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></symbol>
-  <symbol id="i-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></symbol>
-  <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></symbol>
-  <symbol id="i-chip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></symbol>
-  <symbol id="i-terminal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17l6-6-6-6M12 19h8"/></symbol>
-  <symbol id="i-doc" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></symbol>
-  <symbol id="i-pulse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></symbol>
-  <symbol id="i-cap" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10L12 5 2 10l10 5 10-5z"/><path d="M6 12v5c0 1.7 2.7 3 6 3s6-1.3 6-3v-5"/></symbol>
-  <symbol id="i-news" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 8h10M7 12h10M7 16h6"/></symbol>
-  <symbol id="i-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></symbol>
-  <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></symbol>
-  <symbol id="i-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></symbol>
-  <symbol id="i-download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></symbol>
-  <symbol id="i-grid" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></symbol>
-  <symbol id="i-chat" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></symbol>
-  <symbol id="i-activity" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5"/></symbol>
-  <symbol id="i-github" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49 0-.24-.01-.87-.01-1.71-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.5-1.11-1.5-.91-.63.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.57 2.34 1.12 2.91.85.09-.66.35-1.12.63-1.38-2.22-.26-4.56-1.14-4.56-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.28 2.75 1.05a9.4 9.4 0 0 1 5 0c1.91-1.33 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.81-4.57 5.06.36.32.68.94.68 1.9 0 1.37-.01 2.47-.01 2.81 0 .27.18.6.69.49A10.02 10.02 0 0 0 22 12.25C22 6.58 17.52 2 12 2z"/></symbol>
-  <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></symbol>
-  <symbol id="i-more" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></symbol>
-  <symbol id="i-star" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01z"/></symbol>
-  <symbol id="i-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></symbol>
-  <symbol id="i-calendar" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></symbol>
-  <symbol id="i-cloud" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></symbol>
-  <symbol id="i-note" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8"/></symbol>
-  <symbol id="i-edit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></symbol>
+  <!-- One 24x24 grid, 1.7px strokes, round caps and joins, 2px optical
+       padding. Drawn as a set so weight stays even at 15-18px. -->
+  <defs>
+    <style>
+      symbol[id^="i-"] { fill: none; stroke: currentColor; stroke-width: 1.7;
+                         stroke-linecap: round; stroke-linejoin: round; }
+      symbol.solid { fill: currentColor; stroke: none; }
+    </style>
+  </defs>
+
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.8"/><path d="M15.8 15.8L20.5 20.5"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9.2" y="2.6" width="5.6" height="11" rx="2.8"/><path d="M5.4 11.2a6.6 6.6 0 0 0 13.2 0M12 17.8V21.4M8.6 21.4h6.8"/></symbol>
+  <symbol id="i-speaker" viewBox="0 0 24 24"><path d="M11.4 4.4L6.6 8.6H3.2v6.8h3.4l4.8 4.2z"/><path d="M15.4 9.2a4 4 0 0 1 0 5.6"/><path d="M18.2 6.4a8 8 0 0 1 0 11.2"/></symbol>
+  <symbol id="i-speaker-off" viewBox="0 0 24 24"><path d="M11.4 4.4L6.6 8.6H3.2v6.8h3.4l4.8 4.2z"/><path d="M16.2 9.8l5 4.4M21.2 9.8l-5 4.4"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M12 19.5V5.2"/><path d="M5.6 11.6L12 5.2l6.4 6.4"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M6.4 9.4l5.6 5.4 5.6-5.4"/></symbol>
+  <symbol id="i-ghost" viewBox="0 0 24 24"><path d="M4.2 11.4a7.8 7.8 0 0 1 15.6 0v8.4l-2.6-1.8-2.6 1.8-2.6-1.8-2.6 1.8-2.6-1.8z" stroke-dasharray="3 2.6"/><circle cx="9.4" cy="10.6" r="1.05" fill="currentColor" stroke="none"/><circle cx="14.6" cy="10.6" r="1.05" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-chip" viewBox="0 0 24 24"><rect x="6.4" y="6.4" width="11.2" height="11.2" rx="3"/><rect x="10" y="10" width="4" height="4" rx="1.2"/><path d="M9.6 3.2v3.2M14.4 3.2v3.2M9.6 17.6v3.2M14.4 17.6v3.2M3.2 9.6h3.2M3.2 14.4h3.2M17.6 9.6h3.2M17.6 14.4h3.2"/></symbol>
+  <symbol id="i-terminal" viewBox="0 0 24 24"><path d="M8.6 7.6L3.6 12l5 4.4M15.4 7.6l5 4.4-5 4.4M13.6 4.4l-3.2 15.2"/></symbol>
+  <symbol id="i-doc" viewBox="0 0 24 24"><path d="M13.4 2.8H7a2.6 2.6 0 0 0-2.6 2.6v13.2A2.6 2.6 0 0 0 7 21.2h10a2.6 2.6 0 0 0 2.6-2.6V9z"/><path d="M13.4 2.8V9h6.2"/></symbol>
+  <symbol id="i-pulse" viewBox="0 0 24 24"><path d="M2.8 12.4h3.9l2.3-6.2 4.2 12.2 2.4-6h5.6"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.4 12S6.2 5.4 12 5.4 21.6 12 21.6 12 17.8 18.6 12 18.6 2.4 12 2.4 12z"/><circle cx="12" cy="12" r="3.1"/></symbol>
+  <symbol id="i-cap" viewBox="0 0 24 24"><path d="M21 9.2L12 4.8 3 9.2l9 4.4z"/><path d="M6.6 11.4v4.4c0 1.6 2.4 2.9 5.4 2.9s5.4-1.3 5.4-2.9v-4.4"/></symbol>
+  <symbol id="i-news" viewBox="0 0 24 24"><rect x="3.2" y="4.6" width="17.6" height="14.8" rx="3"/><path d="M7 9.2h10M7 12.6h10M7 16h6"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.1"/><path d="M12 2.6l1.5 2.6a7.6 7.6 0 0 1 2 .8l2.9-.6 1.6 2.8-1.9 2.3a7.6 7.6 0 0 1 0 2.2l1.9 2.3-1.6 2.8-2.9-.6a7.6 7.6 0 0 1-2 .8L12 21.4l-1.5-2.6a7.6 7.6 0 0 1-2-.8l-2.9.6-1.6-2.8 1.9-2.3a7.6 7.6 0 0 1 0-2.2L4 9l1.6-2.8 2.9.6a7.6 7.6 0 0 1 2-.8z"/></symbol>
+  <symbol id="i-palette" viewBox="0 0 24 24"><path d="M12 3.2a8.8 8.8 0 0 0 0 17.6c1.4 0 2.3-.85 2.3-1.95 0-.55-.2-1-.55-1.35-.35-.35-.55-.8-.55-1.3 0-1.05.85-1.85 1.9-1.85h1.6a4.1 4.1 0 0 0 4.1-4.1C20.8 6.35 16.9 3.2 12 3.2z"/><circle cx="7.7" cy="11.4" r="1.15" fill="currentColor" stroke="none"/><circle cx="10.3" cy="7.6" r="1.15" fill="currentColor" stroke="none"/><circle cx="14.6" cy="7.7" r="1.15" fill="currentColor" stroke="none"/><circle cx="17.3" cy="10.9" r="1.15" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-file-plus" viewBox="0 0 24 24"><path d="M13.4 2.8H7a2.6 2.6 0 0 0-2.6 2.6v13.2A2.6 2.6 0 0 0 7 21.2h10a2.6 2.6 0 0 0 2.6-2.6V9z"/><path d="M13.4 2.8V9h6.2"/><path d="M12 12.4v5.2M9.4 15h5.2"/></symbol>
+  <symbol id="i-folder-plus" viewBox="0 0 24 24"><path d="M3.2 6.6a2 2 0 0 1 2-2h3.6l2.2 2.6h7.8a2 2 0 0 1 2 2v8.2a2 2 0 0 1-2 2H5.2a2 2 0 0 1-2-2z"/><path d="M12 10.8v5M9.5 13.3h5"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24" stroke-width="2"><path d="M4.8 12.6l4.6 4.4L19.2 7"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3.6 6.4h16.8"/><path d="M8.4 6.4V4.8a2 2 0 0 1 2-2h3.2a2 2 0 0 1 2 2v1.6"/><path d="M18.4 6.4v12.4a2.4 2.4 0 0 1-2.4 2.4H8a2.4 2.4 0 0 1-2.4-2.4V6.4"/><path d="M10.2 10.8v6M13.8 10.8v6"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3.4v11.4"/><path d="M7.4 10.4l4.6 4.4 4.6-4.4"/><path d="M4 17.4v1.6a2.4 2.4 0 0 0 2.4 2.4h11.2a2.4 2.4 0 0 0 2.4-2.4v-1.6"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3.4" y="3.4" width="7.2" height="7.2" rx="2.2"/><rect x="13.4" y="3.4" width="7.2" height="7.2" rx="2.2"/><rect x="3.4" y="13.4" width="7.2" height="7.2" rx="2.2"/><rect x="13.4" y="13.4" width="7.2" height="7.2" rx="2.2"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M20.6 13.6a2.8 2.8 0 0 1-2.8 2.8H8.4L4 20.4V6a2.8 2.8 0 0 1 2.8-2.8h11a2.8 2.8 0 0 1 2.8 2.8z"/></symbol>
+  <symbol id="i-activity" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.4"/><circle cx="12" cy="12" r="4.4"/><circle cx="12" cy="12" r="1" class="solid" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-github" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49 0-.24-.01-.87-.01-1.71-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.5-1.11-1.5-.91-.63.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.57 2.34 1.12 2.91.85.09-.66.35-1.12.63-1.38-2.22-.26-4.56-1.14-4.56-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.28 2.75 1.05a9.4 9.4 0 0 1 5 0c1.91-1.33 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.81-4.57 5.06.36.32.68.94.68 1.9 0 1.37-.01 2.47-.01 2.81 0 .27.18.6.69.49A10.02 10.02 0 0 0 22 12.25C22 6.58 17.52 2 12 2z"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M17.6 6.4L6.4 17.6M6.4 6.4l11.2 11.2"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="5.4" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="18.6" cy="12" r="1.5"/></symbol>
+  <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 3.4l2.7 5.5 6 .9-4.35 4.24 1.03 6-5.38-2.83-5.38 2.83 1.03-6L3.3 9.8l6-.9z"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M20.8 18.6a2.4 2.4 0 0 1-2.4 2.4H5.6a2.4 2.4 0 0 1-2.4-2.4V5.4A2.4 2.4 0 0 1 5.6 3h3.9l2.1 3h6.8a2.4 2.4 0 0 1 2.4 2.4z"/></symbol>
+  <symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3.4" y="5" width="17.2" height="16" rx="3"/><path d="M16 2.8v4.4M8 2.8v4.4M3.4 10.6h17.2"/></symbol>
+  <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M17.6 19.4H7a4.8 4.8 0 0 1-.7-9.55A6.4 6.4 0 0 1 18.5 11a4.2 4.2 0 0 1-.9 8.4z"/></symbol>
+  <symbol id="i-note" viewBox="0 0 24 24"><path d="M13.4 2.8H7a2.6 2.6 0 0 0-2.6 2.6v13.2A2.6 2.6 0 0 0 7 21.2h10a2.6 2.6 0 0 0 2.6-2.6V9z"/><path d="M13.4 2.8V9h6.2M8.6 13.2h6.8M8.6 16.8h4.6"/></symbol>
+  <symbol id="i-edit" viewBox="0 0 24 24"><path d="M11.6 4.6H5.8A2.6 2.6 0 0 0 3.2 7.2v11a2.6 2.6 0 0 0 2.6 2.6h11a2.6 2.6 0 0 0 2.6-2.6v-5.8"/><path d="M17.4 3a2.1 2.1 0 0 1 3 3L12.8 13.6l-3.9.9.9-3.9z"/></symbol>
+  <symbol id="i-paperclip" viewBox="0 0 24 24"><path d="M20.4 11.6l-8.5 8.5a5.2 5.2 0 0 1-7.4-7.4l8.7-8.7a3.5 3.5 0 0 1 4.9 4.9l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><circle cx="7.5" cy="12" r="3.6"/><path d="M11.1 12h9.4M17.6 12v3.2M20.5 12v2.4"/></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24"><rect x="3.2" y="4.6" width="17.6" height="14.8" rx="3"/><circle cx="8.8" cy="10" r="1.6"/><path d="M20.8 15.6l-4.4-4.2-7.6 8"/></symbol>
+  <symbol id="i-file-pdf" viewBox="0 0 24 24"><path d="M13.4 2.8H7a2.6 2.6 0 0 0-2.6 2.6v13.2A2.6 2.6 0 0 0 7 21.2h10a2.6 2.6 0 0 0 2.6-2.6V9z"/><path d="M13.4 2.8V9h6.2"/><path d="M8.8 17.4v-4h1.4a1.3 1.3 0 0 1 0 2.6H8.8"/></symbol>
+  <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.6"/><circle cx="12" cy="12" r="4.6"/><circle cx="12" cy="12" r="1.1" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.8"/><path d="M9.6 9.4a2.5 2.5 0 0 1 4.85.83c0 1.67-2.45 2.5-2.45 2.5"/><circle cx="12" cy="16.6" r="0.95" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-brain" viewBox="0 0 24 24"><circle cx="7.4" cy="7.6" r="2.5"/><circle cx="16.6" cy="6.6" r="2.2"/><circle cx="6.2" cy="16.4" r="2.2"/><circle cx="16.2" cy="16.8" r="2.5"/><path d="M9.6 8.6l4.9-1.4M7 10.1v4.1M8.3 15.6l5.7 0.9M15.9 9.1l-.4 5.2"/></symbol>
+  <symbol id="i-robot" viewBox="0 0 24 24"><rect x="4" y="7.6" width="16" height="11.4" rx="3.2"/><path d="M12 3.4v4.2M8.6 22v-3M15.4 22v-3M1.9 12.6v3.4M22.1 12.6v3.4"/><circle cx="9.2" cy="13" r="1.15" fill="currentColor" stroke="none"/><circle cx="14.8" cy="13" r="1.15" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-puzzle" viewBox="0 0 24 24"><path d="M13.4 3.2a2.3 2.3 0 0 1 2.3 2.3v1.9h2.5a1.8 1.8 0 0 1 1.8 1.8v3.2h-1.9a2.3 2.3 0 0 0 0 4.6h1.9v2.5a1.8 1.8 0 0 1-1.8 1.8h-3.2v-1.9a2.3 2.3 0 0 0-4.6 0v1.9H7.2a1.8 1.8 0 0 1-1.8-1.8v-3.2H3.5a2.3 2.3 0 0 1 0-4.6h1.9V8.4a1.8 1.8 0 0 1 1.8-1.8h3.9V5.5a2.3 2.3 0 0 1 2.3-2.3z"/></symbol>
+  <symbol id="i-archive" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="4.6" rx="1.8"/><path d="M4.8 8.6v9.6A2.4 2.4 0 0 0 7.2 20.6h9.6a2.4 2.4 0 0 0 2.4-2.4V8.6"/><path d="M9.9 12.6h4.2"/></symbol>
+  <symbol id="i-trophy" viewBox="0 0 24 24"><path d="M7.4 3.8h9.2v5.4a4.6 4.6 0 0 1-9.2 0z"/><path d="M7.4 5.4H4.6a2.6 2.6 0 0 0 2.8 4.4M16.6 5.4h2.8a2.6 2.6 0 0 1-2.8 4.4"/><path d="M12 13.8v3.4M8.4 20.4h7.2l-.8-3.2H9.2z"/></symbol>
+  <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M3.2 13.4h4.4l1.5 2.6h5.8l1.5-2.6h4.4"/><path d="M6.2 4.6h11.6l3 8.8v4.2a2.4 2.4 0 0 1-2.4 2.4H5.6a2.4 2.4 0 0 1-2.4-2.4v-4.2z"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M18.2 10.4a6.2 6.2 0 1 0-12.4 0c0 5-2.2 6.4-2.2 6.4h16.8s-2.2-1.4-2.2-6.4z"/><path d="M13.8 20.2a2.1 2.1 0 0 1-3.6 0"/></symbol>
+  <symbol id="i-flask" viewBox="0 0 24 24"><path d="M9.6 2.8v6L4.4 17.6a2.4 2.4 0 0 0 2.1 3.6h11a2.4 2.4 0 0 0 2.1-3.6L14.4 8.8v-6"/><path d="M8.2 2.8h7.6M7.2 14.4h9.6"/></symbol>
+  <symbol id="i-clipboard" viewBox="0 0 24 24"><rect x="8" y="2.6" width="8" height="4" rx="1.6"/><path d="M16 4.6h1.6a2.4 2.4 0 0 1 2.4 2.4v11.6a2.4 2.4 0 0 1-2.4 2.4H6.4A2.4 2.4 0 0 1 4 18.6V7a2.4 2.4 0 0 1 2.4-2.4H8"/><path d="M8.6 11.6h6.8M8.6 15.4h4.6"/></symbol>
 </svg>
+
+<!-- First-run onboarding. Sits in front of the bootstrap splash: which
+     kind of setup you want is a different question from which model to
+     pull, and asking them at once is what made first run confusing. -->
+<div id="onboard" class="hidden">
+  <div class="onboard-card">
+    <button class="onboard-skip" onclick="finishOnboarding(true)">Skip setup</button>
+
+    <section class="onboard-step" data-step="welcome">
+      <div class="splash-logo"><span class="logo-mask"></span></div>
+      <h1>Carrot</h1>
+      <p class="onboard-lede">
+        Carrot is an assistant that runs on your computer. Your chats, notes and
+        files stay here unless you choose otherwise.
+      </p>
+      <p class="onboard-lede muted">
+        There are two ways to give it a brain. You can run a model on this machine,
+        or connect to one over the internet. You can change this later, and you can
+        use both.
+      </p>
+      <div class="onboard-actions">
+        <button class="btn btn-primary" onclick="onboardStep('choose')">Get started</button>
+      </div>
+    </section>
+
+    <section class="onboard-step hidden" data-step="choose">
+      <h2>How would you like to run Carrot?</h2>
+      <div class="onboard-choices">
+        <button class="onboard-choice" onclick="onboardStep('local')">
+          <span class="oc-title">Run it on this computer</span>
+          <span class="oc-body">
+            Carrot downloads a model and runs it locally. Free, works offline, and
+            nothing you type leaves the machine. Needs a few GB of disk, and answers
+            are slower on modest hardware.
+          </span>
+          <span class="oc-tag">Free · Private</span>
+        </button>
+        <button class="onboard-choice" onclick="onboardStep('explain')">
+          <span class="oc-title">What is an API key?</span>
+          <span class="oc-body">
+            I have heard of connecting to a service like Claude or OpenAI, but I do
+            not know what that involves. Explain it first.
+          </span>
+          <span class="oc-tag">Explain it</span>
+        </button>
+        <button class="onboard-choice" onclick="onboardStep('key')">
+          <span class="oc-title">I already have an API key</span>
+          <span class="oc-body">
+            Paste it and Carrot will check it works. Stronger models, no download,
+            and you pay the provider for what you use.
+          </span>
+          <span class="oc-tag">Paste a key</span>
+        </button>
+        <button class="onboard-choice" onclick="onboardStep('subscription')">
+          <span class="oc-title">I want to use my own AI subscription</span>
+          <span class="oc-body">
+            You already pay for Claude Pro or ChatGPT Plus. Sign in with that
+            account instead of setting up separate developer billing.
+          </span>
+          <span class="oc-tag">Sign in</span>
+        </button>
+      </div>
+    </section>
+
+    <section class="onboard-step hidden" data-step="subscription">
+      <h2>Use the subscription you already pay for</h2>
+      <p class="onboard-lede muted">
+        If you have Claude Pro or Max, or ChatGPT Plus or Pro, you can sign in with
+        that account rather than creating a second, separately-billed developer one.
+      </p>
+      <div class="onboard-prose">
+        <p><b>How this works, precisely:</b></p>
+        <ul>
+          <li>Carrot uses the provider's <b>own sign-in page</b>, opened in your real
+              browser. It never sees your password.</li>
+          <li>It does <b>not</b> read your browser's cookies or drive the web app
+              behind your back. Those methods break constantly and violate the
+              providers' terms.</li>
+          <li>Sign-in needs this installation's OAuth client details. If your copy of
+              Carrot does not have them yet, it will say so plainly instead of
+              half-working — an API key is the reliable path until then.</li>
+        </ul>
+      </div>
+      <div class="onboard-field">
+        <label for="onboard-sub-provider">Which subscription?</label>
+        <select id="onboard-sub-provider">
+          <option value="anthropic">Anthropic — Claude Pro or Max</option>
+          <option value="openai">OpenAI — ChatGPT Plus or Pro</option>
+        </select>
+      </div>
+      <div id="onboard-sub-status" class="onboard-status"></div>
+      <div class="onboard-actions">
+        <button class="btn btn-ghost" onclick="onboardStep('choose')">Back</button>
+        <button class="btn btn-ghost" onclick="onboardStep('key')">Use an API key instead</button>
+        <button class="btn btn-primary" onclick="startOnboardingSignIn()">Sign in</button>
+      </div>
+    </section>
+
+    <section class="onboard-step hidden" data-step="explain">
+      <h2>What an API key is</h2>
+      <div class="onboard-prose">
+        <p>
+          An <b>API key</b> is a long password from a company that runs large AI
+          models — Anthropic, OpenAI, Google and others. You paste it into Carrot
+          once, and Carrot can then send your questions to their model and get
+          answers back.
+        </p>
+        <p><b>What it means in practice:</b></p>
+        <ul>
+          <li><b>You pay for what you use</b>, usually a fraction of a cent per
+              question. Most providers ask for a card and let you set a spending cap.
+              A heavy day of use is typically a few dollars, not hundreds.</li>
+          <li><b>Your questions leave this computer.</b> They go to that company's
+              servers to be answered. That is the trade for a much stronger model.</li>
+          <li><b>It is not the same as a chat subscription.</b> Paying for
+              Claude.ai or ChatGPT Plus does <i>not</i> give you an API key — they
+              are separate products on separate billing. Carrot can use a
+              subscription directly instead; that is the third option on the
+              previous screen.</li>
+          <li><b>Treat it like a password.</b> Anyone who has it can spend your
+              money. Carrot stores it on this computer only.</li>
+        </ul>
+        <p>
+          You do not need one. Running locally is free and private, and you can add
+          a key later from Settings whenever you want.
+        </p>
+      </div>
+      <div class="onboard-actions">
+        <button class="btn btn-ghost" onclick="onboardStep('choose')">Back</button>
+        <button class="btn btn-ghost" onclick="onboardStep('local')">Run locally instead</button>
+        <button class="btn btn-primary" onclick="onboardStep('key')">I want to get one</button>
+      </div>
+    </section>
+
+    <section class="onboard-step hidden" data-step="key">
+      <h2>Connect a model</h2>
+      <p class="onboard-lede muted">
+        Pick who you have an account with. The link opens their key page; Carrot
+        checks the key before saving it.
+      </p>
+      <div class="onboard-field">
+        <label for="onboard-provider">Provider</label>
+        <select id="onboard-provider" onchange="onboardProviderChanged()"></select>
+        <a id="onboard-key-link" class="onboard-link" href="#" target="_blank" rel="noopener">Where do I get a key? →</a>
+      </div>
+      <div class="onboard-field">
+        <label for="onboard-key">API key</label>
+        <input type="password" id="onboard-key" placeholder="paste your key here"
+               spellcheck="false" autocomplete="off">
+      </div>
+      <div id="onboard-key-status" class="onboard-status"></div>
+      <div class="onboard-actions">
+        <button class="btn btn-ghost" onclick="onboardStep('choose')">Back</button>
+        <button class="btn btn-ghost" onclick="onboardStep('local')">Run locally instead</button>
+        <button class="btn btn-primary" id="onboard-key-btn" onclick="saveOnboardingKey()">Check and save</button>
+      </div>
+    </section>
+
+    <!-- Last screen, always shown. Someone who has just been asked three
+         questions about billing has learned nothing about the app itself, and
+         "where is help" is the one thing they will need first. -->
+    <section class="onboard-step hidden" data-step="tour">
+      <h2>Where things are</h2>
+      <div class="onboard-tour">
+        <div class="tour-item">
+          <span class="tour-what">Chat</span>
+          <span class="tour-why">Ask anything. It can search the web, read files you
+            attach, and make charts and images right in the conversation.</span>
+        </div>
+        <div class="tour-item">
+          <span class="tour-what">Code</span>
+          <span class="tour-why">A real editor with a terminal, plus an agent that can
+            read and change files — in Plan mode it only proposes, in Act it edits.</span>
+        </div>
+        <div class="tour-item">
+          <span class="tour-what">Planner</span>
+          <span class="tour-why">Hand it a photo of whatever fixes your week — a timetable,
+            a rota — and it builds a week around it, travel time and meals included.</span>
+        </div>
+        <div class="tour-item">
+          <span class="tour-what">Research</span>
+          <span class="tour-why">For questions worth a few minutes: many sources, every
+            claim checked, one cited report.</span>
+        </div>
+        <div class="tour-item highlight">
+          <span class="tour-what">Help</span>
+          <span class="tour-why">In the left sidebar under <b>More → Help</b>. Every
+            feature explained, in plain language. Start there when something is
+            confusing — that is what it is for.</span>
+        </div>
+      </div>
+      <div class="onboard-actions">
+        <button class="btn btn-ghost" onclick="finishOnboarding(false)">Close</button>
+        <button class="btn btn-primary" onclick="finishOnboarding(false, 'help')">Take me to Help</button>
+      </div>
+    </section>
+  </div>
+</div>
 
 <!-- Bootstrap splash (one-click setup) -->
 <div id="splash" class="hidden">
@@ -49,8 +281,16 @@
     <h1>Carrot AI</h1>
     <p class="splash-sub">Setting up your local assistant</p>
     <div id="splash-status" class="splash-status">Checking Ollama…</div>
+    <div id="splash-specs" class="splash-specs hidden"></div>
+    <div id="splash-picks" class="splash-picks hidden"></div>
+    <div id="splash-catalog" class="splash-catalog hidden"></div>
     <div class="splash-progress"><div id="splash-bar" class="splash-bar"></div></div>
-    <button id="splash-btn" class="btn btn-primary hidden" onclick="runBootstrap()">Set up now</button>
+    <div id="splash-detail" class="splash-detail"></div>
+    <div class="splash-actions">
+      <button id="splash-btn" class="btn btn-primary hidden" onclick="runBootstrap()">Set up now</button>
+      <button id="splash-skip" class="btn btn-ghost hidden" onclick="skipModelChoice()" title="For experienced users — keep the stock default and move on">Skip — use default</button>
+    </div>
+    <a id="splash-hub-link" class="splash-hub-link hidden" href="#" onclick="toggleSplashCatalog();return false">See every model and why some won't run here →</a>
   </div>
 </div>
 
@@ -66,6 +306,23 @@
     <input type="text" id="top-search-input" placeholder="Search conversations…" onkeydown="if(event.key==='Enter')topSearch()">
   </div>
   <div class="menubar-right">
+    <div id="ws-switcher">
+      <button id="ws-btn" onclick="toggleWorkspacePop()" title="Which project Carrot is working in">
+        <svg class="ico"><use href="#i-folder"/></svg>
+        <span id="ws-label">All workspaces</span>
+        <svg class="ico chev"><use href="#i-chevron"/></svg>
+      </button>
+      <div id="ws-pop" class="hidden">
+        <div class="pop-section">Workspace</div>
+        <div id="ws-pop-list"></div>
+        <div class="pop-foot">
+          <button class="btn btn-ghost small" onclick="switchTab('workspaces');toggleWorkspacePop()">Manage…</button>
+        </div>
+      </div>
+    </div>
+    <button id="hub-btn" class="btn btn-ghost small" onclick="switchTab('hub')" title="Model Hub — models matched to your hardware">
+      <svg class="ico"><use href="#i-download"/></svg><span>Model Hub</span>
+    </button>
     <span id="engine-status">
       <span id="engine-dot" class="dot"></span>
       <span id="engine-label">Connecting</span>
@@ -95,13 +352,22 @@
   <div id="nav-more-list" class="nav-more-list hidden">
     <button class="nav-item sub" data-tab="chats" onclick="switchTab('chats')"><svg class="ico"><use href="#i-chat"/></svg><span class="nav-label">Chats</span></button>
     <button class="nav-item sub" data-tab="search" onclick="switchTab('search')"><svg class="ico"><use href="#i-search"/></svg><span class="nav-label">Search</span></button>
-    <button class="nav-item sub" data-tab="notes" onclick="switchTab('notes')"><svg class="ico"><use href="#i-doc"/></svg><span class="nav-label">Notes</span></button>
+    <button class="nav-item sub" data-tab="notes" onclick="switchTab('notes')"><svg class="ico"><use href="#i-note"/></svg><span class="nav-label">Notes</span></button>
     <button class="nav-item sub" data-tab="code" onclick="switchTab('code')"><svg class="ico"><use href="#i-terminal"/></svg><span class="nav-label">Code</span></button>
-    <button class="nav-item sub" data-tab="goals" onclick="switchTab('goals')"><svg class="ico"><use href="#i-cap"/></svg><span class="nav-label">Goals</span></button>
-    <button class="nav-item sub" data-tab="reminders" onclick="switchTab('reminders')"><svg class="ico"><use href="#i-pulse"/></svg><span class="nav-label">Reminders</span></button>
-    <button class="nav-item sub" data-tab="assignments" onclick="switchTab('assignments')"><svg class="ico"><use href="#i-news"/></svg><span class="nav-label">Assignments</span></button>
-    <button class="nav-item sub" data-tab="extensions" onclick="switchTab('extensions')"><svg class="ico"><use href="#i-chip"/></svg><span class="nav-label">Extensions</span></button>
-    <button class="nav-item sub" data-tab="leaderboard" onclick="switchTab('leaderboard')"><svg class="ico"><use href="#i-download"/></svg><span class="nav-label">Leaderboard</span></button>
+    <button class="nav-item sub" data-tab="planner" onclick="switchTab('planner')"><svg class="ico"><use href="#i-cap"/></svg><span class="nav-label">Planner</span></button>
+    <button class="nav-item sub" data-tab="goals" onclick="switchTab('goals')"><svg class="ico"><use href="#i-target"/></svg><span class="nav-label">Goals</span></button>
+    <button class="nav-item sub" data-tab="reminders" onclick="switchTab('reminders')"><svg class="ico"><use href="#i-bell"/></svg><span class="nav-label">Reminders</span></button>
+    <button class="nav-item sub" data-tab="workspaces" onclick="switchTab('workspaces')"><svg class="ico"><use href="#i-folder"/></svg><span class="nav-label">Workspaces</span></button>
+    <button class="nav-item sub" data-tab="help" onclick="switchTab('help')"><svg class="ico"><use href="#i-help"/></svg><span class="nav-label">Help</span></button>
+    <button class="nav-item sub" data-tab="research" onclick="switchTab('research')"><svg class="ico"><use href="#i-flask"/></svg><span class="nav-label">Research</span></button>
+    <button class="nav-item sub" data-tab="agent" onclick="switchTab('agent')"><svg class="ico"><use href="#i-robot"/></svg><span class="nav-label">Agent</span></button>
+    <button class="nav-item sub" data-tab="assignments" onclick="switchTab('assignments')"><svg class="ico"><use href="#i-clipboard"/></svg><span class="nav-label">Assignments</span></button>
+    <button class="nav-item sub" data-tab="hub" onclick="switchTab('hub')"><svg class="ico"><use href="#i-download"/></svg><span class="nav-label">Model Hub</span></button>
+    <button class="nav-item sub" data-tab="extensions" onclick="switchTab('extensions')"><svg class="ico"><use href="#i-puzzle"/></svg><span class="nav-label">Extensions</span></button>
+    <button class="nav-item sub" data-tab="memory" onclick="switchTab('memory')"><svg class="ico"><use href="#i-brain"/></svg><span class="nav-label">Memory</span></button>
+    <button class="nav-item sub" data-tab="files" onclick="switchTab('files')"><svg class="ico"><use href="#i-archive"/></svg><span class="nav-label">Your Files</span></button>
+    <button class="nav-item sub" data-tab="inbox" onclick="switchTab('inbox')"><svg class="ico"><use href="#i-inbox"/></svg><span class="nav-label">Inbox</span><span id="notification-badge" class="notif-badge hidden">0</span></button>
+    <button class="nav-item sub" data-tab="leaderboard" onclick="switchTab('leaderboard')"><svg class="ico"><use href="#i-trophy"/></svg><span class="nav-label">Leaderboard</span></button>
   </div>
 </nav>
 
@@ -184,7 +450,7 @@
       <div id="chat-messages">
         <div class="chat-empty" id="chat-empty">
           <span class="logo-mask big"></span>
-          <p>Everything runs on your machine. Ask anything below.</p>
+          <p id="chat-empty-line">Ask anything below.</p>
         </div>
       </div>
       <div id="terminal-panel">
@@ -245,8 +511,15 @@
           <input type="text" id="note-title" class="title-input" placeholder="Untitled note" oninput="scheduleNoteSave()">
           <span id="note-status" class="editor-status"></span>
           <span id="note-words" class="editor-words"></span>
+          <select id="doc-destination" class="doc-destination"
+                  title="Where this note goes. A @/to line in the note sets this for you."
+                  onchange="destinationChanged()"></select>
+          <button class="btn btn-primary" id="doc-send-btn" onclick="sendDocToAgent()"
+                  title="Send this note (or the selected text)">Send</button>
+          <button class="btn btn-ghost" onclick="sendNoteToObsidian()" title="Save this note into your Obsidian vault as a Markdown file">→ Obsidian</button>
           <button class="btn btn-ghost" onclick="deleteCurrentNote()">Delete</button>
         </div>
+        <div id="doc-refs" class="doc-refs hidden"></div>
         <div id="note-editor-host" class="milkdown-host"></div>
         <textarea id="note-fallback" class="note-fallback hidden" placeholder="Write your note…" oninput="scheduleNoteSave()"></textarea>
         <div id="note-empty" class="editor-empty">Select a note on the left, or create a new one.</div>
@@ -260,20 +533,246 @@
       <aside class="split-side">
         <div class="split-side-head">
           <span class="side-label" id="code-root-label">workspace</span>
+          <button class="icon-btn" title="New file" onclick="createEntry(false)"><svg class="ico"><use href="#i-file-plus"/></svg></button>
+          <button class="icon-btn" title="New folder" onclick="createEntry(true)"><svg class="ico"><use href="#i-folder-plus"/></svg></button>
+          <button class="icon-btn" title="Find in files (Ctrl+Shift+F)" onclick="toggleCodeSearch()"><svg class="ico"><use href="#i-search"/></svg></button>
           <button class="icon-btn" title="Change workspace folder" onclick="changeCodeRoot()"><svg class="ico"><use href="#i-gear"/></svg></button>
           <button class="icon-btn" title="Refresh" onclick="loadCodeTree()"><svg class="ico"><use href="#i-pulse"/></svg></button>
+        </div>
+        <div id="code-search" class="code-search hidden">
+          <input type="text" id="code-search-input" placeholder="Find in files…" spellcheck="false">
+          <div id="code-search-results" class="code-search-results"></div>
         </div>
         <div id="code-tree" class="side-list tree"></div>
       </aside>
       <div class="split-main">
+        <!-- Plan/Act used to live here, at the far left, while the agent it
+             governs sat at the far right behind a chip that also said the
+             mode. Two controls for one piece of state, a screen apart, and
+             the read-only one looked like a button. There is one switch now
+             and it is in the agent's own header, next to the thing it
+             governs. This is a status word: it reports, and clicking it takes
+             you to the switch. -->
+        <div class="agent-bar">
+          <button class="agent-mode-status" id="mode-status" onclick="revealAgentMode()"
+                  title="What the agent may do right now — click to change it"></button>
+          <span class="spacer"></span>
+          <span class="git-chip hidden" id="git-chip" onclick="showCodePanel('git')"
+                title="Repository status"></span>
+          <span class="rules-chip hidden" id="rules-chip" title="Project rules are in effect">rules</span>
+          <button class="btn btn-ghost" onclick="takeCheckpoint()"
+                  title="Snapshot the workspace so everything after this can be undone in one step">Checkpoint</button>
+          <button class="btn btn-primary" onclick="toggleAgentSide()"
+                  title="Talk to the agent about this workspace">Agent</button>
+        </div>
         <div class="editor-toolbar">
           <div id="code-tabs" class="code-tabs"></div>
           <span id="code-status" class="editor-status"></span>
+          <button class="btn btn-primary" id="run-btn" onclick="runCurrentFile()">Run</button>
           <button class="btn btn-ghost" onclick="saveCurrentFile()">Save</button>
-          <button class="btn btn-ghost" onclick="openInVSCode()">Open in VS Code</button>
+          <button class="btn btn-ghost" onclick="toggleCodePanel()">Terminal</button>
+          <button class="btn btn-ghost" id="open-editor-btn" onclick="openInVSCode()">Open in VS Code</button>
         </div>
         <div id="code-editor-host" class="monaco-host"></div>
         <div id="code-empty" class="editor-empty">Open a file from the tree to start editing.</div>
+        <div id="code-panel" class="code-panel hidden">
+          <div class="code-panel-tabs">
+            <button class="panel-tab active" data-panel="output" onclick="showCodePanel('output')">Output</button>
+            <button class="panel-tab" data-panel="terminal" onclick="showCodePanel('terminal')">Terminal</button>
+            <button class="panel-tab" data-panel="git" onclick="showCodePanel('git')">Source Control</button>
+            <button class="panel-tab" data-panel="checkpoints" onclick="showCodePanel('checkpoints')">Checkpoints</button>
+            <span class="spacer"></span>
+            <span class="editor-status" id="panel-status"></span>
+            <button class="icon-btn" title="Clear" onclick="clearCodePanel()"><svg class="ico"><use href="#i-trash"/></svg></button>
+            <button class="icon-btn" title="Hide" onclick="toggleCodePanel()"><svg class="ico"><use href="#i-x"/></svg></button>
+          </div>
+          <div id="panel-output" class="panel-body">
+            <!-- A missing package or toolchain gets a one-click answer above
+                 the output, because the line that matters is buried in it. -->
+            <div id="run-offer" class="run-offer hidden"></div>
+            <pre id="run-output" class="run-output"></pre>
+          </div>
+          <div id="panel-terminal" class="panel-body hidden">
+            <div id="term-log" class="term-log"></div>
+            <div class="term-input-row">
+              <span class="term-prompt">$</span>
+              <input id="term-input" type="text" placeholder="run a command in the workspace…"
+                     spellcheck="false" autocomplete="off">
+            </div>
+          </div>
+          <div id="panel-git" class="panel-body hidden">
+            <div class="git-head">
+              <span id="git-branch" class="git-branch"></span>
+              <span class="spacer"></span>
+              <button class="btn btn-ghost" onclick="loadGitPanel()">Refresh</button>
+            </div>
+            <div id="git-changes" class="git-changes"></div>
+            <div class="git-commit-row">
+              <input id="git-message" type="text" placeholder="Commit message" spellcheck="false"
+                     onkeydown="if(event.key==='Enter')commitChanges()">
+              <button class="btn btn-primary" onclick="commitChanges()">Commit</button>
+            </div>
+            <pre id="git-diff" class="git-diff"></pre>
+          </div>
+          <div id="panel-checkpoints" class="panel-body hidden">
+            <div id="checkpoint-list" class="checkpoint-list"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- The agent itself. A Plan/Act switch with nowhere to talk to the
+           agent is a steering wheel with no car attached: this is the car. -->
+      <aside class="agent-side" id="agent-side">
+        <div class="agent-side-head">
+          <svg class="ico"><use href="#i-chip"/></svg>
+          <span class="side-label">Agent</span>
+          <!-- The one Plan/Act control, where the agent is. -->
+          <div class="mode-switch" role="group" aria-label="Agent mode">
+            <button class="mode-opt" id="mode-plan" onclick="setCoderMode('plan')"
+                    title="Read-only. The agent proposes; nothing on disk moves.">Plan</button>
+            <button class="mode-opt" id="mode-act" onclick="setCoderMode('act')"
+                    title="The agent can create, edit, move and delete files, and run commands.">Act</button>
+          </div>
+          <span class="spacer"></span>
+          <button class="icon-btn" title="New task" onclick="newAgentTask()"><svg class="ico"><use href="#i-plus"/></svg></button>
+          <button class="icon-btn" title="Hide the agent" onclick="toggleAgentSide()"><svg class="ico"><use href="#i-x"/></svg></button>
+        </div>
+        <div id="agent-log" class="agent-log">
+          <div class="agent-hello">
+            <p>Tell me what to build, fix or explain. I can see the files in
+               <span class="mono" id="agent-root-hint">your workspace</span>.</p>
+            <p class="muted small">In <strong>Plan</strong> I only read and propose.
+               In <strong>Act</strong> I can edit files and run commands.</p>
+          </div>
+        </div>
+        <div class="agent-compose">
+          <!-- Screenshots of an error, a design mock, a PDF spec: the things
+               you actually want to hand a coding agent. Images need a vision
+               model, so the tray says plainly when the current one cannot. -->
+          <div id="agent-attach-tray" class="attach-tray hidden"></div>
+          <textarea id="agent-input" rows="3" spellcheck="false"
+                    placeholder="Add a retry loop to client.py…  (paste a screenshot, or drop a file)"
+                    onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendAgentTask()}"></textarea>
+          <input type="file" id="agent-file-input" multiple hidden
+                 onchange="addAgentAttachments(this.files); this.value=''">
+          <div class="agent-compose-row">
+            <button class="icon-btn" title="Attach a file or image"
+                    onclick="document.getElementById('agent-file-input').click()">
+              <svg class="ico"><use href="#i-file-plus"/></svg>
+            </button>
+            <!-- The agent used to silently borrow whatever the chat composer
+                 was set to, with nothing on screen saying so. A coding agent
+                 is exactly where the model matters most, and it was the one
+                 place you could not choose or even see it. -->
+            <select id="agent-model" class="agent-model-picker"
+                    title="Which model does the work here"
+                    onchange="setAgentModel(this.value)"></select>
+            <span class="muted small" id="agent-context-hint"></span>
+            <span class="spacer"></span>
+            <button class="btn btn-ghost" id="agent-stop" onclick="stopAgentTask()" hidden>Stop</button>
+            <button class="btn btn-primary" id="agent-send" onclick="sendAgentTask()">Send</button>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- Planner -->
+  <section id="view-planner" class="view">
+    <div class="page">
+      <div class="page-head">
+        <h2>Planner</h2>
+        <span class="muted small" id="planner-status"></span>
+      </div>
+
+      <!-- Start here. A wall of fourteen questions is a form, and nobody fills
+           in a form to try something. Drop in a schedule and say what you want
+           in a sentence; the questions that remain are the ones that could not
+           be worked out, and they are asked in conversation. -->
+      <div class="settings-card" id="planner-start">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-image"/></svg>
+          <h3>Start here</h3>
+        </div>
+        <p class="muted small">
+          Drop in a photo of whatever fixes your week — a class timetable, a shift rota,
+          a training schedule — and say what else you want to fit around it. Carrot works
+          out what it still needs to know and asks only that.
+        </p>
+        <div id="planner-drop" class="planner-drop">
+          <input type="file" id="planner-file" accept="image/*" hidden
+                 onchange="readSyllabusFile(this.files[0]); this.value=''">
+          <button class="btn btn-primary" onclick="document.getElementById('planner-file').click()">
+            Choose a photo
+          </button>
+          <span class="muted small">or drop one here, or paste a screenshot</span>
+        </div>
+        <div class="settings-row">
+          <input type="text" id="planner-freeform" spellcheck="false"
+                 placeholder="I&apos;m at Dartmouth, living in Russell Sage, want the gym 4x a week and 3 meals a day"
+                 onkeydown="if(event.key==='Enter')tellPlanner()">
+          <button class="btn btn-primary" onclick="tellPlanner()">Tell Carrot</button>
+        </div>
+        <div id="planner-conversation" class="planner-conversation"></div>
+      </div>
+
+      <details class="settings-card" id="planner-intake-card">
+        <summary class="settings-head">
+          <svg class="ico"><use href="#i-help"/></svg>
+          <h3>Everything Carrot knows — edit anything</h3>
+        </summary>
+        <div id="planner-intake"><div class="empty">Loading…</div></div>
+      </details>
+
+      <div class="settings-card">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-cap"/></svg>
+          <h3>Your classes and commitments</h3>
+        </div>
+        <p class="muted small">
+          Nothing is saved until you have checked it: a misread room number would send
+          you to the wrong building all term.
+        </p>
+        <details class="planner-paste">
+          <summary>Paste the schedule as text instead</summary>
+          <textarea id="planner-text" rows="5" spellcheck="false"
+                    placeholder="COSC 30  Discrete Math  MWF 10:00-11:05  Kemeny 007"></textarea>
+          <button class="btn btn-ghost" onclick="readSyllabusText()">Read it</button>
+        </details>
+        <div id="planner-courses"></div>
+      </div>
+
+      <!-- Step 3. Travel time is the whole difference between a schedule and a
+           schedule you can actually walk. -->
+      <div class="settings-card">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-target"/></svg>
+          <h3>Getting between places</h3>
+        </div>
+        <p class="muted small">
+          Carrot needs to know roughly where each place is, or it cannot tell that lunch
+          is eleven minutes after something on the other side of town. It will look them
+          up; anything it is unsure of is listed so you can correct it.
+        </p>
+        <div class="settings-row">
+          <button class="btn btn-primary" onclick="lookupCampus()">Look up my places</button>
+          <span class="muted small" id="planner-campus-status"></span>
+        </div>
+        <div id="planner-buildings"></div>
+      </div>
+
+      <!-- Step 4. -->
+      <div class="settings-card">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-cap"/></svg>
+          <h3>Your week</h3>
+        </div>
+        <div class="settings-row">
+          <button class="btn btn-primary" id="planner-build" onclick="buildPlan()">Build my week</button>
+          <span class="muted small" id="planner-build-status"></span>
+        </div>
+        <div id="planner-notes"></div>
+        <div id="planner-week" class="planner-week"></div>
       </div>
     </div>
   </section>
@@ -316,10 +815,265 @@
   </section>
 
   <!-- Extensions -->
+  <!-- Workspaces -->
+  <section id="view-workspaces" class="view">
+    <div class="page">
+      <div class="page-head"><h2>Workspaces</h2></div>
+      <p class="muted">
+        A workspace holds one project's chats, memories, files and runs. While it is active,
+        new work is filed there and search only looks inside it — nothing is moved on disk,
+        and switching to <em>All workspaces</em> shows everything again.
+      </p>
+
+      <div class="composer">
+        <input type="text" id="ws-new-name" placeholder="New workspace name">
+        <select id="ws-new-folder"></select>
+        <button class="btn btn-primary" onclick="createWorkspace()">Add workspace</button>
+        <input type="text" id="folder-new-name" placeholder="New folder name">
+        <select id="folder-new-parent"></select>
+        <button class="btn btn-ghost" onclick="createFolder()">Add folder</button>
+      </div>
+
+      <div class="ws-grid">
+        <div class="ws-tree-pane">
+          <h3 class="small-head">Folders and workspaces</h3>
+          <div id="ws-tree" class="ws-tree"></div>
+        </div>
+        <div class="ws-detail-pane">
+          <h3 class="small-head">Contents</h3>
+          <div id="ws-detail" class="ws-detail">
+            <div class="empty">Pick a workspace to see what is filed in it.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Help -->
+  <section id="view-help" class="view">
+    <div class="page">
+      <div class="page-head"><h2>Help</h2></div>
+
+      <div class="tutorial" id="tutorial">
+        <div class="tutorial-head">
+          <h3>Getting started</h3>
+          <div class="tutorial-progress">
+            <span id="tutorial-count" class="muted small"></span>
+            <div class="tutorial-track"><div id="tutorial-bar" class="tutorial-bar"></div></div>
+          </div>
+        </div>
+        <p class="muted small">
+          Each step checks your actual install, not whether you clicked past it — so this
+          stays honest, and un-ticks itself if you undo something.
+        </p>
+        <div id="tutorial-steps"></div>
+      </div>
+
+      <div class="composer">
+        <input type="text" id="help-search" placeholder="Search help — e.g. &quot;credentials&quot;, &quot;what leaves my machine&quot;"
+               oninput="searchHelp()">
+      </div>
+
+      <div class="help-grid">
+        <div class="help-list-pane"><div id="help-list" class="help-list"></div></div>
+        <div class="help-body-pane"><div id="help-body" class="md report"></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Carrot Research -->
+  <section id="view-research" class="view">
+    <div class="page">
+      <div class="page-head"><h2>Research</h2></div>
+      <p class="muted">
+        Ask a real question. Carrot breaks it into sub-questions, researches each one across the web
+        and your own indexed files, checks every claim against the source it came from, and writes a
+        report you can trace line by line.
+      </p>
+
+      <div class="composer research-composer">
+        <textarea id="research-question" rows="3"
+                  placeholder="What would you like researched? e.g. &quot;How do the current open-weight coding models compare on long-context refactoring, and which fits 32GB of RAM?&quot;"></textarea>
+        <div class="row">
+          <select id="research-depth">
+            <option value="standard">Standard — 4 threads, two rounds</option>
+          </select>
+          <button class="btn btn-primary" id="research-run-btn" onclick="startResearch()">Research</button>
+          <button class="btn btn-ghost hidden" id="research-stop-btn" onclick="stopResearch()">Stop</button>
+          <span id="research-depth-note" class="muted small"></span>
+        </div>
+      </div>
+
+      <div class="research-grid">
+        <div class="research-trace-pane">
+          <h3 class="small-head">Trace</h3>
+          <div id="research-trace" class="trace"><div class="trace-line">Each researcher reports here as it searches, reads and checks.</div></div>
+          <h3 class="small-head">Sources</h3>
+          <div id="research-sources" class="list compact"><div class="empty">Sources appear here as they are read, each with the number it is cited by.</div></div>
+        </div>
+        <div class="research-report-pane">
+          <h3 class="small-head">Report</h3>
+          <div id="research-report" class="md report"></div>
+        </div>
+      </div>
+
+      <div class="ext-section">
+        <div class="ext-head"><h3>Past research</h3></div>
+        <div id="research-runs" class="list"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Carrot Agent -->
+  <section id="view-agent" class="view">
+    <div class="page">
+      <div class="page-head"><h2>Agent</h2></div>
+      <p class="muted">
+        Give Carrot a task and it will carry it out in a real browser — finding a page, filling a form,
+        pulling up your assignments. It shows you its plan before it starts, asks before anything that
+        cannot be undone, and stops the moment you tell it to.
+      </p>
+
+      <div id="agent-availability" class="notice hidden"></div>
+
+      <div class="composer">
+        <textarea id="agent-task" rows="3"
+                  placeholder="What should Carrot do? e.g. &quot;Open my CS 3110 Canvas page, find assignment 4, and tell me what it asks for and when it's due&quot;"></textarea>
+        <div class="row">
+          <select id="agent-surface">
+            <option value="browser" selected>Browser only</option>
+            <option value="desktop">Desktop only</option>
+            <option value="both">Browser and desktop</option>
+          </select>
+          <label class="inline-check">
+            <input type="checkbox" id="agent-approve-plan" checked>
+            Approve the plan before it starts
+          </label>
+          <button class="btn btn-primary" id="agent-run-btn" onclick="startAgentRun()">Run task</button>
+          <button class="btn btn-danger hidden" id="agent-stop-btn" onclick="stopAgentRun()">Stop</button>
+        </div>
+      </div>
+
+      <div id="agent-plan" class="agent-plan hidden"></div>
+      <div id="agent-steps" class="agent-steps"></div>
+      <div id="agent-result" class="agent-result hidden"></div>
+
+      <div class="ext-section">
+        <div class="ext-head"><h3>What Carrot may touch</h3></div>
+        <p class="muted small">
+          Nothing here is on by default. The agent asks before visiting a site that is not listed,
+          and refuses outright to type a stored credential into one that is not.
+        </p>
+
+        <div class="policy-grid">
+          <div class="policy-card">
+            <h4>Allowed sites</h4>
+            <div class="composer inline">
+              <input type="text" id="policy-domain" placeholder="canvas.university.edu or *.university.edu">
+              <button class="btn btn-ghost" onclick="addAllowedDomain()">Allow</button>
+            </div>
+            <div id="policy-domains" class="chips"></div>
+          </div>
+
+          <div class="policy-card">
+            <h4>Stored credentials</h4>
+            <p class="muted small">
+              Carrot types these into sites you have allowed. The model never sees the value —
+              not in its context, not in the log.
+            </p>
+            <div class="composer inline">
+              <input type="text" id="policy-secret-name" placeholder="name, e.g. canvas">
+              <input type="password" id="policy-secret-value" placeholder="value">
+              <button class="btn btn-ghost" onclick="addSecret()">Store</button>
+            </div>
+            <div id="policy-secrets" class="chips"></div>
+          </div>
+
+          <div class="policy-card">
+            <h4>Limits</h4>
+            <div id="policy-budget" class="muted small"></div>
+            <label class="inline-check">
+              <input type="checkbox" id="policy-desktop-control" onchange="setPolicyFlag('agent_desktop_control_enabled', this.checked)">
+              Let Carrot control the mouse and keyboard directly
+            </label>
+            <label class="inline-check">
+              <input type="checkbox" id="policy-critical" onchange="setPolicyFlag('agent_allow_critical_actions', this.checked)">
+              Allow high-consequence actions (payments, deletions) with a typed confirmation
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="ext-section">
+        <div class="ext-head"><h3>Past runs</h3></div>
+        <p class="muted small">Every action the agent took, what the policy decided, and what came back.</p>
+        <div id="agent-runs" class="list"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="view-hub" class="view">
+    <div class="page">
+      <div class="page-head">
+        <h2>Model Hub</h2>
+        <div class="row">
+          <button class="btn btn-ghost" onclick="refreshHubCatalog()" title="Re-fetch the daily catalog now">Refresh catalog</button>
+          <a id="hub-site-link" class="btn btn-primary" href="#" target="_blank" rel="noopener">Browse on Hugging Face ↗</a>
+        </div>
+      </div>
+      <p class="muted">
+        Models matched to <em>this</em> machine, live from Hugging Face. Carrot reads your RAM,
+        GPU and VRAM locally, fetches the newest and most popular models as you search, picks the
+        best quantization that fits your hardware, and drops anything that can't run here.
+      </p>
+
+      <div id="hub-specs" class="hub-specs"></div>
+
+      <div class="hub-search">
+        <input type="text" id="hub-workload" placeholder="What will you use it for? e.g. long conversations, goal tracking, coding, daily updates…"
+               onkeydown="if(event.key==='Enter')runHubSearch()">
+        <button class="btn btn-primary" onclick="runHubSearch()">Search</button>
+      </div>
+      <div class="hub-toolbar">
+        <div id="hub-sort-chips" class="chip-row"></div>
+        <div id="hub-modality-toggles" class="chip-row" title="Only show models that accept these inputs"></div>
+        <span id="hub-live-meta" class="muted small"></span>
+      </div>
+
+      <div id="hub-live-grid" class="hub-grid"><div class="empty">Searching Hugging Face…</div></div>
+
+      <div class="ext-head" style="margin-top:26px"><h3>Curated picks for this machine</h3></div>
+      <p class="muted small">
+        Carrot's built-in list, kept for when you are offline. Everything above is live.
+        <span id="hub-catalog-meta"></span>
+      </p>
+      <div class="hub-toolbar"><div id="hub-usecase-chips" class="chip-row"></div></div>
+      <div id="hub-recs" class="hub-recs"></div>
+      <div id="hub-grid" class="hub-grid"><div class="empty">Loading catalog…</div></div>
+
+      <div class="ext-head" style="margin-top:26px"><h3>Storage &amp; cleanup</h3></div>
+      <p class="muted small">
+        Models add up fast — an 8B here, a 14B there, and the disk is gone. Everything installed
+        is listed with its real size; one click removes it (models can always be re-downloaded).
+      </p>
+      <div id="hub-storage"><div class="empty">Loading…</div></div>
+    </div>
+  </section>
+
   <section id="view-extensions" class="view">
     <div class="page">
       <div class="page-head"><h2>Extensions</h2></div>
       <p class="muted">Customize Carrot with reusable skills and external tools over MCP.</p>
+
+      <div class="ext-section">
+        <div class="ext-head"><h3>Packs</h3></div>
+        <p class="muted small">
+          A bundle of tools, skills and settings you turn on as one switch. A pack can want a
+          program you do not have — Carrot probes for each one and says what works on this
+          machine rather than failing halfway through a task.
+        </p>
+        <div id="packs-list" class="list"></div>
+      </div>
 
       <div class="ext-section">
         <div class="ext-head">
@@ -390,10 +1144,160 @@
     </div>
   </section>
 
+  <!-- Memory — what Carrot believes about you, and where it learned it -->
+  <section id="view-memory" class="view">
+    <div class="page">
+      <div class="page-head"><h2>Memory</h2></div>
+      <p class="muted">
+        What Carrot has learned about you from your conversations. Every entry links back to
+        the message it came from — edit anything that's wrong, pin what matters, and mark
+        mistakes so they're never recorded again.
+      </p>
+      <div id="memory-stats" class="subtle"></div>
+      <div class="composer">
+        <input id="memory-search" placeholder="Search memory…" onkeydown="if(event.key==='Enter')searchMemory()">
+        <select onchange="setMemoryFilter('kind', this.value)">
+          <option value="">All kinds</option>
+          <option value="preference">Preferences</option>
+          <option value="fact">Facts</option>
+          <option value="decision">Decisions</option>
+          <option value="attribute">Attributes</option>
+          <option value="relationship">Relationships</option>
+          <option value="project">Projects</option>
+        </select>
+        <select onchange="setMemoryFilter('status', this.value)">
+          <option value="active">Active</option>
+          <option value="superseded">Superseded</option>
+          <option value="rejected">Rejected</option>
+          <option value="">Everything</option>
+        </select>
+        <button class="btn btn-ghost" onclick="loadMemory()">Refresh</button>
+      </div>
+      <div id="memory-list" class="list"></div>
+    </div>
+  </section>
+
+  <!-- Your Files — the local document index -->
+  <section id="view-files" class="view">
+    <div class="page">
+      <div class="page-head"><h2>Your Files</h2></div>
+      <p class="muted">
+        Point Carrot at folders of notes, papers, and code. It reads them locally and makes
+        them searchable alongside your conversations — nothing is uploaded anywhere.
+      </p>
+      <div id="index-status" class="subtle"></div>
+      <div class="composer">
+        <input id="index-dir-input" placeholder="/path/to/a/folder" onkeydown="if(event.key==='Enter')addIndexDir()">
+        <button class="btn btn-primary" onclick="addIndexDir()">Add folder</button>
+        <button class="btn btn-ghost" onclick="startIndexScan(false)">Scan</button>
+        <button class="btn btn-ghost" onclick="startIndexScan(true)">Rebuild</button>
+        <button class="btn btn-ghost" onclick="backfillEmbeddings()">Backfill embeddings</button>
+      </div>
+      <div id="index-dirs" class="list"></div>
+
+      <div class="page-head"><h3>Search everything</h3></div>
+      <div class="composer">
+        <input id="unified-query" placeholder="Search files, conversations and memory at once…"
+               onkeydown="if(event.key==='Enter')searchEverything(this.value)">
+        <button class="btn btn-primary" onclick="searchEverything(document.getElementById('unified-query').value)">Search</button>
+      </div>
+      <div id="unified-results" class="list"></div>
+    </div>
+  </section>
+
+  <!-- Inbox — proactive notifications -->
+  <section id="view-inbox" class="view">
+    <div class="page">
+      <div class="page-head"><h2>Inbox</h2></div>
+      <p class="muted">Things Carrot noticed without being asked.</p>
+      <div class="composer">
+        <button class="btn btn-ghost" onclick="runNotificationChecks()">Check now</button>
+        <button class="btn btn-ghost" onclick="markAllNotificationsRead()">Mark all read</button>
+      </div>
+      <div id="notification-list" class="list"></div>
+    </div>
+  </section>
+
   <!-- Settings -->
   <section id="view-settings" class="view">
     <div class="page">
       <div class="page-head"><h2>Settings</h2></div>
+
+      <div class="settings-card">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-palette"/></svg>
+          <h3>Appearance</h3>
+        </div>
+        <p class="muted small">
+          <b>Match system</b> follows your computer's light/dark setting and switches with it.
+          The accent tints the buttons, the highlights and the glow behind the window.
+        </p>
+        <div class="settings-row"><span class="settings-label">Mode</span></div>
+        <div class="theme-grid" id="theme-modes"></div>
+        <div class="settings-row" style="margin-top:14px"><span class="settings-label">Accent</span></div>
+        <div class="theme-grid" id="theme-accents"></div>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-calendar"/></svg>
+          <h3>Google Calendar</h3>
+        </div>
+        <p class="muted small">
+          Carrot can show your calendar on the dashboard — and, if you allow it, your assistant
+          can see your upcoming events so you can ask things like <em>"what does my week look like?"</em>.
+          No Google sign-in, no API keys — it uses your calendar's private feed address. Free.
+        </p>
+        <details class="cal-howto">
+          <summary>How to get your calendar address (about 1 minute)</summary>
+          <ol class="muted small">
+            <li>Open <b>Google Calendar</b> in your browser (on a computer, not the phone app).</li>
+            <li>Click the <b>gear icon</b> (top right) → <b>Settings</b>.</li>
+            <li>On the left, under <b>Settings for my calendars</b>, click your calendar (usually your name).</li>
+            <li>Scroll all the way down to <b>"Secret address in iCal format"</b>.</li>
+            <li>Click the <b>copy</b> button next to that long address, and paste it below.</li>
+          </ol>
+          <p class="muted small">
+            Treat that address like a password — anyone who has it can read your calendar.
+            Carrot stores it on this computer only and never shows it again after saving.
+            (Outlook, Proton and most other calendars have the same kind of ".ics" address and work too.)
+          </p>
+        </details>
+        <div class="settings-row">
+          <input type="password" id="cal-ics-url" placeholder="Paste your secret calendar address here (https://…ics)" spellcheck="false" autocomplete="off">
+          <button class="btn btn-primary" onclick="saveCalendarUrl()">Connect</button>
+          <button class="btn btn-ghost" onclick="disconnectCalendar()">Disconnect</button>
+        </div>
+        <div class="settings-row">
+          <label class="inline-check"><input type="checkbox" id="cal-enabled" onchange="saveCalendarToggles()"> Show calendar in Carrot</label>
+          <label class="inline-check"><input type="checkbox" id="cal-agent-aware" onchange="saveCalendarToggles()"> Let the assistant see my calendar</label>
+        </div>
+        <div class="settings-row">
+          <span class="settings-status" id="cal-status">Not connected</span>
+        </div>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-note"/></svg>
+          <h3>Your apps — Obsidian &amp; your code editor</h3>
+        </div>
+        <p class="muted small">
+          Keep using the tools you love. Point Carrot at your <b>Obsidian vault</b> folder and
+          notes flow both ways: "→ Obsidian" in the Notes tab drops any Carrot note into your
+          vault as a normal Markdown file, and <b>Import</b> brings your vault notes into Carrot
+          so search and chat can see them (re-importing updates, never duplicates). The Code tab's
+          open button launches <b>Cursor</b> or <b>VS Code</b> — whichever you have.
+        </p>
+        <div class="settings-row">
+          <input type="text" id="obsidian-vault" placeholder="Full path to your vault folder, e.g. C:\Users\you\Documents\MyVault" spellcheck="false">
+          <button class="btn btn-primary" onclick="saveVaultPath()">Save</button>
+          <button class="btn btn-ghost" onclick="importObsidian()">Import vault → Carrot</button>
+        </div>
+        <div class="settings-row">
+          <span class="settings-status" id="interop-status">Checking…</span>
+        </div>
+      </div>
 
       <div class="settings-card">
         <div class="settings-head">
@@ -414,6 +1318,232 @@
           <div class="muted small">Enter this code in the browser tab that opened:</div>
           <div class="gh-code" id="gh-user-code"></div>
         </div>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-cloud"/></svg>
+          <h3>Providers</h3>
+        </div>
+        <p class="muted small">
+          Ollama runs on this machine and needs no key. Add any other service you have a key
+          for — Anthropic, OpenAI, or anything speaking the OpenAI format (OpenRouter, Groq,
+          Together, DeepSeek, Mistral, LM Studio, vLLM, your own endpoint). Keys are stored
+          locally and never returned by the API once saved.
+        </p>
+        <div id="providers-panel"><div class="empty">Loading…</div></div>
+
+        <details class="provider-add">
+          <summary>Add a provider</summary>
+          <div class="settings-row">
+            <select id="prov-preset" onchange="applyProviderPreset()"></select>
+            <input type="text" id="prov-id" placeholder="id (e.g. openrouter)" spellcheck="false">
+            <input type="text" id="prov-label" placeholder="Display name" spellcheck="false">
+          </div>
+          <div class="settings-row">
+            <select id="prov-kind">
+              <option value="openai">OpenAI-compatible</option>
+              <option value="anthropic">Anthropic</option>
+            </select>
+            <input type="text" id="prov-base" placeholder="https://api.example.com/v1" spellcheck="false">
+            <input type="password" id="prov-key" placeholder="API key (optional now)" spellcheck="false">
+            <button class="btn btn-ghost" onclick="addProvider()">Add</button>
+          </div>
+        </details>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-key"/></svg>
+          <h3>How you sign in</h3>
+        </div>
+        <p class="muted small">
+          Anthropic and OpenAI can be reached two ways. A <strong>developer API key</strong> is
+          billed per token from their console. A <strong>subscription</strong> signs you in to the
+          plan you may already pay for — Claude Pro/Max, ChatGPT Plus/Pro — through their own
+          OAuth flow. Carrot never reads your browser's cookies or drives the web app: if a
+          provider offers no sign-in flow, it says so rather than working around it.
+        </p>
+        <div id="auth-panel"><div class="empty">Loading…</div></div>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-image"/></svg>
+          <h3>Image &amp; video generation</h3>
+        </div>
+        <p class="muted small">
+          Local first here too: point Carrot at a Stable Diffusion server you are already running
+          and nothing leaves the machine. No key, no account, no upload. Hosted backends are
+          there for when you would rather rent someone else's GPU — and Carrot reuses a key you
+          already pasted for chat rather than asking twice.
+        </p>
+        <div id="media-panel"><div class="empty">Loading…</div></div>
+        <div class="settings-row" style="margin-top:12px">
+          <input type="text" id="media-prompt" placeholder="Try it: describe a picture…" spellcheck="false">
+          <button class="btn btn-primary" onclick="tryGenerate()">Generate</button>
+        </div>
+        <div id="media-preview" class="media-preview"></div>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-chip"/></svg>
+          <h3>Consensus &amp; debate</h3>
+        </div>
+        <p class="muted small">
+          For questions where one confident paragraph is not enough. Two or more models
+          answer independently, then critique each other's answers anonymously, then one
+          writes the final answer — stating where the panel disagreed rather than
+          averaging it away. Each model searches for its own evidence, so two of them
+          finding different sources is a real disagreement rather than a difference in
+          what they happened to memorise. Pick models that fail <em>differently</em>: a coding model
+          and a reasoning model beat two of the same family. It costs roughly as many
+          tokens and as much time as models on the panel, so it is per-question rather
+          than a mode you leave on.
+        </p>
+        <div id="consensus-panel"></div>
+        <div id="consensus-suggest"></div>
+        <div class="settings-row">
+          <!-- The same list the composer's model picker uses: everything you
+               have pulled, plus every model from a provider you configured. -->
+          <select id="consensus-add" onchange="addPanelMember(this)">
+            <option value="">Add a model to the panel…</option>
+          </select>
+        </div>
+        <div class="settings-row">
+          <label class="muted small" for="consensus-judge">Which model writes the final answer</label>
+          <select id="consensus-judge" onchange="saveSynthesiser(this.value)"></select>
+        </div>
+      </div>
+
+      <!-- Ambient capture rules. These exist before ambient capture does, on
+           purpose: written the other way round, the exclusions become a patch
+           on a system that already recorded your banking session. -->
+      <div class="settings-card">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-eye"/></svg>
+          <h3>What Carrot is allowed to see</h3>
+        </div>
+        <p class="muted small">
+          Ambient capture — reading your screen so you can ask "what was that thing I
+          had open on Tuesday" — is off, and every one of these rules is on before you
+          arrive. You should never have to think to exclude a private browsing window:
+          opening one is you saying, in the only words the browser gave you, that this
+          is not to be kept. Nothing here is capture. This is the gate capture has to
+          get through, and you can try it below on a window that does not exist.
+        </p>
+        <div id="ambient-panel"><div class="empty">Loading…</div></div>
+        <div class="settings-row" style="margin-top:12px">
+          <select id="ambient-kind" aria-label="What to exclude">
+            <option value="app">App named…</option>
+            <option value="title">Window title containing…</option>
+            <option value="url">URL containing…</option>
+          </select>
+          <input type="text" id="ambient-value" placeholder="Signal, mail.proton.me, …"
+                 spellcheck="false" onkeydown="if(event.key==='Enter')addAmbientExclusion()">
+          <button class="btn" onclick="addAmbientExclusion()">Never capture this</button>
+        </div>
+        <div id="ambient-exclusions"></div>
+        <div class="settings-row" style="margin-top:12px">
+          <input type="text" id="ambient-try-app" placeholder="App, e.g. Chrome" spellcheck="false">
+          <input type="text" id="ambient-try-title" placeholder="Window title" spellcheck="false"
+                 onkeydown="if(event.key==='Enter')tryAmbientWindow()">
+          <button class="btn btn-ghost" onclick="tryAmbientWindow()">Would this be captured?</button>
+        </div>
+        <div id="ambient-try-result" class="muted small"></div>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-pulse"/></svg>
+          <h3>Local webhooks</h3>
+        </div>
+        <p class="muted small">
+          Let Home Assistant, a Stream Deck macro, a Shortcut or a shell script on your
+          own network talk to Carrot. This is the only way into the app that does not
+          need its session, so it is off until you turn it on, and each hook does exactly
+          one named thing — a token that leaks cannot be turned into a shell.
+        </p>
+        <div class="settings-row">
+          <label class="switch">
+            <input type="checkbox" id="hooks-enabled" onchange="setHooksEnabled(this.checked)">
+            <span>Enable local webhooks</span>
+          </label>
+        </div>
+        <div id="hooks-panel"></div>
+        <details class="hook-add">
+          <summary>Create a hook</summary>
+          <div class="settings-row">
+            <input type="text" id="hook-id" placeholder="id (e.g. leaving-home)" spellcheck="false">
+            <select id="hook-action"></select>
+            <button class="btn btn-ghost" onclick="createHook()">Create</button>
+          </div>
+          <div id="hook-created" class="hook-created hidden"></div>
+        </details>
+        <details class="hook-add">
+          <summary>Send events to your smart home</summary>
+          <p class="muted small">
+            Carrot POSTs a small JSON payload when something happens. Targets have to be
+            on your own network — a public URL would turn your notifications into someone
+            else's feed.
+          </p>
+          <div class="settings-row">
+            <input type="text" id="target-url" placeholder="http://homeassistant.local:8123/api/webhook/carrot" spellcheck="false">
+            <button class="btn btn-ghost" onclick="addHookTarget()">Add</button>
+          </div>
+          <div id="hook-targets"></div>
+        </details>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-chip"/></svg>
+          <h3>Task Routing</h3>
+        </div>
+        <p class="muted small">
+          Every model call names the task it is doing, and you decide which provider and model
+          serves each one. Leave a task on <span class="mono">auto</span> to keep it on-device
+          (with optional escalation), or pin it to any provider you configured above. You can
+          also add your own tasks and call them from the API with
+          <span class="mono">task=&lt;id&gt;</span>.
+        </p>
+        <div id="routing-panel"><div class="empty">Loading…</div></div>
+
+        <details class="provider-add">
+          <summary>Add a custom task</summary>
+          <div class="settings-row">
+            <input type="text" id="task-id" placeholder="id (e.g. checking)" spellcheck="false">
+            <input type="text" id="task-label" placeholder="Display name" spellcheck="false">
+            <input type="text" id="task-desc" placeholder="What it's for" spellcheck="false">
+            <button class="btn btn-ghost" onclick="addTask()">Add</button>
+          </div>
+        </details>
+
+        <div class="settings-row">
+          <label class="settings-toggle">
+            <input type="checkbox" id="cloud-enabled" onchange="saveCloudSettings()">
+            Allow automatic escalation for unpinned tasks
+          </label>
+          <button class="btn btn-ghost" onclick="loadRouting()">Refresh</button>
+        </div>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-download"/></svg>
+          <h3>Backup &amp; Restore</h3>
+        </div>
+        <p class="muted small">
+          Export everything — conversations, memory, notes, goals, and the document index —
+          into a single archive you own. Restoring replaces the current contents, after taking
+          a safety copy first.
+        </p>
+        <div class="settings-row">
+          <button class="btn btn-primary" onclick="exportBackup()">Export now</button>
+          <button class="btn btn-ghost" onclick="loadBackups()">Refresh list</button>
+        </div>
+        <div id="backup-list" class="list"></div>
       </div>
 
       <div class="settings-card">
@@ -471,6 +1601,7 @@
 
 <!-- ===== Command bar (Conversations view) ===== -->
 <div id="cmdbar" class="hidden">
+  <div id="attach-tray" class="hidden"></div>
   <div id="skill-pop" class="hidden">
     <div class="pop-section">Skills</div>
     <div id="skill-pop-list"></div>
@@ -486,10 +1617,13 @@
       <svg class="ico chev"><use href="#i-chevron"/></svg>
     </button>
     <div id="model-pop" class="hidden">
-      <div class="pop-section">Installed</div>
-      <div id="model-installed"></div>
-      <div class="pop-section">Available to install</div>
-      <div id="model-suggested"></div>
+      <div class="pop-scroll">
+        <div class="pop-section">On this machine</div>
+        <div id="model-installed"></div>
+        <div id="model-remote"></div>
+        <div class="pop-section">Available to install</div>
+        <div id="model-suggested"></div>
+      </div>
       <div class="pop-custom">
         <input type="text" id="model-custom" placeholder="any ollama model, e.g. llama3.2:1b" onkeydown="if(event.key==='Enter')pullCustomModel()">
         <button class="btn btn-ghost" onclick="pullCustomModel()">Pull</button>
@@ -500,7 +1634,37 @@
       </div>
     </div>
   </div>
+  <button id="temp-btn" class="composer-chip"
+          onclick="toggleTemporaryChat()"
+          title="Answered but not remembered, and deleted afterwards">
+    <svg class="ico"><use href="#i-ghost"/></svg>
+    <span>Temporary</span>
+  </button>
+  <button id="debate-btn" class="composer-chip needs-setup"
+          onclick="debateCurrentQuestion()"
+          title="Set up a model council">
+    <svg class="ico"><use href="#i-chip"/></svg>
+    <span>Council</span>
+  </button>
+  <div id="search-picker">
+    <button id="search-btn" onclick="toggleSearchPop()" title="How much Carrot may search the web">
+      <svg class="ico"><use href="#i-search"/></svg>
+      <span id="search-label">Search</span>
+      <svg class="ico chev"><use href="#i-chevron"/></svg>
+    </button>
+    <div id="search-pop" class="hidden">
+      <div class="pop-section">Web search</div>
+      <div id="search-mode-list"></div>
+    </div>
+  </div>
   <input type="text" id="cmd-input" placeholder="Ask anything — Ctrl+K to focus, / for skills" onkeydown="cmdKeydown(event)" oninput="cmdInputChanged()">
+  <input type="file" id="attach-input" class="hidden" multiple
+         accept="image/*,.pdf,.txt,.md,.csv,.json,.py,.js,.ts,.html,.css,.yaml,.yml,.log"
+         onchange="addAttachments(this.files); this.value='';">
+  <button class="icon-btn" id="attach-btn" title="Attach images, PDFs or text files"
+          onclick="document.getElementById('attach-input').click()">
+    <svg class="ico"><use href="#i-paperclip"/></svg>
+  </button>
   <button class="icon-btn" id="mic-btn" title="Voice input" onclick="toggleVoiceInput()"><svg class="ico"><use href="#i-mic"/></svg></button>
   <button class="icon-btn" id="speak-toggle" title="Read replies aloud" onclick="toggleSpeak()"><svg class="ico"><use href="#i-speaker-off"/></svg></button>
   <button id="send-btn" title="Send" onclick="sendChat()"><svg class="ico"><use href="#i-send"/></svg></button>
@@ -511,5 +1675,12 @@
 <script src="/js/features.js"></script>
 <script src="/js/dashboard.js"></script>
 <script src="/js/app.js"></script>
+<script src="/js/agentops.js"></script>
+<script src="/js/workspaces.js"></script>
+<script src="/js/agents.js"></script>
+<script src="/js/docagent.js"></script>
+<script src="/js/hub.js"></script>
+<script src="/js/studio.js"></script>
+<script src="/js/planner.js"></script>
 </body>
 </html>
