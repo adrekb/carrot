@@ -87,7 +87,13 @@ def test_unknown_tool(workspace):
 
 
 def test_bad_arguments_are_reported(workspace):
-    assert agent_tools.call("carrot__read_file", {}).startswith("error:")
+    # "bad-call:" rather than "error:" since the missing-argument check moved
+    # ahead of dispatch: the model has to be able to tell a call it should
+    # repeat correctly from a tool that is broken. Both are still a reported
+    # message rather than a raised exception, which is what this pins.
+    result = agent_tools.call("carrot__read_file", {})
+    assert result.startswith("bad-call:")
+    assert "path" in result
 
 
 # ===== Journal and undo =====
@@ -566,3 +572,66 @@ class TestTheAgentCanRemoveThingsToo:
         names = ["carrot__delete_file", "carrot__move_file", "carrot__read_file"]
         allowed = coder.tools_for_mode(names, coder.MODE_PLAN)
         assert allowed == ["carrot__read_file"]
+
+
+class TestAMalformedCallIsRecoverable:
+    """Asked for a snake game, the model called write_file with the whole
+    program in `content` and no `path`, and the turn died.
+
+    What came back was "_tool_write_file() missing 1 required positional
+    argument: 'path'" — a private function name and a Python concept, from a
+    raw TypeError. The model did not retry; it answered "the notes do not
+    answer this question because nothing was gathered".
+
+    This is the one failure in run_tool that *should* be retried, so unlike a
+    refusal it says to call again. It has to name the argument in the tool's
+    own vocabulary to be actionable, and it still must not let the model claim
+    the write happened.
+    """
+
+    def spec(self):
+        return {
+            "handler": lambda path, content, **kw: "wrote it",
+            "mutating": True,
+            "risk": "high",
+            "parameters": {
+                "type": "object",
+                "properties": {"path": {"type": "string"},
+                               "content": {"type": "string"}},
+                "required": ["path", "content"],
+            },
+        }
+
+    def test_a_missing_argument_is_named(self, isolated_db):
+        result = agent_tools.run_tool("write_file", self.spec(), {"content": "x"})
+        assert "path" in result
+        assert "_tool_write_file" not in result, "leaks the private handler name"
+        assert "positional argument" not in result, "leaks the Python signature"
+
+    def test_it_says_to_call_again(self, isolated_db):
+        # The opposite of the approval messages, which must stop the retry.
+        result = agent_tools.run_tool("write_file", self.spec(), {"content": "x"})
+        assert "again" in result.lower()
+
+    def test_it_still_cannot_be_reported_as_done(self, isolated_db):
+        result = agent_tools.run_tool("write_file", self.spec(), {"content": "x"})
+        assert "nothing was written" in result.lower()
+        assert "do not tell the user it was done" in result.lower()
+
+    def test_an_empty_string_counts_as_supplied(self, isolated_db):
+        # Writing an empty file is a real thing to want; it is not a missing
+        # argument, and rejecting it would break truncating a file.
+        assert agent_tools._missing_arguments(
+            self.spec(), {"path": "a.py", "content": ""}) == []
+
+    def test_a_complete_call_is_not_flagged(self, isolated_db):
+        assert agent_tools._missing_arguments(
+            self.spec(), {"path": "a.py", "content": "x"}) == []
+
+    def test_the_user_is_not_asked_to_approve_a_call_that_cannot_run(self, isolated_db):
+        # The gate used to come first, so a write with no path still raised a
+        # prompt — a question with no good answer either way.
+        prompts = []
+        agent_tools.run_tool("write_file", self.spec(), {"content": "x"},
+                             emit=prompts.append)
+        assert not [p for p in prompts if "approval_request" in p]

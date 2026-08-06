@@ -18,6 +18,7 @@ Two safety properties hold for every tool here:
 from __future__ import annotations
 
 import difflib
+import logging
 import os
 import re
 import threading
@@ -28,6 +29,8 @@ from typing import Any, Callable, Dict, List, Optional
 
 from .config import get_config
 from .database import get_db
+
+LOG = logging.getLogger(__name__)
 
 TOOL_PREFIX = "carrot"
 # Two minutes was too short for a prompt that renders as a card in the corner
@@ -1282,6 +1285,47 @@ NO_CHANNEL_TEMPLATE = (
 )
 
 
+# A malformed call is the one failure here that *should* be retried, which is
+# why it does not reuse the "do not call it again" wording above. Asked for a
+# snake game, gemma4:e4b called write_file with the whole program in `content`
+# and no `path` at all, and got back "_tool_write_file() missing 1 required
+# positional argument: 'path'" — a private function name and a Python concept.
+# It did not retry; the turn ended "the notes do not answer this question".
+# Naming the argument it left out, in the tool's own vocabulary, is the
+# difference between a recoverable slip and a dead turn.
+BAD_CALL_TEMPLATE = (
+    "bad-call: {tool} was called with {problem}. Nothing was changed and "
+    "nothing was written. Do not tell the user it was done. Call {tool} again "
+    "with every required argument: {required}."
+)
+
+
+def _missing_arguments(spec: Dict[str, Any], arguments: Dict[str, Any]) -> List[str]:
+    """Required parameters the caller left out.
+
+    Presence, not truthiness: writing an empty file is a legitimate call, so an
+    empty string counts as supplied.
+    """
+    params = spec.get("parameters") or {}
+    required = params.get("required") or []
+    return [name for name in required
+            if name not in arguments or arguments[name] is None]
+
+
+def _bad_call_message(tool: str, spec: Dict[str, Any], missing: List[str]) -> str:
+    params = spec.get("parameters") or {}
+    required = params.get("required") or []
+    if missing:
+        problem = "no " + ", ".join(f"'{m}'" for m in missing)
+    else:
+        problem = "arguments it does not accept"
+    return BAD_CALL_TEMPLATE.format(
+        tool=tool,
+        problem=problem,
+        required=", ".join(f"'{r}'" for r in required) or "(none)",
+    )
+
+
 def not_approved_message(reason: str, tool: str) -> str:
     """What the model is told when a gated call did not run."""
     if reason == DENIED_REASON:
@@ -1348,6 +1392,14 @@ def run_tool(
     built-in one does, so both go through here.
     """
     arguments = arguments or {}
+
+    # Checked before the approval gate, not after. A call that cannot run is
+    # not worth interrupting the user for — asking "may I write this file?"
+    # about a write_file with no path is a prompt with no good answer.
+    missing = _missing_arguments(spec, arguments)
+    if missing:
+        return _bad_call_message(name, spec, missing)
+
     if spec.get("mutating") and get_config().get("agent_require_approval", True):
         approved, reason = _request_approval(
             name, arguments, summary or _summarize_call(name, arguments),
@@ -1367,7 +1419,13 @@ def run_tool(
     except PermissionError as exc:
         return f"error: {exc}"
     except TypeError as exc:
-        return f"error: bad arguments for {name}: {exc}"
+        # Reached when the arguments are present but wrong in a way the schema
+        # does not describe — an unexpected name, usually. The exception text is
+        # a Python signature naming a private function, which tells a model
+        # nothing it can act on, so it is logged and the model is told what the
+        # tool actually accepts.
+        LOG.warning("bad arguments for %s: %s", name, exc)
+        return _bad_call_message(name, spec, [])
     except Exception as exc:
         return f"error: {name} failed: {exc}"
     elapsed = time.time() - started
