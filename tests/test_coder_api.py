@@ -146,6 +146,52 @@ class TestRulesReachThePrompt:
         assert any("PLAN mode" in b["content"] for b in A._coder_context())
 
 
+class TestTheCodingModeStaysInTheCodeTab:
+    """`coder_mode` is one global setting with no idea which panel is asking.
+
+    So the plan/act preamble and the workspace's rules rode on every message
+    in the app. Asked for "recent china political news", the model arrived
+    holding an ACT-mode preamble telling it to use write_file and a set of
+    rules for a Pong workspace, and went off to read pong.py — which is
+    exactly what it had just been told it was for.
+
+    The turns that want it say so; nothing else gets it.
+    """
+
+    def _history(self, coder, tmp_path, monkeypatch):
+        from carrot import config, conversation as conv_mod
+
+        monkeypatch.setattr(agent_tools, "workspace_root", lambda: str(tmp_path))
+        (tmp_path / "AGENTS.md").write_text("never use global state")
+        config.set_config("coder_mode", "act")
+        conv = conv_mod.create_conversation("news")
+        history, _ = A._prepare_history(conv, "recent china political news",
+                                        None, coder=coder)
+        return " ".join(m["content"] for m in history if m["role"] == "system")
+
+    def test_an_ordinary_chat_is_not_told_it_is_a_coding_agent(
+            self, isolated_db, tmp_path, monkeypatch):
+        system = self._history(False, tmp_path, monkeypatch)
+        assert "ACT mode" not in system
+        assert "write_file" not in system
+        assert "never use global state" not in system, "workspace rules leaked"
+
+    def test_the_code_tab_still_gets_it(self, isolated_db, tmp_path, monkeypatch):
+        system = self._history(True, tmp_path, monkeypatch)
+        assert "ACT mode" in system
+        assert "never use global state" in system
+
+    def test_the_panel_asks_for_it_and_nothing_else_does(self):
+        from pathlib import Path
+
+        web = Path(__file__).resolve().parents[1] / "carrot" / "web" / "js"
+        assert "coder: true" in (web / "features.js").read_text(encoding="utf-8"), (
+            "the agent panel does not flag its turns, so the Code tab loses "
+            "its mode preamble and rules entirely")
+        assert "coder: true" not in (web / "app.js").read_text(encoding="utf-8"), (
+            "ordinary chat is flagging itself as a coding turn again")
+
+
 class TestEditFileTool:
     def test_a_matching_edit_is_applied_and_journaled(self, isolated_db, tmp_path, monkeypatch):
         monkeypatch.setattr(agent_tools, "workspace_root", lambda: str(tmp_path))
@@ -572,3 +618,37 @@ class TestTheQuestionFormIsWiredUp:
         assert "stripQuestions(answer)" in js, (
             "the answer is rendered without stripping, so the user sees the raw "
             "JSON as well as the form built from it")
+
+
+class TestTheCodingAgentCanLookThingsUp:
+    """It could not. The panel sent search_mode "off", which does not merely
+    discourage searching — SEARCH_OFF contributes an empty tool set, so
+    web_search and read_url were removed from what the model was offered.
+
+    An agent that cannot check a library signature or paste an unfamiliar
+    error into a search guesses instead, and a small model guessing at an API
+    is where the afternoon goes.
+    """
+
+    def test_the_panel_does_not_disable_search(self):
+        from pathlib import Path
+
+        js = (Path(__file__).resolve().parents[1] / "carrot" / "web" / "js"
+              / "features.js").read_text(encoding="utf-8")
+        send = js.split("async function sendAgentTask")[1].split("\n}\n")[0]
+        assert "search_mode: 'off'" not in send, (
+            "the agent cannot look up an API or an error message")
+        assert "search_mode: 'single'" in send, (
+            "multi-turn search would have it researching instead of working")
+
+    def test_off_really_does_remove_the_tools(self):
+        # The reason "off" was the wrong setting rather than a mild preference.
+        assert A.SEARCH_MODES[A.SEARCH_OFF]["tools"] == set()
+        assert "web_search" in A.SEARCH_MODES[A.SEARCH_SINGLE]["tools"]
+        assert "read_url" in A.SEARCH_MODES[A.SEARCH_SINGLE]["tools"]
+
+    def test_act_mode_says_what_the_web_is_for(self, isolated_db, tmp_path, monkeypatch):
+        # Otherwise it either ignores the tools or disappears into them.
+        guidance = coder.MODE_PREAMBLE[coder.MODE_ACT]
+        assert "search the web" in guidance
+        assert "error message" in guidance

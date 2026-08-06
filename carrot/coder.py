@@ -117,7 +117,11 @@ MODE_PREAMBLE = {
         "Prefer edit_file with exact search/replace blocks over rewriting whole "
         "files. After a change that should be runnable, run it and read the "
         "output. If you discover the plan was wrong, stop and say so rather "
-        "than improvising something the user did not agree to."
+        "than improvising something the user did not agree to.\n\n"
+        "You can search the web. Use it for the two things it is good for: an "
+        "API or library you are unsure of, and an error message you did not "
+        "expect. Look it up rather than guessing at a signature. Do not go "
+        "reading around the subject — one look, then back to the work."
     ),
 }
 

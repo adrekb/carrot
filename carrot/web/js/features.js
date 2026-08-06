@@ -1847,9 +1847,19 @@ async function sendAgentTask() {
                     : (typeof currentModel !== 'undefined' ? currentModel : null),
                 provider: agentModel ? agentModel.provider
                     : (typeof currentProvider !== 'undefined' ? currentProvider : null),
-                // The agent works on files; a web search mid-task is rarely
-                // what was asked for and always costs a round.
-                search_mode: 'off',
+                // Single search, not off. "Off" removes web_search and read_url
+                // from the tool list outright, so the agent could not look up
+                // an API it did not know or paste an error message into a
+                // search — the two things a coding agent most needs the web
+                // for. Single rather than multi: it may check a fact, not go
+                // researching instead of working.
+                search_mode: 'single',
+                // This is the coding panel, so this turn gets the plan/act
+                // preamble and the workspace rules. Ordinary chat does not:
+                // one global coder_mode was being applied to every message in
+                // the app, so a question about the news arrived dressed as a
+                // coding task.
+                coder: true,
             }),
         });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);

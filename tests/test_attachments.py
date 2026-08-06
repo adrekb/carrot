@@ -181,7 +181,10 @@ def test_chat_accepts_images_for_a_vision_model(client, monkeypatch):
                         lambda self, m: True, raising=False)
     seen = {}
 
-    def fake_prepare(conv, message, skill, extra_system=None, mode=None, images=None):
+    # **kwargs so a new argument on _prepare_history is not a failure in two
+    # tests about attachments, which is what `coder` was.
+    def fake_prepare(conv, message, skill, extra_system=None, mode=None,
+                     images=None, **kwargs):
         seen["images"] = images
         seen["extra_system"] = extra_system
         return [{"role": "user", "content": message}], None
@@ -202,7 +205,10 @@ def test_chat_accepts_documents_on_any_model(client, monkeypatch):
                         lambda self, m: False, raising=False)
     seen = {}
 
-    def fake_prepare(conv, message, skill, extra_system=None, mode=None, images=None):
+    # **kwargs so a new argument on _prepare_history is not a failure in two
+    # tests about attachments, which is what `coder` was.
+    def fake_prepare(conv, message, skill, extra_system=None, mode=None,
+                     images=None, **kwargs):
         seen["extra_system"] = extra_system
         seen["images"] = images
         return [{"role": "user", "content": message}], None

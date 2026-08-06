@@ -170,6 +170,13 @@ class ChatRequest(BaseModel):
     workspace_id: Optional[str] = None
     # A chat that is answered but not remembered, and deleted afterwards.
     temporary: Optional[bool] = False
+    # Sent by the Code tab's agent panel, and only by it. The plan/act preamble
+    # and the workspace's rules ride on this: `coder_mode` is a single global
+    # setting, so without a per-turn signal every ordinary chat was told it was
+    # a coding agent in ACT mode with file tools. Asked for "recent china
+    # political news" it went and read pong.py, because that is what it had
+    # just been told it was for.
+    coder: Optional[bool] = False
 
 
 class AddMessageRequest(BaseModel):
@@ -942,7 +949,7 @@ def _coder_context(conversation_id: str = ""):
 
 
 def _prepare_history(conv, message, skill_slug, extra_system=None, mode=None,
-                     images=None):
+                     images=None, coder=False):
     """Build the model message list for a turn.
 
     Order matters: the search directive, then skill instructions, then any
@@ -972,10 +979,17 @@ def _prepare_history(conv, message, skill_slug, extra_system=None, mode=None,
     # The coding agent's mode, and whatever instruction files the workspace
     # carries. A repo already set up for Cline, Continue, Goose or Cursor is
     # already set up for Carrot — its rules are read, not re-authored.
-    try:
-        history.extend(_coder_context(conv.get("id", "") if conv else ""))
-    except Exception:
-        pass
+    #
+    # Only for turns that came from the Code tab. `coder_mode` is one global
+    # setting with no idea which panel is asking, so this used to ride on every
+    # chat: "recent china political news" arrived with an ACT-mode preamble and
+    # a workspace's rules attached, and the model dutifully went off to read
+    # pong.py. The mode belongs to the coding panel, not to the app.
+    if coder:
+        try:
+            history.extend(_coder_context(conv.get("id", "") if conv else ""))
+        except Exception:
+            pass
 
     # Calendar awareness is an explicit opt-in; when on, the assistant sees
     # the next few days so "what does my week look like" just works.
@@ -1798,7 +1812,8 @@ async def chat(req: ChatRequest):
     mode = search_mode(req.search_mode)
     images, docs_system, note = _apply_attachments(req, resolved)
     history, skill = _prepare_history(conv, req.message, req.skill,
-                                      extra_system=docs_system, mode=mode, images=images)
+                                      extra_system=docs_system, mode=mode, images=images,
+                                      coder=bool(req.coder))
     conv_mod.add_message(req.conversation_id, "user",
                          f"{req.message}\n\n[{note}]" if note else req.message)
 
@@ -1855,7 +1870,8 @@ async def chat_stream(req: ChatRequest):
     mode = search_mode(req.search_mode)
     images, docs_system, note = _apply_attachments(req, resolved)
     history, skill = _prepare_history(conv, req.message, req.skill,
-                                      extra_system=docs_system, mode=mode, images=images)
+                                      extra_system=docs_system, mode=mode, images=images,
+                                      coder=bool(req.coder))
     conv_mod.add_message(req.conversation_id, "user",
                          f"{req.message}\n\n[{note}]" if note else req.message)
     return _chat_stream_response(req, conv, history, skill, resolved, mode=mode)
