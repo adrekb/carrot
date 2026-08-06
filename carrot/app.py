@@ -1694,8 +1694,19 @@ def _chat_stream_response(req, conv, history, skill, resolved, prelude=None, mod
 
     ``prelude`` is emitted as the first event, which is how a doc send reports
     its resolved citations before any tokens arrive.
+
+    Deliberately a plain ``def``, not ``async def``. Everything below it is
+    synchronous — blocking HTTP to the provider, and a blocking queue drain in
+    ``_run_tool`` while a tool waits on approval. Inside an ``async def`` all of
+    that runs *on the event loop*, so one chat turn starved the whole server:
+    every other request stalled for as long as the model was thinking. The
+    approval prompt was the worst of it, because answering one is itself an
+    HTTP call the starved loop could not serve — the turn could not finish
+    until it was answered and it could not be answered until the turn finished.
+    Starlette runs a sync iterator in a threadpool, which is what the
+    notification stream below already relies on.
     """
-    async def stream():
+    def stream():
         final_text = ""
         if prelude:
             yield f"data: {json.dumps({'document': prelude})}\n\n"
@@ -2851,8 +2862,12 @@ def _sse(generator):
     throw here is not an error response — it is a socket that closes. A deep
     research run that dies on its ninth page fetch would end with a spinner and
     no explanation. It ends with the reason instead.
+
+    Sync for the same reason as the chat stream: the generators handed to this
+    are synchronous, and running them on the event loop starves every other
+    request for the length of a research run.
     """
-    async def stream():
+    def stream():
         try:
             for event in generator:
                 yield f"data: {json.dumps(event)}\n\n"
