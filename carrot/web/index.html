@@ -1640,6 +1640,17 @@
     <svg class="ico"><use href="#i-ghost"/></svg>
     <span>Temporary</span>
   </button>
+  <!-- Distinct from Temporary: that one stops this chat being remembered
+       afterwards, this one stops what is already remembered being read now.
+       Asking for the news and being told about a dog you mentioned once is
+       the second problem, and the global setting was the wrong shape for
+       it — you do not want memory off, you want it off for this. -->
+  <button id="memory-btn" class="composer-chip"
+          onclick="toggleMemoryUse()"
+          title="Ignore what Carrot remembers about you for this chat">
+    <svg class="ico"><use href="#i-brain"/></svg>
+    <span>Memory</span>
+  </button>
   <button id="debate-btn" class="composer-chip needs-setup"
           onclick="debateCurrentQuestion()"
           title="Set up a model council">

@@ -400,3 +400,50 @@ def test_memory_history_endpoint(client):
 
 def test_vector_stats_endpoint(client):
     assert client.get("/api/vectors/stats").json()["total"] == 0
+
+
+class TestMemoryCanBeLeftOutOfOneTurn:
+    """Asked for the news and told about a dog mentioned once months ago.
+
+    There was only a global switch, which is the wrong shape for that: you do
+    not want memory off, you want it off for this. So the flag rides on the
+    turn, and the global setting is what it falls back to.
+    """
+
+    def _systems(self, memory):
+        from carrot import app as A, conversation as conv_mod
+
+        conv = conv_mod.create_conversation("news")
+        history, _ = A._prepare_history(conv, "recent us political news", None,
+                                        memory=memory)
+        return " ".join(m["content"] for m in history if m["role"] == "system")
+
+    def _remember_the_dog(self):
+        from carrot import config, memory as memory_mod
+
+        config.set_config("memory_enabled", True)
+        memory_mod.create("fact", "dog", "The user has a dog called Biscuit.")
+
+    def test_by_default_memory_is_used(self, isolated_db):
+        self._remember_the_dog()
+        assert "Biscuit" in self._systems(None)
+
+    def test_a_turn_can_leave_it_out(self, isolated_db):
+        self._remember_the_dog()
+        assert "Biscuit" not in self._systems(False)
+
+    def test_the_global_setting_is_still_the_default(self, isolated_db):
+        from carrot import config
+
+        self._remember_the_dog()
+        config.set_config("memory_enabled", False)
+        assert "Biscuit" not in self._systems(None)
+
+    def test_a_turn_can_opt_back_in(self, isolated_db):
+        # Otherwise the per-turn flag could only ever subtract, and a chat that
+        # genuinely wants context could not have it without a trip to Settings.
+        from carrot import config
+
+        self._remember_the_dog()
+        config.set_config("memory_enabled", False)
+        assert "Biscuit" in self._systems(True)

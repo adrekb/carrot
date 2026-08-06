@@ -170,6 +170,12 @@ class ChatRequest(BaseModel):
     workspace_id: Optional[str] = None
     # A chat that is answered but not remembered, and deleted afterwards.
     temporary: Optional[bool] = False
+    # Whether what Carrot remembers about the user may be used this turn.
+    # `None` means the saved default. It is per-turn because the global setting
+    # is the wrong shape for the actual complaint: asking for the news and
+    # being told about a dog you mentioned once does not mean you want memory
+    # off, it means you want it off *now*.
+    memory: Optional[bool] = None
     # Sent by the Code tab's agent panel, and only by it. The plan/act preamble
     # and the workspace's rules ride on this: `coder_mode` is a single global
     # setting, so without a per-turn signal every ordinary chat was told it was
@@ -949,7 +955,7 @@ def _coder_context(conversation_id: str = ""):
 
 
 def _prepare_history(conv, message, skill_slug, extra_system=None, mode=None,
-                     images=None, coder=False):
+                     images=None, coder=False, memory=None):
     """Build the model message list for a turn.
 
     Order matters: the search directive, then skill instructions, then any
@@ -1000,7 +1006,10 @@ def _prepare_history(conv, message, skill_slug, extra_system=None, mode=None,
     except Exception:
         pass
 
-    if config.get_config().get("memory_enabled", True):
+    # The turn's own choice wins; without one, the saved default stands.
+    use_memory = (config.get_config().get("memory_enabled", True)
+                  if memory is None else bool(memory))
+    if use_memory:
         try:
             # Recall is scoped to the workspace the conversation lives in, not
             # the one that happens to be active — re-opening an old chat should
@@ -1181,11 +1190,31 @@ MULTI_SEARCH_DIRECTIVE = (
     SEARCH_PREAMBLE +
     "Search mode: multi-turn. Do not stop at the first set of results.\n"
     "- Search, read the pages that look most likely to answer the question, then ask "
-    "yourself what you still cannot answer, and search again for exactly that.\n"
+    "yourself what you still cannot answer *about the question that was asked*, and "
+    "search again for exactly that.\n"
+    # Asked for "recent us political news" it read an NBC section front, took
+    # that page's list of headlines as an agenda, and ran eight searches on
+    # Max Miller, a Wisconsin convention and a "wonk reference manual" — none
+    # of which anyone had asked about. A front page is a list of everything
+    # that exists, not a list of what the user wants.
+    "- A gap is something the question needs and you do not have. It is not every "
+    "headline you happened to see: an index page lists everything a site has, and "
+    "chasing each one answers a question nobody asked.\n"
     "- Two or three focused rounds beat one broad one. Use the words a source would "
     "use, not the words of the question.\n"
     "- Cite the URL for anything you learned from a page, and say plainly when the "
     "sources disagree or when you could not find something.\n"
+    # It shipped its own working notes: "Here's what the second search
+    # uncovered, filling in the gaps from earlier", a status table, and a
+    # closing "What Remains Unanswered" listing the searches it might run next.
+    # In a brand-new conversation that reads as a half-finished job pushed out
+    # early, which is exactly how it was reported.
+    "- The rounds are how you work, not what you deliver. Write one answer to the "
+    "question as though you had known it all along. Never refer to 'the first "
+    "search' or 'the second search', never hand over a status table of topics, and "
+    "never end with a list of what is still unanswered or what you would search "
+    "next. If something genuinely could not be found and it matters, say that in a "
+    "sentence, in place.\n"
     "- If the question is big enough to deserve a written report with checked "
     "citations, call start_research instead of doing it by hand."
 )
@@ -1828,7 +1857,7 @@ async def chat(req: ChatRequest):
     images, docs_system, note = _apply_attachments(req, resolved)
     history, skill = _prepare_history(conv, req.message, req.skill,
                                       extra_system=docs_system, mode=mode, images=images,
-                                      coder=bool(req.coder))
+                                      coder=bool(req.coder), memory=req.memory)
     conv_mod.add_message(req.conversation_id, "user",
                          f"{req.message}\n\n[{note}]" if note else req.message)
 
@@ -1886,7 +1915,7 @@ async def chat_stream(req: ChatRequest):
     images, docs_system, note = _apply_attachments(req, resolved)
     history, skill = _prepare_history(conv, req.message, req.skill,
                                       extra_system=docs_system, mode=mode, images=images,
-                                      coder=bool(req.coder))
+                                      coder=bool(req.coder), memory=req.memory)
     conv_mod.add_message(req.conversation_id, "user",
                          f"{req.message}\n\n[{note}]" if note else req.message)
     return _chat_stream_response(req, conv, history, skill, resolved, mode=mode)

@@ -636,6 +636,8 @@ async function sendChat() {
         model: currentModel,
         provider: currentProvider,
         temporary: temporaryChat,
+        // null means "whatever the setting says"; false means "not this turn".
+        memory: useMemory,
         skill: activeSkill ? activeSkill.slug : null,
         search_mode: currentSearchMode,
     }, activeSkill);
@@ -2154,6 +2156,34 @@ async function maybeShowOnboarding() {
 // on the next start. The banner is not decoration: a mode that silently
 // changes whether you are being remembered is a mode people forget they are
 // in, and the whole value here is knowing.
+
+// Whether what Carrot remembers may be read on this turn. `null` follows the
+// saved default; the chip only ever turns it off, because turning it on for a
+// chat where the user disabled it globally would be overriding them.
+let useMemory = null;
+
+function toggleMemoryUse() {
+    // No new chat, unlike Temporary. That one changes what happens to this
+    // conversation afterwards, so switching mid-way would misdescribe the
+    // turns already taken. This only changes what the next turn reads, and
+    // wanting it off from here on is the normal case — you find out it is
+    // bringing up your dog by watching it do so.
+    useMemory = useMemory === false ? null : false;
+    renderMemoryState();
+}
+
+function renderMemoryState() {
+    const button = document.getElementById('memory-btn');
+    if (!button) return;
+    const off = useMemory === false;
+    // `on` is the chip's lit state, and the lit state here means "being
+    // ignored" — the thing worth a highlight is the departure from normal.
+    button.classList.toggle('on', off);
+    button.querySelector('span').textContent = off ? 'Memory off' : 'Memory';
+    button.title = off
+        ? 'Ignoring what Carrot remembers about you — click to use it again'
+        : 'Ignore what Carrot remembers about you for this chat';
+}
 
 function toggleTemporaryChat() {
     // Switching mode mid-conversation would be a lie either way — the earlier
