@@ -5,6 +5,7 @@ textboxes", "clicking New York doesn't work", "why no model picker in agent" —
 and each is a static property of the shipped assets, so it can be pinned here
 rather than rediscovered by a person clicking around.
 """
+import re
 from pathlib import Path
 
 import pytest
@@ -97,7 +98,35 @@ class TestTheComposerLeavesRoomToType:
     def test_the_collapse_is_keyed_to_the_bar_not_the_window(self):
         css = read("css", "style.css")
         assert "#cmdbar { container-type: inline-size; }" in css
-        assert "@container (max-width: 720px)" in css
+
+    def test_the_collapse_fires_at_the_width_the_bar_actually_rests_at(self):
+        """The breakpoint has to clear the bar's own cap, or it never fires.
+
+        Keying to the bar is necessary but not sufficient. The first version
+        asserted the literal string "@container (max-width: 720px)" and passed
+        green while the bug was live, because 720px is *below* the 760px the bar
+        rests at — so on a 1000px window the query never matched, the input
+        stayed pinned to its 160px floor, and the placeholder still cut off
+        mid-word. Compare the two numbers instead of spelling either one out.
+        """
+        css = read("css", "style.css")
+        # Scoped to the #cmdbar rules on purpose: an unanchored min(Npx, calc(
+        # 100vw ...)) also matches unrelated panels and drags their widths in.
+        caps = [int(n) for n in re.findall(r"#cmdbar\s*{[^}]*?width:\s*min\((\d+)px", css)]
+        resting = min(caps)          # the narrow bar, the one that broke
+        widest = max(caps)           # the wide-screen bar, where labels still fit
+        assert resting == 760 and widest == 920, f"bar widths moved: {sorted(set(caps))}"
+
+        breakpoints = [int(n) for n in re.findall(r"@container \(max-width: (\d+)px\)", css)]
+        collapse = max(breakpoints)
+        assert collapse >= resting, (
+            f"the label collapse fires at {collapse}px but the bar rests at "
+            f"{resting}px, so it never fires when the input is squeezed"
+        )
+        assert collapse < widest, (
+            f"the collapse at {collapse}px would also strip the labels off the "
+            f"{widest}px wide-screen bar, where they fit fine"
+        )
 
     def test_there_is_a_fallback_without_container_queries(self):
         css = read("css", "style.css")

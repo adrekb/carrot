@@ -1,4 +1,4 @@
-/* Inter (SIL Open Font License 1.1) — bundled so the UI looks identical on
+﻿/* Inter (SIL Open Font License 1.1) — bundled so the UI looks identical on
    every OS and works with no network. License: /assets/fonts/LICENSE.txt */
 @font-face {
   font-family: "InterVar";
@@ -4631,10 +4631,17 @@ td, th, .si-sub, .small, .editor-status {
  * query, which was simply the wrong measurement: the bar is capped at 760px
  * however wide the screen is, so on a 1000px window the labels stayed on, the
  * eight controls took ~700px of it, and the input the box exists for was left
- * with about an inch — enough to show "Ask ar" and nothing else. */
+ * with about an inch — enough to show "Ask ar" and nothing else.
+ *
+ * The threshold has to sit *above* the bar's own resting width, not below it.
+ * Keying to the bar was right but 720px was still 40px under the 760px cap, so
+ * the query never fired at the width that broke — the input stayed pinned to
+ * its 160px floor and the placeholder still cut off at "Ask anything — Ctrl+K".
+ * 800px clears the 760px cap; the 920px wide-screen bar stays uncollapsed,
+ * which is correct because at 920px the labels and the placeholder both fit. */
 #cmdbar { container-type: inline-size; }
 
-@container (max-width: 720px) {
+@container (max-width: 800px) {
   .composer-chip span,
   #search-label,
   #model-btn .chev { display: none; }
