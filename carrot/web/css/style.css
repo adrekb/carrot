@@ -448,7 +448,19 @@ body {
 /* superseded below: #232329 is invisible on the cream theme */
 .chat-empty p { font-size: 13px; }
 
-.message { max-width: 72%; }
+/* Capped by measure, not by percentage.
+ *
+ * 72% of the column is 866px on a 1440px window, which at 13.5px is about 124
+ * characters to a line. Typography's comfortable range is 60-75: past that the
+ * eye loses its place on the return sweep, and it is why long answers here
+ * read as heavy going when the same text does not in ChatGPT. The percentage
+ * still governs narrow windows; the ch cap only bites on wide ones, where the
+ * old rule was making the problem worse the more screen you had. */
+/* 80ch, not 68: `ch` is the width of a zero, and in Inter a zero is narrower
+ * than the average letter, so 68ch measured out at 57 real characters. 80
+ * lands at about 67, in the middle of the comfortable range rather than at
+ * its edge. Measured in the browser, not converted on paper. */
+.message { max-width: min(72%, 80ch); }
 .message .role-label {
   font-family: var(--mono);
   font-size: 10px;
@@ -458,10 +470,12 @@ body {
   margin-bottom: 5px;
 }
 .message .content {
-  padding: 10px 14px;
-  border-radius: 10px;
-  font-size: 13.5px;
-  line-height: 1.55;
+  padding: 12px 16px;
+  border-radius: 12px;
+  /* 15px, not 13.5. This is the one piece of text in the app people actually
+     read at length, and it was set smaller than the labels around it. */
+  font-size: 15px;
+  line-height: 1.6;
   white-space: pre-wrap;
   word-wrap: break-word;
 }
