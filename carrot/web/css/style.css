@@ -4253,6 +4253,41 @@ td, th, .si-sub, .small, .editor-status {
 }
 .approval-what { font-size: 12.5px; color: var(--text); margin-bottom: 8px; }
 .approval-row { display: flex; gap: 8px; }
+/* An answered prompt kept its buttons looking live: they are disabled in
+   script, but nothing said so, so a row of resolved cards read as a row of
+   decisions still waiting to be made. */
+.agent-approval button:disabled {
+  opacity: 0.45;
+  cursor: default;
+  filter: grayscale(0.6);
+}
+
+/* What the call would actually do, folded away until asked for. */
+.approval-preview { margin: 0 0 8px; }
+.approval-preview summary {
+  font-size: 11.5px;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 2px 0;
+  user-select: none;
+}
+.approval-preview summary:hover { color: var(--text); }
+.approval-preview pre {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg2);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  /* Wraps: code in a narrow panel that scrolls sideways is code nobody reads,
+     and the point of this is that it gets read. */
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 
 /* The sources behind an answer, above it.
  *

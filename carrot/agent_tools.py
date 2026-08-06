@@ -866,7 +866,14 @@ TOOLS: Dict[str, Dict[str, Any]] = {
         "handler": _tool_write_file,
         "mutating": True,
         "risk": "high",
-        "description": "Write a file in the workspace, creating it if needed. The previous contents are journaled so the edit can be reverted.",
+        # The folder half was true and undocumented: write_file has always
+        # created missing parents, but nothing said so, so asked to organise
+        # anything into directories the model concluded it could not and put
+        # everything at the top level.
+        "description": "Write a file in the workspace, creating it if needed. Any missing "
+                       "folders in the path are created too, so write to 'src/utils/helper.py' "
+                       "to make those folders. The previous contents are journaled so the "
+                       "edit can be reverted.",
         "parameters": {
             "type": "object",
             "properties": {

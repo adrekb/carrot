@@ -652,3 +652,49 @@ class TestTheCodingAgentCanLookThingsUp:
         guidance = coder.MODE_PREAMBLE[coder.MODE_ACT]
         assert "search the web" in guidance
         assert "error message" in guidance
+
+
+class TestYouCanSeeWhatYouAreApproving:
+    """"Write 4145 characters to magnetic_field_simulator.py" is not something
+    anyone can agree to. Seven of those in a row get seven reflex clicks, and
+    a gate that is always waved through has stopped being a gate.
+
+    The content was in the request the whole time and thrown away at the point
+    of asking, which is the one moment it was needed.
+    """
+
+    def read(self, *parts):
+        return Path(__file__).resolve().parents[1].joinpath(
+            "carrot", "web", *parts).read_text(encoding="utf-8")
+
+    def test_the_card_can_show_what_would_be_written(self):
+        js = self.read("js", "features.js")
+        assert "function approvalPreview" in js
+        body = js.split("function approvalPreview")[1].split("\n}\n")[0]
+        for tool in ("write_file", "edit_file", "run_command",
+                     "delete_file", "move_file"):
+            assert tool in body, f"{tool} approvals show no preview"
+
+    def test_an_unknown_tool_still_shows_its_arguments(self):
+        # Pack and MCP tools are not enumerable here, and a bare summary for
+        # them is the same problem again.
+        js = self.read("js", "features.js")
+        body = js.split("function approvalPreview")[1].split("\n}\n")[0]
+        assert "default" in body and "JSON.stringify(args" in body
+
+    def test_the_preview_is_folded_away(self):
+        # Seven expanded cards would be worse than seven collapsed ones.
+        js = self.read("js", "features.js")
+        assert "createElement('details')" in js
+
+    def test_an_answered_prompt_does_not_look_answerable(self):
+        # The buttons were disabled in script and styled as though live, so a
+        # column of resolved cards read as decisions still waiting.
+        css = self.read("css", "style.css")
+        assert ".agent-approval button:disabled" in css
+
+    def test_the_model_is_told_it_can_make_folders(self):
+        # It always could — write_file creates missing parents — but nothing
+        # said so, so it put everything at the top level instead.
+        spec = agent_tools.TOOLS["write_file"]
+        assert "folders" in spec["description"].lower()

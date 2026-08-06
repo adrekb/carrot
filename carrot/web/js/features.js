@@ -2069,11 +2069,74 @@ async function submitAgentQuestions(box, questions, chosen) {
     sendAgentTask();
 }
 
+// The body of an approval, per tool: what you would need to read to decide.
+// Long content is cut rather than paged — the point is to see what it is, and
+// nobody audits nine thousand characters in a card. The head is where the
+// surprises are.
+const APPROVAL_PREVIEW_CHARS = 4000;
+
+function approvalPreview(request) {
+    const args = request.arguments || {};
+    const clip = (text) => {
+        const body = String(text);
+        return body.length > APPROVAL_PREVIEW_CHARS
+            ? body.slice(0, APPROVAL_PREVIEW_CHARS)
+              + `\n\n… ${body.length - APPROVAL_PREVIEW_CHARS} more characters`
+            : body;
+    };
+    switch (request.tool) {
+        case 'write_file':
+        case 'create_file':
+            if (args.content == null) return null;
+            return { label: `Show what goes into ${args.path || 'the file'}`,
+                     body: clip(args.content) };
+        case 'edit_file':
+            // Already a search/replace block, which reads as a diff as-is.
+            if (args.edits == null && args.diff == null) return null;
+            return { label: `Show the edit to ${args.path || 'the file'}`,
+                     body: clip(args.edits != null ? args.edits : args.diff) };
+        case 'run_command':
+            if (!args.command) return null;
+            return { label: 'Show the full command', body: String(args.command) };
+        case 'move_file':
+            if (!args.path) return null;
+            return { label: 'Show the move', body: `${args.path}\n  ->  ${args.to || '?'}` };
+        case 'delete_file':
+            if (!args.path) return null;
+            return { label: 'Show what would be deleted', body: String(args.path) };
+        default: {
+            // Anything else — packs, MCP servers — still beats a bare summary.
+            const keys = Object.keys(args);
+            if (!keys.length) return null;
+            return { label: 'Show the arguments', body: clip(JSON.stringify(args, null, 2)) };
+        }
+    }
+}
+
 function agentApproval(wrap, request) {
     const box = document.createElement('div');
     box.className = 'agent-approval';
     box.dataset.approvalId = request.id || '';
     box.innerHTML = `<div class="approval-what">${escHtml(request.summary || request.tool || 'Allow this?')}</div>`;
+
+    // What it is actually about to do, not just how many characters of it.
+    //
+    // "Write 4145 characters to magnetic_field_simulator.py" is not something
+    // anyone can meaningfully agree to, so seven of them in a row get seven
+    // reflex clicks and the gate stops being a gate. The content is already in
+    // the request — it was being thrown away at the point of asking.
+    const preview = approvalPreview(request);
+    if (preview) {
+        const details = document.createElement('details');
+        details.className = 'approval-preview';
+        const summary = document.createElement('summary');
+        summary.textContent = preview.label;
+        const pre = document.createElement('pre');
+        pre.textContent = preview.body;
+        details.append(summary, pre);
+        box.appendChild(details);
+    }
+
     const row = document.createElement('div');
     row.className = 'approval-row';
     for (const [label, allow] of [['Allow', true], ['Deny', false]]) {
