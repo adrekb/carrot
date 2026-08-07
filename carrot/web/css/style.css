@@ -592,6 +592,15 @@ body {
 .msg-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .msg-action .ico { width: 12px; height: 12px; }
 
+/* "Still waiting" on an approval card. Quiet, because it is reassurance
+   rather than news — the point is only that it changes. */
+.approval-waiting {
+  margin-top: 6px;
+  font-size: var(--text-xs);
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
 .caret {
   display: inline-block; width: 8px; height: 15px;
   background: var(--accent);

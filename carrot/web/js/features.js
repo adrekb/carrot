@@ -1901,6 +1901,8 @@ async function sendAgentTask() {
                 if (payload.approval_request) agentApproval(wrap, payload.approval_request);
                 // And clear it when it is answered from anywhere — including a
                 // timeout, which otherwise leaves live-looking buttons behind.
+                // The Code tab has its own card, so its own place to say it.
+                if (payload.approval_waiting) agentApprovalWaiting(wrap, payload.approval_waiting);
                 if (payload.approval_resolved) {
                     agentApprovalResolved(wrap, payload.approval_resolved);
                 }
@@ -2196,6 +2198,25 @@ function annotateApproval(box, decision) {
     if (!what) return;
     const said = { allow: 'allowed', deny: 'denied', timeout: 'not answered' };
     what.textContent += ` — ${said[decision] || decision}`;
+}
+
+// Said on the card itself, every ten seconds, for as long as the turn is
+// blocked. A turn that is waiting and a turn that has died produced the same
+// picture — an approval card and no further output — and the second one is
+// what people reported. Now only one of them keeps moving.
+function agentApprovalWaiting(wrap, waiting) {
+    const box = wrap.querySelector(
+        `.agent-approval[data-approval-id="${CSS.escape(waiting.id || '')}"]`);
+    if (!box || box.dataset.answered) return;
+    let line = box.querySelector('.approval-waiting');
+    if (!line) {
+        line = document.createElement('div');
+        line.className = 'approval-waiting';
+        box.appendChild(line);
+    }
+    const left = Math.round((waiting.seconds_left || 0) / 60);
+    line.textContent = `Waiting for you — ${waiting.seconds}s so far`
+        + (left ? `, giving up in about ${left} min` : '');
 }
 
 function agentApprovalResolved(wrap, resolved) {

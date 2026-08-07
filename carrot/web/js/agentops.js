@@ -146,6 +146,24 @@ function dismissApprovalPrompt(approvalId) {
     if (card) card.remove();
 }
 
+// The server says, every ten seconds, that it is still waiting. Saying so on
+// the card is the difference between a turn that is being patient and a turn
+// that has died — which from the outside were the same picture, and got
+// reported as the agent hanging without ever finishing.
+function noteApprovalWaiting(waiting) {
+    const card = document.getElementById('approval-' + waiting.id);
+    if (!card) return;
+    let line = card.querySelector('.approval-waiting');
+    if (!line) {
+        line = document.createElement('div');
+        line.className = 'approval-waiting';
+        card.appendChild(line);
+    }
+    const left = Math.round((waiting.seconds_left || 0) / 60);
+    line.textContent = `Waiting for you — ${waiting.seconds}s so far`
+        + (left ? `, giving up in about ${left} min` : '');
+}
+
 async function resolveApproval(approvalId, decision, remember, confirmation) {
     dismissApprovalPrompt(approvalId);
     try {

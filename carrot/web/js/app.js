@@ -1130,6 +1130,7 @@ async function streamTurn(url, payload, skill) {
                              + ' — see the card, bottom right', 'intent');
                     showApprovalPrompt(payload.approval_request);
                 }
+                if (payload.approval_waiting) noteApprovalWaiting(payload.approval_waiting);
                 if (payload.approval_resolved) {
                     dismissApprovalPrompt(payload.approval_resolved.id);
                     if (payload.approval_resolved.decision === 'timeout') {

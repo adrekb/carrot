@@ -379,6 +379,7 @@ async function runAgentStream(url, payload) {
                     plan.innerHTML = `<h4>Plan</h4><pre>${escHtml(event.plan)}</pre>`;
                 }
                 if (event.approval_request) showApprovalPrompt(event.approval_request);
+                if (event.approval_waiting) noteApprovalWaiting(event.approval_waiting);
                 if (event.approval_resolved) dismissApprovalPrompt(event.approval_resolved.id);
                 if (event.thought) agentStep(`<span class="agent-thought">${escHtml(event.thought)}</span>`, 'thought');
                 if (event.action) {

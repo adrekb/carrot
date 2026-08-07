@@ -225,7 +225,7 @@ def request_approval(
     _raise_waiting_notification(request)
 
     timeout = approval_timeout_seconds()
-    answered = request.event.wait(timeout)
+    answered = _wait_saying_so(request, timeout, emit)
     with _pending_lock:
         _pending.pop(request.id, None)
     _clear_waiting_notification(request)
@@ -236,6 +236,42 @@ def request_approval(
     if request.decision != "allow":
         return False, DENIED_REASON, False
     return True, "approved", request.remembered
+
+
+# How often a blocked turn says it is still blocked. Short enough that a user
+# who looks at the panel sees something moving, long enough not to be chatter.
+APPROVAL_HEARTBEAT_SECONDS = 10
+
+
+def _wait_saying_so(request: "ApprovalRequest", timeout: int, emit) -> bool:
+    """Wait for an answer, repeating that we are waiting.
+
+    A turn blocked on approval emitted the prompt and then went completely
+    silent — no output, no heartbeat, no end. Reported as the coding agent
+    hanging "without finishing or saying it's done", and from the panel that is
+    exactly what it looks like: a stopped turn and a dead one are the same
+    picture.
+
+    Two things this buys. The user gets told, repeatedly, what is actually
+    being waited on. And the stream keeps producing bytes, so a browser or a
+    proxy that culls idle connections does not quietly kill a turn that was
+    only being patient.
+    """
+    waited = 0
+    while waited < timeout:
+        slice_seconds = min(APPROVAL_HEARTBEAT_SECONDS, timeout - waited)
+        if request.event.wait(slice_seconds):
+            return True
+        waited += slice_seconds
+        if emit:
+            emit({"approval_waiting": {
+                "id": request.id,
+                "tool": request.tool,
+                "summary": request.summary,
+                "seconds": waited,
+                "seconds_left": max(0, timeout - waited),
+            }})
+    return request.event.is_set()
 
 
 def _notification_key(request: "ApprovalRequest") -> str:
