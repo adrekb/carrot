@@ -478,7 +478,7 @@ class TestPlannerTabIsReachable:
 
     def read(self, *parts):
         from pathlib import Path
-        return Path(__file__).resolve().parents[1].joinpath("carrot", "web", *parts).read_text()
+        return Path(__file__).resolve().parents[1].joinpath("carrot", "web", *parts).read_text(encoding="utf-8")
 
     def test_there_is_a_nav_entry(self):
         assert 'data-tab="planner"' in self.read("index.html")
@@ -596,7 +596,7 @@ class TestPlannerFromChat:
 class TestOnboardingRevision:
     def read(self, *parts):
         from pathlib import Path
-        return Path(__file__).resolve().parents[1].joinpath("carrot", "web", *parts).read_text()
+        return Path(__file__).resolve().parents[1].joinpath("carrot", "web", *parts).read_text(encoding="utf-8")
 
     def test_using_your_own_subscription_is_offered(self):
         assert "I want to use my own AI subscription" in self.read("index.html")
@@ -710,7 +710,7 @@ class TestTellingCarrotInASentence:
 class TestPlannerIsNotStudentware:
     def read(self, *parts):
         from pathlib import Path
-        return Path(__file__).resolve().parents[1].joinpath("carrot", "web", *parts).read_text()
+        return Path(__file__).resolve().parents[1].joinpath("carrot", "web", *parts).read_text(encoding="utf-8")
 
     def test_it_is_called_planner(self):
         html = self.read("index.html")
@@ -746,7 +746,7 @@ class TestPlannerIsNotStudentware:
 class TestTheTruthAboutWhereItRuns:
     def read(self, *parts):
         from pathlib import Path
-        return Path(__file__).resolve().parents[1].joinpath("carrot", "web", *parts).read_text()
+        return Path(__file__).resolve().parents[1].joinpath("carrot", "web", *parts).read_text(encoding="utf-8")
 
     def test_the_empty_state_no_longer_claims_local_unconditionally(self):
         # With a hosted model selected it was simply false, and a privacy claim
@@ -772,7 +772,7 @@ class TestTheOverlayIsAFullTurn:
         # It used to call the model once, directly, with no tools — so the
         # quick-ask overlay could not search and had none of the
         # never-answer-with-nothing guarantees.
-        source = (Path(__file__).resolve().parents[1] / "carrot" / "app.py").read_text()
+        source = (Path(__file__).resolve().parents[1] / "carrot" / "app.py").read_text(encoding="utf-8")
         chat = source.split("async def chat(req: ChatRequest):")[1][:2000]
         assert "_agentic_chat_events" in chat
         assert "router_mod.complete(resolved, history)" not in chat
@@ -780,5 +780,5 @@ class TestTheOverlayIsAFullTurn:
     def test_the_overlay_can_ask_for_a_search_mode(self):
         from pathlib import Path
 
-        main = (Path(__file__).resolve().parents[1] / "gui" / "main.js").read_text()
+        main = (Path(__file__).resolve().parents[1] / "gui" / "main.js").read_text(encoding="utf-8")
         assert "body.search_mode = opts.search_mode" in main

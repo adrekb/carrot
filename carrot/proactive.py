@@ -145,6 +145,26 @@ def mark_all_read() -> int:
     return count
 
 
+def dismiss_by_key(dedupe_key: str) -> bool:
+    """Dismiss whatever is live under a dedupe key.
+
+    Used for notifications that describe a *pending* state rather than an
+    event: once an approval is answered, the alert about it is not history, it
+    is noise, and the raiser knows the key rather than the id.
+    """
+    if not dedupe_key:
+        return False
+    conn = get_db()
+    cursor = conn.execute(
+        "UPDATE notifications SET dismissed = 1, read = 1 WHERE dedupe_key = ? AND dismissed = 0",
+        (dedupe_key,),
+    )
+    conn.commit()
+    updated = cursor.rowcount > 0
+    conn.close()
+    return updated
+
+
 def dismiss(notification_id: str) -> bool:
     """Dismiss a notification. False when it is unknown or already dismissed."""
     conn = get_db()
@@ -353,8 +373,15 @@ def _watch_loop():
                 run_checks()
         except Exception:
             pass
-        interval = get_config().get("proactive_interval_seconds", CHECK_INTERVAL_SECONDS)
-        _stop.wait(max(60, int(interval)))
+        # Reading the interval is a database call too. Unguarded, a database
+        # that disappeared under the watcher took the thread down with it —
+        # which meant proactive checks stopped for the rest of the session and
+        # nothing said so.
+        try:
+            interval = int(get_config().get("proactive_interval_seconds", CHECK_INTERVAL_SECONDS))
+        except Exception:
+            interval = CHECK_INTERVAL_SECONDS
+        _stop.wait(max(60, interval))
 
 
 def start_watcher():

@@ -241,7 +241,7 @@ class TestDisagreementIsNeverHidden:
 
         # Two answers can agree word for word and both be wrong; the docstring
         # is where that stays true for the next person reading it.
-        source = (Path(__file__).resolve().parents[1] / "carrot" / "consensus.py").read_text()
+        source = (Path(__file__).resolve().parents[1] / "carrot" / "consensus.py").read_text(encoding="utf-8")
         assert "both be wrong" in source
 
     def test_the_synthesis_prompt_forbids_averaging(self):
@@ -332,7 +332,7 @@ class TestEndpoints:
 class TestTheInterface:
     def read(self, *parts):
         from pathlib import Path
-        return Path(__file__).resolve().parents[1].joinpath("carrot", "web", *parts).read_text()
+        return Path(__file__).resolve().parents[1].joinpath("carrot", "web", *parts).read_text(encoding="utf-8")
 
     def test_the_settings_panel_exists(self):
         assert 'id="consensus-panel"' in self.read("index.html")
@@ -587,7 +587,7 @@ class TestPanelMembersCanSearch:
     def test_the_endpoint_hands_the_panel_the_apps_tools(self):
         from pathlib import Path
 
-        source = (Path(__file__).resolve().parents[1] / "carrot" / "consensus_api.py").read_text()
+        source = (Path(__file__).resolve().parents[1] / "carrot" / "consensus_api.py").read_text(encoding="utf-8")
         assert "_available_tools" in source and "run_tool=run_tool" in source
 
     def test_the_search_mode_can_be_chosen_per_debate(self, client):

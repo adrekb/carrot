@@ -119,7 +119,10 @@ decisions, projects, commitments — and stores them as rows you can read.
 Three rules make it auditable:
 
 - **Provenance is mandatory.** Every memory links back to the message it came
-  from. A memory with no source cannot be checked, so it is not stored.
+  from. A memory with no source cannot be checked, so it is not stored. It also
+  records where it was learned — an ordinary chat, the Code tab, a document you
+  sent, or your own hand — and the Memory tab filters on that, and on the
+  workspace the conversation belonged to.
 - **Supersede, never overwrite.** A new value marks the old one superseded and
   links forward, so "what did I used to think about X" still works.
 - **You are the authority.** Edit, pin, or reject anything in the Memory tab.
@@ -287,6 +290,12 @@ Out of the box everything runs on Ollama. Add a provider key in Settings and
 you can pin any task to any model: a frontier model for research, something
 cheap for classification, everything else on-device. An explicit assignment
 always beats the automatic rules.
+
+**Auto**, at the top of the model picker, is the one that decides *for* you.
+It reads the message, decides whether it is chat, code or a reasoning problem,
+and then routes that task exactly as the table above would — so your
+assignments still apply. Every turn says which task it read and why, and
+picking a model by name turns it off again.
 
 Keys are stored locally and reduced to booleans by the config API — a saved key
 is never readable over HTTP. Every chat turn reports which provider and model

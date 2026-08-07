@@ -170,6 +170,12 @@ class ChatRequest(BaseModel):
     workspace_id: Optional[str] = None
     # A chat that is answered but not remembered, and deleted afterwards.
     temporary: Optional[bool] = False
+    # Whether what Carrot remembers about the user may be used this turn.
+    # `None` means the saved default. It is per-turn because the global setting
+    # is the wrong shape for the actual complaint: asking for the news and
+    # being told about a dog you mentioned once does not mean you want memory
+    # off, it means you want it off *now*.
+    memory: Optional[bool] = None
     # Sent by the Code tab's agent panel, and only by it. The plan/act preamble
     # and the workspace's rules ride on this: `coder_mode` is a single global
     # setting, so without a per-turn signal every ordinary chat was told it was
@@ -177,6 +183,10 @@ class ChatRequest(BaseModel):
     # political news" it went and read pong.py, because that is what it had
     # just been told it was for.
     coder: Optional[bool] = False
+    # Let the message pick the task, and the task pick the model. `None` means
+    # the saved picker setting; the flag exists so a caller can opt one turn in
+    # or out without changing it.
+    auto: Optional[bool] = None
 
 
 class AddMessageRequest(BaseModel):
@@ -256,6 +266,10 @@ class ModelPullRequest(BaseModel):
 
 class ModelSelectRequest(BaseModel):
     model: str
+
+
+class AutoModelRequest(BaseModel):
+    enabled: bool = True
 
 
 class SkillRequest(BaseModel):
@@ -756,13 +770,27 @@ async def list_models():
         "chat_provider": chat_provider,
         "chat_model": chat_model,
         "chat_local": chat_local,
+        # Auto is a picker entry, not a model, so it rides alongside rather
+        # than pretending to be one of the names above. `auto_local` is what
+        # the empty state's privacy claim is allowed to depend on.
+        "auto": router_mod.auto_enabled(),
+        "auto_local": router_mod.auto_is_local(),
     }
 
 
 @app.post("/api/models/select")
 async def select_model(req: ModelSelectRequest):
     config.set_config("ollama_model", req.model)
+    # Naming a model is the opposite of asking Carrot to name one.
+    router_mod.set_auto(False)
     return {"active_model": req.model}
+
+
+@app.post("/api/models/auto")
+async def set_auto_model(req: AutoModelRequest):
+    """Let each message pick its own task, and the task pick the model."""
+    router_mod.set_auto(req.enabled)
+    return {"auto": router_mod.auto_enabled(), "auto_local": router_mod.auto_is_local()}
 
 
 @app.post("/api/models/pull")
@@ -949,7 +977,7 @@ def _coder_context(conversation_id: str = ""):
 
 
 def _prepare_history(conv, message, skill_slug, extra_system=None, mode=None,
-                     images=None, coder=False):
+                     images=None, coder=False, memory=None):
     """Build the model message list for a turn.
 
     Order matters: the search directive, then skill instructions, then any
@@ -1000,7 +1028,10 @@ def _prepare_history(conv, message, skill_slug, extra_system=None, mode=None,
     except Exception:
         pass
 
-    if config.get_config().get("memory_enabled", True):
+    # The turn's own choice wins; without one, the saved default stands.
+    use_memory = (config.get_config().get("memory_enabled", True)
+                  if memory is None else bool(memory))
+    if use_memory:
         try:
             # Recall is scoped to the workspace the conversation lives in, not
             # the one that happens to be active — re-opening an old chat should
@@ -1181,11 +1212,47 @@ MULTI_SEARCH_DIRECTIVE = (
     SEARCH_PREAMBLE +
     "Search mode: multi-turn. Do not stop at the first set of results.\n"
     "- Search, read the pages that look most likely to answer the question, then ask "
-    "yourself what you still cannot answer, and search again for exactly that.\n"
-    "- Two or three focused rounds beat one broad one. Use the words a source would "
-    "use, not the words of the question.\n"
+    "yourself what you still cannot answer *about the question that was asked*, and "
+    "search again for exactly that.\n"
+    # Asked for "recent us political news" it read an NBC section front, took
+    # that page's list of headlines as an agenda, and ran eight searches on
+    # Max Miller, a Wisconsin convention and a "wonk reference manual" — none
+    # of which anyone had asked about. A front page is a list of everything
+    # that exists, not a list of what the user wants.
+    "- A gap is something the question needs and you do not have. It is not every "
+    "headline you happened to see: an index page lists everything a site has, and "
+    "chasing each one answers a question nobody asked.\n"
+    # Persistence was never the problem — the run that went wrong searched
+    # eight times and the good one searched more. Keep going; the fix is where
+    # it is pointed and what it hands over, not how hard it works.
+    "- Keep going until you can actually answer, and do not stop at a round "
+    "count. If a page will not load or a lead is thin, find the same fact "
+    "somewhere else rather than reporting that you could not. Each round should "
+    "be narrower than the last: use the words a source would use, not the words "
+    "of the question.\n"
     "- Cite the URL for anything you learned from a page, and say plainly when the "
     "sources disagree or when you could not find something.\n"
+    # The shape of an answer people actually want back: grouped, specific,
+    # sourced. Not a topic-by-topic status report of the searching.
+    "- Group what you found under a few plain headings, and make every line a "
+    "concrete fact — who, what, when, how much — with its source. A heading with "
+    "one vague sentence under it means you stopped too early; go and get the "
+    "detail.\n"
+    "- Offering to go deeper is welcome, and is not the same as leaving the job "
+    "unfinished: 'I can go further on Congress or the midterms' is an offer, "
+    "while 'this remains unanswered, searching X might find it' is work handed "
+    "back. Do the search instead, then offer.\n"
+    # It shipped its own working notes: "Here's what the second search
+    # uncovered, filling in the gaps from earlier", a status table, and a
+    # closing "What Remains Unanswered" listing the searches it might run next.
+    # In a brand-new conversation that reads as a half-finished job pushed out
+    # early, which is exactly how it was reported.
+    "- The rounds are how you work, not what you deliver. Write one answer to the "
+    "question as though you had known it all along. Never refer to 'the first "
+    "search' or 'the second search', never hand over a status table of topics, and "
+    "never end with a list of what is still unanswered or what you would search "
+    "next. If something genuinely could not be found and it matters, say that in a "
+    "sentence, in place.\n"
     "- If the question is big enough to deserve a written report with checked "
     "citations, call start_research instead of doing it by hand."
 )
@@ -1616,7 +1683,19 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mo
     yield {"_final_text": final_text}
 
 
-def _post_turn(conversation_id, user_message, assistant_text, message_id):
+def _memory_origin(req, override=None) -> str:
+    """Which part of Carrot produced this turn, for the memory's provenance.
+
+    Derived here rather than taken from the request body: origin is a claim
+    about what Carrot was doing, and the answer is already in front of us.
+    """
+    if override:
+        return override
+    return memory_mod.ORIGIN_CODE if getattr(req, "coder", False) else memory_mod.ORIGIN_CHAT
+
+
+def _post_turn(conversation_id, user_message, assistant_text, message_id,
+               origin=memory_mod.ORIGIN_CHAT):
     """Extract memories and refresh the rolling summary after a turn.
 
     Both call the model, so they run on a worker thread — the user gets their
@@ -1630,7 +1709,17 @@ def _post_turn(conversation_id, user_message, assistant_text, message_id):
                 return
         except Exception:
             pass
-        settings = config.get_config()
+        # Reading the settings is itself a database call, and it sat outside
+        # every guard — so a database that went away underneath this thread
+        # (a shutdown, a test's temporary directory) killed the whole worker
+        # with an unhandled exception rather than skipping bookkeeping the
+        # user was never waiting on. Everything below is best-effort; this line
+        # has to be too.
+        try:
+            settings = config.get_config()
+        except Exception:
+            LOG.debug("post-turn bookkeeping skipped: settings unavailable", exc_info=True)
+            return
         if settings.get("memory_enabled", True):
             try:
                 memory_mod.extract_from_turn(
@@ -1639,6 +1728,7 @@ def _post_turn(conversation_id, user_message, assistant_text, message_id):
                     conversation_id=conversation_id,
                     message_id=message_id,
                     min_confidence=settings.get("memory_min_confidence", 0.6),
+                    origin=origin,
                 )
             except Exception:
                 pass
@@ -1678,12 +1768,24 @@ def _open_conversation(req):
 
 def _resolve_chat_route(req):
     """Pick the model for this turn, failing early if nothing can serve it."""
-    resolved = router_mod.route(
-        task=getattr(req, "task", None) or router_mod.TASK_CHAT,
-        model=req.model,
-        provider=getattr(req, "provider", None),
-        prefer_cloud=bool(getattr(req, "cloud", False)),
-    )
+    resolved = None
+    # Auto only gets to decide when nobody already did: an explicit model is
+    # what the user picked in the UI, and a named task is a caller that already
+    # knows what kind of work this is. Reading the message over the top of
+    # either would be overriding an answer, not supplying a missing one.
+    if _auto_requested(req) and not req.model and not getattr(req, "task", None):
+        resolved = router_mod.auto_route(
+            getattr(req, "message", "") or "",
+            coder=bool(getattr(req, "coder", False)),
+            prefer_cloud=bool(getattr(req, "cloud", False)),
+        )
+    if resolved is None:
+        resolved = router_mod.route(
+            task=getattr(req, "task", None) or router_mod.TASK_CHAT,
+            model=req.model,
+            provider=getattr(req, "provider", None),
+            prefer_cloud=bool(getattr(req, "cloud", False)),
+        )
     if resolved.local:
         client = ollama_mod.OllamaClient()
         if not client.is_available():
@@ -1693,6 +1795,12 @@ def _resolve_chat_route(req):
         # would have to come from, before a single token is spent.
         _require_installed_model(client, resolved.model)
     return resolved
+
+
+def _auto_requested(req) -> bool:
+    """Whether this turn should route by message. ``None`` defers to the setting."""
+    asked = getattr(req, "auto", None)
+    return router_mod.auto_enabled() if asked is None else bool(asked)
 
 
 def _require_installed_model(client, model: str) -> None:
@@ -1718,7 +1826,8 @@ def _require_installed_model(client, model: str) -> None:
     )
 
 
-def _chat_stream_response(req, conv, history, skill, resolved, prelude=None, mode=SEARCH_SINGLE):
+def _chat_stream_response(req, conv, history, skill, resolved, prelude=None,
+                          mode=SEARCH_SINGLE, origin=None):
     """Shared SSE body for the chat and doc-send endpoints.
 
     ``prelude`` is emitted as the first event, which is how a doc send reports
@@ -1765,6 +1874,7 @@ def _chat_stream_response(req, conv, history, skill, resolved, prelude=None, mod
             _post_turn(
                 req.conversation_id, req.message, final_text,
                 stored.get("id") if isinstance(stored, dict) else None,
+                origin=_memory_origin(req, origin),
             )
         except Exception:
             # Bookkeeping must never cost the user the answer they can see.
@@ -1828,7 +1938,7 @@ async def chat(req: ChatRequest):
     images, docs_system, note = _apply_attachments(req, resolved)
     history, skill = _prepare_history(conv, req.message, req.skill,
                                       extra_system=docs_system, mode=mode, images=images,
-                                      coder=bool(req.coder))
+                                      coder=bool(req.coder), memory=req.memory)
     conv_mod.add_message(req.conversation_id, "user",
                          f"{req.message}\n\n[{note}]" if note else req.message)
 
@@ -1854,6 +1964,7 @@ async def chat(req: ChatRequest):
     _post_turn(
         req.conversation_id, req.message, response,
         stored.get("id") if isinstance(stored, dict) else None,
+        origin=_memory_origin(req),
     )
     return {
         "conversation_id": req.conversation_id,
@@ -1886,7 +1997,7 @@ async def chat_stream(req: ChatRequest):
     images, docs_system, note = _apply_attachments(req, resolved)
     history, skill = _prepare_history(conv, req.message, req.skill,
                                       extra_system=docs_system, mode=mode, images=images,
-                                      coder=bool(req.coder))
+                                      coder=bool(req.coder), memory=req.memory)
     conv_mod.add_message(req.conversation_id, "user",
                          f"{req.message}\n\n[{note}]" if note else req.message)
     return _chat_stream_response(req, conv, history, skill, resolved, mode=mode)
@@ -2554,18 +2665,45 @@ async def speech_voices():
 # ===== Memory =====
 
 @app.get("/api/memory")
-async def list_memories(kind: str = None, status: str = "active", subject: str = None, limit: int = 200):
+async def list_memories(kind: str = None, status: str = "active", subject: str = None,
+                        limit: int = 200, origin: str = None, workspace: str = "all"):
+    """What Carrot remembers, filterable by what produced it and where it lives.
+
+    ``workspace`` defaults to "all" rather than to the active one: this screen
+    is the audit of everything Carrot believes about you, and an audit that
+    silently hides two thirds of its subject is not an audit. Scoping is a
+    thing you ask for here, not a mode you are already in.
+    """
     return {
         "memories": memory_mod.list_memories(
-            kind=kind, status=status or None, subject=subject, limit=limit
+            kind=kind, status=status or None, subject=subject, limit=limit,
+            origin=origin or None,
+            workspace_id=workspaces_mod.resolve_scope(workspace),
         ),
         "stats": memory_mod.stats(),
+        # Two labels, because they read differently: `label` is the word on the
+        # row's tag, `filter` is the whole dropdown line. "Learned in you" is
+        # what one label for both produces.
+        "origins": [
+            {
+                "id": origin_id,
+                "label": memory_mod.ORIGIN_LABELS[origin_id],
+                "filter": memory_mod.ORIGIN_FILTER_LABELS[origin_id],
+            }
+            for origin_id in memory_mod.ORIGINS
+        ],
     }
 
 
 @app.get("/api/memory/search")
-async def search_memories(q: str, limit: int = 10, include_superseded: bool = False):
-    return {"results": memory_mod.search(q, limit=limit, include_superseded=include_superseded)}
+async def search_memories(q: str, limit: int = 10, include_superseded: bool = False,
+                          workspace: str = "all"):
+    # Typing in the search box used to drop whatever scope was set, so a search
+    # inside a workspace quietly answered from every workspace.
+    return {"results": memory_mod.search(
+        q, limit=limit, include_superseded=include_superseded,
+        workspace_id=workspaces_mod.resolve_scope(workspace),
+    )}
 
 
 @app.get("/api/memory/history/{subject}")
@@ -2579,6 +2717,9 @@ async def create_memory(req: MemoryRequest):
     return memory_mod.create(
         kind=req.kind, subject=req.subject, content=req.content,
         confidence=req.confidence, pinned=bool(req.pinned),
+        # Nothing extracted this — it arrived through the API because someone
+        # typed it, and that is the strongest provenance there is.
+        origin=memory_mod.ORIGIN_MANUAL,
     )
 
 
@@ -3266,7 +3407,8 @@ async def doc_send(req: DocSendRequest):
     )
     conv_mod.add_message(chat_req.conversation_id, "user", resolved.prompt)
     return _chat_stream_response(
-        chat_req, conv, history, skill, route, prelude=resolved.as_dict(), mode=mode
+        chat_req, conv, history, skill, route, prelude=resolved.as_dict(), mode=mode,
+        origin=memory_mod.ORIGIN_DOCUMENT,
     )
 
 

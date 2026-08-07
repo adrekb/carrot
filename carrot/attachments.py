@@ -185,13 +185,20 @@ def documents_prompt(documents: List[Dict[str, str]]) -> str:
     """
     if not documents:
         return ""
+    from . import policy
+
     budget = max(MAX_DOC_CHARS // max(len(documents), 1), 2000)
     parts = ["The user attached the following file(s). Use them to answer."]
     for doc in documents:
         text = doc["text"]
         if len(text) > budget:
             text = text[:budget] + f"\n[… truncated, {len(doc['text']) - budget} more characters]"
-        parts.append(f"\n--- {doc['name']} ---\n{text}")
+        # The user chose to attach it; they did not write what is inside it.
+        # A PDF is a document somebody else composed, which makes it exactly
+        # the same kind of input as a web page — screened, and enveloped so
+        # the model reads it as material rather than as orders.
+        parts.append(f"\n--- {doc['name']} ---\n"
+                     + policy.ingest(text, origin=f"attached file: {doc['name']}"))
     return "\n".join(parts)
 
 

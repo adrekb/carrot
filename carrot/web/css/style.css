@@ -448,7 +448,19 @@ body {
 /* superseded below: #232329 is invisible on the cream theme */
 .chat-empty p { font-size: 13px; }
 
-.message { max-width: 72%; }
+/* Capped by measure, not by percentage.
+ *
+ * 72% of the column is 866px on a 1440px window, which at 13.5px is about 124
+ * characters to a line. Typography's comfortable range is 60-75: past that the
+ * eye loses its place on the return sweep, and it is why long answers here
+ * read as heavy going when the same text does not in ChatGPT. The percentage
+ * still governs narrow windows; the ch cap only bites on wide ones, where the
+ * old rule was making the problem worse the more screen you had. */
+/* 80ch, not 68: `ch` is the width of a zero, and in Inter a zero is narrower
+ * than the average letter, so 68ch measured out at 57 real characters. 80
+ * lands at about 67, in the middle of the comfortable range rather than at
+ * its edge. Measured in the browser, not converted on paper. */
+.message { max-width: min(72%, 80ch); }
 .message .role-label {
   font-family: var(--mono);
   font-size: 10px;
@@ -458,10 +470,12 @@ body {
   margin-bottom: 5px;
 }
 .message .content {
-  padding: 10px 14px;
-  border-radius: 10px;
-  font-size: 13.5px;
-  line-height: 1.55;
+  padding: 12px 16px;
+  border-radius: 12px;
+  /* 15px, not 13.5. This is the one piece of text in the app people actually
+     read at length, and it was set smaller than the labels around it. */
+  font-size: 15px;
+  line-height: 1.6;
   white-space: pre-wrap;
   word-wrap: break-word;
 }
@@ -858,6 +872,23 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 }
 .model-row .m-install:hover { color: var(--accent); border-color: rgba(255, 92, 31, 0.4); }
 .model-row .m-install .ico { width: 11px; height: 11px; }
+
+/* Auto is a choice about *how* to choose, so it reads as a sentence rather
+   than a model name — no mono, and a line saying what it will do. */
+.model-auto-row { align-items: flex-start; }
+.model-auto-row .m-name {
+  font-family: inherit;
+  font-size: 12.5px;
+  white-space: normal;
+  overflow: visible;
+}
+.model-auto-row .m-sub {
+  display: block;
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 1.4;
+  margin-top: 2px;
+}
 
 .pop-custom {
   display: flex; gap: 6px;
@@ -1661,6 +1692,14 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 .memory-content:focus { border-bottom: 1px dashed var(--accent); }
 .memory-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 7px; }
 .memory-source { color: var(--muted); text-decoration: underline dotted; }
+
+/* Where a memory was learned. Colour-coded so a row learned somewhere you did
+   not expect stands out while scanning — which is the whole point of showing
+   it. Kept quiet: this is provenance, not a status to act on. */
+.memory-meta .tag.origin { margin-left: 0; }
+.tag.origin-code { color: #7fb2ff; background: rgba(127, 178, 255, 0.1); border-color: rgba(127, 178, 255, 0.24); }
+.tag.origin-document { color: #b48cff; background: rgba(180, 140, 255, 0.1); border-color: rgba(180, 140, 255, 0.24); }
+.tag.origin-manual { color: var(--accent); background: var(--accent-soft); border-color: rgba(255, 92, 31, 0.25); }
 .memory-actions { display: flex; flex-direction: column; gap: 4px; }
 
 /* Document index */
@@ -4239,6 +4278,41 @@ td, th, .si-sub, .small, .editor-status {
 }
 .approval-what { font-size: 12.5px; color: var(--text); margin-bottom: 8px; }
 .approval-row { display: flex; gap: 8px; }
+/* An answered prompt kept its buttons looking live: they are disabled in
+   script, but nothing said so, so a row of resolved cards read as a row of
+   decisions still waiting to be made. */
+.agent-approval button:disabled {
+  opacity: 0.45;
+  cursor: default;
+  filter: grayscale(0.6);
+}
+
+/* What the call would actually do, folded away until asked for. */
+.approval-preview { margin: 0 0 8px; }
+.approval-preview summary {
+  font-size: 11.5px;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 2px 0;
+  user-select: none;
+}
+.approval-preview summary:hover { color: var(--text); }
+.approval-preview pre {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg2);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  /* Wraps: code in a narrow panel that scrolls sideways is code nobody reads,
+     and the point of this is that it gets read. */
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 
 /* The sources behind an answer, above it.
  *

@@ -114,10 +114,12 @@ class TestPickerSendsItsProvider:
     def read(self):
         from pathlib import Path
         root = Path(__file__).resolve().parents[1]
-        return (root / "carrot" / "web" / "js" / "app.js").read_text()
+        return (root / "carrot" / "web" / "js" / "app.js").read_text(encoding="utf-8")
 
     def test_the_chat_body_carries_the_provider(self):
-        assert "provider: currentProvider," in self.read()
+        # Auto is the one case that deliberately sends none — it has not picked
+        # a model yet, and naming one would outrank the classifier.
+        assert "provider: autoModel ? null : currentProvider," in self.read()
 
     def test_the_label_follows_the_resolved_chat_route(self):
         source = self.read()

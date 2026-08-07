@@ -80,9 +80,47 @@ function showApprovalPrompt(request) {
         };
     });
     approvalHost().appendChild(card);
+    alertAwayFromScreen(request);
 
     const confirmation = document.getElementById('approval-confirm-' + request.id);
     if (confirmation) confirmation.focus();
+}
+
+// A prompt nobody is looking at is a run that has stopped. The agent blocks
+// until it is answered, so an unwatched approval does not fail safe — it fails
+// *slow*, and the whole task is wasted waiting on a window in the background.
+//
+// Only when the window is actually unfocused: someone sitting in front of the
+// card does not need their operating system to tell them it is there, and a
+// toast per step during an attended run is its own kind of broken.
+// Clicking the toast raises the window, which is where the card is waiting.
+function alertAwayFromScreen(request) {
+    if (document.hasFocus()) return;
+    const what = request.tool === 'start_task'
+        ? 'Carrot is ready to start a task'
+        : 'Carrot needs your approval';
+    const body = String(request.summary || request.tool || 'An action is waiting.').slice(0, 160);
+    try {
+        if (window.carrot && window.carrot.notify) {
+            window.carrot.notify(what, body);
+            return;
+        }
+        // In a plain browser rather than the desktop app. Same idea, and the
+        // permission ask happens on the first approval rather than at startup,
+        // where it would be a prompt about nothing.
+        if (typeof Notification === 'undefined') return;
+        if (Notification.permission === 'granted') {
+            new Notification(what, { body }).onclick = () => window.focus();
+        } else if (Notification.permission !== 'denied') {
+            Notification.requestPermission().then(granted => {
+                if (granted === 'granted') {
+                    new Notification(what, { body }).onclick = () => window.focus();
+                }
+            });
+        }
+    } catch (_) {
+        // Never let a failed toast take the approval card down with it.
+    }
 }
 
 function dismissApprovalPrompt(approvalId) {
@@ -191,7 +229,11 @@ function startNotificationStream() {
 
 // ---------- Memory ----------
 
-let memoryFilter = { kind: '', status: 'active', subject: '' };
+// `workspace: 'all'` rather than the active one, deliberately. This screen is
+// the audit of everything Carrot believes about you; opening it inside a
+// project and being shown a third of your memories, with nothing saying so,
+// would be the wrong default for the one place you go to check.
+let memoryFilter = { kind: '', status: 'active', subject: '', origin: '', workspace: 'all' };
 
 async function loadMemory() {
     const list = document.getElementById('memory-list');
@@ -202,8 +244,11 @@ async function loadMemory() {
         if (memoryFilter.kind) params.set('kind', memoryFilter.kind);
         if (memoryFilter.status) params.set('status', memoryFilter.status);
         if (memoryFilter.subject) params.set('subject', memoryFilter.subject);
+        if (memoryFilter.origin) params.set('origin', memoryFilter.origin);
+        params.set('workspace', memoryFilter.workspace || 'all');
 
         const data = await api('/api/memory?' + params.toString());
+        renderMemoryOptions(data.origins);
         renderMemoryStats(data.stats);
         renderMemoryList(data.memories);
     } catch (e) {
@@ -211,19 +256,76 @@ async function loadMemory() {
     }
 }
 
+// The origin list comes from the server because it is a fact about what
+// actually writes memories — offering a filter for something nothing produces
+// would be a dropdown entry that always returns nothing.
+function renderMemoryOptions(origins) {
+    const originEl = document.getElementById('memory-origin');
+    if (originEl && origins && originEl.options.length <= 1) {
+        for (const origin of origins) {
+            const option = document.createElement('option');
+            option.value = origin.id;
+            // The server writes the whole line. "Learned in " + label reads
+            // fine for three origins and produces "Learned in you" for the one
+            // that matters most.
+            option.textContent = origin.filter || origin.label;
+            originEl.appendChild(option);
+        }
+    }
+
+    // Rebuilt every load, not filled in once: a workspace created after this
+    // panel first opened would otherwise never appear in its own filter.
+    const wsEl = document.getElementById('memory-workspace');
+    if (wsEl && typeof flatWorkspaces === 'function') {
+        const chosen = wsEl.value || 'all';
+        wsEl.innerHTML = '<option value="all">All workspaces</option>';
+        for (const workspace of flatWorkspaces()) {
+            const option = document.createElement('option');
+            option.value = workspace.id;
+            option.textContent = workspace.path
+                ? `${workspace.path} / ${workspace.name}` : workspace.name;
+            wsEl.appendChild(option);
+        }
+        // A workspace deleted out from under the filter falls back to "all" —
+        // in the dropdown *and* in the filter, so the two cannot disagree
+        // about what you are looking at.
+        const stillThere = [...wsEl.options].some(o => o.value === chosen);
+        wsEl.value = stillThere ? chosen : 'all';
+        if (!stillThere) memoryFilter.workspace = 'all';
+    }
+}
+
+// "manual" is what the column stores; "you" is what it means. The label is
+// only ever shown, never sent back as a filter value.
+const MEMORY_ORIGIN_LABELS = { chat: 'chat', code: 'code', document: 'document', manual: 'you' };
+
+function memoryOriginLabel(origin) {
+    return MEMORY_ORIGIN_LABELS[origin] || origin || 'chat';
+}
+
 function renderMemoryStats(stats) {
     const el = document.getElementById('memory-stats');
     if (!el || !stats) return;
     const kinds = Object.entries(stats.by_kind || {})
         .map(([kind, count]) => `${escHtml(kind)} ${count}`).join(' · ');
-    el.textContent = `${stats.total} remembered${kinds ? ' — ' + kinds : ''}`;
+    const origins = Object.entries(stats.by_origin || {})
+        .map(([origin, count]) => `${memoryOriginLabel(origin)} ${count}`).join(' · ');
+    el.textContent = `${stats.total} remembered${kinds ? ' — ' + kinds : ''}`
+        + (origins ? ` · learned in ${origins}` : '');
 }
 
 function renderMemoryList(memories) {
     const list = document.getElementById('memory-list');
     if (!list) return;
     if (!memories.length) {
-        list.innerHTML = '<div class="empty">Nothing remembered yet. Carrot learns as you chat.</div>';
+        // "Nothing remembered yet" is false the moment a filter is on, and it
+        // is exactly the wrong thing to read after narrowing to a workspace.
+        const filtered = memoryFilter.kind || memoryFilter.origin
+            || (memoryFilter.workspace && memoryFilter.workspace !== 'all')
+            || memoryFilter.status !== 'active';
+        list.innerHTML = filtered
+            ? '<div class="empty">Nothing matches these filters.</div>'
+            : '<div class="empty">Nothing remembered yet. Carrot learns as you chat.</div>';
         return;
     }
     list.innerHTML = '';
@@ -236,6 +338,7 @@ function renderMemoryList(memories) {
                 <div class="memory-meta">
                     <span class="tag">${escHtml(m.kind)}</span>
                     <span class="tag subtle">${escHtml(m.subject)}</span>
+                    <span class="tag origin origin-${escHtml(m.origin || 'chat')}">${escHtml(memoryOriginLabel(m.origin))}</span>
                     <span class="subtle">confidence ${Math.round((m.confidence || 0) * 100)}%</span>
                     ${m.source_conversation_id
                         ? `<a href="#" class="subtle memory-source">source</a>` : '<span class="subtle">no source</span>'}
@@ -292,7 +395,11 @@ async function searchMemory() {
     const input = document.getElementById('memory-search');
     if (!input || !input.value.trim()) return loadMemory();
     try {
-        const data = await api('/api/memory/search?q=' + encodeURIComponent(input.value.trim()));
+        // The workspace filter is a scope, not a decoration on the list — a
+        // search inside a project that answers from every project is a lie
+        // about what you were looking at.
+        const data = await api('/api/memory/search?q=' + encodeURIComponent(input.value.trim())
+            + '&workspace=' + encodeURIComponent(memoryFilter.workspace || 'all'));
         renderMemoryList(data.results);
     } catch (e) {
         alert(e.message);

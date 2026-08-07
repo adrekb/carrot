@@ -9,7 +9,11 @@ and audited by the user.
 Design rules that matter:
 
 * **Provenance is mandatory.** Every memory records the message and conversation
-  it was derived from. A memory with no source is a hallucination we can't check.
+  it was derived from, and the ``origin`` — which part of Carrot was running
+  when it was learned. A memory with no source is a hallucination we can't
+  check, and a memory whose origin you cannot see is one you cannot judge:
+  "Carrot thinks I prefer tabs" reads differently once you know it was picked
+  up while the Code tab was open on somebody else's repo.
 * **Supersede, never overwrite.** A new value for an existing (kind, subject)
   marks the old row ``superseded`` and links forward. History stays intact, so
   "what did I used to think about X" still works.
@@ -30,6 +34,39 @@ from . import vectors
 from .database import get_db
 
 KINDS = ("fact", "preference", "decision", "attribute", "relationship", "project")
+
+# Where a memory came from. `kind` says what sort of belief it is; `origin`
+# says which part of Carrot was running when it was learned — and that is the
+# question a list of two hundred memories actually raises. "Carrot thinks I
+# prefer tabs" reads very differently once you know it was learned while the
+# Code tab was open on someone else's repo.
+#
+# Only origins something actually writes are listed. An origin no code path
+# produces would be a filter that always returns nothing, which is worse than
+# not offering it.
+ORIGIN_CHAT = "chat"            # an ordinary conversation turn
+ORIGIN_CODE = "code"            # a turn from the Code tab
+ORIGIN_DOCUMENT = "document"    # a note or document sent to chat
+ORIGIN_MANUAL = "manual"        # you wrote it yourself
+
+ORIGINS = (ORIGIN_CHAT, ORIGIN_CODE, ORIGIN_DOCUMENT, ORIGIN_MANUAL)
+
+ORIGIN_LABELS = {
+    ORIGIN_CHAT: "chat",
+    ORIGIN_CODE: "code",
+    ORIGIN_DOCUMENT: "document",
+    ORIGIN_MANUAL: "you",
+}
+
+# The same four origins as a whole phrase, for the filter dropdown. Composing
+# "Learned in " + label works for three of them and produces "Learned in you"
+# for the fourth, which is why this is a table and not a format string.
+ORIGIN_FILTER_LABELS = {
+    ORIGIN_CHAT: "Learned in chat",
+    ORIGIN_CODE: "Learned in the Code tab",
+    ORIGIN_DOCUMENT: "Learned from a document",
+    ORIGIN_MANUAL: "Written by you",
+}
 
 STATUS_ACTIVE = "active"
 STATUS_SUPERSEDED = "superseded"
@@ -93,6 +130,10 @@ def _row_to_memory(row: sqlite3.Row) -> Dict[str, Any]:
         "pinned": bool(row["pinned"]),
         "source_message_id": row["source_message_id"],
         "source_conversation_id": row["source_conversation_id"],
+        # `keys()` rather than a bare index: a row read through a connection
+        # opened before the migration ran has no such column, and provenance
+        # must never be the reason a memory cannot be displayed.
+        "origin": (row["origin"] if "origin" in row.keys() else ORIGIN_CHAT) or ORIGIN_CHAT,
         "superseded_by": row["superseded_by"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
@@ -109,9 +150,11 @@ def create(
     source_message_id: Optional[int] = None,
     source_conversation_id: Optional[str] = None,
     pinned: bool = False,
+    origin: str = ORIGIN_CHAT,
 ) -> Dict[str, Any]:
     """Store a memory, superseding any active memory with the same key."""
     kind = kind if kind in KINDS else "fact"
+    origin = origin if origin in ORIGINS else ORIGIN_CHAT
     subject = (subject or "").strip().lower()
     memory_id = str(uuid.uuid4())[:12]
     now = _now()
@@ -125,11 +168,12 @@ def create(
     conn.execute(
         """INSERT INTO memories
            (id, kind, subject, content, confidence, status, pinned,
-            source_message_id, source_conversation_id, superseded_by, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)""",
+            source_message_id, source_conversation_id, origin, superseded_by,
+            created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)""",
         (
             memory_id, kind, subject, content.strip(), float(confidence), STATUS_ACTIVE,
-            1 if pinned else 0, source_message_id, source_conversation_id, now, now,
+            1 if pinned else 0, source_message_id, source_conversation_id, origin, now, now,
         ),
     )
     for row in previous:
@@ -172,6 +216,8 @@ def list_memories(
     status: Optional[str] = STATUS_ACTIVE,
     subject: Optional[str] = None,
     limit: int = 200,
+    origin: Optional[str] = None,
+    workspace_id: str = "",
 ) -> List[Dict[str, Any]]:
     query = "SELECT * FROM memories WHERE 1=1"
     params: List[Any] = []
@@ -184,6 +230,18 @@ def list_memories(
     if subject:
         query += " AND subject LIKE ?"
         params.append(f"%{subject.lower()}%")
+    if origin:
+        query += " AND origin = ?"
+        params.append(origin)
+    if workspace_id:
+        # Filed ids, in SQL, so LIMIT still means what it says. Filtering the
+        # page afterwards would have returned "up to 200 memories, of which
+        # some number are yours" — which is not a scope, it is a coincidence.
+        allowed = _filed_ids(workspace_id)
+        if not allowed:
+            return []
+        query += f" AND id IN ({','.join('?' * len(allowed))})"
+        params.extend(allowed)
     query += " ORDER BY pinned DESC, updated_at DESC LIMIT ?"
     params.append(limit)
 
@@ -191,6 +249,16 @@ def list_memories(
     rows = conn.execute(query, params).fetchall()
     conn.close()
     return [_row_to_memory(r) for r in rows]
+
+
+def _filed_ids(workspace_id: str) -> List[str]:
+    """Memory ids filed in a workspace. Empty when workspaces are unavailable."""
+    try:
+        from . import workspaces as workspaces_mod
+
+        return workspaces_mod.item_ids(workspace_id, workspaces_mod.KIND_MEMORY)
+    except Exception:
+        return []
 
 
 def update(memory_id: str, **fields) -> Optional[Dict[str, Any]]:
@@ -241,7 +309,12 @@ def history(subject: str, kind: Optional[str] = None) -> List[Dict[str, Any]]:
     if kind:
         query += " AND kind = ?"
         params.append(kind)
-    query += " ORDER BY created_at ASC"
+    # `rowid` breaks the tie, and has to. Two memories written in the same
+    # clock tick — which is a whole millisecond or more on Windows — carry the
+    # identical `created_at`, and SQLite is then free to return them in either
+    # order. That is how a superseding fact could appear *before* the fact it
+    # replaced, in the one view whose entire job is saying what changed.
+    query += " ORDER BY created_at ASC, rowid ASC"
     conn = get_db()
     rows = conn.execute(query, params).fetchall()
     conn.close()
@@ -390,6 +463,7 @@ def extract_from_turn(
     message_id: Optional[int] = None,
     model: Optional[str] = None,
     min_confidence: float = 0.6,
+    origin: str = ORIGIN_CHAT,
 ) -> List[Dict[str, Any]]:
     """Ask the model for durable facts in a turn and store the confident ones."""
     from .ollama_client import OllamaClient
@@ -444,6 +518,7 @@ def extract_from_turn(
                 confidence=confidence,
                 source_message_id=message_id,
                 source_conversation_id=conversation_id,
+                origin=origin,
             )
         )
     return stored
@@ -469,9 +544,14 @@ def stats() -> Dict[str, Any]:
         (STATUS_ACTIVE,),
     ).fetchall()
     by_status = conn.execute("SELECT status, COUNT(*) AS c FROM memories GROUP BY status").fetchall()
+    by_origin = conn.execute(
+        "SELECT origin, COUNT(*) AS c FROM memories WHERE status = ? GROUP BY origin",
+        (STATUS_ACTIVE,),
+    ).fetchall()
     conn.close()
     return {
         "total": total,
         "by_kind": {r["kind"]: r["c"] for r in by_kind},
         "by_status": {r["status"]: r["c"] for r in by_status},
+        "by_origin": {(r["origin"] or ORIGIN_CHAT): r["c"] for r in by_origin},
     }

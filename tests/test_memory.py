@@ -32,6 +32,25 @@ def test_new_value_supersedes_old_and_keeps_history(isolated_db):
     ]
 
 
+def test_history_order_survives_a_shared_timestamp(isolated_db):
+    """Two writes in the same clock tick must still read oldest-first.
+
+    `created_at` is microsecond ISO text, but the clock behind it ticks in
+    milliseconds on Windows — so this is not a hypothetical. With no tiebreak
+    the ordering was whatever SQLite felt like, and the suite flaked here.
+    """
+    from unittest.mock import patch
+
+    with patch.object(memory, "_now", lambda: "2026-08-06T10:00:00+00:00"):
+        memory.create("preference", "editor", "The user prefers Neovim.")
+        memory.create("preference", "editor", "The user prefers Zed.")
+
+    assert [m["content"] for m in memory.history("editor")] == [
+        "The user prefers Neovim.",
+        "The user prefers Zed.",
+    ]
+
+
 def test_different_kinds_do_not_collide(isolated_db):
     memory.create("preference", "python", "The user enjoys Python.")
     memory.create("project", "python", "The user is building a Python CLI.")
@@ -400,3 +419,57 @@ def test_memory_history_endpoint(client):
 
 def test_vector_stats_endpoint(client):
     assert client.get("/api/vectors/stats").json()["total"] == 0
+
+
+class TestMemoryCanBeLeftOutOfOneTurn:
+    """Asked for the news and told about a dog mentioned once months ago.
+
+    There was only a global switch, which is the wrong shape for that: you do
+    not want memory off, you want it off for this. So the flag rides on the
+    turn, and the global setting is what it falls back to.
+    """
+
+    def _systems(self, memory):
+        from carrot import app as A, conversation as conv_mod
+
+        conv = conv_mod.create_conversation("news")
+        history, _ = A._prepare_history(conv, "recent us political news", None,
+                                        memory=memory)
+        return " ".join(m["content"] for m in history if m["role"] == "system")
+
+    # No teardown restoring memory_enabled, deliberately. `isolated_db` is
+    # function-scoped and config lives in that database, so switching the
+    # setting off inside a test cannot outlive it. A fixture that put it back
+    # ran *after* isolated_db's monkeypatch had been undone, which wrote the
+    # setting to the real config instead — a leak invented to fix one that
+    # was not there.
+
+    def _remember_the_dog(self):
+        from carrot import config, memory as memory_mod
+
+        config.set_config("memory_enabled", True)
+        memory_mod.create("fact", "dog", "The user has a dog called Biscuit.")
+
+    def test_by_default_memory_is_used(self, isolated_db):
+        self._remember_the_dog()
+        assert "Biscuit" in self._systems(None)
+
+    def test_a_turn_can_leave_it_out(self, isolated_db):
+        self._remember_the_dog()
+        assert "Biscuit" not in self._systems(False)
+
+    def test_the_global_setting_is_still_the_default(self, isolated_db):
+        from carrot import config
+
+        self._remember_the_dog()
+        config.set_config("memory_enabled", False)
+        assert "Biscuit" not in self._systems(None)
+
+    def test_a_turn_can_opt_back_in(self, isolated_db):
+        # Otherwise the per-turn flag could only ever subtract, and a chat that
+        # genuinely wants context could not have it without a trip to Settings.
+        from carrot import config
+
+        self._remember_the_dog()
+        config.set_config("memory_enabled", False)
+        assert "Biscuit" in self._systems(True)

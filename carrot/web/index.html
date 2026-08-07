@@ -1150,8 +1150,8 @@
       <div class="page-head"><h2>Memory</h2></div>
       <p class="muted">
         What Carrot has learned about you from your conversations. Every entry links back to
-        the message it came from — edit anything that's wrong, pin what matters, and mark
-        mistakes so they're never recorded again.
+        the message it came from and says where it was learned — edit anything that's wrong,
+        pin what matters, and mark mistakes so they're never recorded again.
       </p>
       <div id="memory-stats" class="subtle"></div>
       <div class="composer">
@@ -1170,6 +1170,15 @@
           <option value="superseded">Superseded</option>
           <option value="rejected">Rejected</option>
           <option value="">Everything</option>
+        </select>
+        <!-- Where it was learned, and where it lives. Two different questions:
+             the first is what part of Carrot was running, the second is which
+             project the conversation belonged to. -->
+        <select id="memory-origin" onchange="setMemoryFilter('origin', this.value)">
+          <option value="">Learned anywhere</option>
+        </select>
+        <select id="memory-workspace" onchange="setMemoryFilter('workspace', this.value)">
+          <option value="all">All workspaces</option>
         </select>
         <button class="btn btn-ghost" onclick="loadMemory()">Refresh</button>
       </div>
@@ -1618,6 +1627,7 @@
     </button>
     <div id="model-pop" class="hidden">
       <div class="pop-scroll">
+        <div id="model-auto"></div>
         <div class="pop-section">On this machine</div>
         <div id="model-installed"></div>
         <div id="model-remote"></div>
@@ -1639,6 +1649,17 @@
           title="Answered but not remembered, and deleted afterwards">
     <svg class="ico"><use href="#i-ghost"/></svg>
     <span>Temporary</span>
+  </button>
+  <!-- Distinct from Temporary: that one stops this chat being remembered
+       afterwards, this one stops what is already remembered being read now.
+       Asking for the news and being told about a dog you mentioned once is
+       the second problem, and the global setting was the wrong shape for
+       it — you do not want memory off, you want it off for this. -->
+  <button id="memory-btn" class="composer-chip"
+          onclick="toggleMemoryUse()"
+          title="Ignore what Carrot remembers about you for this chat">
+    <svg class="ico"><use href="#i-brain"/></svg>
+    <span>Memory</span>
   </button>
   <button id="debate-btn" class="composer-chip needs-setup"
           onclick="debateCurrentQuestion()"

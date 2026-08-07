@@ -473,3 +473,18 @@ class TestClarifyingQuestionsBecomeAForm:
         question = coder.parse_questions(text)[0]
         assert question["question"] == "spaced out"
         assert question["options"][0] == "a b"
+
+    def test_plan_looks_at_the_workspace_before_planning(self):
+        """It planned a magnetic field simulator into a folder holding Pong.
+
+        It never looked, so everything landed at the top level next to what was
+        already there, and the first the user saw of it was an approval prompt
+        for a filename in the wrong place.
+        """
+        plan = coder.MODE_PLAN
+        guidance = coder.MODE_PREAMBLE[plan]
+        assert "list_dir" in guidance, "nothing tells it to look first"
+        assert "new folder" in guidance, "no offer to work somewhere separate"
+        # And that the offer is actionable rather than another dead end: the
+        # folder is made by writing into it, which it has to be told.
+        assert "creates missing folders" in guidance

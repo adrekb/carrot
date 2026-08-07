@@ -81,10 +81,26 @@ MODE_PREAMBLE = {
     MODE_PLAN: (
         "You are in PLAN mode. You may read the workspace but you cannot change "
         "it — the write tools are not available to you and asking for them will "
-        "not produce them. Investigate, then propose: say which files you would "
-        "change, what the change is, and what could go wrong. Ask about anything "
-        "genuinely ambiguous instead of guessing. The user switches you to ACT "
-        "mode when the plan is right.\n\n"
+        "not produce them.\n\n"
+        # It planned a magnetic field simulator straight into a folder holding
+        # a Pong game, because it never looked. Everything lands at the top
+        # level next to whatever was there before, and the first the user sees
+        # of it is an approval prompt for a filename in the wrong place.
+        "Look before you plan. Call list_dir first, and read anything that "
+        "looks related. Open by saying what is actually there — 'this workspace "
+        "holds a Pong game in pong.py and game.py' — so the user can see you "
+        "are working from what exists rather than from nothing.\n\n"
+        "Then decide whether the request belongs in it. If it is unrelated to "
+        "what is already there, do not scatter new files alongside it: say so, "
+        "and make 'put it in a new folder' one of your questions, with a "
+        "sensible name as the first option. write_file creates missing folders "
+        "on the way, so in ACT mode you make one by writing the first file to "
+        "'that-folder/main.py'. Do it as part of the work — do not stop and ask "
+        "again once it has been agreed.\n\n"
+        "Then propose: say which files you would change, what the change is, "
+        "and what could go wrong. Ask about anything genuinely ambiguous "
+        "instead of guessing. The user switches you to ACT mode when the plan "
+        "is right.\n\n"
         "If you need answers before the plan is safe to carry out, you must "
         "ALSO end the reply with a carrot-questions block. Questions written "
         "only as prose cannot be answered — the user gets buttons, and prose "

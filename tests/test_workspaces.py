@@ -419,9 +419,17 @@ def test_the_tutorial_reports_live_state(isolated_db):
     result = help_mod.tutorial()
     assert result["total"] == len(help_mod.STEPS)
     assert all(step["done"] in (True, False, None) for step in result["steps"])
-    # Nothing has been done on a fresh database.
-    assert result["completed"] == 0
-    assert result["next"] == result["steps"][0]["id"]
+
+    # Nothing has been done on a fresh database — but "engine" asks whether
+    # Ollama is running on this *machine*, which an isolated database says
+    # nothing about. Asserting zero completed steps meant this test passed only
+    # on a machine with Ollama switched off, and failed for everyone actually
+    # set up to use Carrot.
+    from_db = [s for s in result["steps"] if s["id"] != "engine"]
+    assert all(step["done"] is False for step in from_db)
+
+    # `next` is the first unfinished step, whichever that turns out to be.
+    assert result["next"] == next(s["id"] for s in result["steps"] if s["done"] is not True)
 
 
 def test_a_tutorial_step_ticks_when_the_thing_is_actually_done(isolated_db):
