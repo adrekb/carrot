@@ -1,20 +1,65 @@
 /* Inter (SIL Open Font License 1.1) — bundled so the UI looks identical on
    every OS and works with no network. License: /assets/fonts/LICENSE.txt */
+/* ===== Typefaces =====
+ *
+ * Four faces, each with one job. Every one is OFL, so they ship with the app
+ * rather than being fetched — which is the point: a local-first assistant that
+ * phones a font CDN on every launch is not local-first, and the previous set
+ * was referenced but never committed, so all nine files 404ed and the whole
+ * system silently fell back to Segoe UI.
+ *
+ * The serif is gone. It was carrying "this is prose, slow down" for assistant
+ * replies, and a serif inside a dark tool UI reads as a magazine pastiche
+ * rather than as reading material. Stack Sans Text does the same job with the
+ * grain of the rest of the interface — it has the largest x-height of the
+ * five (560/1000) and is drawn for running text, which is what that role
+ * actually needed.
+ *
+ * Variable fonts, one file per family: the weight axis is continuous, so a
+ * semibold label costs no extra download. */
+
 @font-face {
-  font-family: "InterVar";
-  src: url("/assets/fonts/InterVariable.woff2") format("woff2-variations"),
-       url("/assets/fonts/InterVariable.woff2") format("woff2");
-  font-weight: 100 900;
+  font-family: "SpaceGrotesk";
+  src: url("/assets/fonts/SpaceGrotesk.woff2") format("woff2");
+  font-weight: 300 700;
   font-style: normal;
   font-display: swap;
 }
 @font-face {
-  font-family: "InterVar";
-  src: url("/assets/fonts/InterVariable-Italic.woff2") format("woff2-variations"),
-       url("/assets/fonts/InterVariable-Italic.woff2") format("woff2");
-  font-weight: 100 900;
+  font-family: "PlusJakarta";
+  src: url("/assets/fonts/PlusJakartaSans.woff2") format("woff2");
+  font-weight: 200 800;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "PlusJakarta";
+  src: url("/assets/fonts/PlusJakartaSans-Italic.woff2") format("woff2");
+  font-weight: 200 800;
   font-style: italic;
   font-display: swap;
+}
+@font-face {
+  font-family: "StackSansText";
+  src: url("/assets/fonts/StackSansText.woff2") format("woff2");
+  font-weight: 200 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "DMMono";
+  src: url("/assets/fonts/DMMono-Regular.woff2") format("woff2");
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "DMMono";
+  src: url("/assets/fonts/DMMono-Medium.woff2") format("woff2");
+  font-weight: 500; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "DMMono";
+  src: url("/assets/fonts/DMMono-Italic.woff2") format("woff2");
+  font-weight: 400; font-style: italic; font-display: swap;
 }
 
 /* ===== Carrot AI — dark workspace theme ===== */
@@ -36,7 +81,11 @@
   --border-hi: rgba(190, 205, 235, 0.13);
   --text: #eceef4;
   --muted: #99a0ae;
-  --faint: #69707f;
+  /* Raised to clear WCAG AA. Every theme's `--faint` sat between 3.27
+     and 3.74 against its own card, under the 4.5 needed for normal
+     text — and it is used at 11px, which is the worst case for it.
+     Still clearly quieter than --muted (6.2), which is the job. */
+  --faint: #828997;   /* 4.63:1 on --card */
   /* Carrot orange proper: warmer and more saturated than a clay
      terracotta, softer than the neon it replaced. */
   --accent: #f4813f;
@@ -45,15 +94,29 @@
   --accent-soft: rgba(244, 129, 63, 0.14);
   --accent-line: rgba(244, 129, 63, 0.32);
   --green: #57d1a0;
+  /* The tint on a file-type badge. Set per element from JS, because it is a
+     property of the file's language rather than of the theme; the value here
+     is the default an unrecognised type falls back to. */
+  --mark: #6b7280;
   --red: #f2736b;
   --yellow: #f0c268;
-  --mono: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  /* Code, the terminal and the editor. Distinguishes 0/O and 1/l/I, which
+     is the whole job. */
+  --mono: "DMMono", "Cascadia Code", "JetBrains Mono", Consolas, monospace;
   /* System stacks on purpose: the app runs offline, so it cannot pull a
      webfont. These resolve to SF Pro on macOS and Segoe UI Variable on
      Windows 11 — both close in spirit to what we're after. */
-  --sans: "InterVar", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  --display: "InterVar", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  --serif: ui-serif, "Iowan Old Style", Charter, Cambria, "Palatino Linotype", Georgia, serif;
+  /* The interface itself: buttons, labels, menus, table cells. The tallest
+     cap height of the five (745/1000), which is what keeps a 11px
+     uppercase label legible. */
+  --sans: "PlusJakarta", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  /* Headings, the brand, empty states. The most distinctive of the five,
+     and its low x-height (486) is a liability at 12px and an asset at 30. */
+  --display: "SpaceGrotesk", "PlusJakarta", -apple-system, "Segoe UI", system-ui, sans-serif;
+  /* Things you read rather than operate: assistant replies, research
+     reports, onboarding. Was a serif; see the note above the @font-face
+     block for why it is not any more. */
+  --prose: "StackSansText", "PlusJakarta", -apple-system, "Segoe UI", system-ui, sans-serif;
   --radius: 14px;
   --radius-sm: 10px;
   --radius-lg: 20px;
@@ -128,7 +191,7 @@ body {
 }
 .page-head h1, .page-head h2, .splash-card h1, .dash-head h1,
 .settings-head h3, .ext-head h3 {
-  font-family: var(--serif);
+  font-family: var(--prose);
   font-weight: 500;
   letter-spacing: -0.012em;
 }
@@ -229,12 +292,21 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   color: var(--faint);
   padding: 9px 10px 5px;
 }
-#model-pop, #ws-pop, #nav-more-list, .combo-pop {
+#model-pop, #ws-pop, #nav-more-list, .combo-pop, #tool-pop {
   border-radius: var(--radius);
   box-shadow: var(--shadow-lg);
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
+
+/* Form controls do not inherit type. Every browser renders `button`, `input`,
+   `select` and `textarea` in its own UI font unless told otherwise — on
+   Windows that is Arial — so the theme swatches, the mode buttons and every
+   other unstyled control were sitting in Arial next to a page set in Plus
+   Jakarta. It had been patched five times at individual rules; this is the
+   rule those were each working around. Size and weight are left alone: plenty
+   of controls set their own, and only the family was ever wrong. */
+button, input, select, textarea, optgroup { font-family: inherit; }
 
 html, body { height: 100%; }
 
@@ -365,7 +437,17 @@ body {
 .view.active { display: flex; }
 
 /* ===== Workspace ===== */
-#view-workspace { gap: 12px; padding: 12px 12px 84px; }
+/* The composer is `position: fixed`, so it is outside the flow and nothing
+   below it knows it is there. This reserve is what keeps it from sitting on
+   top of the terminal — and it used to be a flat 84px, which stopped being
+   true the moment the bar became two rows, and was never true when the
+   attachment tray was open. `--composer-h` is measured from the bar itself,
+   so the gap tracks whatever the bar currently is. The literal is the
+   first-paint fallback, before the observer has run once. */
+#view-workspace {
+  gap: 12px;
+  padding: 12px 12px calc(var(--composer-h, 84px) + 28px);
+}
 
 #ws-left {
   width: 320px;
@@ -898,59 +980,164 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   bottom: 16px;
   transform: translateX(-50%);
   width: min(760px, calc(100vw - 32px));
+  /* Two rows, always: the question, then the controls. Not a flex row that
+     wraps under pressure — the rows are the design, so there is no width at
+     which the layout is a compromise. */
   display: flex;
-  align-items: center;
-  gap: 6px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
   background: rgba(22, 22, 27, 0.92);
   backdrop-filter: blur(18px);
   border: 1px solid var(--border-hi);
   border-radius: var(--r-lg);
-  padding: 8px 10px;
+  padding: 10px 12px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
   z-index: 60;
 }
 
 #cmd-input {
-  flex: 1;
-  /* `min-width: auto` on a flex item floors it at its content width, which for
-     a text input is a browser default of about 160px. The bar then had to find
-     that space somewhere, and took it from the only items that would give:
-     every fixed-size control beside it. In a narrow window the send button was
-     squeezed to 16px wide while staying 36 tall — a `border-radius: 50%`
-     circle rendered as a tall orange ellipse, which is what got reported.
-     The input is the one thing here that can usefully be narrow. */
+  width: 100%;
+  /* Kept, though nothing competes with it any more: it is the property that
+     stops a flex item being floored at its content width, and it costs
+     nothing to leave correct. */
   min-width: 0;
   background: none;
   border: none;
   outline: none;
   color: var(--text);
   font-size: var(--text-base);
-  padding: 8px 6px;
+  padding: 6px 4px;
 }
 #cmd-input::placeholder { color: var(--faint); }
 
-/* Nothing in the bar with a declared size may be squeezed out of shape. A
-   control that is 20% narrower is not a smaller control, it is a broken one —
-   and these are all circles and squares, where it shows immediately. */
-#cmdbar > button,
-#cmdbar > #model-picker,
-#cmdbar > #search-picker,
-#cmdbar > .composer-chip { flex-shrink: 0; }
-
-/* Nine controls plus a text field do not fit on one line in a narrow window,
-   and refusing to deform them only moves the problem: the row overflows and
-   the send button is clipped by the edge instead of squashed by its
-   neighbours. So below this width the bar becomes two rows — the text field
-   on top, where it is the thing you are actually using, and the controls
-   underneath in their proper shapes. */
-@media (max-width: 620px) {
-  #cmdbar { flex-wrap: wrap; }
-  #cmd-input {
-    order: -1;
-    flex: 1 0 100%;
-    padding-bottom: 4px;
-  }
+/* The control row. */
+#cmd-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
+
+/* Two kinds of control, and only one of them may give up space.
+ *
+ * A circle squeezed to 80% is not a smaller circle, it is a broken one — that
+ * is the reported bug, the send button at 16x36 with `border-radius: 50%`
+ * rendering as a tall ellipse. So the icon buttons are rigid.
+ *
+ * The pickers are text, and text has a graceful way to be too long. Letting
+ * them shrink to an ellipsis is what makes a hard breakpoint unnecessary:
+ * the row degrades continuously instead of dropping both labels the moment
+ * it crosses a number somebody had to pick. */
+#cmd-row > #send-btn,
+#cmd-row > .icon-btn,
+#cmd-row > #tool-menu { flex-shrink: 0; }
+
+#cmd-row > #model-picker,
+#cmd-row > #search-picker,
+#cmd-row > #active-skill { min-width: 0; flex-shrink: 1; }
+
+/* The label is the part that gives; the icon and the chevron are what make
+   the control recognisable once it has, so they hold their size. */
+#model-btn, #search-btn, #active-skill { max-width: 100%; }
+#model-btn > .ico, #search-btn > .ico { flex-shrink: 0; }
+#model-label, #search-label, #active-skill-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* The one flexible thing in the row, so send sits at the far end and the
+   controls stay their own size rather than spreading. */
+.cmd-gap { flex: 1 1 auto; min-width: 8px; }
+
+/* ===== The plus menu =====
+ *
+ * Attach, Temporary, Memory, Council, voice in and voice out are all things
+ * you set once and then stop looking at. On the row they were six controls
+ * competing for space with the two that are actually live state, and the
+ * whole label-collapsing apparatus existed to referee that fight. In a menu
+ * they get their full names back and cost one button. */
+
+#tool-menu { position: relative; }
+
+#tool-btn {
+  width: 32px; height: 32px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--card2);
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+#tool-btn:hover { color: var(--text); border-color: var(--accent-line); }
+#tool-btn.open { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* The surface itself comes from the shared floating-layer rule that every
+ * other popover in the app uses — glass, `--radius`, `--shadow-lg`, restated
+ * per theme. Rolling its own background and radius is what made this menu
+ * read as a foreign widget: a flat panel with square corners, because the
+ * radius it asked for (`--r-md`) is not one of the five that exist. Only
+ * position and width belong here. */
+#tool-pop {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 0;
+  width: 268px;
+  padding: 6px;
+  z-index: 70;
+}
+#tool-pop.hidden { display: none; }
+
+.tool-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--text);
+  font-size: var(--text-md);
+  line-height: 1.35;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.tool-item:hover { background: var(--card2); }
+.tool-item .ico { color: var(--muted); }
+/* What the row does, in the app's meta voice. On its own line under the
+   name, not in a right-hand column: at the width "Read replies aloud" needs,
+   a second column has nowhere to go and both halves wrap into a block of
+   text — which is what made the menu look nothing like the rest of the app.
+   `flex-basis: 100%` is what puts it on that line; the indent lines it up
+   under the name past the icon and its gap. */
+.tool-item .tool-sub {
+  /* `100%` plus the indent is wider than the line by exactly the indent, and
+     the row scrolls. The basis has to be what is left after it. */
+  flex: 0 0 calc(100% - 26px);
+  margin-left: 26px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--faint);
+  font-size: var(--text-xs);
+}
+.tool-item.hidden { display: none; }
+
+/* Lit state. Same meaning as the old chips had: the highlight marks the
+   departure from normal, not the feature being present. */
+.tool-item.on { color: var(--accent); }
+.tool-item.on .ico { color: var(--accent); }
+.tool-item.recording .ico { color: var(--red); }
+/* A council that has not been set up still shows, because a feature you
+   cannot see is one you do not have — it explains itself and takes you to
+   the setup rather than doing nothing. */
+.tool-item.needs-setup { color: var(--muted); }
+
+.tool-sep { height: 1px; margin: 5px 8px; background: var(--border); }
 
 #send-btn {
   width: 36px; height: 36px;
@@ -3020,7 +3207,7 @@ body::before {
 .hub-card.pick, .settings-card:hover { border-color: var(--border-hi); }
 
 /* Floating layers get the heaviest blur — they overlap real content. */
-#model-pop, #ws-pop, #nav-more-list, .combo-pop, #splash .splash-card,
+#model-pop, #ws-pop, #nav-more-list, .combo-pop, #tool-pop, #splash .splash-card,
 .skill-pop, #catalog-modal .modal-card {
   background: rgba(30, 33, 41, 0.82);
   backdrop-filter: blur(30px) saturate(180%);
@@ -3171,7 +3358,7 @@ body::before {
   background: rgba(42, 46, 58, 0.48);
   border-color: rgba(255, 255, 255, 0.115);
 }
-#model-pop, #ws-pop, #nav-more-list, .combo-pop, #splash .splash-card,
+#model-pop, #ws-pop, #nav-more-list, .combo-pop, #tool-pop, #splash .splash-card,
 .skill-pop, #search-pop, #attach-tray .attach-chip {
   background: rgba(30, 33, 42, 0.66);
   backdrop-filter: blur(44px) saturate(200%);
@@ -3282,7 +3469,7 @@ select option:checked { background-color: #2f333d; }
   --border-hi: rgba(38, 32, 26, 0.17);
   --text: #1c1a18;
   --muted: #5f5a54;
-  --faint: #8a847c;
+  --faint: #736e66;   /* 5.06:1 on --card */
   --on-accent: #2a1508;
 
   --shadow-sm: 0 1px 2px rgba(38, 30, 22, 0.07);
@@ -3416,7 +3603,7 @@ body::before {
   background: var(--glass-card-hi);
   border-color: var(--glass-card-edge-hi);
 }
-#model-pop, #ws-pop, #nav-more-list, .combo-pop, #splash .splash-card,
+#model-pop, #ws-pop, #nav-more-list, .combo-pop, #tool-pop, #splash .splash-card,
 .skill-pop, #search-pop, #attach-tray .attach-chip {
   background: var(--glass-pop);
   border: 1px solid var(--glass-pop-edge);
@@ -3475,14 +3662,14 @@ h1, h2, h3,
 .card-title, .settings-head h3, .ext-head h3, .page-head h1, .page-head h2,
 .dash-head h1, .splash-card h1, .hub-card h4, .widget-card .card-title,
 .empty-widget .empty-title, .greeting, .section-title {
-  font-family: var(--serif);
+  font-family: var(--prose);
   font-weight: 500;
   letter-spacing: -0.014em;
 }
 .card-title { font-size: var(--text-md); }
 .page-head h2 { font-weight: 500; }
 /* Blockquotes and the research narrative read better set, too. */
-.msg-assistant blockquote, .research-summary { font-family: var(--serif); }
+.msg-assistant blockquote, .research-summary { font-family: var(--prose); }
 /* Numerals in a serif face are old-style and wander on a baseline, which
    looks wrong in tables and counters. Keep those lining and tabular. */
 .stat-value, .metric, .count, td, th, .kbd, code, pre {
@@ -3542,7 +3729,7 @@ code, pre, .kbd { font-family: var(--mono); }
   box-shadow: var(--shadow-lg), inset 0 1px 0 var(--glass-inset-hi);
 }
 .path-prompt-title {
-  font-family: var(--serif);
+  font-family: var(--prose);
   font-size: var(--text-lg);
   font-weight: 500;
   letter-spacing: -0.014em;
@@ -3668,56 +3855,21 @@ code, pre, .kbd { font-family: var(--mono); }
 /* =====================================================================
    Charcoal & cream
    =====================================================================
-   An editorial pass, not a hue swap. Two typefaces doing different jobs:
-   Playfair Display for anything that announces itself (a Didone — high
-   stroke contrast, small apertures, and it only looks right large), and
-   Vollkorn for anything you actually read (a warm text serif that holds
-   up at 13px, which Playfair does not). Inter stays for controls, labels
-   and data, where a serif costs legibility and buys nothing.
+   An editorial pass, not a hue swap. The type roles are the app's, set
+   once at the top of this file: Space Grotesk announces, Stack Sans Text
+   is read, Plus Jakarta operates, DM Mono is code. This theme changes what
+   they sit on, not which they are.
 
-   Both are SIL OFL. The other uploads could not be shipped: Basheq Vintage
-   is a demo licence, Bodoni FLF and Aloe Vera are non-commercial, and this
-   app is redistributed in a public installer.
-   License texts: /assets/fonts/*-OFL.txt */
-@font-face {
-  font-family: "Vollkorn";
-  src: url("/assets/fonts/Vollkorn-Regular.woff2") format("woff2");
-  font-weight: 400; font-style: normal; font-display: swap;
-}
-@font-face {
-  font-family: "Vollkorn";
-  src: url("/assets/fonts/Vollkorn-Italic.woff2") format("woff2");
-  font-weight: 400; font-style: italic; font-display: swap;
-}
-@font-face {
-  font-family: "Vollkorn";
-  src: url("/assets/fonts/Vollkorn-Medium.woff2") format("woff2");
-  font-weight: 500; font-style: normal; font-display: swap;
-}
-@font-face {
-  font-family: "Vollkorn";
-  src: url("/assets/fonts/Vollkorn-Semibold.woff2") format("woff2");
-  font-weight: 600; font-style: normal; font-display: swap;
-}
-@font-face {
-  font-family: "PlayfairDisplay";
-  src: url("/assets/fonts/PlayfairDisplay-Regular.woff2") format("woff2");
-  font-weight: 400; font-style: normal; font-display: swap;
-}
-@font-face {
-  font-family: "PlayfairDisplay";
-  src: url("/assets/fonts/PlayfairDisplay-Medium.woff2") format("woff2");
-  font-weight: 500; font-style: normal; font-display: swap;
-}
-@font-face {
-  font-family: "PlayfairDisplay";
-  src: url("/assets/fonts/PlayfairDisplay-Italic.woff2") format("woff2");
-  font-weight: 400; font-style: italic; font-display: swap;
-}
+   It used to pair Playfair Display with Vollkorn, and the editorial feel
+   was doing real work — but a serif inside a dark tool UI reads as a
+   magazine pastiche rather than as reading material, and neither face was
+   ever committed, so both silently fell back to Georgia. The distinction
+   that mattered (announcing vs reading vs operating) survives; the serifs
+   do not.
 
+   All four are SIL OFL, which is why they can ship inside a public
+   installer. License texts: /assets/fonts/*-OFL.txt */
 :root {
-  --display: "PlayfairDisplay", ui-serif, Georgia, serif;
-  --serif: "Vollkorn", ui-serif, "Iowan Old Style", Charter, Georgia, serif;
 
   /* Charcoal: warm and slightly green-black, the colour of pressed ink
      rather than the blue-black of a screen. Surfaces separate by a few
@@ -3733,7 +3885,7 @@ code, pre, .kbd { font-family: var(--mono); }
   /* Cream, not white. #fff on a warm charcoal reads blue and buzzes. */
   --text: #f2ece0;
   --muted: #a89f8d;
-  --faint: #77705f;
+  --faint: #96907f;   /* 5.11:1 on --card */
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow: 0 8px 24px rgba(0, 0, 0, 0.38);
@@ -3773,7 +3925,7 @@ code, pre, .kbd { font-family: var(--mono); }
   --border-hi: rgba(40, 34, 22, 0.18);
   --text: #1e1b14;
   --muted: #5f584a;
-  --faint: #8b8271;
+  --faint: #776f60;   /* 4.89:1 on --card */
   --opt-bg: #fffdf8;
   --opt-text: #1e1b14;
   --opt-sel: #ece5d5;
@@ -3783,9 +3935,10 @@ code, pre, .kbd { font-family: var(--mono); }
 }
 
 /* ---- Type ----
-   Playfair only above ~18px. Below that its thin strokes disappear and
-   its small apertures close up, which is why the card titles use Vollkorn
-   instead even though both are serifs. */
+   The display face only above ~18px. Space Grotesk has the smallest
+   x-height of the four (486/1000) — the thing that gives it presence in a
+   headline is what makes it thin and cramped in a card title, so titles
+   take the reading face instead. */
 .page-head h1, .page-head h2, .dash-head h1, .splash-card h1, .greeting {
   font-family: var(--display);
   font-weight: 400;
@@ -3798,24 +3951,25 @@ code, pre, .kbd { font-family: var(--mono); }
 h3, .settings-head h3, .ext-head h3, .card-title, .hub-card h4,
 .widget-card .card-title, .empty-widget .empty-title, .section-title,
 .path-prompt-title {
-  font-family: var(--serif);
+  font-family: var(--prose);
   font-weight: 600;
   letter-spacing: 0;
 }
 .card-title { font-size: var(--text-md); }
 .settings-head h3, .ext-head h3 { font-size: var(--text-lg); }
 
-/* Body copy is Vollkorn: long explanations are the reason to have a text
-   serif at all. Vollkorn runs small, so it needs a nudge in size and a
-   shorter measure than the sans did. */
+/* Body copy takes the reading face. Long explanations are the whole reason
+   that role exists — Stack Sans Text has the largest x-height of the four
+   (560/1000) and is drawn for running text, so it holds a 70ch measure at
+   13px without the reader having to work. */
 .msg-assistant, .msg-user, p.muted, .settings-card > p, .hub-card p,
 .help-body, .research-summary {
-  font-family: var(--serif);
+  font-family: var(--prose);
   font-size: var(--text-md);
   line-height: 1.62;
 }
 p.muted { max-width: 70ch; }
-.msg-assistant blockquote { font-family: var(--serif); font-style: italic; }
+.msg-assistant blockquote { font-family: var(--prose); font-style: italic; }
 
 /* Controls, labels, counters and anything tabular stay in the sans — a
    serif here costs legibility at 11-12px and buys nothing. */
@@ -3846,7 +4000,7 @@ td, th, .si-sub, .small, .editor-status {
 }
 .artifact-title {
   flex: 1;
-  font-family: var(--serif);
+  font-family: var(--prose);
   font-weight: 600;
   font-size: var(--text-base);
 }
@@ -4054,7 +4208,7 @@ td, th, .si-sub, .small, .editor-status {
 .onboard-skip:hover { color: var(--text); text-decoration: underline; }
 .onboard-step.hidden { display: none; }
 .onboard-lede {
-  font-family: var(--serif);
+  font-family: var(--prose);
   font-size: var(--text-md);
   line-height: 1.62;
   max-width: 60ch;
@@ -4079,14 +4233,14 @@ td, th, .si-sub, .small, .editor-status {
 .onboard-choice:hover { border-color: var(--accent-line); background: var(--card3); }
 .oc-title {
   display: block;
-  font-family: var(--serif);
+  font-family: var(--prose);
   font-weight: 600;
   font-size: var(--text-lg);
   margin-bottom: 5px;
 }
 .oc-body {
   display: block;
-  font-family: var(--serif);
+  font-family: var(--prose);
   font-size: var(--text-base);
   line-height: 1.55;
   color: var(--muted);
@@ -4105,7 +4259,7 @@ td, th, .si-sub, .small, .editor-status {
   text-transform: uppercase;
 }
 
-.onboard-prose { font-family: var(--serif); font-size: var(--text-md); line-height: 1.66; max-width: 66ch; }
+.onboard-prose { font-family: var(--prose); font-size: var(--text-md); line-height: 1.66; max-width: 66ch; }
 .onboard-prose p { margin-bottom: 12px; }
 .onboard-prose ul { margin: 0 0 14px 20px; }
 .onboard-prose li { margin-bottom: 8px; }
@@ -4972,52 +5126,35 @@ td, th, .si-sub, .small, .editor-status {
 
 /* ===== Composer breathing room =====
  *
- * The bar had grown to eight controls — model, Temporary, Council, search
- * mode, attach, mic, speak, send — and the thing you actually type in was
- * the only one that gave up space for them. On a 760px bar the input had
- * about an inch left, which is the wrong trade in a box whose entire job is
- * to take a question.
+ * This used to be a container query that hid the control labels one
+ * breakpoint at a time — chips to icons at 800px, the model name clamped and
+ * the speaker dropped at 560px — because eight controls and the text field
+ * shared one row and the input was the only item that would give up space.
+ * On a 760px bar it was left with about an inch, enough to show "Ask ar".
  *
- * The fix is not to remove any of them. It is to let the labels go first:
- * every one of these controls has an icon and a tooltip, and the label is
- * the least load-bearing part. Below 900px the chips become their icons and
- * the input takes the space back. */
-#cmd-input { min-width: 0; }
-
-/* Keyed to the bar, not the window. The first attempt used a viewport media
- * query, which was simply the wrong measurement: the bar is capped at 760px
- * however wide the screen is, so on a 1000px window the labels stayed on, the
- * eight controls took ~700px of it, and the input the box exists for was left
- * with about an inch — enough to show "Ask ar" and nothing else.
+ * The row split removed the fight rather than refereeing it. The input has
+ * its own line at full width, the controls have theirs, and six of the eight
+ * moved behind the plus. What is left on the row is a 32px button, two
+ * pickers and send, which fits at every width the bar can be — so there is
+ * nothing here to collapse, and the labels stay on.
  *
- * The threshold has to sit *above* the bar's own resting width, not below it.
- * Keying to the bar was right but 720px was still 40px under the 760px cap, so
- * the query never fired at the width that broke — the input stayed pinned to
- * its 160px floor and the placeholder still cut off at "Ask anything — Ctrl+K".
- * 800px clears the 760px cap; the 920px wide-screen bar stays uncollapsed,
- * which is correct because at 920px the labels and the placeholder both fit. */
-#cmdbar { container-type: inline-size; }
+ * The one thing still worth a cap is the model name, which is user-supplied
+ * and can be arbitrarily long: `mistral-small-3.2-24b-instruct-2506-q4_K_M`
+ * would otherwise take the whole row before the shrinking has anything to
+ * work with. The ellipsis itself lives with the other labels, above. */
+#model-label { max-width: 190px; }
 
-@container (max-width: 800px) {
-  .composer-chip span,
-  #search-label,
-  #model-btn .chev { display: none; }
-  .composer-chip { padding: 8px; }
-  #model-btn { max-width: 132px; }
-}
-
-@container (max-width: 560px) {
-  /* The model name is the last label standing: it is the one piece of state
-   * you cannot recover from an icon. */
-  #model-label { max-width: 76px; }
-  #speak-toggle { display: none; }
-}
-
-/* Belt and braces for a browser without container queries, and the floor the
- * flexbox may not go below whatever else is in the row. */
-#cmd-input { min-width: 160px; }
-@supports not (container-type: inline-size) {
-  .composer-chip span, #search-label { display: none; }
+/* Phone width, and only phone width. The desktop app cannot get here — the
+ * window has a 1024px minimum, where the row has ~300px to spare — but Carrot
+ * is also served over HTTP, and on a phone the ellipsis has a floor: the two
+ * icons, the chevron and the button padding are ~60px per picker before a
+ * single character of label. Below this the labels shrink to nothing and the
+ * row overflows anyway, so the search label goes and the icon carries it.
+ * The model name stays, because it is the one piece of state you cannot
+ * recover from an icon — the same reason it was the last label standing
+ * under the old scheme. */
+@media (max-width: 560px) {
+  #search-label { display: none; }
 }
 
 /* There is room for a wider bar on a wide screen, and the question is the
@@ -5080,3 +5217,169 @@ td, th, .si-sub, .small, .editor-status {
   cursor: pointer;
 }
 .agent-model-picker:hover { border-color: var(--border-hi); }
+
+/* ===== A menu over the conversation has to be opaque =====
+ *
+ * The composer's three popovers are children of `#cmdbar`, and `#cmdbar` has
+ * a `backdrop-filter` of its own. A nested backdrop-filter does not compose:
+ * the ancestor's filter establishes the backdrop root, so a descendant's
+ * blur samples a backdrop that has already been flattened and effectively
+ * does nothing. What is left is the bare 82% alpha of the glass colour — and
+ * you could read the dashboard card and the placeholder text straight through
+ * the open menu.
+ *
+ * Glass is a look for a layer floating over its own background. These float
+ * over arbitrary content, so they get a solid surface instead. `--card` is an
+ * opaque hex in all four themes, which is what makes this one rule enough.
+ *
+ * Written as a descendant selector on purpose: the themed glass rules are
+ * plain id selectors that appear later in the file, and matching their
+ * specificity would leave this depending on source order. `#cmdbar #tool-pop`
+ * wins wherever it sits. */
+#cmdbar #tool-pop,
+#cmdbar #model-pop,
+#cmdbar #search-pop,
+#cmdbar #skill-pop {
+  background: var(--card);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* ===== Choosing which panels the conversation page shows =====
+ *
+ * The control sits in the conversation's own tabstrip, not in the rail it
+ * governs: switching the last panel off removes the rail, and a button that
+ * disappears along with the thing it turns off cannot turn it back on.
+ * Quiet by default — it is a preference, not a feature. */
+
+#rail-menu { position: relative; margin-left: auto; }
+
+#rail-btn {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 8px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--faint);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+#rail-btn:hover { color: var(--text); background: var(--card2); }
+#rail-btn .ico { width: 13px; height: 13px; }
+
+/* Opens downward — it hangs off a strip at the top of the page, so there is
+   no room above it. The composer's menus open up for the mirror reason. */
+#rail-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 262px;
+  padding: 6px;
+  background: var(--card);
+  border: 1px solid var(--border-hi);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  z-index: 70;
+}
+#rail-pop.hidden { display: none; }
+
+/* A shown panel is the normal state, so it is not highlighted — only the
+   tick distinguishes it. Lighting four rows out of four says nothing. */
+#rail-pop .tool-item.on .ico { color: var(--green); }
+#rail-pop .tool-item:not(.on) { color: var(--muted); }
+#rail-pop .tool-item:not(.on) .ico { color: var(--faint); }
+
+/* The rail is a flex child with a fixed width, so `hidden` has to beat that
+   as well as the `display: flex` it carries. */
+#ws-left.hidden { display: none; }
+
+/* ===== File type marks =====
+ *
+ * A tree of identical grey rows makes you read every name to find the one you
+ * want. The mark does the finding; the name confirms it. A letter badge in the
+ * mono face rather than an icon set — nothing to ship, nothing to keep in sync
+ * with the extension list, and it themes with everything else.
+ *
+ * The tint arrives inline as `--mark`, because it is per file type and would
+ * otherwise need a class per extension. */
+
+.file-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  /* Sized off the scale's smallest step rather than a number that looked
+     right: three characters have to fit — "C++", "JSX", "TML" — so the box
+     follows the glyph instead of the other way round. The badge is a shape
+     you recognise before you read it, which is what makes 10px acceptable
+     here and nowhere else. */
+  width: 20px;
+  height: 18px;
+  border-radius: var(--r-xs);
+  font-family: var(--mono);
+  font-size: var(--text-2xs);
+  font-weight: 500;
+  letter-spacing: -0.06em;
+  line-height: 1;
+  color: var(--mark, var(--muted));
+  /* The tint at low alpha for the field, full strength for the glyph and a
+     hairline between. Solid fills at these sizes turn a file tree into a bag
+     of sweets; this reads as a mark on a surface. */
+  background: color-mix(in srgb, var(--mark, #6b7280) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--mark, #6b7280) 34%, transparent);
+}
+
+/* No color-mix (older WebKit): the border carries the identity on its own
+   rather than every badge collapsing to an untinted grey box. */
+@supports not (background: color-mix(in srgb, red 10%, transparent)) {
+  .file-mark { background: none; border-color: var(--mark, var(--border)); }
+}
+
+.tree-row { display: flex; align-items: center; gap: 6px; }
+.tree-folder { width: 15px; height: 15px; color: var(--muted); }
+.code-tab .file-mark { margin-right: 6px; }
+
+/* Section headings in the More menu. Eighteen destinations in one vertical
+   wall meant reading all of them to find one; the eye lands on a heading and
+   then scans four or five. Styled as the app's other section labels are, and
+   deliberately quiet — they are signposts, not items. */
+.nav-group {
+  padding: 12px 12px 5px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.nav-group:first-child { padding-top: 6px; }
+/* A rule above every group but the first, so the boundary is visible even
+   when the heading itself is scrolled just out of view. */
+.nav-group + .nav-item { margin-top: 0; }
+.nav-item + .nav-group {
+  margin-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+
+/* ===== Anchoring the composer =====
+ *
+ * It is where you type, and it was floating rather than sitting — a soft drop
+ * shadow and nothing close in, so against the terminal strip directly above
+ * it (the same near-black) the two read as one surface with a line through
+ * them. The far shadow gives depth; the tight one gives an edge.
+ *
+ * `body #cmdbar` because three themes each restyle `#cmdbar`'s shadow and all
+ * of them appear later in this file — matching their specificity would make
+ * this depend on source order. Built from `--shadow-lg` so each theme's own
+ * depth still comes through; only the close edge is added. */
+body #cmdbar {
+  box-shadow: var(--shadow-lg), 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+/* Focus is the one moment it should be unmistakably the centre of the page. */
+body #cmdbar:focus-within {
+  border-color: var(--accent-line);
+  box-shadow: var(--shadow-lg), 0 2px 8px rgba(0, 0, 0, 0.3),
+              0 0 0 3px var(--accent-soft);
+}

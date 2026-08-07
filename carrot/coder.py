@@ -807,6 +807,10 @@ def restore_checkpoint(checkpoint_id: str) -> Dict[str, Any]:
             "restored": result["reverted"],
             "removed": [],
             "purged": True,
+            # Files the OS would not let go of — an editor or another program
+            # holding them open. Named rather than swallowed: a restore that
+            # silently skipped a file is the one that costs someone their work.
+            "blocked": result.get("blocked", []),
         }
 
     files = json.loads(row["files"])

@@ -242,10 +242,15 @@ async function runNotificationChecks() {
     } catch (_) {}
 }
 
-function startNotificationStream() {
+async function startNotificationStream() {
     if (notificationStream) return;
     try {
-        notificationStream = new EventSource(tokenUrl('/api/notifications/stream'));
+        // A ticket has to be fetched first, so this is async now. The guard
+        // above is not enough on its own any more: two calls can both pass it
+        // while the first is still awaiting its ticket, and the second would
+        // open a duplicate stream. The flag is claimed before the await.
+        notificationStream = 'pending';
+        notificationStream = new EventSource(await tokenUrl('/api/notifications/stream'));
         notificationStream.onmessage = (event) => {
             const notification = JSON.parse(event.data);
             refreshNotifications();

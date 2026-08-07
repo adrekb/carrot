@@ -511,3 +511,49 @@ class TestActModeHasToActuallyAct:
         # Plan mode's entire job is proposing without writing. Showing the code
         # it would write is the correct behaviour there.
         assert not [e for e in events if "gate" in e]
+
+
+class TestARestoreThatCannotFinishSaysSo:
+    """A file the OS will not release stopped `checkout-index` dead, and the
+    error escaped raw — after some files had already been rewritten. So
+    "restore" could leave the tree half-way and report only
+    `unable to unlink old 'x'`, which is the opposite of what it promises.
+
+    This is not hypothetical: a SQLite database open in another program cannot
+    be replaced on Windows, and that is exactly how it was found — the test
+    harness's own database was sitting inside the repo under test.
+    """
+
+    def test_a_locked_file_does_not_abort_the_rest(self, tmp_path, isolated_db):
+        import sqlite3
+
+        make_repo(tmp_path)
+        # A database committed into the project, then held open — the shape
+        # that cannot be unlinked on Windows.
+        db = tmp_path / "app.db"
+        sqlite3.connect(str(db)).close()
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-qm", "with db"], cwd=tmp_path, check=True)
+
+        made = coder.create_checkpoint(str(tmp_path), "before")
+        (tmp_path / "a.py").unlink()
+
+        conn = sqlite3.connect(str(db))
+        conn.execute("CREATE TABLE IF NOT EXISTS t (x)")
+        conn.execute("INSERT INTO t VALUES (1)")
+        try:
+            result = coder.restore_checkpoint(made["id"])
+        finally:
+            conn.close()
+
+        # The point: the file that *could* be restored was.
+        assert (tmp_path / "a.py").exists()
+        assert "blocked" in result
+
+    def test_a_failure_git_did_not_name_still_propagates(self):
+        """Only "could not write this path" is downgraded to a report. Any
+        other git failure is a different problem and must not be quietly
+        turned into "some files were skipped"."""
+        assert gitops._unwritable_paths("fatal: not a git repository") == []
+        assert gitops._unwritable_paths(
+            "error: unable to unlink old 'carrot.db': Invalid argument") == ["carrot.db"]

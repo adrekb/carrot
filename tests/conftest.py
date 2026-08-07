@@ -12,16 +12,32 @@ from carrot import database, config
 
 @pytest.fixture
 def isolated_db(tmp_path, monkeypatch):
-    """Point the database and config modules at a temporary SQLite file."""
+    """Point the database and config modules at a temporary SQLite file.
+
+    In its own subdirectory, not `tmp_path` itself. The checkpoint tests do
+    `git init` in `tmp_path`, so with the database sitting beside them the
+    repo under test contained the harness's own SQLite file — `git add -A`
+    captured `carrot.db` into every checkpoint, and restoring one ran
+    `checkout-index -f` over a database the suite still had open. On Windows
+    that cannot unlink, so the restore raised `unable to unlink old
+    'carrot.db'` and the test failed. Whether it failed depended on whether a
+    connection happened to be open at that moment, which is what made it look
+    like flakiness rather than a fixture putting two things in one place.
+    """
     from carrot import security
 
-    db_path = str(tmp_path / "carrot.db")
+    data = tmp_path / "_carrot"
+    data.mkdir(exist_ok=True)
+    db_path = str(data / "carrot.db")
     monkeypatch.setattr(database, "DB_PATH", db_path)
-    monkeypatch.setattr(database, "DBCORE_DIR", str(tmp_path))
-    monkeypatch.setattr(config, "CARROT_DIR", str(tmp_path))
-    # Keep the session token out of the real data directory too.
-    monkeypatch.setattr(security, "CONFIG_DIR", str(tmp_path / "config"))
-    monkeypatch.setattr(security, "TOKEN_PATH", str(tmp_path / "config" / "session.json"))
+    monkeypatch.setattr(database, "DBCORE_DIR", str(data))
+    monkeypatch.setattr(config, "CARROT_DIR", str(data))
+    # Keep the session token out of the real data directory too — including
+    # the path kept for reading a token written by an older version, which
+    # otherwise lets a real one leak into the tests.
+    monkeypatch.setattr(security, "CONFIG_DIR", str(data / "config"))
+    monkeypatch.setattr(security, "TOKEN_PATH", str(data / "config" / "session.json"))
+    monkeypatch.setattr(security, "LEGACY_TOKEN_PATH", str(data / "config" / "legacy.json"))
     monkeypatch.setattr(security, "_token", None)
     database.init_db()
     return db_path

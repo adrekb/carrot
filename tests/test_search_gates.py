@@ -21,7 +21,7 @@ def tool_call(name, **args):
 
 
 def drive(script, mode, question="status of the F-15EX program", synthesis=None,
-          tool_result="RESULT"):
+          tool_result="RESULT", coder=False):
     """Run one chat turn against a scripted model.
 
     `script` is a list of (assistant_text, tool_calls) per round. Once it is
@@ -51,10 +51,12 @@ def drive(script, mode, question="status of the F-15EX program", synthesis=None,
          patch.object(A, "_run_tool", _runner(tool_result, read_urls)), \
          patch.object(A, "_available_tools", lambda m: []):
         history = [{"role": "user", "content": question}]
-        events = list(A._agentic_chat_events(history, Route(), None, None, mode))
+        events = list(A._agentic_chat_events(history, Route(), None, None, mode,
+                                             coder=coder))
 
     return {
         "events": events,
+        "plans": [e["plan"] for e in events if "plan" in e],
         "final": next(e["_final_text"] for e in events if "_final_text" in e),
         "ran": [e["tool"]["name"] for e in events
                 if "tool" in e and not e["tool"].get("rejected")],
@@ -789,3 +791,168 @@ class TestUnmetGoals:
 
     def test_no_goals_means_nothing_to_be_unmet(self):
         assert A._unmet_goals([], "q", "anything") == []
+
+
+# ===== The coding agent works to a plan too =====
+#
+# ACT mode's failure is the same shape as multi-turn's, one layer over: it stops
+# because it has *done* something, not because it has done the thing. Asked for
+# four files it writes one and describes the other three, and the description
+# reads exactly like the work. So the steps are checked against the tool calls,
+# never against the prose — in ACT mode prose is where the shortfall hides.
+
+def drive_coder(script, plan, act=True, question="add a --json flag to cli.py",
+                tool_result="ok"):
+    """Drive a coding turn with a scripted plan, as the Code tab would."""
+    from unittest.mock import patch
+
+    with patch.object(A, "_coder_plan", lambda resolved, q: plan), \
+         patch.object(A, "_act_mode_now", lambda: act):
+        return drive(script, A.SEARCH_SINGLE, question=question,
+                     tool_result=tool_result, coder=True)
+
+
+class TestTheCodingPlan:
+    def test_the_steps_are_stated_before_any_work(self):
+        result = drive_coder([
+            ("", tool_call("edit_file", path="cli.py", content="--json flag")),
+            ("Added the flag and its tests.", []),
+        ], plan=["Add a --json flag to cli.py", "Cover it in test_cli.py"])
+        assert result["plans"], "the coding turn never published a plan"
+        assert result["plans"][0] == {
+            "goals": ["Add a --json flag to cli.py", "Cover it in test_cli.py"],
+            "done": [],
+        }
+
+    def test_a_step_ticks_when_a_tool_touches_it(self):
+        result = drive_coder([
+            ("", tool_call("edit_file", path="cli.py", content="add --json flag")),
+            ("", tool_call("write_file", path="test_cli.py", content="cover the flag")),
+            ("Both done.", []),
+        ], plan=["Add a --json flag to cli.py", "Cover it in test_cli.py"])
+        assert result["plans"][-1]["done"] == [
+            "Add a --json flag to cli.py", "Cover it in test_cli.py"]
+
+    def test_describing_a_step_does_not_tick_it(self):
+        """The whole reason the plan is checked against `work` and not the answer.
+
+        One file written, the other three described in prose that reads just
+        like having done them. If the answer counted, this turn would finish
+        with a full checklist and one change on disk.
+        """
+        result = drive_coder([
+            ("", tool_call("edit_file", path="cli.py", content="add --json flag")),
+            ("Added the flag to cli.py, and covered it in test_cli.py.", []),
+        ], plan=["Add a --json flag to cli.py", "Cover it in test_cli.py"])
+        done = result["plans"][-1]["done"]
+        assert done == ["Add a --json flag to cli.py"]
+        assert "Cover it in test_cli.py" not in done
+
+    def test_an_untouched_step_sends_the_turn_back(self):
+        result = drive_coder([
+            ("", tool_call("edit_file", path="cli.py", content="add --json flag")),
+            ("Added the flag to cli.py, and covered it in test_cli.py.", []),
+            ("", tool_call("write_file", path="test_cli.py", content="cover the flag")),
+            ("Both done, for real this time.", []),
+        ], plan=["Add a --json flag to cli.py", "Cover it in test_cli.py"])
+        assert result["gates"], "it stopped with a step nobody had run"
+        assert "Cover it in test_cli.py" in result["gates"][0]
+        assert result["final"] == "Both done, for real this time."
+
+    def test_the_nudge_is_capped(self):
+        """A model that will not use the tools still gets to finish.
+
+        Nudging forever is the failure the search gates already learned: the
+        turn has to end with whatever was managed, not spin to the budget.
+        """
+        result = drive_coder([
+            ("", tool_call("edit_file", path="cli.py", content="add --json flag")),
+            ("I have also covered it in test_cli.py.", []),
+        ] * 8, plan=["Add a --json flag to cli.py", "Cover it in test_cli.py"])
+        assert len(result["gates"]) <= A.MAX_GOAL_NUDGES
+
+    def test_plan_mode_gets_no_checklist(self):
+        """PLAN mode's whole output is a plan the user reads and approves.
+
+        A second machine-made checklist above it is noise, and with the write
+        tools withheld there is nothing for one to tick against anyway.
+        """
+        result = drive_coder([
+            ("Here is what I would change, and why.", []),
+        ], plan=["Add a --json flag to cli.py"], act=False)
+        assert not result["plans"]
+        assert not result["gates"]
+
+    def test_an_ordinary_chat_turn_gets_no_coding_plan(self):
+        """The plan costs a model call before any work, and `coder` is the only
+        thing that says this turn came from the Code tab."""
+        from unittest.mock import patch
+        with patch.object(A, "_coder_plan", lambda resolved, q: ["never asked"]), \
+             patch.object(A, "_act_mode_now", lambda: True):
+            result = drive([("Sure.", [])], A.SEARCH_SINGLE)
+        assert not result["plans"]
+
+
+class TestDraftingTheCodingPlan:
+    def test_steps_are_taken_and_decoration_dropped(self):
+        raw = ("Implementation plan:\n"
+               "1. Add a --json flag to cli.py\n"
+               "- Update the parser in args.py\n"
+               "* Run the test suite\n"
+               "\n"
+               "Let me know if this works.\n")
+        with patch.object(A.router_mod, "complete", lambda r, m: raw):
+            steps = A._coder_plan(object(), "add a --json flag")
+        assert steps == ["Add a --json flag to cli.py",
+                         "Update the parser in args.py",
+                         "Run the test suite"]
+
+    def test_a_heading_is_not_a_step(self):
+        with patch.object(A.router_mod, "complete",
+                          lambda r, m: "Here is the plan:\nEdit cli.py to add --json"):
+            assert A._coder_plan(object(), "q") == ["Edit cli.py to add --json"]
+
+    def test_a_question_is_not_a_step(self):
+        # Asking is PLAN mode's job, and it has a form for it. A question here
+        # would sit on the checklist unanswerable and never tick.
+        with patch.object(A.router_mod, "complete",
+                          lambda r, m: "Should it be --json or --format?\nEdit cli.py to add --json"):
+            assert A._coder_plan(object(), "q") == ["Edit cli.py to add --json"]
+
+    def test_the_plan_is_capped(self):
+        raw = "\n".join(f"Edit file{i}.py to add the flag" for i in range(20))
+        with patch.object(A.router_mod, "complete", lambda r, m: raw):
+            assert len(A._coder_plan(object(), "q")) == A.MAX_GOALS
+
+    def test_a_model_that_cannot_plan_does_not_break_the_turn(self):
+        def boom(resolved, messages):
+            raise RuntimeError("no")
+        with patch.object(A.router_mod, "complete", boom):
+            assert A._coder_plan(object(), "q") == []
+
+
+class TestWhatCountsAsWork:
+    def test_paths_and_arguments_carry_the_step_words(self):
+        terms = A._work_terms("edit_file", {"path": "cli.py", "content": "--json"}, "ok")
+        assert "cli.py" in terms and "--json" in terms
+
+    def test_a_noisy_command_cannot_swamp_the_plan(self):
+        """A run_command that dumps a test suite would otherwise mark every
+        step done on the strength of one command's output."""
+        terms = A._work_terms("run_command", {"cmd": "pytest"}, "x" * 5000)
+        assert len(terms) < 1000
+
+    def test_non_string_arguments_are_skipped(self):
+        # Tool arguments are whatever the model produced, not a fixed schema.
+        A._work_terms("edit_file", {"path": "cli.py", "line": 42, "flags": None}, "ok")
+
+    def test_narration_is_not_a_step(self):
+        """A step of questions could be told from narration by the question
+        mark; a step of work has no such marker. It matters more than tidiness:
+        a line like this shares no words with anything the tools will ever do,
+        so it can never tick, and would spend both nudges on non-work."""
+        raw = ("Edit cli.py to add --json\n"
+               "Let me know if this works.\n"
+               "I'll update the docs too.\n")
+        with patch.object(A.router_mod, "complete", lambda r, m: raw):
+            assert A._coder_plan(object(), "q") == ["Edit cli.py to add --json"]

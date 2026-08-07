@@ -271,11 +271,45 @@ def restore_tree(root: str, tree: str) -> Dict[str, Any]:
     env = _private_index(root)
     before = {c["path"] for c in status(root)["changes"]}
     _run(["read-tree", tree], cwd=root, env=env)
-    _run(["checkout-index", "-a", "-f"], cwd=root, env=env)
-    # Never clean the checkpoint state itself, and never touch .git.
-    _run(["clean", "-fd", "-e", CHECKPOINT_DIR], cwd=root, env=env)
+
+    # A file the OS will not let go of stops `checkout-index` dead, and the
+    # first version let that escape as a raw git error — after some files had
+    # already been rewritten. So "restore" could leave the tree half-way and
+    # report only `unable to unlink old 'x'`, which is the opposite of the
+    # promise above. It happens for real: a SQLite database open in another
+    # program cannot be replaced on Windows.
+    #
+    # So the failure is caught, the rest of the restore is still attempted,
+    # and the files that could not be written are named. A partial restore the
+    # user knows about is recoverable; a partial restore reported as a git
+    # error is what makes people stop trusting undo.
+    blocked: List[str] = []
+    try:
+        _run(["checkout-index", "-a", "-f"], cwd=root, env=env)
+    except GitError as exc:
+        blocked = _unwritable_paths(str(exc))
+        if not blocked:
+            raise
+    try:
+        # Never clean the checkpoint state itself, and never touch .git.
+        _run(["clean", "-fd", "-e", CHECKPOINT_DIR], cwd=root, env=env)
+    except GitError as exc:
+        blocked += [p for p in _unwritable_paths(str(exc)) if p not in blocked]
+
     after = {c["path"] for c in status(root)["changes"]}
-    return {"tree": tree, "reverted": sorted(before - after), "remaining": sorted(after)}
+    return {"tree": tree, "reverted": sorted(before - after),
+            "remaining": sorted(after), "blocked": sorted(set(blocked))}
+
+
+def _unwritable_paths(message: str) -> List[str]:
+    """The files git said it could not replace, out of its error output.
+
+    Only these two shapes, and only when git actually named a path: anything
+    else is a different failure and has to keep propagating rather than being
+    quietly downgraded to "some files were skipped".
+    """
+    return re.findall(r"unable to (?:unlink old|write file|create file) '([^']+)'",
+                      message)
 
 
 def tree_files(root: str, tree: str) -> List[str]:

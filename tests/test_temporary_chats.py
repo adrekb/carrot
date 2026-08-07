@@ -96,7 +96,7 @@ class TestPurging:
         # startup makes the promise unconditional rather than dependent on a
         # clean shutdown.
         source = (Path(__file__).resolve().parents[1] / "carrot" / "app.py").read_text(encoding="utf-8")
-        startup = source.split("def startup():")[1][:600]
+        startup = source.split("def _startup():")[1][:600]
         assert "purge_temporary()" in startup
 
     def test_they_can_be_purged_on_demand(self, client, isolated_db):

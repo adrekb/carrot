@@ -29,58 +29,67 @@ def get_hardware_profile():
     return profile
 
 
+def _run(command, timeout=5):
+    """Run a command and return its output, or "" if it is not there.
+
+    Never `shell=True`. Passing a *list* with `shell=True` is wrong on both
+    platforms and was wrong here: on POSIX the shell runs only argv[0] and the
+    rest become its positional parameters, so the macOS branch was calling
+    `system_profiler` with no data type at all and asking for every report on
+    the machine — which is also why it needed a 10 second timeout.
+    """
+    import subprocess
+    try:
+        return subprocess.check_output(
+            command, stderr=subprocess.DEVNULL, timeout=timeout,
+        ).decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
 def _detect_gpu():
+    """The GPUs in this machine, or "Integrated/Unknown".
+
+    Windows used to ask `wmic`, which Microsoft removed in Windows 11 24H2 —
+    the first OS this app targets. On a 26200 box with an RTX 4070 the command
+    is simply not found, the exception is swallowed, and the machine profile
+    reports "Integrated/Unknown"; every Hub and leaderboard recommendation is
+    then made for a machine with no graphics card.
+
+    `nvidia-smi` first because it is the same source `hub.py` already trusts
+    for VRAM, so the two agree about what is installed. CIM is the fallback,
+    and it is the one that still answers on a machine with no NVIDIA card.
+    """
     gpus = []
     system = platform.system()
 
     if system == "Windows":
-        try:
-            import subprocess
-            output = subprocess.check_output(
-                ["wmic", "path", "win32_videocontroller", "get", "name"],
-                shell=True,
-                stderr=subprocess.DEVNULL,
-                timeout=5,
-            ).decode("utf-8", errors="replace")
-            for line in output.strip().split("\n"):
-                line = line.strip()
-                if line and "Name" not in line:
-                    gpus.append(line)
-        except Exception:
-            pass
+        out = _run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"])
+        gpus = [line.strip() for line in out.splitlines() if line.strip()]
+        if not gpus:
+            # `-NoProfile` because a user's PowerShell profile can print
+            # banners into stdout, and this parses stdout.
+            out = _run([
+                "powershell", "-NoProfile", "-NonInteractive", "-Command",
+                "Get-CimInstance Win32_VideoController | "
+                "Select-Object -ExpandProperty Name",
+            ], timeout=15)
+            gpus = [line.strip() for line in out.splitlines() if line.strip()]
 
     elif system == "Linux":
-        try:
-            import subprocess
-            output = subprocess.check_output(
-                ["lspci"],
-                shell=True,
-                stderr=subprocess.DEVNULL,
-                timeout=5,
-            ).decode("utf-8", errors="replace")
-            for line in output.split("\n"):
-                lower = line.lower()
-                if "vga" in lower or "3d" in lower or "display" in lower:
-                    parts = line.split(":")
-                    if len(parts) >= 3:
-                        gpus.append(parts[-1].strip())
-        except Exception:
-            pass
+        out = _run(["lspci"])
+        for line in out.splitlines():
+            lower = line.lower()
+            if "vga" in lower or "3d" in lower or "display" in lower:
+                parts = line.split(":")
+                if len(parts) >= 3:
+                    gpus.append(parts[-1].strip())
 
     elif system == "Darwin":
-        try:
-            import subprocess
-            output = subprocess.check_output(
-                ["system_profiler", "SPDisplaysDataType"],
-                shell=True,
-                stderr=subprocess.DEVNULL,
-                timeout=10,
-            ).decode("utf-8", errors="replace")
-            for line in output.split("\n"):
-                if "Chip" in line or "Model" in line or "VRAM" in line:
-                    gpus.append(line.strip())
-        except Exception:
-            pass
+        out = _run(["system_profiler", "SPDisplaysDataType"], timeout=10)
+        for line in out.splitlines():
+            if "Chip" in line or "Model" in line or "VRAM" in line:
+                gpus.append(line.strip())
 
     if not gpus:
         return "Integrated/Unknown"

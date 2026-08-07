@@ -273,6 +273,73 @@ function langForPath(path) {
     return LANG_BY_EXT[ext] || 'plaintext';
 }
 
+// ===== File type marks =====
+//
+// A file tree of identical grey rows makes you read every name to find the one
+// you want. Every real IDE marks the type instead, so the shape and colour do
+// the finding and the name only confirms it.
+//
+// Drawn rather than drawn *from* something: a letter badge in the app's mono
+// face, tinted per language. No icon set to ship, no sprite to keep in sync
+// with the extension list, and it scales and themes with everything else.
+// The colours are the ones people already associate with these languages
+// (Linguist's, broadly), because a private colour scheme would have to be
+// learned before it could help.
+const FILE_MARKS = {
+    py: ['PY', '#3572a5'], pyi: ['PY', '#3572a5'],
+    js: ['JS', '#c9a227'], mjs: ['JS', '#c9a227'], cjs: ['JS', '#c9a227'],
+    jsx: ['JSX', '#c9a227'],
+    ts: ['TS', '#3178c6'], tsx: ['TSX', '#3178c6'],
+    json: ['{ }', '#a8a13a'],
+    html: ['<>', '#e34c26'], htm: ['<>', '#e34c26'],
+    css: ['CSS', '#8a63d2'], scss: ['SCS', '#c6538c'], less: ['LES', '#2b5e8f'],
+    md: ['MD', '#7d8590'], markdown: ['MD', '#7d8590'],
+    sh: ['SH', '#66a55a'], bash: ['SH', '#66a55a'],
+    bat: ['BAT', '#66a55a'], ps1: ['PS', '#2b6cb0'],
+    yml: ['YML', '#b8574a'], yaml: ['YML', '#b8574a'],
+    toml: ['TML', '#8a7a5e'], ini: ['INI', '#8a7a5e'], cfg: ['CFG', '#8a7a5e'],
+    env: ['ENV', '#8a7a5e'],
+    xml: ['XML', '#0f6cbd'], svg: ['SVG', '#c96198'],
+    sql: ['SQL', '#c48a1a'], db: ['DB', '#c48a1a'], sqlite: ['DB', '#c48a1a'],
+    java: ['JV', '#b07219'], kt: ['KT', '#a97bff'],
+    c: ['C', '#6f8ba4'], h: ['H', '#6f8ba4'],
+    cpp: ['C++', '#f34b7d'], cc: ['C++', '#f34b7d'], hpp: ['H++', '#f34b7d'],
+    cs: ['C#', '#2e8b3d'], go: ['GO', '#00add8'], rs: ['RS', '#d08770'],
+    rb: ['RB', '#a4373a'], php: ['PHP', '#6f77b5'], swift: ['SW', '#f05138'],
+    lua: ['LUA', '#3b6fd4'], r: ['R', '#276dc3'], pl: ['PL', '#7a8a99'],
+    txt: ['TXT', '#7d8590'], log: ['LOG', '#7d8590'], csv: ['CSV', '#4a8f5a'],
+    pdf: ['PDF', '#c0392b'],
+    png: ['IMG', '#b678c4'], jpg: ['IMG', '#b678c4'], jpeg: ['IMG', '#b678c4'],
+    gif: ['IMG', '#b678c4'], webp: ['IMG', '#b678c4'], ico: ['IMG', '#b678c4'],
+    woff: ['FNT', '#8a7a9e'], woff2: ['FNT', '#8a7a9e'], ttf: ['FNT', '#8a7a9e'],
+    zip: ['ZIP', '#8a8a8a'], tar: ['ZIP', '#8a8a8a'], gz: ['ZIP', '#8a8a8a'],
+};
+
+// A few files are recognised whole, because the name carries more than the
+// extension does — `.gitignore` has no extension at all, and `Dockerfile`
+// would otherwise read as plain text.
+const FILE_MARKS_BY_NAME = {
+    '.gitignore': ['GIT', '#e8734a'], '.gitattributes': ['GIT', '#e8734a'],
+    'dockerfile': ['DK', '#2496ed'], 'makefile': ['MK', '#8a7a5e'],
+    'license': ['LIC', '#7d8590'], 'readme.md': ['MD', '#7d8590'],
+    'package.json': ['NPM', '#cb3837'], 'package-lock.json': ['NPM', '#cb3837'],
+    'pyproject.toml': ['PY', '#3572a5'], 'requirements.txt': ['PY', '#3572a5'],
+};
+
+function fileMark(name) {
+    const lower = (name || '').toLowerCase();
+    const mark = FILE_MARKS_BY_NAME[lower]
+        || FILE_MARKS[lower.includes('.') ? lower.split('.').pop() : ''];
+    return mark || ['•', '#6b7280'];
+}
+
+function fileMarkHtml(name) {
+    const [label, colour] = fileMark(name);
+    // The tint is per file type, so it cannot live in the stylesheet without a
+    // class per extension. The shape does; only the colour is inline.
+    return `<span class="file-mark" style="--mark: ${colour}">${escHtml(label)}</span>`;
+}
+
 async function loadCodeTab() {
     try {
         const r = await api('/api/files/root');
@@ -320,7 +387,10 @@ function renderTreeEntries(parent, entries, depth) {
         row.dataset.path = entry.path;
         row.dataset.isDir = entry.is_dir ? '1' : '';
         row.draggable = true;
-        row.innerHTML = `<span class="tree-caret">${entry.is_dir ? '▸' : ''}</span><span class="tree-name">${escHtml(entry.name)}</span>`;
+        row.innerHTML = `<span class="tree-caret">${entry.is_dir ? '▸' : ''}</span>`
+                      + (entry.is_dir ? '<svg class="ico tree-folder"><use href="#i-folder"/></svg>'
+                                      : fileMarkHtml(entry.name))
+                      + `<span class="tree-name">${escHtml(entry.name)}</span>`;
         parent.appendChild(row);
 
         row.addEventListener('contextmenu', (e) => {
@@ -668,18 +738,104 @@ function defineMonacoThemes(monaco) {
     });
 }
 
-function ensureMonacoEditor(monaco) {
-    if (monacoEditor) return;
-    defineMonacoThemes(monaco);
-    monacoEditor = monaco.editor.create(document.getElementById('code-editor-host'), {
+// The editor is Monaco — the same engine VS Code runs — but it was created
+// with almost none of it switched on: no minimap, no indent guides, no bracket
+// colouring, no folding affordances, and the browser's default monospace.
+// That is not a smaller editor, it is the same editor with its features off,
+// and next to a real IDE it read as a textarea with syntax colours.
+//
+// Everything below is Monaco configuration. Options it does not recognise are
+// ignored, so this degrades quietly on an older vendor bundle rather than
+// throwing during editor construction and leaving the Code tab blank.
+
+function editorOptions() {
+    return {
         model: null,
         theme: monacoThemeName(),
         automaticLayout: true,
+        // The app's mono face, so code in the editor, the terminal and a chat
+        // code block are all the same typeface. DM Mono has no ligatures to
+        // disable, which is the right default for an editor anyway: `!=` and
+        // `=>` should be the characters that are actually in the file.
+        fontFamily: 'DMMono, "Cascadia Code", "JetBrains Mono", Consolas, monospace',
         fontSize: 13,
-        minimap: { enabled: false },
+        lineHeight: 20,
+        fontLigatures: false,
+        // JetBrains shows the map, the guides and the scope. Each one answers
+        // a "where am I" question that otherwise costs a scroll.
+        minimap: { enabled: true, renderCharacters: false, maxColumn: 90 },
+        stickyScroll: { enabled: true },
+        guides: {
+            indentation: true,
+            highlightActiveIndentation: true,
+            bracketPairs: true,
+        },
+        bracketPairColorization: { enabled: true },
+        matchBrackets: 'always',
+        folding: true,
+        showFoldingControls: 'mouseover',
+        renderLineHighlight: 'all',
+        renderWhitespace: 'selection',
+        cursorBlinking: 'smooth',
+        cursorSmoothCaretAnimation: 'on',
+        smoothScrolling: true,
         scrollBeyondLastLine: false,
-    });
+        // A ruler where lines start getting long, which is a convention this
+        // codebase already follows in its own source.
+        rulers: [88],
+        tabSize: 4,
+        detectIndentation: true,
+        trimAutoWhitespace: true,
+        formatOnPaste: true,
+        suggestSelection: 'first',
+        quickSuggestions: { other: true, comments: false, strings: false },
+        occurrencesHighlight: 'singleFile',
+        selectionHighlight: true,
+        linkedEditing: true,
+        autoClosingBrackets: 'languageDefined',
+        autoSurround: 'languageDefined',
+        multiCursorModifier: 'alt',
+        find: { seedSearchStringFromSelection: 'selection', autoFindInSelection: 'multiline' },
+        padding: { top: 8, bottom: 120 },
+    };
+}
+
+// The handful of JetBrains bindings whose muscle memory actually hurts when
+// it fails. Monaco keeps its own defaults as well, so this adds an alias
+// rather than taking anything away — Ctrl+D still duplicates in JetBrains and
+// still adds a cursor in VS Code.
+function jetbrainsKeymap(monaco) {
+    const K = monaco.KeyMod, C = monaco.KeyCode;
+    return [
+        ['editor.action.copyLinesDownAction', K.CtrlCmd | C.KeyD],
+        ['editor.action.deleteLines', K.CtrlCmd | C.KeyY],
+        ['editor.action.moveLinesUpAction', K.CtrlCmd | K.Shift | C.UpArrow],
+        ['editor.action.moveLinesDownAction', K.CtrlCmd | K.Shift | C.DownArrow],
+        ['editor.action.formatDocument', K.CtrlCmd | K.Alt | C.KeyL],
+        ['editor.action.quickCommand', K.CtrlCmd | K.Shift | C.KeyA],
+        ['editor.action.gotoLine', K.CtrlCmd | C.KeyG],
+        ['editor.action.smartSelect.expand', K.CtrlCmd | C.KeyW],
+        ['editor.action.smartSelect.shrink', K.CtrlCmd | K.Shift | C.KeyW],
+        ['editor.action.commentLine', K.CtrlCmd | C.Slash],
+        ['editor.action.rename', C.F2],
+    ];
+}
+
+function ensureMonacoEditor(monaco) {
+    if (monacoEditor) return;
+    defineMonacoThemes(monaco);
+    monacoEditor = monaco.editor.create(
+        document.getElementById('code-editor-host'), editorOptions());
     monacoEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, saveCurrentFile);
+
+    for (const [id, binding] of jetbrainsKeymap(monaco)) {
+        // `addAction` on an id Monaco does not have would create a dead menu
+        // entry, so the existing action is looked up and re-bound instead.
+        // A missing one is skipped: the bundle decides which exist, not this.
+        const action = monacoEditor.getAction(id);
+        if (!action) continue;
+        monacoEditor.addCommand(binding, () => action.run());
+    }
 }
 
 // theme.js fires this whenever the appearance changes, including when the OS
@@ -700,7 +856,8 @@ function renderCodeTabs() {
         const dirty = dirtyFiles.has(path);
         if (dirty) tab.classList.add('dirty');
         tab.title = path;
-        tab.innerHTML = `<span class="ct-name">${escHtml(name)}</span>`
+        tab.innerHTML = fileMarkHtml(name)
+                      + `<span class="ct-name">${escHtml(name)}</span>`
                       + `<span class="ct-close">${dirty ? '●' : '×'}</span>`;
         tab.querySelector('.ct-name').onclick = () => openFile(path);
         tab.querySelector('.ct-close').onclick = (e) => { e.stopPropagation(); closeFile(path); };
@@ -1907,6 +2064,28 @@ async function sendAgentTask() {
                     agentApprovalResolved(wrap, payload.approval_resolved);
                 }
                 if (payload.questions) agentQuestions(wrap, payload.questions);
+                // The steps this turn is working to, ticking as the tools
+                // actually touch them. Same component as chat and Research,
+                // from the same event.
+                if (payload.plan && payload.plan.goals) {
+                    renderPlan(wrap, payload.plan);
+                }
+                // An answer that got pushed back is one we intend to replace,
+                // and this panel was keeping it. `answer` only ever grew, so
+                // the ACT-mode "you pasted a file instead of writing it" nudge
+                // — which has been in the backend all along — rendered the
+                // rejected file and then the real reply glued underneath it,
+                // with nothing on screen to say why there were two. Drop the
+                // discarded text and say what sent it back.
+                if (payload.gate) {
+                    const unmet = (payload.gate.unmet || []).length;
+                    agentTrace(wrap, unmet
+                        ? `↻ ${unmet} step(s) from the plan not done yet`
+                        : '↻ sent back: ' + String(payload.gate.reason).split('\n')[0],
+                        'rejected');
+                    answer = '';
+                    body.innerHTML = '<span class="caret">&nbsp;</span>';
+                }
                 if (payload.chunk) {
                     answer += payload.chunk;
                     // Through mdToHtml, the same renderer the chat trace uses,

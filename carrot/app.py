@@ -13,6 +13,7 @@ from typing import Optional, List, Dict, Any
 import os
 import re
 import json
+import contextlib
 import queue
 import logging
 import threading
@@ -459,10 +460,16 @@ class McpEnableRequest(BaseModel):
     enabled: bool = True
 
 
-# ===== Startup =====
+# ===== Startup and shutdown =====
+#
+# A lifespan context manager rather than `@app.on_event`, which is deprecated
+# and warned on every boot. The real gain is the other half: there was no
+# shutdown path at all, so the research scheduler and the proactive watcher
+# were only ever stopped by the process dying. They are daemon threads, so
+# that worked — but "it works because nothing outlives it" is not the same as
+# stopping, and a reload in dev left the old watcher running beside the new.
 
-@app.on_event("startup")
-def startup():
+def _startup():
     init_db()
     os.makedirs(DB_DIR, exist_ok=True)
     # "Temporary" that survives a crash is not temporary, it is
@@ -478,6 +485,29 @@ def startup():
         indexer_mod.start_scan_async()
 
 
+def _shutdown():
+    # Best effort and individually guarded: one background thread refusing to
+    # stop must not prevent the next one from being asked.
+    for stop in (getattr(proactive_mod, "stop_watcher", None),
+                 getattr(dr_mod, "stop_scheduler", None)):
+        if not callable(stop):
+            continue
+        try:
+            stop()
+        except Exception:
+            LOG.debug("a background worker did not stop cleanly", exc_info=True)
+
+
+@contextlib.asynccontextmanager
+async def lifespan(_app: FastAPI):
+    _startup()
+    yield
+    _shutdown()
+
+
+app.router.lifespan_context = lifespan
+
+
 @app.middleware("http")
 async def require_session_token(request: Request, call_next):
     """Gate the API behind the session token.
@@ -488,6 +518,16 @@ async def require_session_token(request: Request, call_next):
     """
     if not security_mod.auth_enabled() or security_mod.is_public_path(request.url.path):
         return await call_next(request)
+
+    # `EventSource` cannot set a header, so the two SSE endpoints present a
+    # ticket instead: minted by an authenticated POST, spent here, and gone.
+    # The session token used to ride in the query string for these, which put
+    # it in the server log and the browser's history on every launch. Scoped
+    # to those paths, because a ticket is not a session and must not open one.
+    if request.url.path in security_mod.TICKET_PATHS:
+        if security_mod.spend_ticket(
+                request.query_params.get(security_mod.TICKET_QUERY_PARAM)):
+            return await call_next(request)
 
     presented = request.headers.get(security_mod.TOKEN_HEADER) or request.query_params.get(
         security_mod.TOKEN_QUERY_PARAM
@@ -564,6 +604,19 @@ def app_version() -> str:
         return version("carrot")
     except Exception:
         return "unknown"
+
+
+@app.post("/api/auth/sse-ticket")
+async def sse_ticket():
+    """A one-shot credential for an EventSource connection.
+
+    Reaching this endpoint already required the session token in a header, so
+    the ticket proves nothing new — it just carries that proof somewhere a
+    header cannot go. Short lived and single use, so the copy left behind in
+    the server log is dead by the time anyone reads it.
+    """
+    return {"ticket": security_mod.mint_ticket(),
+            "expires_in": security_mod.TICKET_TTL_SECONDS}
 
 
 @app.get("/api/health")
@@ -770,9 +823,26 @@ async def list_models():
     except Exception:
         pass
 
+    # Whether the model now answering can read an image at all.
+    #
+    # The server has always refused images a model cannot see, but only on
+    # send, as a 400 — after you had found the file, attached it and written
+    # the question. The composer needs to know beforehand so it can stop
+    # offering images rather than take one and then reject it.
+    try:
+        chat_vision = (ollama_mod.OllamaClient().supports_vision(chat_model)
+                       if chat_local else
+                       attach_mod.model_supports_vision(chat_model))
+    except Exception:
+        # Claiming vision it may not have is the safe direction: the send-time
+        # check still refuses, so the cost is the old behaviour rather than a
+        # vision model that silently will not take pictures.
+        chat_vision = True
+
     return {
         "installed": installed,
         "active_model": active,
+        "chat_vision": chat_vision,
         "default_model": bootstrap_mod.DEFAULT_MODEL,
         "suggested": suggested,
         "remote": remote,
@@ -1213,6 +1283,106 @@ def _research_plan(resolved, question: str) -> List[str]:
         if len(goals) >= MAX_GOALS:
             break
     return goals
+
+
+# The coding agent gets the same treatment, for the same reason and against a
+# different kind of plan. Multi-turn search stops early because it has said
+# something; ACT stops early because it has *done* something — one of the four
+# files, and a paragraph describing the rest as though it had been written. The
+# steps are what the finish is checked against, and unlike search they are
+# checked against the work, not the prose: a step is done when a tool touched
+# it, because in ACT mode saying you changed a file is precisely the failure.
+
+CODER_PLAN_PROMPT = """You are about to carry out this coding task. Before touching anything, list the steps you will take.
+
+TASK: {task}
+
+Rules:
+- Write 2 to {limit} short steps, one per line, in the order you will do them.
+- Each step must name what it changes — a file, a function, a command to run. "update cli.py to accept --json" is a step; "improve the code" is not.
+- If you need to read something before you can change it, that is a step.
+- No numbering, no bullets, no preamble. Just the steps, one per line."""
+
+# A plan of questions could be told from a model's narration by the question
+# mark; a plan of steps has no such marker, and "Let me know if this works."
+# parses as a step exactly as well as "Update the parser in args.py" does.
+# It matters more than tidiness: a line like that shares no words with anything
+# the tools will ever do, so it can never tick, and it would spend both nudges
+# sending the turn back for a step that was never work in the first place.
+# Steps are imperative; talking to the user is not, and it opens in one of a
+# small number of ways.
+CODER_NARRATION = re.compile(
+    r"^(?:let me|let's|i'?ll|i have|i will|i'?ve|note that|please|"
+    r"feel free|would you|do you|here'?s|here is|this (?:plan|will)|"
+    r"that'?s|hope|if you)\b", re.I)
+
+
+def _coder_plan(resolved, task: str) -> List[str]:
+    """The steps this coding turn must carry out before it may stop.
+
+    Best-effort in the same way and for the same reason as `_research_plan`:
+    the models most likely to stop after one file are also the ones most likely
+    to fluff the planning call, and failing closed there would take ACT mode
+    away from exactly them.
+    """
+    try:
+        raw = router_mod.complete(resolved, [{
+            "role": "user",
+            "content": CODER_PLAN_PROMPT.format(task=task[:400], limit=MAX_GOALS),
+        }])
+    except Exception:
+        LOG.debug("could not draft a coding plan", exc_info=True)
+        return []
+
+    steps = []
+    for line in (raw or "").splitlines():
+        line = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", line).strip()
+        if len(line) < 8 or len(line) > 200:
+            continue
+        # A heading ("Steps:", "Implementation plan:") is the model framing the
+        # list rather than an item in it. A question is it asking rather than
+        # planning, which is PLAN mode's job and not this one's.
+        if line.endswith(":") or line.endswith("?"):
+            continue
+        if CODER_NARRATION.match(line):
+            continue
+        steps.append(line)
+        if len(steps) >= MAX_GOALS:
+            break
+    return steps
+
+
+CODER_GATE_NUDGE = (
+    "Your own plan is not finished. Nothing you have run has touched these "
+    "steps:\n{listed}\n"
+    "You have about {rounds} rounds left. Do the first one now, with the "
+    "tools — write_file or edit_file for a change, run_command for something "
+    "to run. Describing it is not doing it.\n"
+    "If one of them turns out to be unnecessary or impossible, say which and "
+    "why in one sentence, rather than leaving it silently undone."
+)
+
+
+def _coder_gate_nudge(unmet: List[str], rounds_left: int) -> str:
+    return CODER_GATE_NUDGE.format(
+        listed="\n".join(f"- {step}" for step in unmet), rounds=rounds_left)
+
+
+def _work_terms(name: str, args: Dict[str, Any], result: str) -> str:
+    """What a tool call contributes to the record of what was actually done.
+
+    Paths and command lines carry the words a step names — the file, the flag,
+    the function — so the arguments matter more here than the output does. The
+    result is included but clipped, because a `run_command` that dumps a test
+    suite would otherwise swamp every step's terms and mark the whole plan done
+    on the strength of one command's noise.
+    """
+    parts = [name]
+    for value in (args or {}).values():
+        if isinstance(value, str):
+            parts.append(value[:400])
+    parts.append((result or "")[:400])
+    return " ".join(parts)
 
 
 def _unmet_goals(goals: List[str], question: str, answer: str) -> List[str]:
@@ -1868,7 +2038,8 @@ def _evidence_answer(question, evidence, failure=""):
     return "\n".join(lines)
 
 
-def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mode=SEARCH_SINGLE):
+def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
+                         mode=SEARCH_SINGLE, coder=False):
     """Yield SSE dicts for one chat turn, running the tool-calling loop.
 
     Tool calls are dispatched to built-in tools or MCP by name prefix, surfaced
@@ -1888,6 +2059,11 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mo
     question = next((m["content"] for m in reversed(history) if m.get("role") == "user"), "")
 
     gated = mode == SEARCH_MULTI
+    # A coding turn that may actually change things. PLAN mode is excluded on
+    # purpose: its whole output is a plan the user reads and approves, so a
+    # second machine-made checklist above it is noise, and with the write tools
+    # withheld there is nothing for one to tick against.
+    planning_work = bool(coder) and _act_mode_now()
     searches = reads = nudges = 0
     # Pages the turn has opened, and whether the server has already stepped in
     # and opened some itself. Once only: if reading them still did not produce
@@ -1924,6 +2100,11 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mo
     # forced answer is written from, so it has to fit in a context window that
     # the full transcript already overran.
     evidence = []
+    # What the coding turn has actually run, as opposed to what it says it has.
+    # Kept separate from `evidence`, which is search and page text and feeds the
+    # forced-answer digest — a list of edit_file calls is not material to write
+    # an answer from.
+    work = []
 
     # Written before any searching, so the turn has something to be finished
     # against. Shown to the user because "what is it actually trying to find
@@ -1935,6 +2116,17 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mo
                 "role": "user",
                 "content": ("Work to this plan. Answer every one of these before you"
                             " stop:\n" + "\n".join(f"- {goal}" for goal in goals)),
+            })
+            last_open = list(goals)
+            yield {"plan": {"goals": goals, "done": []}}
+    elif planning_work:
+        goals = _coder_plan(resolved, question)
+        if goals:
+            working.append({
+                "role": "user",
+                "content": ("Work to this plan. Carry out every one of these with the"
+                            " tools before you stop:\n"
+                            + "\n".join(f"- {step}" for step in goals)),
             })
             last_open = list(goals)
             yield {"plan": {"goals": goals, "done": []}}
@@ -2054,6 +2246,22 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mo
                     working.append({"role": "user", "content": reason})
                     continue
 
+            # The same refusal to stop short, against the work rather than the
+            # answer. `work` and not `content_str` is the whole point: ACT mode
+            # exists because a model will happily describe four changes and
+            # make one, and prose is where that lie lives.
+            if planning_work and goals and not stalled:
+                rounds_left = rounds - round_index - 1
+                unmet = _unmet_goals(goals, question, " ".join(work))
+                if unmet and rounds_left > 1 and goal_nudges < MAX_GOAL_NUDGES:
+                    goal_nudges += 1
+                    reason = _coder_gate_nudge(unmet, rounds_left)
+                    yield {"gate": {"reason": reason, "unmet": unmet,
+                                    "searches": searches, "reads": reads}}
+                    working.append({"role": "assistant", "content": content_str})
+                    working.append({"role": "user", "content": reason})
+                    continue
+
             final_text = content_str
             break
 
@@ -2129,7 +2337,15 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mo
             # resolves all at once tells you nothing while you are waiting,
             # which is the whole complaint about a long run.
             if goals:
-                gathered = " ".join(item["text"] for item in evidence)
+                # A search goal is met by what was found; a coding step is met
+                # by what was run. Checking a coding plan against page text
+                # would leave every step open, and checking it against the
+                # model's prose would mark them all done on a description.
+                if planning_work:
+                    work.append(_work_terms(bare, args, result))
+                    gathered = " ".join(work)
+                else:
+                    gathered = " ".join(item["text"] for item in evidence)
                 still_open = _unmet_goals(goals, question, gathered)
                 if still_open != last_open:
                     last_open = still_open
@@ -2383,7 +2599,8 @@ def _chat_stream_response(req, conv, history, skill, resolved, prelude=None,
         # turn is saved, and `done` is sent.
         try:
             for event in _agentic_chat_events(
-                    history, resolved, skill, req.conversation_id, mode):
+                    history, resolved, skill, req.conversation_id, mode,
+                    coder=bool(getattr(req, "coder", False))):
                 if "_final_text" in event:
                     final_text = event["_final_text"]
                     continue
@@ -2513,7 +2730,8 @@ async def chat(req: ChatRequest):
     # collects the result, so the two doors into chat behave the same.
     parts, tools_used, route_info = [], [], resolved.as_dict()
     final = ""
-    for event in _agentic_chat_events(history, resolved, skill, req.conversation_id, mode):
+    for event in _agentic_chat_events(history, resolved, skill, req.conversation_id, mode,
+                                      coder=bool(getattr(req, "coder", False))):
         if "_final_text" in event:
             final = event["_final_text"]
         elif "chunk" in event:

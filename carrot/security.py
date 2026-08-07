@@ -19,18 +19,45 @@ from __future__ import annotations
 
 import hmac
 import json
+import logging
 import os
 import re
 import secrets
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from .config import get_config
 
+LOG = logging.getLogger(__name__)
+
 TOKEN_HEADER = "X-Carrot-Token"
 TOKEN_QUERY_PARAM = "carrot_token"
+# What an EventSource presents instead of the token itself.
+TICKET_QUERY_PARAM = "ticket"
+# The only paths a ticket opens. It is not a session token and must not
+# work like one: minted for a stream, spent on that stream, nothing else.
+TICKET_PATHS = ("/api/notifications/stream", "/api/bootstrap/stream")
 
-CONFIG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "config")
+# Where the session token lives.
+#
+# This used to be derived from `__file__`, i.e. inside the installed package.
+# `config.py` goes out of its way *not* to do that — when the backend is
+# frozen it puts everything under %APPDATA%/Carrot precisely because the
+# install directory may be read-only — and this file ignored that decision.
+# In a machine-wide install the `makedirs` below is a PermissionError that
+# escapes `session_token()` outright, and in the milder case the write fails
+# and the token is never persisted, which reinstates the exact failure
+# persistence exists to prevent: restart the backend, and an already-open
+# window is holding a token that no longer exists.
+from .config import CARROT_DIR
+
+CONFIG_DIR = os.path.join(CARROT_DIR, "config")
 TOKEN_PATH = os.path.join(CONFIG_DIR, "session.json")
+
+# Where it used to live. Read once, so upgrading does not log you out of a
+# window that is already open.
+LEGACY_TOKEN_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "data", "config", "session.json")
 
 # Paths reachable without a token: the shell that carries the token, the static
 # assets it pulls in, and the health probe the Electron launcher polls before
@@ -51,8 +78,20 @@ PUBLIC_PREFIXES = (
 _token: Optional[str] = None
 
 
-def _ensure_config_dir():
-    os.makedirs(CONFIG_DIR, exist_ok=True)
+def _ensure_config_dir() -> bool:
+    """Make the config directory, reporting whether it is usable.
+
+    Returns rather than raises: a token that cannot be *stored* is still a
+    perfectly good token for this process, and failing to make a directory
+    must not take authentication down with it.
+    """
+    try:
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        return True
+    except OSError:
+        LOG.warning("cannot create %s — the session token will not survive a "
+                    "backend restart", CONFIG_DIR)
+        return False
 
 
 def session_token() -> str:
@@ -65,36 +104,102 @@ def session_token() -> str:
     if _token:
         return _token
 
-    _ensure_config_dir()
-    if os.path.exists(TOKEN_PATH):
+    writable = _ensure_config_dir()
+    for path in (TOKEN_PATH, LEGACY_TOKEN_PATH):
+        if not os.path.exists(path):
+            continue
         try:
-            with open(TOKEN_PATH, "r", encoding="utf-8") as handle:
+            with open(path, "r", encoding="utf-8") as handle:
                 stored = json.load(handle).get("token")
             if stored:
                 _token = stored
+                # Carry a token found at the old location forward, so the
+                # move happens once and quietly.
+                if path is LEGACY_TOKEN_PATH and writable:
+                    _write_token(_token)
                 return _token
         except (OSError, json.JSONDecodeError):
             pass
 
     _token = secrets.token_urlsafe(32)
+    if writable:
+        _write_token(_token)
+    return _token
+
+
+def _write_token(token: str):
     try:
         with open(TOKEN_PATH, "w", encoding="utf-8") as handle:
-            json.dump({"token": _token}, handle)
-        os.chmod(TOKEN_PATH, 0o600)
+            json.dump({"token": token}, handle)
     except OSError:
-        pass
-    return _token
+        LOG.warning("could not persist the session token to %s", TOKEN_PATH)
+        return
+    # A no-op on Windows, where the file inherits the parent directory's ACL.
+    # %APPDATA%/Carrot is already per-user there, which is the protection this
+    # is reaching for; on POSIX the mode is what provides it.
+    if os.name == "posix":
+        try:
+            os.chmod(TOKEN_PATH, 0o600)
+        except OSError:
+            pass
 
 
 def rotate_token() -> str:
     """Mint a fresh token, invalidating every existing client."""
     global _token
     _token = None
-    try:
-        os.remove(TOKEN_PATH)
-    except OSError:
-        pass
+    # Both locations. Leaving the legacy file behind would mean "rotate" hands
+    # back the very token it was asked to invalidate, because the read below
+    # falls back to it — the one place where supporting the old path could
+    # turn into a security hole rather than a convenience.
+    for path in (TOKEN_PATH, LEGACY_TOKEN_PATH):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
     return session_token()
+
+
+# ===== Tickets for EventSource =====
+#
+# `EventSource` cannot set a request header, so the two SSE endpoints carried
+# the session token in the query string — which put it in the server log, the
+# browser's history, and anything sitting in between. It is a local app, so
+# the exposure is small, but it was the one place the token left the header
+# and it did so on every launch.
+#
+# A ticket is minted by an authenticated POST, spent by the SSE connection,
+# and then gone: single use, short lived, and useless for anything else. What
+# ends up in the log is a value that was already dead when it was written.
+
+TICKET_TTL_SECONDS = 30
+_tickets: Dict[str, float] = {}
+
+
+def mint_ticket() -> str:
+    """A one-shot credential for an EventSource connection."""
+    _sweep_tickets()
+    ticket = secrets.token_urlsafe(24)
+    _tickets[ticket] = time.time() + TICKET_TTL_SECONDS
+    return ticket
+
+
+def spend_ticket(ticket: Optional[str]) -> bool:
+    """Redeem a ticket. True at most once per ticket, and only before it expires."""
+    if not ticket:
+        return False
+    _sweep_tickets()
+    # `pop` is what makes it single use: a ticket replayed from a log or a
+    # history entry finds nothing to redeem.
+    expiry = _tickets.pop(ticket, None)
+    return expiry is not None and expiry > time.time()
+
+
+def _sweep_tickets():
+    """Drop expired tickets, so an unused one cannot accumulate forever."""
+    now = time.time()
+    for key in [k for k, expiry in _tickets.items() if expiry <= now]:
+        _tickets.pop(key, None)
 
 
 def auth_enabled() -> bool:

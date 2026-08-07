@@ -44,10 +44,27 @@ function authHeaders(extra = {}) {
     return headers;
 }
 
-// EventSource cannot set headers, so SSE URLs carry the token as a query param.
-function tokenUrl(path) {
+// EventSource cannot set headers, so an SSE URL has to carry its credential in
+// the query string — where it lands in the server log and the browser's
+// history. It used to be the session token itself, which meant the one thing
+// the header design exists to protect was written to disk on every launch.
+//
+// It carries a ticket now: minted by an authenticated POST, single use, and
+// valid for thirty seconds. The copy left in the log is dead before anyone
+// could read it.
+async function tokenUrl(path) {
     if (!CARROT_TOKEN) return path;
-    return path + (path.includes('?') ? '&' : '?') + 'carrot_token=' + encodeURIComponent(CARROT_TOKEN);
+    let ticket;
+    try {
+        ticket = (await api('/api/auth/sse-ticket', { method: 'POST' })).ticket;
+    } catch (_) {
+        // Older backend, or the mint failed. The query-param token still
+        // works, and a stream that does not open at all is worse than one
+        // whose credential is in a local log file.
+        return path + (path.includes('?') ? '&' : '?')
+             + 'carrot_token=' + encodeURIComponent(CARROT_TOKEN);
+    }
+    return path + (path.includes('?') ? '&' : '?') + 'ticket=' + encodeURIComponent(ticket);
 }
 
 async function api(path, options = {}) {
@@ -237,8 +254,15 @@ async function refreshStatus() {
         const s = await api('/api/status');
         const ok = s.ollama_available && s.model_loaded;
         dot.className = 'dot ' + (ok ? 'ok' : (s.ollama_available ? 'warn' : 'err'));
-        label.textContent = ok ? 'Local Engine Active'
-            : (s.ollama_available ? 'Model missing' : 'Engine offline');
+        // The name "Ollama" already sits next to this, so the label is its
+        // state and nothing else. It used to read "Local Engine Active",
+        // which was both louder than the fact and wrong about it: Ollama
+        // being up says nothing about where *this chat* runs, and next to a
+        // conversation routed to a hosted model it read as a claim that the
+        // answers were local. The empty state is what says where answers
+        // come from; this says whether the local engine is there.
+        label.textContent = ok ? 'Ready'
+            : (s.ollama_available ? 'No model' : 'Offline');
         renderEngineCard(s);
         return s;
     } catch (e) {
@@ -273,6 +297,8 @@ async function loadRecapConfig() {
         recapCfg.enabled = !!cfg.recap_auto_enabled;
         recapCfg.time = cfg.recap_auto_time || '04:00';
         recapCfg.last_run = cfg.recap_auto_last_run || '';
+        // Same fetch, so the rail's server copy costs nothing extra.
+        syncRailFromServer(cfg);
     } catch (_) {}
 }
 
@@ -310,11 +336,35 @@ async function loadModels() {
         // Under Auto the model is not known until the message is read, so the
         // label must not name one. The route line on each turn says what ran.
         document.getElementById('model-label').textContent = autoModel ? 'Auto' : currentModel;
+        // Under Auto the model is picked per message, so no single answer to
+        // "can it see" exists yet — assume it can, and let the send-time check
+        // be the one that refuses.
+        renderAttachAffordance(autoModel || data.chat_vision !== false);
         renderModelPop(data);
         renderEmptyStateLine();
     } catch (_) {
         document.getElementById('model-label').textContent = 'no engine';
     }
+}
+
+// Offering something that will be refused is worse than not offering it.
+//
+// The server has always rejected images a model cannot read, but only on
+// send, as a 400 — after you had found the file, attached it and written the
+// question. The file picker itself now stops listing images, so a text-only
+// model simply never presents the choice.
+let modelCanSeeImages = true;
+
+function renderAttachAffordance(canSee) {
+    modelCanSeeImages = canSee;
+    const input = document.getElementById('attach-input');
+    const button = document.getElementById('attach-btn');
+    if (!input || !button) return;
+    const docs = '.pdf,.txt,.md,.csv,.json,.py,.js,.ts,.html,.css,.yaml,.yml,.log';
+    input.accept = canSee ? 'image/*,' + docs : docs;
+    button.title = canSee
+        ? 'Attach an image, PDF or text file'
+        : `${currentModel} cannot read images — PDFs and text files only`;
 }
 
 function renderModelPop(data) {
@@ -695,7 +745,11 @@ function renderPlan(host, plan) {
         box.innerHTML = '<div class="plan-head">'
             + '<svg class="ico"><use href="#i-check"/></svg><span>Plan</span>'
             + '<span class="plan-count"></span></div><div class="plan-items"></div>';
-        const content = host.querySelector('.content');
+        // Above whatever the host uses for its prose — `.content` in a chat
+        // bubble, `.agent-body` in the Code tab's. Appending instead would put
+        // the checklist under the answer, where the one thing it is for
+        // (seeing what is left while you wait) cannot happen.
+        const content = host.querySelector('.content, .agent-body');
         host.insertBefore(box, content || null);
     }
     const done = new Set(plan.done || []);
@@ -923,6 +977,15 @@ async function addAttachments(files) {
             reader.readAsDataURL(file);
         });
         const isImage = (file.type || '').startsWith('image/');
+        // `accept` on the file input only filters the picker. A screenshot
+        // pasted in, or a photo dropped on the window, arrives here having
+        // never seen it — and would be carried all the way to a 400 on send.
+        if (isImage && modelCanSeeImages === false) {
+            alert(`${currentModel} cannot read images. Pick a vision model — `
+                  + `the Model Hub's 'image: Y' filter lists the ones that fit `
+                  + `your machine — or attach a PDF or text file instead.`);
+            continue;
+        }
         pendingAttachments.push({
             name: file.name, mime: file.type, bytes: file.size, data,
             thumb: isImage ? `data:${file.type};base64,${data}` : null,
@@ -1015,6 +1078,26 @@ function renderSearchModes() {
             <span class="pop-item-name">${escHtml(mode.label)}</span>
             <span class="pop-item-sub">${escHtml(mode.help)}</span>
         </button>`).join('');
+}
+
+// ===== The plus menu =====
+//
+// Attach, Temporary, Memory, Council, voice in and voice out. All six are
+// settings you touch once, and on the row they crowded out the two controls
+// that are live state. Each keeps its id and its handler — the menu is where
+// they are drawn, not what they do.
+
+function toggleToolMenu() {
+    const pop = document.getElementById('tool-pop');
+    if (!pop) return;
+    const opening = pop.classList.contains('hidden');
+    pop.classList.toggle('hidden');
+    document.getElementById('tool-btn')?.classList.toggle('open', opening);
+}
+
+function closeToolMenu() {
+    document.getElementById('tool-pop')?.classList.add('hidden');
+    document.getElementById('tool-btn')?.classList.remove('open');
 }
 
 function toggleSearchPop() {
@@ -1486,11 +1569,162 @@ async function openConversation(convId) {
     switchTab('workspace');
 }
 
+// ===== Which panels the conversation page shows =====
+//
+// Four cards nobody chose, on the page you open most. A morning recap and a
+// deadline list are useful to some people and pure noise to others, and the
+// home page is the worst place to guess — so it is a choice, and it lives
+// next to the panels rather than three levels into Settings.
+//
+// Local-first for the same reason the theme is: the rail paints before any
+// network call finishes, and a panel you switched off must not flash on and
+// then vanish. The server copy is a best-effort mirror, never waited on.
+
+const RAIL_PANELS = [
+    { id: 'recap', label: 'Morning Recap', sub: 'your daily briefing' },
+    { id: 'deadlines', label: 'Deadlines', sub: 'what is due' },
+    { id: 'milestones', label: 'Milestones', sub: 'progress on goals' },
+    { id: 'engine', label: 'This machine', sub: 'what is running, and where' },
+];
+const RAIL_KEY = 'carrot.rail';
+
+// Absent means all of them. A new panel added in a later version is therefore
+// shown by default rather than silently hidden by an older stored list.
+let railHidden = readRailPref();
+
+function readRailPref() {
+    try {
+        const raw = localStorage.getItem(RAIL_KEY);
+        if (!raw) return [];
+        const parsed = JSON.parse(raw);
+        const known = RAIL_PANELS.map(p => p.id);
+        return Array.isArray(parsed) ? parsed.filter(id => known.includes(id)) : [];
+    } catch (e) {
+        return [];
+    }
+}
+
+function applyRail() {
+    for (const panel of RAIL_PANELS) {
+        const card = document.querySelector(`#ws-left .card[data-panel="${panel.id}"]`);
+        if (card) card.classList.toggle('hidden', railHidden.includes(panel.id));
+    }
+    // With everything off the rail goes away rather than standing there empty,
+    // and the conversation gets the width back. That is the whole point of
+    // switching them off — a 320px column with nothing in it is not less
+    // clutter, it is the same clutter with the content removed.
+    document.getElementById('ws-left')
+        ?.classList.toggle('hidden', railHidden.length >= RAIL_PANELS.length);
+    renderRailMenu();
+}
+
+function renderRailMenu() {
+    const list = document.getElementById('rail-pop-list');
+    if (!list) return;
+    list.innerHTML = '';
+    for (const panel of RAIL_PANELS) {
+        const on = !railHidden.includes(panel.id);
+        const row = document.createElement('button');
+        row.className = 'tool-item' + (on ? ' on' : '');
+        row.onclick = () => toggleRailPanel(panel.id);
+        row.innerHTML = `<svg class="ico"><use href="#i-${on ? 'check' : 'x'}"/></svg>`
+            + `<span>${escHtml(panel.label)}</span>`
+            + `<span class="tool-sub">${escHtml(panel.sub)}</span>`;
+        list.appendChild(row);
+    }
+}
+
+function toggleRailPanel(id) {
+    railHidden = railHidden.includes(id)
+        ? railHidden.filter(x => x !== id)
+        : railHidden.concat([id]);
+    applyRail();
+    try { localStorage.setItem(RAIL_KEY, JSON.stringify(railHidden)); } catch (e) { /* ignore */ }
+    if (typeof api === 'function') {
+        api('/api/config/ui_rail_hidden', {
+            method: 'PUT', body: JSON.stringify(railHidden),
+        }).catch(() => {});
+    }
+}
+
+// The composer floats over the workspace, so the column underneath has to be
+// told how much room to leave. This was a flat 84px in the stylesheet, which
+// was wrong the moment the bar grew a second row and had never been right with
+// the attachment tray open — the terminal ended up underneath it. Measured
+// rather than guessed, because the bar's height is genuinely variable: one
+// row or two, tray or no tray, one skill chip or none.
+function watchComposerHeight() {
+    const bar = document.getElementById('cmdbar');
+    if (!bar) return;
+    const tray = document.getElementById('attach-tray');
+    const apply = () => {
+        const box = bar.getBoundingClientRect();
+        let top = box.top;
+        // The attachment tray is `position: absolute; bottom: 100%` — it hangs
+        // *above* the bar, outside its border box, so the bar's own height
+        // does not include it. Attach a file and the chip is the topmost thing
+        // in the composer; measuring only the bar puts it over the terminal,
+        // which is the exact case that was reported.
+        if (tray && !tray.classList.contains('hidden')) {
+            const trayBox = tray.getBoundingClientRect();
+            if (trayBox.height) top = Math.min(top, trayBox.top);
+        }
+        const h = Math.round(box.bottom - top);
+        if (h > 0) document.documentElement.style.setProperty('--composer-h', h + 'px');
+    };
+    apply();
+    if (window.ResizeObserver) {
+        const observer = new ResizeObserver(apply);
+        observer.observe(bar);
+        if (tray) observer.observe(tray);
+    } else {
+        window.addEventListener('resize', apply);
+    }
+    // Both the tray and the bar itself are shown and hidden by class. A
+    // `display: none` element measures zero and a ResizeObserver does not
+    // report it, so on any tab other than the workspace the reserve would
+    // never be computed at all — which is why the variable was coming back
+    // empty on first load, the bar being hidden until you open the tab.
+    if (window.MutationObserver) {
+        const watch = { attributes: true, attributeFilter: ['class'], childList: true };
+        new MutationObserver(apply).observe(bar, watch);
+        if (tray) new MutationObserver(apply).observe(tray, watch);
+    }
+}
+
+function toggleRailMenu() {
+    const pop = document.getElementById('rail-pop');
+    if (!pop) return;
+    pop.classList.toggle('hidden');
+}
+
+function closeRailMenu() {
+    document.getElementById('rail-pop')?.classList.add('hidden');
+}
+
+// For a machine whose localStorage was cleared. A stored local choice always
+// wins: it is the more recent expression of intent, and it is what already
+// painted.
+function syncRailFromServer(cfg) {
+    let stored = null;
+    try { stored = localStorage.getItem(RAIL_KEY); } catch (e) { /* ignore */ }
+    if (stored || !Array.isArray(cfg?.ui_rail_hidden)) return;
+    const known = RAIL_PANELS.map(p => p.id);
+    railHidden = cfg.ui_rail_hidden.filter(id => known.includes(id));
+    applyRail();
+}
+
 // ===== Workspace cards =====
 async function loadWorkspace() {
-    loadRecapCard();
-    loadDeadlinesCard();
-    loadMilestonesCard();
+    applyRail();
+    // A panel you switched off does not get fetched for. Hiding it in CSS
+    // while still polling for it would keep the cost and lose the point.
+    const shown = id => !railHidden.includes(id);
+    if (shown('recap')) loadRecapCard();
+    if (shown('deadlines')) loadDeadlinesCard();
+    if (shown('milestones')) loadMilestonesCard();
+    // Not gated: the status call also drives the engine dot in the menu bar
+    // and the empty state's privacy line, neither of which is this panel.
     refreshStatus();
 }
 
@@ -2142,7 +2376,7 @@ function splashFailed(message) {
 
 // Setup streams over SSE so the bar tracks the actual download. A model
 // is gigabytes; a bar that jumps 30% -> 100% just looks frozen.
-function runBootstrap() {
+async function runBootstrap() {
     const btn = document.getElementById('splash-btn');
     const status = document.getElementById('splash-status');
     const detail = document.getElementById('splash-detail');
@@ -2156,7 +2390,7 @@ function runBootstrap() {
     detail.textContent = '';
     bar.style.width = '2%';
 
-    const url = tokenUrl('/api/bootstrap/stream'
+    const url = await tokenUrl('/api/bootstrap/stream'
         + (splashModel ? `?model=${encodeURIComponent(splashModel)}` : ''));
     const src = new EventSource(url);
     let started = Date.now();
@@ -2204,6 +2438,9 @@ function runBootstrap() {
 
 // ===== Init =====
 document.addEventListener('DOMContentLoaded', async () => {
+    // Before the first await, so the workspace never paints a frame with the
+    // composer sitting on top of the terminal.
+    watchComposerHeight();
     await loadRecapConfig();
     await refreshStatus();
     showBuildVersion();
@@ -2228,12 +2465,19 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
 
-    // Click outside closes model popover
+    // Click outside closes the popovers. The search picker was never in here:
+    // its menu only closed by picking a mode or by toggling the same button
+    // again, so clicking anywhere else left it hanging over the conversation.
     document.addEventListener('click', e => {
         const picker = document.getElementById('model-picker');
         if (!picker.contains(e.target)) {
             document.getElementById('model-pop').classList.add('hidden');
         }
+        if (!document.getElementById('search-picker')?.contains(e.target)) {
+            document.getElementById('search-pop')?.classList.add('hidden');
+        }
+        if (!document.getElementById('tool-menu')?.contains(e.target)) closeToolMenu();
+        if (!document.getElementById('rail-menu')?.contains(e.target)) closeRailMenu();
         const cmdbar = document.getElementById('cmdbar');
         if (!cmdbar.contains(e.target)) hideSkillPop();
     });

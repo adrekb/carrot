@@ -469,14 +469,36 @@ END;
 SCHEMA = SCHEMA + FTS_SCHEMA + AUX_FTS_SCHEMA
 
 
+# Databases this process has already run the schema against.
+#
+# `get_db()` used to execute all 73 DDL statements on every connection, and
+# most endpoints open one per request. It is correct — everything is
+# IF NOT EXISTS — and it is the safety net that means a caller never has to
+# have run `init_db()` first. It also costs 0.35 ms of parsing every time,
+# which buys nothing after the first.
+#
+# Keyed by path rather than a bare flag on purpose: the tests point `DB_PATH`
+# at a fresh temporary file per test, and a single boolean would let the
+# second test skip creating its schema and fail on a missing table.
+_schema_ready: set = set()
+
+
 def get_db():
     os.makedirs(DBCORE_DIR, exist_ok=True)
+    # Checked before connecting, because connecting creates the file. A
+    # database that has been deleted or replaced underneath us — a restored
+    # checkpoint, a test tearing its directory down — has to be rebuilt, and
+    # the marker from the file that used to be there would prevent it.
+    if not os.path.exists(DB_PATH):
+        _schema_ready.discard(DB_PATH)
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.row_factory = sqlite3.Row
-    conn.executescript(SCHEMA)
-    conn.commit()
+    if DB_PATH not in _schema_ready:
+        conn.executescript(SCHEMA)
+        conn.commit()
+        _schema_ready.add(DB_PATH)
     return conn
 
 
