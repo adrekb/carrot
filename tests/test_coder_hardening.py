@@ -7,6 +7,7 @@ into the implementation, it attends to none of eight hundred lines of merged
 rules, and it invokes a recipe with a parameter missing.
 """
 import json
+import os
 import subprocess
 
 import pytest
@@ -253,8 +254,11 @@ class TestGitCheckpoints:
 
     def test_the_checkpoint_state_lives_under_dot_carrot(self, tmp_path):
         make_repo(tmp_path)
+        # Built with os.path.join: the separator is `\` on Windows, and
+        # hard-coding `/` failed this everywhere the app mostly runs — on a
+        # path the code was constructing perfectly correctly.
         assert gitops.checkpoint_index_path(str(tmp_path)).endswith(
-            f"{gitops.CHECKPOINT_DIR}/{gitops.CHECKPOINT_INDEX}")
+            os.path.join(gitops.CHECKPOINT_DIR, gitops.CHECKPOINT_INDEX))
 
     def test_the_panel_is_told_which_backend_each_checkpoint_uses(self, tmp_path, isolated_db):
         make_repo(tmp_path)
