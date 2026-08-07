@@ -592,6 +592,45 @@ body {
 .msg-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .msg-action .ico { width: 12px; height: 12px; }
 
+/* The plan a long run is working to.
+ *
+ * Sits above the answer, because it is what you watch while the answer does
+ * not exist yet. Quiet by default and only the ticks are coloured: the list is
+ * reference, and the movement is the information. */
+.plan-box {
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--card2);
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+.plan-head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-xs);
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.plan-head .ico { width: 12px; height: 12px; }
+.plan-count { margin-left: auto; font-variant-numeric: tabular-nums; }
+.plan-items { padding: 5px 4px 7px; }
+.plan-item {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 4px 8px;
+  font-size: var(--text-base);
+  line-height: 1.45;
+  color: var(--text);
+}
+.plan-mark { width: 13px; flex-shrink: 0; color: var(--faint); text-align: center; }
+/* Struck through as well as dimmed: on a list of five, colour alone is a weak
+   signal, and it has to read at a glance from across the room. */
+.plan-item.done { color: var(--faint); }
+.plan-item.done .plan-text { text-decoration: line-through; }
+.plan-item.done .plan-mark { color: var(--green); }
+.plan-box.complete .plan-count { color: var(--green); }
+
 /* "Still waiting" on an approval card. Quiet, because it is reassurance
    rather than news — the point is only that it changes. */
 .approval-waiting {

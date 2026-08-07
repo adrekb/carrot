@@ -59,6 +59,12 @@ def approval_timeout_seconds() -> int:
 # is reworded.
 DENIED_REASON = "the user denied this action"
 NO_CHANNEL_REASON = "approval required but no interactive channel is attached"
+ABANDONED_REASON = "the window that asked this question is gone"
+
+# The decision recorded when nobody is left to make one. Distinct from a denial
+# because it is not a judgement about the action — it means the question can no
+# longer be put to anybody.
+DECISION_ABANDONED = "abandoned"
 
 
 def timeout_reason(seconds: Optional[int] = None) -> str:
@@ -184,6 +190,37 @@ def resolve_approval(
     return True
 
 
+def abandon(approval_id: str) -> bool:
+    """Give up on a prompt because there is nobody left to answer it.
+
+    A turn blocks on approval for up to half an hour. If the browser goes away
+    in the meantime — the tab closed, the window reloaded, the app quit — that
+    wait carries on regardless: a held thread, a pending question in a list
+    nobody is reading, and a tool call that will eventually time out and report
+    the user as unresponsive. Observed at twenty-seven minutes, with nothing on
+    the other end for twenty-six of them.
+
+    Abandoning is not denying. The action was never judged; the question simply
+    stopped being answerable, and the model is told that rather than being told
+    the user said no — which it would otherwise report back as a refusal.
+    """
+    with _pending_lock:
+        request = _pending.get(approval_id)
+        # `resolve_approval` records the decision but leaves the request in the
+        # list until the waiting turn wakes up and removes it. That window is
+        # small and real: click Allow, close the tab, and the disconnect would
+        # otherwise rewrite an answer the user had already given. A decision
+        # once made is final — the only thing that may be abandoned is a
+        # question still genuinely open.
+        if request is None or request.decision is not None:
+            return False
+        _pending.pop(approval_id, None)
+    request.decision = DECISION_ABANDONED
+    request.remembered = False
+    request.event.set()
+    return True
+
+
 def reset_session_approvals():
     _session_allowed.clear()
 
@@ -233,6 +270,11 @@ def request_approval(
         emit({"approval_resolved": {"id": request.id, "decision": "timeout"}})
         return False, timeout_reason(timeout), False
     emit({"approval_resolved": {"id": request.id, "decision": request.decision}})
+    if request.decision == DECISION_ABANDONED:
+        # Not a refusal. Saying "the user denied this" would have the model
+        # apologise for something nobody decided, and in a resumed
+        # conversation that misreading is what it would carry forward.
+        return False, ABANDONED_REASON, False
     if request.decision != "allow":
         return False, DENIED_REASON, False
     return True, "approved", request.remembered

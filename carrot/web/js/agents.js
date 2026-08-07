@@ -8,6 +8,9 @@
 // agent's gate are the same gate, and it looks the same to the user.
 
 let researchRunId = null;
+// The plan a research run is working to, and which of it has landed.
+let researchGoals = [];
+let researchDone = [];
 let agentRunId = null;
 
 // ---------- Shared stream reader ----------
@@ -153,6 +156,10 @@ function renderResearchSources(sources) {
 // only the endpoint differs.
 
 function prepareResearchPanes(heading) {
+    // A plan left over from the last run would tick against this one.
+    researchGoals = [];
+    researchDone = [];
+    document.getElementById('research-plan-host').innerHTML = '';
     document.getElementById('research-trace').innerHTML = '';
     document.getElementById('research-sources').innerHTML = '';
     document.getElementById('research-report').innerHTML = '';
@@ -168,9 +175,25 @@ function makeResearchHandler() {
     return event => {
         if (event.run_id) researchRunId = event.run_id;
         if (event.stage) traceLine('research-trace', `${event.stage}: ${event.detail || ''}`, 'stage');
+        // The same checklist chat uses. Sub-questions run in parallel, so
+        // they tick out of order as each thread lands — which is honest about
+        // what is actually happening and, with four threads and three rounds,
+        // is most of what there is to watch.
         if (event.plan) {
-            event.plan.forEach(item =>
-                traceLine('research-trace', 'sub-question: ' + item.question, 'intent'));
+            researchGoals = event.plan.map(item => item.question);
+            researchDone = [];
+            renderPlan(document.getElementById('research-plan-host'),
+                       { goals: researchGoals, done: researchDone });
+        }
+        if (event.plan_progress) {
+            if (!researchDone.includes(event.plan_progress.question)) {
+                researchDone.push(event.plan_progress.question);
+            }
+            renderPlan(document.getElementById('research-plan-host'),
+                       { goals: researchGoals, done: researchDone });
+            traceLine('research-trace',
+                      `${event.plan_progress.outcome}: ${event.plan_progress.question}`,
+                      'stage');
         }
         if (event.source) {
             sources.push(event.source);

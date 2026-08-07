@@ -591,3 +591,201 @@ class TestPickingWhatToOpen:
         evidence = [{"tool": "web_search", "source": "q",
                      "text": "see https://example.com/story), and more"}]
         assert A._unread_result_urls(evidence, set()) == ["https://example.com/story"]
+
+
+# ===== The plan, and refusing to stop short of it =====
+
+def drive_planned(script, plan, mode=None, question="c8 zr1x specs",
+                  tool_result="- ZR1X page - https://gmauthority.com/zr1x [Gm]"):
+    """Drive a turn with a scripted plan as well as a scripted model."""
+    from unittest.mock import patch
+
+    with patch.object(A, "_research_plan", lambda resolved, q: plan):
+        return drive(script, mode or A.SEARCH_MULTI, question=question,
+                     tool_result=tool_result)
+
+
+class TestACoverageReportIsNotAnAnswer:
+    """Three reports, three shapes, one failure.
+
+        "Specs available include: 0-60 time, quarter mile times, top speed"
+        "The following resources cover technical specifications for the ZR1X"
+        "The provided notes do not contain specific performance specifications.
+         I would need technical data sheets or a full article."
+
+    The last is the clearest: rounds left, knew exactly what was missing, said
+    so, and stopped. Each reads as diligence, which is why they kept shipping.
+    """
+
+    @pytest.mark.parametrize("answer", [
+        "The provided notes do not contain specific performance specifications for the ZR1X.",
+        "I would need technical data sheets or a full article containing engine figures.",
+        "Specs available include: 0-60 time, quarter mile times, top speed, price.",
+        "The following resources cover technical specifications for the C8 ZR1X.",
+        "These sources cover the vehicle performance and pricing.",
+        "The search results do not contain the horsepower figure.",
+        "For the latest figures, check the manufacturer website.",
+    ])
+    def test_the_shapes_that_kept_shipping(self, answer):
+        assert A._reads_like_a_coverage_report(answer) is True
+
+    @pytest.mark.parametrize("answer", [
+        "The ZR1X makes 1,250 hp and reaches 60 mph in 1.89 seconds.",
+        "It uses a twin-turbo 5.5-litre V8 with an electric front axle. I could not "
+        "find a confirmed kerb weight.",
+        "Prices start at $187,495 according to Car and Driver.",
+        "",
+    ])
+    def test_a_real_answer_is_left_alone(self, answer):
+        # "I could not find X" inside an answer that gives the other figures is
+        # a useful admission, not the failure shape. What is caught is the case
+        # where describing the material has *replaced* answering.
+        assert A._reads_like_a_coverage_report(answer) is False
+
+    def test_the_turn_is_sent_back_for_it(self):
+        result = drive_planned([
+            ("", tool_call("web_search", query="c8 zr1x specs")),
+            ("", tool_call("read_url", url="https://gmauthority.com/zr1x")),
+            ("", tool_call("web_search", query="c8 zr1x engine")),
+            ("The provided notes do not contain specific specifications.", []),
+            ("It makes 1,250 hp.", []),
+        ], plan=[])
+        assert any("report on your own reading" in g for g in result["gates"])
+        assert result["final"] == "It makes 1,250 hp."
+
+    def test_it_gives_up_rather_than_looping(self):
+        # A model that only ever produces coverage reports must still finish.
+        result = drive_planned([
+            ("", tool_call("web_search", query="a")),
+            ("", tool_call("read_url", url="https://gmauthority.com/zr1x")),
+            ("", tool_call("web_search", query="b")),
+            ("The notes do not contain that.", []),
+        ] * 8, plan=[])
+        assert result["final"]
+        coverage = [g for g in result["gates"] if "report on your own reading" in g]
+        assert len(coverage) <= A.MAX_GOAL_NUDGES
+
+
+class TestTheTurnWorksToAPlan:
+    def test_the_plan_is_stated_before_searching(self):
+        result = drive_planned([
+            ("", tool_call("web_search", query="c8 zr1x")),
+            ("", tool_call("read_url", url="https://gmauthority.com/zr1x")),
+            ("", tool_call("web_search", query="zr1x engine")),
+            ("It makes 1250 horsepower with a twin-turbo engine and costs $187,495.", []),
+        ], plan=["What engine does it use?", "What does it cost?"])
+        plans = [e["plan"]["goals"] for e in result["events"] if "plan" in e]
+        assert plans and plans[0] == ["What engine does it use?", "What does it cost?"]
+
+    def test_an_answer_touching_every_goal_is_accepted(self):
+        result = drive_planned([
+            ("", tool_call("web_search", query="c8 zr1x")),
+            ("", tool_call("read_url", url="https://gmauthority.com/zr1x")),
+            ("", tool_call("web_search", query="zr1x price")),
+            ("It uses a twin-turbo engine and costs $187,495.", []),
+        ], plan=["What engine does it use?", "What does it cost?"])
+        assert result["final"] == "It uses a twin-turbo engine and costs $187,495."
+        assert not any(e.get("gate", {}).get("unmet")
+                       for e in result["events"] if "gate" in e)
+
+    def test_an_untouched_goal_sends_it_back(self):
+        result = drive_planned([
+            ("", tool_call("web_search", query="c8 zr1x")),
+            ("", tool_call("read_url", url="https://gmauthority.com/zr1x")),
+            ("", tool_call("web_search", query="zr1x engine")),
+            ("It uses a twin-turbo engine.", []),          # nothing about price
+            ("It uses a twin-turbo engine and costs $187,495.", []),
+        ], plan=["What engine does it use?", "What does it cost?"])
+        unmet = [e["gate"]["unmet"] for e in result["events"]
+                 if "gate" in e and e["gate"].get("unmet")]
+        assert unmet and "What does it cost?" in unmet[0]
+        assert result["final"] == "It uses a twin-turbo engine and costs $187,495."
+
+    def test_it_stops_arguing_about_coverage_eventually(self):
+        result = drive_planned([
+            ("", tool_call("web_search", query="a")),
+            ("", tool_call("read_url", url="https://gmauthority.com/zr1x")),
+            ("", tool_call("web_search", query="b")),
+            ("It uses a twin-turbo engine.", []),
+        ] * 8, plan=["What engine does it use?", "What does it cost?"])
+        assert result["final"] == "It uses a twin-turbo engine."
+        goal_gates = [e for e in result["events"]
+                      if "gate" in e and e["gate"].get("unmet")]
+        assert len(goal_gates) <= A.MAX_GOAL_NUDGES
+
+    def test_single_pass_gets_no_plan(self):
+        # The plan costs a model call before any searching. Single-pass exists
+        # to be quick, and one round cannot be checked against a plan anyway.
+        result = drive_planned([
+            ("", tool_call("web_search", query="c8 zr1x")),
+            ("Short answer.", []),
+        ], plan=["What engine does it use?"], mode=A.SEARCH_SINGLE)
+        assert not any("plan" in e for e in result["events"])
+
+
+class TestReadingThePlan:
+    def test_it_takes_questions_and_drops_narration(self):
+        from unittest.mock import patch
+
+        raw = ("Here is my plan:\n"
+               "1. What is a C8 ZR1X?\n"
+               "- What engine does it use?\n"
+               "I will then summarise.\n"
+               "* How much does it cost?\n")
+        with patch.object(A.router_mod, "complete", lambda r, m: raw):
+            goals = A._research_plan(object(), "c8 zr1x specs")
+        assert goals == ["What is a C8 ZR1X?", "What engine does it use?",
+                         "How much does it cost?"]
+
+    def test_it_is_capped(self):
+        from unittest.mock import patch
+
+        raw = "\n".join(f"Question number {n}?" for n in range(20))
+        with patch.object(A.router_mod, "complete", lambda r, m: raw):
+            assert len(A._research_plan(object(), "q")) == A.MAX_GOALS
+
+    def test_a_model_that_cannot_plan_does_not_break_the_turn(self):
+        # Planning that failed closed would make the mode fragile for exactly
+        # the models that need it most.
+        from unittest.mock import patch
+
+        def boom(resolved, messages):
+            raise RuntimeError("no")
+
+        with patch.object(A.router_mod, "complete", boom):
+            assert A._research_plan(object(), "q") == []
+
+    def test_the_prompt_says_to_identify_an_unknown_thing_first(self):
+        # "c8 zr1X" became "Toyota C-HR ZR1X" because it replaced a term it did
+        # not know with one it did. The plan is where that gets caught.
+        assert "your FIRST question must be what that thing actually is" in A.PLAN_PROMPT
+
+
+class TestUnmetGoals:
+    def test_words_from_the_question_do_not_count(self):
+        # They turn up in any answer, so matching on them would mark every goal
+        # as touched and the check would never fire.
+        assert A._unmet_goals(["What is the kerb weight?"], "c8 zr1x specs",
+                              "Here are the zr1x specs.") == ["What is the kerb weight?"]
+
+    def test_a_goal_made_only_of_the_questions_words_is_treated_as_met(self):
+        # It cannot be checked — every answer contains those words — and the
+        # alternative is nudging forever over a goal no evidence could satisfy.
+        assert A._unmet_goals(["What are the specs of the zr1x?"],
+                              "c8 zr1x specs", "Here are the zr1x specs.") == []
+
+    def test_a_plural_still_counts(self):
+        # The goal says "what does it cost", the answer says "costs $187,495".
+        # Without the lightest stemming the turn is sent back to find something
+        # it had already found.
+        assert A._unmet_goals(["What does it cost?"], "c8 zr1x specs",
+                              "It costs $187,495.") == []
+
+    def test_one_matching_term_is_enough(self):
+        # The job is catching a silently dropped goal, not grading coverage. A
+        # check that argued about quality would nudge forever.
+        assert A._unmet_goals(["What engine does it use?"], "c8 zr1x specs",
+                              "It uses a twin-turbo engine.") == []
+
+    def test_no_goals_means_nothing_to_be_unmet(self):
+        assert A._unmet_goals([], "q", "anything") == []

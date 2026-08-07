@@ -1105,6 +1105,179 @@ GATE_NUDGE_ONE_SEARCH = (
 )
 
 
+# An answer that describes the state of the reading rather than answering the
+# question. Reported three times in a row, in three different shapes:
+#
+#   "Specs available include: 0-60 time, quarter mile times, top speed, price"
+#   "The following resources cover technical specifications for the C8 ZR1X"
+#   "The provided notes do not contain specific performance specifications...
+#    I would need technical data sheets or a full article"
+#
+# The last one is the clearest: it had rounds left, it knew exactly what was
+# missing, it said so — and stopped. Every one of these reads as diligence,
+# which is why they kept getting shipped. The phrasings below are the seams
+# where that shape shows: talking about "the notes", "the sources" or "the
+# provided information" instead of about the subject, or stating what it would
+# need instead of going to get it.
+COVERAGE_REPORT_SIGNALS = [
+    r"\b(the )?(provided |available |given |above )?(notes?|sources?|results?|search results?|information|data|documents?|articles?|snippets?)\b"
+    r"[^.]{0,60}\b(do(es)? not|don'?t|didn'?t|fail(ed)? to|lack|are (missing|silent)|contain no)\b",
+    r"\bi (would|will) need\b",
+    r"\b(specs?|specifications?|details?|figures?|information)\s+(available|listed|covered|provided)\s+(include|are)\b",
+    r"\bthe following (resources?|sources?|links?|pages?)\b[^.]{0,40}\bcover\b",
+    r"\b(for|to get) (the )?(latest|full|complete|specific|exact)\b[^.]{0,40}\b(check|visit|refer to|consult|see)\b",
+    r"\bthese (sources?|resources?|pages?) (cover|contain|discuss|provide)\b",
+    r"\bno (specific|concrete|detailed) (figures?|numbers?|specifications?|data)\b[^.]{0,40}\b(were|was|are|is) (found|available|provided)\b",
+]
+
+_COVERAGE_RE = [re.compile(p, re.IGNORECASE) for p in COVERAGE_REPORT_SIGNALS]
+
+
+def _reads_like_a_coverage_report(answer: str) -> bool:
+    """Is this an answer, or a status report on the reading?
+
+    Deliberately narrow. "I could not find the 0-60 time" inside an answer that
+    also gives the horsepower is a legitimate, useful admission — the shape
+    being caught is one where describing the material has *replaced* answering,
+    which is why every pattern is about the notes rather than about the subject.
+    """
+    text = (answer or "").strip()
+    if not text:
+        return False
+    return any(pattern.search(text) for pattern in _COVERAGE_RE)
+
+
+GATE_NUDGE_COVERAGE = (
+    "That is a report on your own reading, not an answer. You named what is "
+    "missing instead of going to get it, and you still have rounds left.\n"
+    "Do that now: take the single most important thing the question asked for "
+    "and that you do not yet have, search for it directly — the words a source "
+    "would use, a specification sheet or a manufacturer page rather than a "
+    "review — and open the result. Then write the answer with the figures in "
+    "it.\n"
+    "A consumer product's specifications are published somewhere. If two more "
+    "attempts genuinely fail, say which single fact you could not find, in one "
+    "sentence, inside an answer that gives everything you did find."
+)
+
+
+# ===== The plan a multi-turn turn works against =====
+#
+# Multi-turn searched, read, and stopped whenever it felt done — and "done" for
+# a small model means "I have said something". It had no statement of what
+# finishing would require, so there was nothing to be finished *against*, and
+# nothing anybody could check.
+#
+# So it writes one first: a handful of concrete questions that together answer
+# the request. They are shown to the user, and they are what the finish gate
+# tests the answer against. A turn cannot stop while a goal is untouched and
+# rounds remain.
+
+MAX_GOALS = 5
+MAX_GOAL_NUDGES = 2
+
+PLAN_PROMPT = """You are about to research this request. Before searching, list what you will need to have found in order to answer it properly.
+
+REQUEST: {question}
+
+Rules:
+- Write 2 to {limit} short questions, one per line, each a specific fact you must obtain.
+- If the request names something you do not recognise — a model number, a product code, an abbreviation — your FIRST question must be what that thing actually is. Do not assume it means something similar that you do know.
+- Each question must be checkable: "what engine does it use" is checkable, "understand the vehicle" is not.
+- No numbering, no bullets, no preamble. Just the questions, one per line."""
+
+
+def _research_plan(resolved, question: str) -> List[str]:
+    """The concrete questions this turn must answer before it may stop.
+
+    Best-effort: a model that will not produce a usable plan gets the old
+    behaviour rather than a broken turn, because a planning step that can fail
+    closed would make the whole mode fragile for the models that need it most.
+    """
+    try:
+        raw = router_mod.complete(resolved, [{
+            "role": "user",
+            "content": PLAN_PROMPT.format(question=question[:400], limit=MAX_GOALS),
+        }])
+    except Exception:
+        LOG.debug("could not draft a research plan", exc_info=True)
+        return []
+
+    goals = []
+    for line in (raw or "").splitlines():
+        line = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", line).strip()
+        # A plan is questions. A line that is not one is the model narrating.
+        if len(line) < 8 or len(line) > 200 or not line.endswith("?"):
+            continue
+        goals.append(line)
+        if len(goals) >= MAX_GOALS:
+            break
+    return goals
+
+
+def _unmet_goals(goals: List[str], question: str, answer: str) -> List[str]:
+    """Goals the answer does not appear to touch at all.
+
+    Compared on the words that are distinctive to each goal — the ones not
+    already in the question, since those turn up in any answer. Deliberately
+    generous: one matching term counts as touched. The job is to catch a goal
+    that was silently dropped, not to grade how well it was covered, and a
+    check that argued about quality would nudge forever.
+    """
+    asked = _content_terms(question)
+    answered = _content_terms(answer or "")
+    unmet = []
+    for goal in goals:
+        distinctive = _content_terms(goal) - asked
+        # A goal made entirely of the question's own words cannot be checked
+        # against the answer — every answer contains them. Treated as met,
+        # because the alternative is nudging forever over a goal no evidence
+        # could ever satisfy.
+        if distinctive and not (distinctive & answered):
+            unmet.append(goal)
+    return unmet
+
+
+def _content_terms(text: str) -> set:
+    """Search terms with sentence punctuation taken off the ends.
+
+    `websearch._terms` keeps `.`, `-` and `+` inside a token on purpose, so
+    "f-15ex", "3.5" and "c++" survive as single terms. The side effect is that
+    a word ending a sentence keeps its full stop — "engine." never matches
+    "engine", which silently made every goal look unanswered. Stripped here
+    rather than in the shared helper, because that one also decides search
+    relevance and query drift, and this is not the moment to move those.
+    """
+    from . import websearch
+
+    terms = set()
+    for term in websearch._terms(text):
+        term = term.rstrip(".+-")
+        # The lightest possible stemming, and it earns its place: the goal says
+        # "what does it cost", the answer says "costs $187,495", and without
+        # this the goal reads as untouched and the turn is sent back to find
+        # something it had already found.
+        if len(term) > 3 and term.endswith("s") and not term.endswith("ss"):
+            term = term[:-1]
+        if term:
+            terms.add(term)
+    return terms
+
+
+def _goal_nudge(unmet: List[str], rounds_left: int) -> str:
+    listed = "\n".join(f"- {goal}" for goal in unmet)
+    return (
+        "Your own plan is not finished. These are still unanswered:\n"
+        f"{listed}\n"
+        f"You have about {rounds_left} rounds left. Search for the first one "
+        "directly, using the words a source would use, open the best result, "
+        "and answer from the page.\n"
+        "If one of them turns out to be genuinely unobtainable, say so in one "
+        "sentence inside the answer — but say it about that specific fact, "
+        "after trying, not about your notes in general."
+    )
+
+
 def _search_gate_gap(searches: int, reads: int) -> Optional[str]:
     """What multi-turn still owes the user, if anything.
 
@@ -1721,6 +1894,16 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mo
     # an answer, reading two more is not the missing piece.
     read_urls: set = set()
     auto_read_done = False
+    # The plan this turn is working against, and how many times the answer has
+    # been pushed back for leaving part of it untouched. Capped separately from
+    # the search gates: a fuzzy check must not be able to spend the whole
+    # budget arguing about coverage.
+    goals: List[str] = []
+    # The last computed set of open goals, so the plan is only re-sent when it
+    # actually changes rather than after every tool call.
+    last_open: List[str] = []
+    goal_nudges = 0
+    coverage_nudges = 0
     final_text = ""
     stalled = False
     # What the provider said when it stopped talking to us, if it did. This
@@ -1742,13 +1925,27 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mo
     # the full transcript already overran.
     evidence = []
 
+    # Written before any searching, so the turn has something to be finished
+    # against. Shown to the user because "what is it actually trying to find
+    # out" is the thing a long multi-turn run gives no sense of.
+    if gated:
+        goals = _research_plan(resolved, question)
+        if goals:
+            working.append({
+                "role": "user",
+                "content": ("Work to this plan. Answer every one of these before you"
+                            " stop:\n" + "\n".join(f"- {goal}" for goal in goals)),
+            })
+            last_open = list(goals)
+            yield {"plan": {"goals": goals, "done": []}}
+
     # In gated mode the model's prose is held back until the gates are met,
     # because a premature answer is one we intend to throw away — streaming it
     # first would print an answer to the user and then silently replace it.
     def emit_text(text):
         return [] if gated else [{"chunk": text}]
 
-    for _ in range(rounds):
+    for round_index in range(rounds):
         content_parts = []
         tool_calls = []
         # A provider can fail mid-turn for reasons that have nothing to do with
@@ -1831,6 +2028,32 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mo
                 # Out of nudges: the model cannot or will not do it. Keep the
                 # answer, but say so rather than passing it off as researched.
                 stalled = True
+
+            # The searching gates are satisfied; these two are about the answer
+            # itself. Checked in this order because a coverage report is a
+            # stronger signal than an untouched goal — it is the model telling
+            # us, in its own words, that it stopped short.
+            if gated and not stalled:
+                rounds_left = rounds - round_index - 1
+                if (rounds_left > 1 and coverage_nudges < MAX_GOAL_NUDGES
+                        and _reads_like_a_coverage_report(content_str)):
+                    coverage_nudges += 1
+                    yield {"gate": {"reason": GATE_NUDGE_COVERAGE,
+                                    "searches": searches, "reads": reads}}
+                    working.append({"role": "assistant", "content": content_str})
+                    working.append({"role": "user", "content": GATE_NUDGE_COVERAGE})
+                    continue
+
+                unmet = _unmet_goals(goals, question, content_str) if goals else []
+                if unmet and rounds_left > 1 and goal_nudges < MAX_GOAL_NUDGES:
+                    goal_nudges += 1
+                    reason = _goal_nudge(unmet, rounds_left)
+                    yield {"gate": {"reason": reason, "unmet": unmet,
+                                    "searches": searches, "reads": reads}}
+                    working.append({"role": "assistant", "content": content_str})
+                    working.append({"role": "user", "content": reason})
+                    continue
+
             final_text = content_str
             break
 
@@ -1901,6 +2124,18 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mo
                     yield event
             if bare in coder_mod.WRITE_TOOLS and not result.startswith("error:"):
                 wrote += 1
+            # Tick the plan as the evidence arrives, rather than only judging
+            # it at the end. A list that sits inert for two minutes and then
+            # resolves all at once tells you nothing while you are waiting,
+            # which is the whole complaint about a long run.
+            if goals:
+                gathered = " ".join(item["text"] for item in evidence)
+                still_open = _unmet_goals(goals, question, gathered)
+                if still_open != last_open:
+                    last_open = still_open
+                    yield {"plan": {"goals": goals,
+                                    "done": [g for g in goals if g not in still_open]}}
+
             if bare == "web_search":
                 searches += 1
                 # A query that ran is part of the subject now, so the next one
@@ -2132,7 +2367,11 @@ def _chat_stream_response(req, conv, history, skill, resolved, prelude=None,
     Starlette runs a sync iterator in a threadpool, which is what the
     notification stream below already relies on.
     """
-    def stream():
+    # Prompts this turn has raised and not yet had answered. Kept out here so
+    # the `finally` below can reach them however the generator ends.
+    outstanding: set = set()
+
+    def _body():
         final_text = ""
         if prelude:
             yield f"data: {json.dumps({'document': prelude})}\n\n"
@@ -2148,6 +2387,14 @@ def _chat_stream_response(req, conv, history, skill, resolved, prelude=None,
                 if "_final_text" in event:
                     final_text = event["_final_text"]
                     continue
+                # Watched as they go past rather than plumbed through every
+                # layer between here and the approval gate: the ids are already
+                # in the stream, and the stream is the thing that knows whether
+                # anyone is still receiving it.
+                if "approval_request" in event:
+                    outstanding.add(event["approval_request"]["id"])
+                elif "approval_resolved" in event:
+                    outstanding.discard(event["approval_resolved"]["id"])
                 yield f"data: {json.dumps(event)}\n\n"
         except Exception as exc:
             LOG.exception("chat turn failed")
@@ -2179,6 +2426,28 @@ def _chat_stream_response(req, conv, history, skill, resolved, prelude=None,
         except Exception:
             LOG.exception("could not parse clarifying questions")
         yield f"data: {json.dumps({'done': True, 'conversation_id': req.conversation_id})}\n\n"
+
+    def stream():
+        """The body, plus the guarantee that nothing is left waiting on it.
+
+        When the browser goes away, Starlette closes this generator, which
+        raises GeneratorExit at whichever yield it was sitting on — and the
+        approval heartbeat is what makes sure there *is* a recent yield to
+        raise it at. A turn blocked with no client used to keep its thread and
+        its unanswered question for the full timeout: observed at twenty-seven
+        minutes, twenty-six of them with nobody on the other end.
+
+        `finally` rather than `except GeneratorExit`, because a turn that ends
+        by crashing has the same loose end as one that ends by being closed,
+        and on a normal finish the set is empty and this costs nothing.
+        """
+        try:
+            yield from _body()
+        finally:
+            gone = [approval for approval in list(outstanding)
+                    if agent_mod.abandon(approval)]
+            if gone:
+                LOG.info("client left; abandoned %d unanswered approval(s)", len(gone))
 
     return StreamingResponse(stream(), media_type="text/event-stream")
 

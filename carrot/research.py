@@ -845,15 +845,29 @@ def run_research_stream(
 
         def work(subquestion: Dict[str, Any]):
             researcher = Researcher(run_id, subquestion, depth, store, context, emit, seeds=seeds)
+            # Sub-questions are researched in parallel, so the order they
+            # finish in is not the order they were planned in. Reporting each
+            # one as it lands is what lets the plan tick rather than sitting
+            # inert until the whole run resolves — with four threads and three
+            # rounds, that inert period is most of the run.
+            def done(outcome: str):
+                emit({"plan_progress": {"question": subquestion["question"],
+                                        "outcome": outcome}})
+
             try:
-                return researcher.run()
+                found = researcher.run()
+                done("answered" if found else "nothing found")
+                return found
             except policy.Cancelled:
+                done("cancelled")
                 return []
             except policy.BudgetExceeded as exc:
                 emit({"stage": "budget", "detail": str(exc)})
+                done("ran out of budget")
                 return researcher.mine
             except Exception as exc:
                 errors.append(f"{subquestion['question']}: {exc}")
+                done("failed")
                 return researcher.mine
 
         # Concurrency is no longer how rate limits are handled. Capping workers
