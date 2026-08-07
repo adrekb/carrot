@@ -80,9 +80,47 @@ function showApprovalPrompt(request) {
         };
     });
     approvalHost().appendChild(card);
+    alertAwayFromScreen(request);
 
     const confirmation = document.getElementById('approval-confirm-' + request.id);
     if (confirmation) confirmation.focus();
+}
+
+// A prompt nobody is looking at is a run that has stopped. The agent blocks
+// until it is answered, so an unwatched approval does not fail safe — it fails
+// *slow*, and the whole task is wasted waiting on a window in the background.
+//
+// Only when the window is actually unfocused: someone sitting in front of the
+// card does not need their operating system to tell them it is there, and a
+// toast per step during an attended run is its own kind of broken.
+// Clicking the toast raises the window, which is where the card is waiting.
+function alertAwayFromScreen(request) {
+    if (document.hasFocus()) return;
+    const what = request.tool === 'start_task'
+        ? 'Carrot is ready to start a task'
+        : 'Carrot needs your approval';
+    const body = String(request.summary || request.tool || 'An action is waiting.').slice(0, 160);
+    try {
+        if (window.carrot && window.carrot.notify) {
+            window.carrot.notify(what, body);
+            return;
+        }
+        // In a plain browser rather than the desktop app. Same idea, and the
+        // permission ask happens on the first approval rather than at startup,
+        // where it would be a prompt about nothing.
+        if (typeof Notification === 'undefined') return;
+        if (Notification.permission === 'granted') {
+            new Notification(what, { body }).onclick = () => window.focus();
+        } else if (Notification.permission !== 'denied') {
+            Notification.requestPermission().then(granted => {
+                if (granted === 'granted') {
+                    new Notification(what, { body }).onclick = () => window.focus();
+                }
+            });
+        }
+    } catch (_) {
+        // Never let a failed toast take the approval card down with it.
+    }
 }
 
 function dismissApprovalPrompt(approvalId) {

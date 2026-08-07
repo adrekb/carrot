@@ -34,10 +34,24 @@ LOG = logging.getLogger(__name__)
 
 TOOL_PREFIX = "carrot"
 # Two minutes was too short for a prompt that renders as a card in the corner
-# of the screen: a user reading the answer misses it, and the turn dies. Ten
-# minutes is long enough to notice, and the timeout is a backstop against a
-# closed tab rather than a deadline for the user.
-APPROVAL_TIMEOUT_SECONDS = 600
+# of the screen: a user reading the answer misses it, and the turn dies. The
+# timeout is a backstop against a closed tab rather than a deadline for the
+# user, so it is generous — and now that an unfocused window raises an
+# operating-system notification, being away from the desk is no longer the same
+# thing as not knowing. Configurable because "how long might I be out of the
+# room" is not a question this file can answer for anybody.
+DEFAULT_APPROVAL_TIMEOUT_SECONDS = 1800
+APPROVAL_TIMEOUT_SECONDS = DEFAULT_APPROVAL_TIMEOUT_SECONDS
+
+
+def approval_timeout_seconds() -> int:
+    """How long a prompt waits. Floors at a minute; a zero would deny instantly."""
+    try:
+        configured = int(get_config().get("agent_approval_timeout_seconds",
+                                          DEFAULT_APPROVAL_TIMEOUT_SECONDS))
+    except (TypeError, ValueError):
+        return DEFAULT_APPROVAL_TIMEOUT_SECONDS
+    return max(60, configured)
 
 # The three ways a gated call ends without running. They are constants because
 # the tool runner picks its wording from *which* of them happened, and matching
@@ -47,8 +61,8 @@ DENIED_REASON = "the user denied this action"
 NO_CHANNEL_REASON = "approval required but no interactive channel is attached"
 
 
-def timeout_reason() -> str:
-    return f"approval timed out after {APPROVAL_TIMEOUT_SECONDS}s"
+def timeout_reason(seconds: Optional[int] = None) -> str:
+    return f"approval timed out after {seconds or approval_timeout_seconds()}s"
 
 
 MAX_READ_CHARS = 20000
@@ -208,17 +222,65 @@ def request_approval(
     with _pending_lock:
         _pending[request.id] = request
     emit({"approval_request": request.as_dict()})
+    _raise_waiting_notification(request)
 
-    answered = request.event.wait(APPROVAL_TIMEOUT_SECONDS)
+    timeout = approval_timeout_seconds()
+    answered = request.event.wait(timeout)
     with _pending_lock:
         _pending.pop(request.id, None)
+    _clear_waiting_notification(request)
     if not answered:
         emit({"approval_resolved": {"id": request.id, "decision": "timeout"}})
-        return False, timeout_reason(), False
+        return False, timeout_reason(timeout), False
     emit({"approval_resolved": {"id": request.id, "decision": request.decision}})
     if request.decision != "allow":
         return False, DENIED_REASON, False
     return True, "approved", request.remembered
+
+
+def _notification_key(request: "ApprovalRequest") -> str:
+    return f"approval:{request.id}"
+
+
+def _raise_waiting_notification(request: "ApprovalRequest"):
+    """Put the pending prompt in the notification feed as well as the card.
+
+    The card only exists in a window that may be behind three others. The feed
+    reaches the operating system's own notification centre, so a run that is
+    blocked is visible from wherever the user actually is — the whole cost of a
+    missed approval is a task sitting still for half an hour.
+
+    Best-effort by construction: a notification that cannot be raised must
+    never take down the approval it was announcing.
+    """
+    try:
+        from . import proactive as proactive_mod
+
+        proactive_mod.create(
+            kind="approval",
+            title=("Carrot is ready to start a task" if request.tool == "start_task"
+                   else "Carrot needs your approval"),
+            body=(request.summary or request.tool)[:300],
+            severity=proactive_mod.SEVERITY_URGENT,
+            dedupe_key=_notification_key(request),
+            metadata={"approval_id": request.id, "tool": request.tool, "risk": request.risk},
+        )
+    except Exception:
+        LOG.debug("could not raise an approval notification", exc_info=True)
+
+
+def _clear_waiting_notification(request: "ApprovalRequest"):
+    """Drop the notification once the prompt is answered or has expired.
+
+    Otherwise the feed fills up with alerts about decisions already made, and a
+    notification list that is mostly stale is one nobody reads.
+    """
+    try:
+        from . import proactive as proactive_mod
+
+        proactive_mod.dismiss_by_key(_notification_key(request))
+    except Exception:
+        LOG.debug("could not clear an approval notification", exc_info=True)
 
 
 def _request_approval(tool: str, arguments: Dict[str, Any], summary: str, risk: str, emit: Optional[Callable]):
@@ -477,9 +539,16 @@ def _tool_search_documents(query: str, **_) -> str:
     )["results"]
     if not results:
         return "no indexed documents matched"
-    return "\n\n".join(
+    from . import policy
+
+    # Indexing a folder is a decision to let Carrot *read* it, not a statement
+    # that the user wrote everything in it. A PDF someone emailed, a synced
+    # note, a downloaded paper — all land here, and all get the same envelope
+    # a web page gets.
+    body = "\n\n".join(
         f"{r['path']} (chunk {r['ordinal']}):\n{r['content'][:800]}" for r in results
     )
+    return policy.ingest(body, origin="your indexed documents")
 
 
 def _tool_search_conversations(query: str, **_) -> str:

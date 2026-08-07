@@ -1709,7 +1709,17 @@ def _post_turn(conversation_id, user_message, assistant_text, message_id,
                 return
         except Exception:
             pass
-        settings = config.get_config()
+        # Reading the settings is itself a database call, and it sat outside
+        # every guard — so a database that went away underneath this thread
+        # (a shutdown, a test's temporary directory) killed the whole worker
+        # with an unhandled exception rather than skipping bookkeeping the
+        # user was never waiting on. Everything below is best-effort; this line
+        # has to be too.
+        try:
+            settings = config.get_config()
+        except Exception:
+            LOG.debug("post-turn bookkeeping skipped: settings unavailable", exc_info=True)
+            return
         if settings.get("memory_enabled", True):
             try:
                 memory_mod.extract_from_turn(
