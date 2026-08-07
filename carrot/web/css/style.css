@@ -496,6 +496,48 @@ body {
 }
 .message.assistant .content.error { border-color: rgba(255, 93, 93, 0.4); color: var(--red); }
 
+/* Copy, rerun, branch.
+ *
+ * Held at low opacity until the message is hovered or one of the buttons has
+ * focus — three controls under every message, at full strength, turn a
+ * transcript into a control panel. They keep their space rather than being
+ * display:none, so revealing them cannot make the conversation jump.
+ *
+ * Focus-within, not hover alone: a keyboard user must be able to reach them,
+ * and an action you can tab to but not see is worse than one that is absent. */
+.msg-actions {
+  display: flex;
+  gap: 2px;
+  margin-top: 4px;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.message:hover .msg-actions,
+.msg-actions:focus-within { opacity: 1; }
+@media (hover: none) {
+  /* No hover to reveal them on a touch screen, so they simply stay visible. */
+  .msg-actions { opacity: 0.7; }
+}
+.message.user .msg-actions { justify-content: flex-end; }
+
+.msg-action {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 7px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--faint);
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: color 0.12s, background 0.12s;
+}
+.msg-action:hover { color: var(--text); background: rgba(255, 255, 255, 0.06); }
+.msg-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.msg-action .ico { width: 12px; height: 12px; }
+
 .caret {
   display: inline-block; width: 8px; height: 15px;
   background: var(--accent);

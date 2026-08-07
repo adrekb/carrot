@@ -187,11 +187,20 @@ class ChatRequest(BaseModel):
     # the saved picker setting; the flag exists so a caller can opt one turn in
     # or out without changing it.
     auto: Optional[bool] = None
+    # Running a turn again over a transcript that already contains the
+    # question. Without it, rerun stored the user's message a second time and
+    # the conversation grew a duplicate every time you asked for another go.
+    replay: Optional[bool] = False
 
 
 class AddMessageRequest(BaseModel):
     role: str
     content: str
+
+
+class BranchRequest(BaseModel):
+    message_id: int
+    title: Optional[str] = ""
 
 
 class CreateConversationRequest(BaseModel):
@@ -977,7 +986,7 @@ def _coder_context(conversation_id: str = ""):
 
 
 def _prepare_history(conv, message, skill_slug, extra_system=None, mode=None,
-                     images=None, coder=False, memory=None):
+                     images=None, coder=False, memory=None, replay=False):
     """Build the model message list for a turn.
 
     Order matters: the search directive, then skill instructions, then any
@@ -1048,6 +1057,11 @@ def _prepare_history(conv, message, skill_slug, extra_system=None, mode=None,
             pass
 
     history += summarize_mod.build_history(conv)
+    # On a rerun the question is already the last thing in the transcript —
+    # only the answer was rewound — so appending it again would hand the model
+    # the same question twice in a row and make it read as insistence.
+    if replay and history and history[-1].get("role") == "user":
+        return history, skill
     user_turn = {"role": "user", "content": message}
     if images:
         # Ollama takes base64 images on the message itself.
@@ -1938,9 +1952,13 @@ async def chat(req: ChatRequest):
     images, docs_system, note = _apply_attachments(req, resolved)
     history, skill = _prepare_history(conv, req.message, req.skill,
                                       extra_system=docs_system, mode=mode, images=images,
-                                      coder=bool(req.coder), memory=req.memory)
-    conv_mod.add_message(req.conversation_id, "user",
-                         f"{req.message}\n\n[{note}]" if note else req.message)
+                                      coder=bool(req.coder), memory=req.memory,
+                                      replay=bool(getattr(req, "replay", False)))
+    # A rerun runs an existing turn again, and the question is already in the
+    # transcript — storing it again grew a duplicate on every go.
+    if not getattr(req, "replay", False):
+        conv_mod.add_message(req.conversation_id, "user",
+                             f"{req.message}\n\n[{note}]" if note else req.message)
 
     if req.stream:
         return _chat_stream_response(req, conv, history, skill, resolved, mode=mode)
@@ -1997,9 +2015,13 @@ async def chat_stream(req: ChatRequest):
     images, docs_system, note = _apply_attachments(req, resolved)
     history, skill = _prepare_history(conv, req.message, req.skill,
                                       extra_system=docs_system, mode=mode, images=images,
-                                      coder=bool(req.coder), memory=req.memory)
-    conv_mod.add_message(req.conversation_id, "user",
-                         f"{req.message}\n\n[{note}]" if note else req.message)
+                                      coder=bool(req.coder), memory=req.memory,
+                                      replay=bool(getattr(req, "replay", False)))
+    # A rerun runs an existing turn again, and the question is already in the
+    # transcript — storing it again grew a duplicate on every go.
+    if not getattr(req, "replay", False):
+        conv_mod.add_message(req.conversation_id, "user",
+                             f"{req.message}\n\n[{note}]" if note else req.message)
     return _chat_stream_response(req, conv, history, skill, resolved, mode=mode)
 
 
@@ -2047,6 +2069,23 @@ async def update_conversation(conv_id: str, req: ConversationUpdateRequest):
     if result is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return result
+
+
+@app.post("/api/conversations/{conv_id}/branch")
+async def branch_conversation(conv_id: str, req: BranchRequest):
+    """Fork a conversation at a message, leaving the original untouched."""
+    try:
+        return conv_mod.branch_conversation(conv_id, req.message_id, title=req.title or "")
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.post("/api/conversations/{conv_id}/rewind")
+async def rewind_conversation(conv_id: str, req: BranchRequest):
+    """Drop a message and everything after it, so the turn can be run again."""
+    if conv_mod.get_conversation(conv_id) is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"removed": conv_mod.drop_messages_from(conv_id, req.message_id)}
 
 
 @app.post("/api/conversations/temporary/purge")

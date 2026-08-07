@@ -129,6 +129,79 @@ def add_message(conv_id: str, role: str, content: str, metadata: dict = None):
     return {"id": cursor.lastrowid, "role": role, "content": content, "timestamp": ts}
 
 
+def branch_conversation(conv_id: str, message_id: int, title: str = ""):
+    """Copy a conversation up to and including one message, into a new one.
+
+    "What if I had asked this differently" is a fork, not an edit. Rewriting
+    the original would destroy the answer you are comparing against, which is
+    the entire reason for asking — so the original is left exactly as it was
+    and the new conversation starts as its prefix.
+
+    The copy is a real copy of the message rows: a branch that pointed back at
+    the parent's messages would change under it the moment the parent was
+    edited or deleted.
+    """
+    source = get_conversation(conv_id)
+    if source is None:
+        raise ValueError(f"Conversation {conv_id} not found")
+
+    kept = []
+    for message in source["messages"]:
+        kept.append(message)
+        if message["id"] == message_id:
+            break
+    else:
+        raise ValueError(f"Message {message_id} is not in conversation {conv_id}")
+
+    branch = create_conversation(
+        title=(title or source["title"] or "Untitled").strip()[:80],
+        metadata={
+            **source["metadata"],
+            # Where it came from, so the branch is traceable rather than a
+            # mystery conversation that resembles another one.
+            "branched_from": conv_id,
+            "branched_at_message": message_id,
+        },
+    )
+    for message in kept:
+        add_message(branch["id"], message["role"], message["content"],
+                    metadata=message.get("metadata"))
+
+    # A branch belongs where its parent belongs. Filing it into whatever
+    # workspace happens to be active would scatter forks of one project.
+    try:
+        from . import workspaces as workspaces_mod
+
+        workspaces_mod.file_item(
+            workspaces_mod.KIND_CONVERSATION, branch["id"],
+            workspaces_mod.workspace_of(workspaces_mod.KIND_CONVERSATION, conv_id),
+        )
+    except Exception:
+        pass
+
+    return get_conversation(branch["id"])
+
+
+def drop_messages_from(conv_id: str, message_id: int) -> int:
+    """Delete a message and everything after it. Returns how many went.
+
+    Used by rerun: asking the same question again only means anything if the
+    answer being replaced is gone. Deleting *from* a point rather than one row
+    keeps the transcript a straight line — a conversation with a hole in the
+    middle is worse than either keeping or dropping the lot.
+    """
+    conn = get_db()
+    cursor = conn.execute(
+        "DELETE FROM messages WHERE conversation_id = ? AND id >= ?",
+        (conv_id, message_id),
+    )
+    conn.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (now_iso(), conv_id))
+    conn.commit()
+    removed = cursor.rowcount
+    conn.close()
+    return removed
+
+
 def update_message_metadata(conv_id: str, message_id: int, metadata: dict):
     conn = get_db()
     conn.execute(
