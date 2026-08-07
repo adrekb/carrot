@@ -1622,6 +1622,33 @@ def _forced_answer(resolved, question, evidence):
     yield {"_answer": "".join(parts)}
 
 
+# A Python exception that escaped into the turn, rather than anything the
+# provider did. These are the phrasings the interpreter uses, and none of them
+# can come out of an HTTP error or a model refusal.
+_OUR_FAULT = (
+    "can only concatenate", "object has no attribute", "unsupported operand",
+    "is not subscriptable", "not callable", "takes no arguments",
+    "unexpected keyword argument", "positional argument", "NoneType",
+    "list indices must be", "string indices must be",
+)
+
+
+def _blame_for(failure: str) -> str:
+    """Say who actually broke, because the answer sends the user somewhere.
+
+    A turn died with "can only concatenate str (not "list") to str" and was
+    reported as *provider stopped the turn* — so the user went and checked
+    Mistral's rate limits for a TypeError two frames down in Carrot. "The
+    provider stopped the turn" is the right sentence for an HTTP 429 and the
+    wrong one for our own bug, and the two need different things from whoever
+    reads it.
+    """
+    if any(marker in failure for marker in _OUR_FAULT):
+        return (f"this is a fault in Carrot, not in the provider or in what you "
+                f"asked: `{failure}`. It is worth reporting.")
+    return f"the provider stopped the turn (`{failure}`)."
+
+
 def _evidence_answer(question, evidence, failure=""):
     """Write something true and useful without the model, as a last resort.
 
@@ -1635,7 +1662,7 @@ def _evidence_answer(question, evidence, failure=""):
     for completely different things from the user, and guessing between them is
     what made the last few of these unfixable.
     """
-    blame = f"\n\nThe provider stopped the turn with: `{failure}`" if failure else ""
+    blame = f"\n\n{_blame_for(failure)}" if failure else ""
     if not evidence:
         return (
             "I could not gather anything usable for that. Every source I tried "
@@ -1647,7 +1674,7 @@ def _evidence_answer(question, evidence, failure=""):
     pages = [e["source"] for e in evidence if e["tool"] == "read_url" and e["source"]]
     lines = [
         "I gathered the material for this but could not write it up — "
-        + (f"the provider stopped the turn (`{failure}`)." if failure
+        + (_blame_for(failure) if failure
            else "the model ran out of room to answer.")
         + " Here is what the turn actually collected, so it is not wasted:",
         "",

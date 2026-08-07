@@ -24,6 +24,39 @@ from .ollama_client import ThinkTagStreamFilter
 REASONING_KEYS = ("reasoning_content", "reasoning")
 
 
+def text_of(value: Any) -> str:
+    """Whatever a provider put in a content field, as a string.
+
+    "chat-completions compatible" is a family resemblance, not a specification.
+    The original format put a plain string in ``delta.content``; several
+    providers now send the same structured content-part lists the request side
+    has always accepted — ``[{"type": "text", "text": "..."}]`` — and Mistral's
+    current API is one of them.
+
+    That reached ``ThinkTagStreamFilter.feed``, whose first act is ``buf +=
+    text``, and killed the turn with "can only concatenate str (not list) to
+    str". It surfaced to the user as *provider stopped the turn*, which pointed
+    the blame at Mistral for what was a type error two frames down in our own
+    code.
+
+    Unknown part types are skipped rather than guessed at: a future part that
+    is an image or a citation has no string form, and inventing one would put
+    a repr in the middle of somebody's answer.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return "".join(text_of(part) for part in value)
+    if isinstance(value, dict):
+        # A single content part. Only text carries text.
+        if value.get("type") in (None, "text"):
+            return str(value.get("text") or "")
+        return ""
+    return ""
+
+
 class OpenAICompatibleClient:
     """One provider endpoint that speaks chat-completions."""
 
@@ -85,12 +118,17 @@ class OpenAICompatibleClient:
                 delta = choices[0].get("delta") or {}
 
                 for key in REASONING_KEYS:
-                    if delta.get(key):
-                        yield {"type": "thinking", "text": delta[key]}
+                    reasoning = text_of(delta.get(key))
+                    if reasoning:
+                        yield {"type": "thinking", "text": reasoning}
 
-                if delta.get("content"):
+                # Normalized at the boundary, once. Everything downstream —
+                # the think-tag filter, the accumulators, the chat loop — is
+                # entitled to assume it is holding a string.
+                content = text_of(delta.get("content"))
+                if content:
                     # Some models inline their reasoning in <think> tags instead.
-                    for event in think.feed(delta["content"]):
+                    for event in think.feed(content):
                         if event["text"]:
                             yield event
 
@@ -123,7 +161,7 @@ class OpenAICompatibleClient:
         choices = response.json().get("choices") or []
         if not choices:
             return ""
-        return choices[0].get("message", {}).get("content") or ""
+        return text_of(choices[0].get("message", {}).get("content"))
 
 
 class _ToolCallAccumulator:
