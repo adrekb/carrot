@@ -672,7 +672,13 @@ def _tool_web_search(query: str, emit=None, **_) -> str:
                              "index page" if r.get("kind") == "front" else "") if m]
         head = f"- {r['title']} — {r['url']}"
         if marks:
-            head += f"\n  [{' · '.join(marks)}]"
+            # Parentheses, not brackets. `[Gm]` and `[En]` are square-bracket
+            # tokens sitting next to a title and a URL, which is markdown's
+            # link-label syntax — so models copied them into the answer as the
+            # citation, and every source came out as a bare "[Gmauthority]"
+            # that links to nothing. This annotation is metadata for the model,
+            # never a citation, and it should not look like one.
+            head += f"\n  ({' · '.join(marks)})"
         lines.append(f"{head}\n  {r['snippet'][:220]}")
     return "\n".join(lines)
 

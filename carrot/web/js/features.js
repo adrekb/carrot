@@ -1938,6 +1938,49 @@ function agentBubble(role, text) {
     return { wrap, body };
 }
 
+// The same set the backend gates ACT mode on, so "changed" means here what it
+// means there.
+const WRITE_TOOLS = new Set([
+    'write_file', 'edit_file', 'create_file', 'delete_file', 'move_file',
+    'git_commit', 'git_checkout', 'restore_checkpoint',
+]);
+
+// Say when it has stopped, and what it did.
+//
+// A finished turn used to just stop: the caret disappeared and the prose sat
+// there, often ending with a question, so there was no way to tell a turn that
+// had finished from one still thinking. And the answer describes intentions —
+// the files are what actually happened, which is the thing ACT mode exists to
+// make true.
+function agentFinished(wrap, touched, commandsRun, elapsedMs) {
+    if (!wrap || wrap.querySelector('.agent-done')) return;
+    const parts = [];
+    if (touched.size) {
+        parts.push(`${touched.size} file${touched.size === 1 ? '' : 's'} changed`);
+    }
+    if (commandsRun) {
+        parts.push(`${commandsRun} command${commandsRun === 1 ? '' : 's'} run`);
+    }
+    // "Nothing changed" is information, not an absence of it — in ACT mode it
+    // is the whole complaint, and in Plan mode it is the correct outcome.
+    if (!parts.length) parts.push('nothing changed on disk');
+
+    const row = document.createElement('div');
+    row.className = 'agent-done';
+    row.innerHTML = `<svg class="ico"><use href="#i-check"/></svg>`
+        + `<span>Done — ${escHtml(parts.join(', '))}`
+        + `<span class="agent-done-time"> · ${Math.round(elapsedMs / 1000)}s</span></span>`;
+    if (touched.size) {
+        const list = document.createElement('div');
+        list.className = 'agent-done-files';
+        list.innerHTML = [...touched]
+            .map(p => `<code>${escHtml(p)}</code>`).join('');
+        row.appendChild(list);
+    }
+    wrap.appendChild(row);
+    document.getElementById('agent-log').scrollTop = 1e9;
+}
+
 function agentTrace(wrap, text, cls) {
     let trace = wrap.querySelector('.agent-trace');
     if (!trace) {
@@ -1980,6 +2023,9 @@ async function sendAgentTask() {
 
     const { wrap, body } = agentBubble('agent', '');
     body.innerHTML = '<span class="caret">&nbsp;</span>';
+    // What this turn actually did, so it can say so when it stops.
+    const touched = new Set();
+    let commandsRun = 0;
     const send = document.getElementById('agent-send');
     const stop = document.getElementById('agent-stop');
     send.disabled = true;
@@ -2043,6 +2089,14 @@ async function sendAgentTask() {
                         Object.entries(payload.tool.args || {})
                             .map(([k, v]) => `${k}=${String(v).slice(0, 60)}`).join(', ')})`,
                         payload.tool.rejected ? 'rejected' : '');
+                    // What the turn changed, for the summary at the end. A
+                    // rejected call did not happen and must not be counted.
+                    if (!payload.tool.rejected) {
+                        const bare = String(payload.tool.name).split('__').pop();
+                        const path = (payload.tool.args || {}).path;
+                        if (WRITE_TOOLS.has(bare) && path) touched.add(path);
+                        else if (bare === 'run_command') commandsRun++;
+                    }
                 }
                 if (payload.tool_result) {
                     agentTrace(wrap, `← ${String(payload.tool_result.result).slice(0, 300)}`, 'result');
@@ -2110,6 +2164,7 @@ async function sendAgentTask() {
         send.disabled = false;
         stop.hidden = true;
         if (!answer.trim() && body.querySelector('.caret')) body.textContent = '(done)';
+        agentFinished(wrap, touched, commandsRun, Date.now() - startedAt);
         // A coding turn is the kind of work people start and then go and do
         // something else during. Finishing unread costs the same time as being
         // blocked unread does.

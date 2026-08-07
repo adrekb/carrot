@@ -1448,6 +1448,129 @@ def _goal_nudge(unmet: List[str], rounds_left: int) -> str:
     )
 
 
+# A line that announces a tool call rather than answering. These are the whole
+# of what a round's prose usually is, and gluing them onto the answer would be
+# a different bug from the one being fixed.
+NARRATION = re.compile(
+    r"^\s*(?:okay|ok|alright|sure|got it|let me|let's|i'?ll|i am going to|"
+    r"i'?m going to|i will|first,? i|now i|next,? i|searching|looking|"
+    r"let me search|let me look|one moment|hold on)\b", re.I)
+
+
+def _restore_carried(carried: List[str], final: str) -> str:
+    """Put back answer prose written in rounds that also called a tool.
+
+    Those rounds' text was dropped entirely, so a model that opened its answer,
+    fetched one more fact and then continued lost its opening — the reported
+    symptom was an answer that begins at a bullet with the heading missing.
+
+    Two things are not restored. Narration ("Let me search for that") is not
+    answer text and belongs nowhere near it. And anything the model wrote again
+    in its final message is already there, so putting it back would duplicate
+    rather than repair.
+    """
+    kept = []
+    for piece in carried:
+        text = piece.strip()
+        if not text or NARRATION.match(text):
+            continue
+        # Compared on a prefix rather than the whole, because a model that
+        # continues from its own opening usually re-states it with small edits.
+        if text[:60] in final:
+            continue
+        kept.append(text)
+    if not kept:
+        return final
+    return "\n\n".join(kept + ([final.strip()] if final.strip() else []))
+
+
+# ===== Checking the answer against the pages it was written from =====
+#
+# Reported: asked for the C8 ZR1X, the answer said the car has "two electric
+# motors, one on each front wheel". It has one, and the page it had just read
+# said so — 186 hp on the front axle. Everything around the invention was
+# right, sourced and specific, which is what makes this the worst failure
+# shape in the app: a confident answer with a fabricated detail inside it.
+#
+# The gates already force it to search and to read. Nothing checked that what
+# it wrote is what the pages said. This is Research's verification pass,
+# scoped to one call: the model sees the answer and the page text and nothing
+# else — no question, no narrative of its own to defend — which is the whole
+# reason it can mark its own work here at all.
+
+MAX_SUPPORT_NUDGES = 1
+SUPPORT_EVIDENCE_CHARS = 2500
+
+SUPPORT_PROMPT = """Below is an answer, and the source text it was written from.
+
+Find statements in the answer that the sources do not support. A statement is unsupported if the sources do not say it — not if it is merely phrased differently, and not if it is general knowledge that the sources happen not to mention.
+
+Be strict about specifics: counts, quantities, names, dates and configurations are exactly where an answer invents detail, and "two motors" where the source says one is the failure to catch.
+
+ANSWER:
+{answer}
+
+SOURCES:
+{evidence}
+
+Return JSON only: {{"unsupported": ["the exact statement, quoted from the answer", ...]}}
+An empty list means everything checks out. Do not invent problems."""
+
+
+def _unsupported_claims(resolved, answer: str, evidence: List[Dict[str, Any]]) -> List[str]:
+    """Statements in the answer that the pages do not support.
+
+    Best-effort in both directions. A check that cannot run returns nothing,
+    because a verification step that fails closed would block answers over its
+    own unavailability. And anything it reports that is not actually in the
+    answer is dropped: a checker that hallucinates a quotation is the same
+    problem one layer up.
+    """
+    pages = "\n\n".join(
+        f"--- {item['source']} ---\n{item['text'][:SUPPORT_EVIDENCE_CHARS]}"
+        for item in evidence if item.get("text")
+    )
+    if not pages.strip():
+        return []
+    try:
+        raw = router_mod.complete(resolved, [{
+            "role": "user",
+            "content": SUPPORT_PROMPT.format(answer=answer[:6000], evidence=pages[:24000]),
+        }])
+    except Exception:
+        LOG.debug("could not check the answer against its sources", exc_info=True)
+        return []
+
+    # Research already owns the forgiving JSON reader — models fence it, prefix
+    # it, and trail commentary after it, and there is one tested copy of that.
+    from .research import extract_json
+
+    parsed = extract_json(raw or "")
+    if not isinstance(parsed, dict):
+        return []
+    found = []
+    for claim in parsed.get("unsupported", [])[:5]:
+        text = str(claim).strip()
+        # It has to be a quotation from the answer, or it is the checker
+        # writing rather than reading.
+        if len(text) > 12 and text[:40] in answer:
+            found.append(text)
+    return found
+
+
+SUPPORT_NUDGE = (
+    "These statements are not in any page you read:\n{listed}\n"
+    "Each one is either something you inferred or something you invented. "
+    "Rewrite the answer without them, or search for a source that actually "
+    "states them and cite it. Everything else in the answer was fine — keep "
+    "it, and keep the same structure."
+)
+
+
+def _support_nudge(claims: List[str]) -> str:
+    return SUPPORT_NUDGE.format(listed="\n".join(f"- {c}" for c in claims))
+
+
 def _search_gate_gap(searches: int, reads: int) -> Optional[str]:
     """What multi-turn still owes the user, if anything.
 
@@ -1548,6 +1671,22 @@ def _identifiers(text: str) -> set:
     return set(_IDENTIFIER.findall((text or "").lower()))
 
 
+def _identifier_key(token: str) -> str:
+    """An identifier reduced to what makes it that identifier.
+
+    Hyphens, spaces and dots inside a model number are typography, not
+    content: `f35`, `f-35` and `F 35` are one thing, and so are `gpt4` and
+    `gpt-4`. Comparing them literally is what made this check fire on its own
+    subject — asked for "f35 status" the model searched "F-35 delivery status
+    2025 2026 Lockheed Martin production deliveries TR-3 Block 4", which is a
+    *better* query than the question, and it was refused for "dropping f35".
+    The model then complied literally and searched "f35", which is the worst
+    query it could have run. The guard produced the exact failure it exists to
+    prevent, on the turn it was watching.
+    """
+    return re.sub(r"[-_.\s]", "", token or "")
+
+
 def _dropped_identifiers(question: str, query: str) -> set:
     """Identifiers in the question that the first search threw away.
 
@@ -1566,8 +1705,14 @@ def _dropped_identifiers(question: str, query: str) -> set:
     Only applied to the first search of a turn. A later query narrowing to
     "1250 hp coupe" has legitimately moved past the model number; the opening
     move has not earned that.
+
+    Compared on the normalised form, so writing the identifier *better* than
+    the user did counts as keeping it. The point is catching a substitution,
+    never punishing a spelling.
     """
-    return _identifiers(question) - _identifiers(query)
+    kept = {_identifier_key(token) for token in _identifiers(query)}
+    return {token for token in _identifiers(question)
+            if _identifier_key(token) not in kept}
 
 
 QUERY_IDENTIFIER_CORRECTION = (
@@ -1692,8 +1837,18 @@ MULTI_SEARCH_DIRECTIVE = (
     "somewhere else rather than reporting that you could not. Each round should "
     "be narrower than the last: use the words a source would use, not the words "
     "of the question.\n"
-    "- Cite the URL for anything you learned from a page, and say plainly when the "
+    # The preamble already asks for markdown links; this line used to say only
+    # "cite the URL", which is weaker and read as permission for the bare
+    # "[Gmauthority]" labels that link to nothing and cannot be checked.
+    "- Every claim carries its source as a link on the same line — "
+    "[GM Authority](https://...) — never a bare label. Say plainly when the "
     "sources disagree or when you could not find something.\n"
+    # The shape of the answers that came back rated good: they open by saying
+    # what the subject *is*, in the words someone who had to ask would need,
+    # before any heading or list.
+    "- Open with one sentence naming what the subject is and why it matters, "
+    "before any heading — a page of figures with no idea what they belong to "
+    "is a table, not an answer.\n"
     # The shape of an answer people actually want back: grouped, specific,
     # sourced. Not a topic-by-topic status report of the searching.
     "- Group what you found under a few plain headings, and make every line a "
@@ -2080,6 +2235,9 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
     last_open: List[str] = []
     goal_nudges = 0
     coverage_nudges = 0
+    # Capped at one. It costs a model call and a round, and a checker allowed
+    # to argue twice about the same paragraph would spend the budget on style.
+    support_nudges = 0
     final_text = ""
     stalled = False
     # What the provider said when it stopped talking to us, if it did. This
@@ -2100,6 +2258,9 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
     # forced answer is written from, so it has to fit in a context window that
     # the full transcript already overran.
     evidence = []
+    # Answer prose written in rounds that also called a tool. See where it is
+    # appended for why dropping it deleted the first half of real answers.
+    carried: List[str] = []
     # What the coding turn has actually run, as opposed to what it says it has.
     # Kept separate from `evidence`, which is search and page text and feeds the
     # forced-answer digest — a list of edit_file calls is not material to write
@@ -2262,8 +2423,46 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
                     working.append({"role": "user", "content": reason})
                     continue
 
-            final_text = content_str
+            answer = _restore_carried(carried, content_str)
+
+            # Last, and only once. The searching gates are about effort and the
+            # goal check is about coverage; this is the only one that asks
+            # whether the answer is *true to the pages*. It runs after the
+            # others so it grades the finished text rather than a draft that
+            # was going to be replaced anyway.
+            if gated and not stalled and evidence and support_nudges < MAX_SUPPORT_NUDGES:
+                rounds_left = rounds - round_index - 1
+                unsupported = (_unsupported_claims(resolved, answer, evidence)
+                               if rounds_left >= 1 else [])
+                if unsupported:
+                    support_nudges += 1
+                    reason = _support_nudge(unsupported)
+                    yield {"gate": {"reason": reason, "unsupported": unsupported,
+                                    "searches": searches, "reads": reads}}
+                    working.append({"role": "assistant", "content": content_str})
+                    working.append({"role": "user", "content": reason})
+                    # The carried opening was part of the answer just judged, so
+                    # it must not be prepended a second time to the rewrite.
+                    carried = []
+                    continue
+
+            final_text = answer
             break
+
+        # Prose written in a round that also called a tool.
+        #
+        # It was dropped. `content_parts` resets each round, so only the last
+        # round's text became the answer — and a model that writes its opening
+        # paragraph, realises it needs one more lookup, and then continues had
+        # its opening deleted. The user saw an answer starting mid-sentence at
+        # a bullet, with the heading and the introduction simply gone. The text
+        # went into `working` as something the assistant had already said, so
+        # the model never wrote it again: it believed it had been delivered.
+        #
+        # Kept here and put back at the end. In gated mode none of it was
+        # streamed, so restoring it cannot double anything on screen.
+        if content_str.strip():
+            carried.append(content_str)
 
         working.append({"role": "assistant", "content": content_str, "tool_calls": tool_calls})
         for call in tool_calls:
@@ -2420,6 +2619,34 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
             }}
 
     yield {"_final_text": final_text}
+
+
+# What is worth keeping out of the stream, and how much of it.
+#
+# Not everything: `chunk` is the answer, which is stored as the message, and
+# re-storing it would double the row. What is kept is the evidence — what was
+# searched, what was opened, what came back, what sent the turn back — because
+# that is what a reader cannot reconstruct from the prose.
+TRACE_EVENTS = ("tool", "tool_result", "plan", "gate", "route", "search_mode",
+                "skill", "source", "document", "suggest_research",
+                "provider_error", "error")
+# A trace is stored as one JSON column on one row. A turn that read six pages
+# would otherwise carry the whole of all six into the transcript.
+TRACE_RESULT_CHARS = 400
+MAX_TRACE_EVENTS = 200
+
+
+def _remember_trace(trace: List[Dict[str, Any]], event: Dict[str, Any]):
+    """Keep the parts of an event worth reopening the conversation for."""
+    if len(trace) >= MAX_TRACE_EVENTS:
+        return
+    kind = next((k for k in TRACE_EVENTS if k in event), "")
+    if not kind:
+        return
+    kept = event[kind]
+    if kind == "tool_result" and isinstance(kept, dict):
+        kept = {**kept, "result": str(kept.get("result", ""))[:TRACE_RESULT_CHARS]}
+    trace.append({kind: kept})
 
 
 def _memory_origin(req, override=None) -> str:
@@ -2589,6 +2816,12 @@ def _chat_stream_response(req, conv, history, skill, resolved, prelude=None,
 
     def _body():
         final_text = ""
+        # What the turn did, kept so it survives the page. The searches, the
+        # pages read and the plan were rendered live and then thrown away —
+        # reopen the conversation and only the prose came back, which is the
+        # half you can already read. The evidence is the half you cannot
+        # reconstruct, and it is the reason to trust the answer at all.
+        trace: List[Dict[str, Any]] = []
         if prelude:
             yield f"data: {json.dumps({'document': prelude})}\n\n"
         # The last line of defence, and the one that was missing. By the time
@@ -2612,6 +2845,7 @@ def _chat_stream_response(req, conv, history, skill, resolved, prelude=None,
                     outstanding.add(event["approval_request"]["id"])
                 elif "approval_resolved" in event:
                     outstanding.discard(event["approval_resolved"]["id"])
+                _remember_trace(trace, event)
                 yield f"data: {json.dumps(event)}\n\n"
         except Exception as exc:
             LOG.exception("chat turn failed")
@@ -2622,7 +2856,9 @@ def _chat_stream_response(req, conv, history, skill, resolved, prelude=None,
             )
             yield f"data: {json.dumps({'chunk': final_text})}\n\n"
         try:
-            stored = conv_mod.add_message(req.conversation_id, "assistant", final_text)
+            stored = conv_mod.add_message(
+                req.conversation_id, "assistant", final_text,
+                metadata={"trace": trace} if trace else None)
             _post_turn(
                 req.conversation_id, req.message, final_text,
                 stored.get("id") if isinstance(stored, dict) else None,

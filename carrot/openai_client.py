@@ -101,6 +101,16 @@ class OpenAICompatibleClient:
         calls = _ToolCallAccumulator()
 
         with self._request(payload, stream=True) as response:
+            # Server-sent events are UTF-8 by specification, always. But the
+            # header is usually a bare `text/event-stream` with no charset,
+            # and `requests` maps any charset-less `text/*` to ISO-8859-1 —
+            # so every hosted provider's stream was being decoded as Latin-1.
+            # An em dash arrived as "â", "Łask" as "Åask", and the mojibake
+            # went into the answer, the stored message and the memory.
+            #
+            # Never guessed: SSE has no other legal encoding, so this is the
+            # right value rather than a better default.
+            response.encoding = "utf-8"
             for line in response.iter_lines(decode_unicode=True):
                 if not line or not line.startswith("data:"):
                     continue

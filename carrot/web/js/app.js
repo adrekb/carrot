@@ -291,6 +291,30 @@ function renderEngineCard(s) {
         </div>`;
 }
 
+// The reader fallback, for pages that refuse to be read.
+//
+// Off unless asked for. It sends the page's address to a third party, and the
+// address is the private part — "what did you look up" is the question Carrot
+// exists not to send anywhere. So this is a switch the user flips knowingly,
+// not a default that quietly improves the numbers.
+async function setReaderFallback(enabled) {
+    try {
+        await api('/api/config/reader_fallback', {
+            method: 'PUT', body: JSON.stringify(!!enabled),
+        });
+    } catch (_) {
+        // Put the checkbox back where it was rather than showing a state the
+        // server does not agree with.
+        const box = document.getElementById('reader-fallback-toggle');
+        if (box) box.checked = !enabled;
+    }
+}
+
+function renderReaderFallback(cfg) {
+    const box = document.getElementById('reader-fallback-toggle');
+    if (box) box.checked = !!(cfg || {}).reader_fallback;
+}
+
 async function loadRecapConfig() {
     try {
         const cfg = await api('/api/config');
@@ -299,6 +323,7 @@ async function loadRecapConfig() {
         recapCfg.last_run = cfg.recap_auto_last_run || '';
         // Same fetch, so the rail's server copy costs nothing extra.
         syncRailFromServer(cfg);
+        renderReaderFallback(cfg);
     } catch (_) {}
 }
 
@@ -1552,7 +1577,14 @@ async function openConversation(convId) {
     const messagesEl = document.getElementById('chat-messages');
     messagesEl.innerHTML = '';
     document.getElementById('chat-title').textContent = conv.title || 'Untitled';
-    const rendered = conv.messages.map(m => appendMessage(m.role, m.content, m.id));
+    const rendered = conv.messages.map(m => {
+        const el = appendMessage(m.role, m.content, m.id);
+        // What the turn actually did. Rendered live and then lost on every
+        // reload — reopening a chat gave you the prose and none of the
+        // evidence, which is the half you cannot reconstruct by reading.
+        replayTrace(el, (m.metadata || {}).trace);
+        return el;
+    });
     // Charts made earlier in this conversation are part of it — reopening a
     // chat and finding the figures gone would make them feel disposable.
     if (typeof mountArtifacts === 'function') {
@@ -1567,6 +1599,52 @@ async function openConversation(convId) {
         } catch (_) { /* older conversation, or none stored */ }
     }
     switchTab('workspace');
+}
+
+// Rebuild a stored trace above a message that has already been rendered.
+//
+// The same shapes the live stream draws, from the same event names, so a
+// reopened turn reads exactly like the one you watched. It is deliberately
+// one-way and lossy: the stored events carry a clipped tool result, and the
+// plan is drawn at whatever state it finished in rather than re-ticking.
+// Replaying it as an animation would be a re-enactment, not a record.
+function replayTrace(messageEl, trace) {
+    if (!messageEl || !Array.isArray(trace) || !trace.length) return;
+    const content = messageEl.querySelector('.content');
+    const box = document.createElement('div');
+    box.className = 'trace tool-trace';
+    messageEl.insertBefore(box, content || null);
+
+    const line = (text, cls) => {
+        const div = document.createElement('div');
+        div.className = 'trace-line' + (cls ? ' ' + cls : '');
+        div.textContent = text;
+        box.appendChild(div);
+    };
+
+    let plan = null;
+    for (const event of trace) {
+        if (event.skill) line('skill: ' + event.skill.name, 'intent');
+        if (event.search_mode) line('search: ' + event.search_mode, 'intent');
+        if (event.plan) plan = event.plan;          // the last one is the outcome
+        if (event.gate) {
+            const unmet = (event.gate.unmet || []).length;
+            line(unmet ? `  ↻ ${unmet} thing(s) from the plan still unanswered`
+                       : '  ↻ sent back: ' + String(event.gate.reason).split('\n')[0],
+                 'intent');
+        }
+        if (event.tool) {
+            const why = event.tool.rejected
+                ? `  ✗ not run: ${event.tool.reason || 'refused'}` : '';
+            line(`tool → ${event.tool.name}(${JSON.stringify(event.tool.args)})${why}`,
+                 event.tool.rejected ? 'error' : 'search');
+        }
+        if (event.tool_result) line('← ' + String(event.tool_result.result), 'result');
+        if (event.provider_error) line('provider: ' + event.provider_error.message, 'error');
+        if (event.error) line('error: ' + event.error, 'error');
+    }
+    if (plan && plan.goals) renderPlan(messageEl, plan);
+    if (!box.childElementCount) box.remove();
 }
 
 // ===== Which panels the conversation page shows =====

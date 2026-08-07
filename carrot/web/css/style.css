@@ -5383,3 +5383,36 @@ body #cmdbar:focus-within {
   box-shadow: var(--shadow-lg), 0 2px 8px rgba(0, 0, 0, 0.3),
               0 0 0 3px var(--accent-soft);
 }
+
+/* The line that says a coding turn has stopped, and what it did.
+   A finished turn used to just stop — the caret vanished and the prose sat
+   there, often ending in a question, with nothing to distinguish "finished"
+   from "still thinking". */
+.agent-done {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+.agent-done .ico { width: 13px; height: 13px; color: var(--green); }
+.agent-done-time { color: var(--faint); }
+.agent-done-files {
+  flex: 0 0 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 6px;
+}
+.agent-done-files code {
+  padding: 2px 6px;
+  border-radius: var(--r-xs);
+  background: var(--card2);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+}

@@ -95,7 +95,31 @@ def fake_ollama(monkeypatch):
 
 
 @pytest.fixture
-def client(isolated_db, fake_ollama):
+def no_background_workers(monkeypatch):
+    """Keep app startup from running pollers against the test's database.
+
+    Entering a `TestClient` runs the app's startup, which starts the proactive
+    watcher and the research scheduler. The watcher's loop calls `run_checks()`
+    *immediately*, before its first wait — so it raced every test that used a
+    client, against the same database, on its own thread.
+
+    It showed up as one flaky test. `test_notification_api_flow` creates an
+    overdue reminder and asserts that an explicit check raises a notification
+    for it; when the watcher got there first, the notification already existed,
+    dedupe suppressed the second one, and the count came back 0. Whether it
+    happened depended on thread scheduling, which is why it looked like noise.
+
+    No test starts either worker or asserts on one, so nothing is lost by not
+    running them here. A test that wants one can call it directly.
+    """
+    from carrot import proactive, deep_research
+
+    monkeypatch.setattr(proactive, "start_watcher", lambda *a, **k: None)
+    monkeypatch.setattr(deep_research, "start_scheduler", lambda *a, **k: None)
+
+
+@pytest.fixture
+def client(isolated_db, fake_ollama, no_background_workers):
     """A TestClient wired to the isolated DB, mocked Ollama, and a session token."""
     from fastapi.testclient import TestClient
     from carrot import app as carrot_app, security
@@ -108,7 +132,7 @@ def client(isolated_db, fake_ollama):
 
 
 @pytest.fixture
-def unauthenticated_client(isolated_db, fake_ollama):
+def unauthenticated_client(isolated_db, fake_ollama, no_background_workers):
     """A TestClient with no session token, for testing the auth gate itself."""
     from fastapi.testclient import TestClient
     from carrot import app as carrot_app
