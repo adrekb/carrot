@@ -15,7 +15,7 @@ WEB = Path(__file__).resolve().parents[1] / "carrot" / "web"
 
 
 def read(*parts):
-    return WEB.joinpath(*parts).read_text()
+    return WEB.joinpath(*parts).read_text(encoding="utf-8")
 
 
 class TestTheDragOverlayCannotEatTheApp:

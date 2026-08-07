@@ -95,7 +95,7 @@ class TestPurging:
         # "Temporary" that survives a crash is not temporary. Sweeping at
         # startup makes the promise unconditional rather than dependent on a
         # clean shutdown.
-        source = (Path(__file__).resolve().parents[1] / "carrot" / "app.py").read_text()
+        source = (Path(__file__).resolve().parents[1] / "carrot" / "app.py").read_text(encoding="utf-8")
         startup = source.split("def startup():")[1][:600]
         assert "purge_temporary()" in startup
 
@@ -107,7 +107,7 @@ class TestPurging:
 class TestTheInterface:
     def read(self, *parts):
         from pathlib import Path
-        return Path(__file__).resolve().parents[1].joinpath("carrot", "web", *parts).read_text()
+        return Path(__file__).resolve().parents[1].joinpath("carrot", "web", *parts).read_text(encoding="utf-8")
 
     def test_there_is_a_toggle_in_the_composer(self):
         assert 'id="temp-btn"' in self.read("index.html")
@@ -165,5 +165,5 @@ class TestPanelCeiling:
     def test_the_ceiling_explains_itself(self):
         from pathlib import Path
 
-        source = (Path(__file__).resolve().parents[1] / "carrot" / "consensus.py").read_text()
+        source = (Path(__file__).resolve().parents[1] / "carrot" / "consensus.py").read_text(encoding="utf-8")
         assert "the machine and the wallet are the user's to know about" in source

@@ -396,7 +396,7 @@ class TestGitTiers:
     def test_no_git_call_ever_uses_a_shell(self):
         from pathlib import Path
 
-        source = (Path(__file__).resolve().parents[1] / "carrot" / "gitops.py").read_text()
+        source = (Path(__file__).resolve().parents[1] / "carrot" / "gitops.py").read_text(encoding="utf-8")
         assert "shell=True" not in source
 
 

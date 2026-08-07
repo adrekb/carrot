@@ -312,7 +312,7 @@ class TestCodeTabWiring:
     def read(self, *parts):
         from pathlib import Path
         root = Path(__file__).resolve().parents[1] / "carrot" / "web"
-        return root.joinpath(*parts).read_text()
+        return root.joinpath(*parts).read_text(encoding="utf-8")
 
     def test_the_mode_switch_is_in_the_markup(self):
         html = self.read("index.html")
@@ -353,7 +353,7 @@ class TestAgentPanel:
 
     def read(self, *parts):
         from pathlib import Path
-        return Path(__file__).resolve().parents[1].joinpath("carrot", "web", *parts).read_text()
+        return Path(__file__).resolve().parents[1].joinpath("carrot", "web", *parts).read_text(encoding="utf-8")
 
     def test_the_panel_exists_in_the_code_tab(self):
         html = self.read("index.html")

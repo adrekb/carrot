@@ -263,7 +263,7 @@ class TestInstallEndpoint:
 class TestCodeTabWiring:
     def read(self, *parts):
         from pathlib import Path
-        return Path(__file__).resolve().parents[1].joinpath("carrot", "web", *parts).read_text()
+        return Path(__file__).resolve().parents[1].joinpath("carrot", "web", *parts).read_text(encoding="utf-8")
 
     def test_the_offer_area_exists(self):
         assert 'id="run-offer"' in self.read("index.html")
