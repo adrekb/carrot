@@ -455,7 +455,10 @@
           <p id="chat-empty-line">Ask anything below.</p>
         </div>
       </div>
-      <div id="terminal-panel">
+      <!-- Collapsed to start. A terminal open by default takes 190px off the
+           conversation for a tool most turns never touch, and it made the
+           whole workspace read as a developer console. One click away. -->
+      <div id="terminal-panel" class="collapsed">
         <div id="term-head" onclick="toggleTerminal()">
           <svg class="ico"><use href="#i-terminal"/></svg>
           <span class="term-title">terminal — carrot@local</span>
@@ -908,6 +911,9 @@
 
       <div class="research-grid">
         <div class="research-trace-pane">
+          <!-- The plan, above the trace: what the run is trying to find out,
+               rather than the line-by-line of it doing so. -->
+          <div id="research-plan-host"></div>
           <h3 class="small-head">Trace</h3>
           <div id="research-trace" class="trace"><div class="trace-line">Each researcher reports here as it searches, reads and checks.</div></div>
           <h3 class="small-head">Sources</h3>

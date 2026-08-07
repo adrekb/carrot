@@ -208,3 +208,52 @@ class TestTheComposerKeepsItsShape:
         # The text field goes on top, where it is the thing being used.
         assert "order: -1;" in wrapped
         assert "flex: 1 0 100%;" in wrapped
+
+
+class TestThePlanChecklist:
+    """A long run gave no sense of what it was trying to find out.
+
+    You watched searches go past with no way to tell whether any of them were
+    the point, or how much was left. The plan is now a list that ticks, and it
+    is the same component in chat and in Research so there is one thing to
+    learn rather than three progress displays.
+    """
+
+    def test_the_component_exists_and_replaces_itself(self):
+        source = read("js", "app.js")
+        assert "function renderPlan(" in source
+        # Re-sent every time it changes, so it must update in place rather than
+        # stacking copies of itself down the transcript.
+        assert "let box = host.querySelector('.plan-box');" in source
+
+    def test_it_sits_above_the_answer(self):
+        # It is what you watch while the answer does not exist yet.
+        assert "host.insertBefore(box, content || null);" in read("js", "app.js")
+
+    def test_done_items_are_marked_twice_over(self):
+        # On a list of five, colour alone is a weak signal.
+        css = read("css", "style.css")
+        assert ".plan-item.done .plan-text { text-decoration: line-through; }" in css
+        assert ".plan-item.done .plan-mark { color: var(--green); }" in css
+
+    def test_research_uses_the_same_component(self):
+        source = read("js", "agents.js")
+        assert "renderPlan(document.getElementById('research-plan-host')" in source
+        assert "event.plan_progress" in source
+
+    def test_research_clears_its_plan_between_runs(self):
+        # A plan left over from the last run would tick against this one.
+        source = read("js", "agents.js")
+        assert "researchGoals = [];" in source
+        assert "document.getElementById('research-plan-host').innerHTML = '';" in source
+
+
+class TestTheTerminalStartsOutOfTheWay:
+    def test_it_is_collapsed_by_default(self):
+        # Open by default it took 190px off the conversation for a tool most
+        # turns never touch, and made the workspace read as a developer console.
+        html = read("index.html")
+        assert '<div id="terminal-panel" class="collapsed">' in html
+
+    def test_it_is_still_one_click_away(self):
+        assert 'onclick="toggleTerminal()"' in read("index.html")

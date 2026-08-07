@@ -676,6 +676,44 @@ function appendMessage(role, content, messageId) {
     return div;
 }
 
+// ===== The plan a run is working to =====
+//
+// One element per turn, replaced in place as the server re-sends it, so the
+// list ticks rather than piling up copies of itself. Rendered above the answer
+// because it is the thing you watch while the answer does not exist yet.
+//
+// Every panel that runs a long job renders the same component from the same
+// event, so a plan looks and behaves the same in chat, Research and the Code
+// tab — three different-looking progress lists would be three things to learn.
+
+function renderPlan(host, plan) {
+    if (!host || !plan || !plan.goals || !plan.goals.length) return null;
+    let box = host.querySelector('.plan-box');
+    if (!box) {
+        box = document.createElement('div');
+        box.className = 'plan-box';
+        box.innerHTML = '<div class="plan-head">'
+            + '<svg class="ico"><use href="#i-check"/></svg><span>Plan</span>'
+            + '<span class="plan-count"></span></div><div class="plan-items"></div>';
+        const content = host.querySelector('.content');
+        host.insertBefore(box, content || null);
+    }
+    const done = new Set(plan.done || []);
+    const items = box.querySelector('.plan-items');
+    items.innerHTML = '';
+    for (const goal of plan.goals) {
+        const row = document.createElement('div');
+        const isDone = done.has(goal);
+        row.className = 'plan-item' + (isDone ? ' done' : '');
+        row.innerHTML = `<span class="plan-mark">${isDone ? '✓' : '○'}</span>`
+            + `<span class="plan-text">${escHtml(goal)}</span>`;
+        items.appendChild(row);
+    }
+    box.querySelector('.plan-count').textContent = `${done.size}/${plan.goals.length}`;
+    box.classList.toggle('complete', done.size === plan.goals.length);
+    return box;
+}
+
 // ===== Message actions =====
 //
 // Copy, rerun, branch. All three exist because a chat transcript is not a log
@@ -1087,6 +1125,22 @@ async function streamTurn(url, payload, skill) {
                     const why = payload.route.auto && payload.route.reason
                         ? ` — ${payload.route.reason.replace(/^auto: /, '')}` : '';
                     toolLine(`${payload.route.model} (${where})${why}`, 'intent');
+                }
+                // What the run is actually trying to find out, ticking as it
+                // finds it. A long run gave no sense of this at all — you
+                // watched searches go past with no way to tell whether any of
+                // them were the point, or how much was left.
+                if (payload.plan && payload.plan.goals) {
+                    renderPlan(assistantEl, payload.plan);
+                }
+                // Why an answer was pushed back. Shown because a turn that
+                // silently takes four extra rounds looks like it is stuck.
+                if (payload.gate) {
+                    const unmet = (payload.gate.unmet || []).length;
+                    toolLine(unmet
+                        ? `  ↻ ${unmet} thing(s) from the plan still unanswered`
+                        : '  ↻ sent back: ' + String(payload.gate.reason).split('\n')[0],
+                        'intent');
                 }
                 if (payload.document) {
                     // A doc send reports what it actually attached, before any
