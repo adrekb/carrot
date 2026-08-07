@@ -2,6 +2,7 @@
 import sys
 import os
 import json
+import subprocess
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -45,7 +46,12 @@ def main():
         print(f"Press Ctrl+C to stop")
         import webbrowser
         webbrowser.open(url)
-        os.system(f"python -m carrot.app")
+        # `sys.executable`, not "python": inside a virtualenv the bare name
+        # resolves against PATH, which may be a different interpreter or none
+        # at all — and `os.system` threw the child's exit code away, so a
+        # server that failed to start looked like one that had stopped
+        # normally. Same interpreter, and the code comes back.
+        raise SystemExit(subprocess.call([sys.executable, "-m", "carrot.app"]))
 
     elif command == "terminal":
         init_db()

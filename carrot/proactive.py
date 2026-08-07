@@ -385,11 +385,19 @@ def _watch_loop():
 
 
 def start_watcher():
-    """Start the background watcher (idempotent)."""
+    """Start the background watcher (idempotent).
+
+    The clear comes first. It used to sit after the liveness check, which is a
+    race: a thread that has been asked to stop is still alive until it next
+    looks at the flag, so a start arriving in that window returned early —
+    leaving the flag set — and the thread then exited on it. The result was no
+    watcher at all, from a call whose whole job was to guarantee one. Clearing
+    first means a pending stop is cancelled either way.
+    """
     global _watcher
+    _stop.clear()
     if _watcher is not None and _watcher.is_alive():
         return
-    _stop.clear()
     _watcher = threading.Thread(target=_watch_loop, daemon=True, name="carrot-proactive")
     _watcher.start()
 

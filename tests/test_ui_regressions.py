@@ -18,6 +18,11 @@ def read(*parts):
     return WEB.joinpath(*parts).read_text(encoding="utf-8")
 
 
+def read_py(rel):
+    root = Path(__file__).resolve().parents[1]
+    return root.joinpath(rel).read_text(encoding="utf-8")
+
+
 class TestTheDragOverlayCannotEatTheApp:
     """One stuck CSS class killed every input and every button in the app.
 
@@ -89,109 +94,38 @@ class TestTheCityListIsClickable:
 class TestTheComposerLeavesRoomToType:
     """The input the box exists for had about an inch of width.
 
-    The first fix keyed the label collapse to a viewport media query, which is
-    the wrong measurement: the bar is capped at 760px however wide the window
-    is, so on a 1000px screen the labels stayed on, eight controls took ~700px,
-    and the placeholder rendered as "Ask ar".
-    """
+    Eight controls and the text field shared one row, and the input was the
+    only item that would give up space, so it did — all of it. Two fixes went
+    in on top of that arrangement rather than at it: `min-width: 0` so the
+    controls stopped being deformed instead (the send button rendered as a
+    16x36 ellipse), then a container query hiding the labels one breakpoint at
+    a time, which had to be re-pinned once because 720px sat *below* the bar's
+    own 760px cap and so never fired.
 
-    def test_the_collapse_is_keyed_to_the_bar_not_the_window(self):
-        css = read("css", "style.css")
-        assert "#cmdbar { container-type: inline-size; }" in css
-
-    def test_the_collapse_fires_at_the_width_the_bar_actually_rests_at(self):
-        """The breakpoint has to clear the bar's own cap, or it never fires.
-
-        Keying to the bar is necessary but not sufficient. The first version
-        asserted the literal string "@container (max-width: 720px)" and passed
-        green while the bug was live, because 720px is *below* the 760px the bar
-        rests at — so on a 1000px window the query never matched, the input
-        stayed pinned to its 160px floor, and the placeholder still cut off
-        mid-word. Compare the two numbers instead of spelling either one out.
-        """
-        css = read("css", "style.css")
-        # Scoped to the #cmdbar rules on purpose: an unanchored min(Npx, calc(
-        # 100vw ...)) also matches unrelated panels and drags their widths in.
-        caps = [int(n) for n in re.findall(r"#cmdbar\s*{[^}]*?width:\s*min\((\d+)px", css)]
-        resting = min(caps)          # the narrow bar, the one that broke
-        widest = max(caps)           # the wide-screen bar, where labels still fit
-        assert resting == 760 and widest == 920, f"bar widths moved: {sorted(set(caps))}"
-
-        breakpoints = [int(n) for n in re.findall(r"@container \(max-width: (\d+)px\)", css)]
-        collapse = max(breakpoints)
-        assert collapse >= resting, (
-            f"the label collapse fires at {collapse}px but the bar rests at "
-            f"{resting}px, so it never fires when the input is squeezed"
-        )
-        assert collapse < widest, (
-            f"the collapse at {collapse}px would also strip the labels off the "
-            f"{widest}px wide-screen bar, where they fit fine"
-        )
-
-    def test_there_is_a_fallback_without_container_queries(self):
-        css = read("css", "style.css")
-        assert "@supports not (container-type: inline-size)" in css
-
-    def test_the_input_has_a_floor(self):
-        assert "#cmd-input { min-width: 160px; }" in read("css", "style.css")
-
-
-class TestTheAgentSaysWhichModelItUses:
-    """It silently borrowed whatever the chat composer was set to.
-
-    A coding agent is where the model matters most — a 4B local model and a
-    frontier model are not interchangeable at editing a file — and it was the
-    one place you could neither see the choice nor make it.
-    """
-
-    def test_the_picker_is_in_the_panel(self):
-        assert 'id="agent-model"' in read("index.html")
-
-    def test_it_is_populated_from_the_models_the_machine_can_reach(self):
-        js = read("js", "features.js")
-        assert "loadAgentModelPicker" in js
-        assert "loadAvailableModels" in js
-
-    def test_following_the_chat_model_stays_the_default(self):
-        # Silently changing which model runs someone's agent is not an upgrade.
-        js = read("js", "features.js")
-        assert "Same as chat" in js
-
-    def test_the_choice_actually_reaches_the_request(self):
-        js = read("js", "features.js")
-        body = js.split("await fetch('/api/chat/stream'")[1].split("});")[0]
-        assert "agentModel" in body
-
-    def test_the_choice_survives_a_restart(self):
-        assert "carrot-agent-model" in read("js", "features.js")
-
-
-class TestTheComposerKeepsItsShape:
-    """Reported with a screenshot: the send button as a tall orange sliver.
-
-    `#cmd-input` is a flex item, and `min-width: auto` floors a text input at
-    its content width — about 160px. The bar had to find that space somewhere
-    and took it from the only items that would give: every fixed-size control
-    beside it. In a narrow window the send button was squeezed to 16px wide
-    while staying 36 tall, and a `border-radius: 50%` circle rendered at those
-    dimensions is an ellipse.
-
-    Refusing to deform them is only half the fix. Nine controls and a text
-    field do not fit on one line in a narrow window, so without wrapping the
-    row simply overflows and the send button is clipped by the edge instead of
-    squashed by its neighbours — which is the other thing in the screenshot.
+    The row split ended the argument. The question gets its own line at full
+    width, the controls get theirs, and the six you set once and forget moved
+    behind the plus. Nothing competes, so nothing has to collapse — these
+    tests pin that there is no width at which the old squeeze can come back.
     """
 
     def css(self):
         return read("css", "style.css")
 
-    def test_the_input_is_what_gives_up_space(self):
-        block = self.css()[self.css().index("#cmd-input {"):]
-        assert "min-width: 0;" in block[:block.index("}")]
+    def test_the_bar_is_two_rows_by_construction(self):
+        # Not a flex row that wraps under pressure — wrapping is a fallback,
+        # and a fallback has a width at which it has not happened yet.
+        block = self.css()[self.css().index("#cmdbar {"):]
+        block = block[:block.index("}")]
+        assert "flex-direction: column;" in block
 
-    def test_the_controls_do_not_shrink(self):
-        assert "#cmdbar > button," in self.css()
-        assert "flex-shrink: 0;" in self.css()
+    def test_the_question_takes_the_whole_width(self):
+        block = self.css()[self.css().index("#cmd-input {"):]
+        block = block[:block.index("}")]
+        assert "width: 100%;" in block
+        # The property that stops a flex item being floored at its content
+        # width. Nothing competes with the input now, but leaving it correct
+        # costs nothing and it is what the original bug turned on.
+        assert "min-width: 0;" in block
 
     def test_the_send_button_holds_its_own_size(self):
         block = self.css()[self.css().index("#send-btn {"):]
@@ -200,14 +134,202 @@ class TestTheComposerKeepsItsShape:
         # A circle is only a circle while the two are equal.
         assert "width: 36px; height: 36px;" in block
 
-    def test_a_narrow_window_wraps_instead_of_overflowing(self):
+    def test_send_sits_at_the_far_end(self):
+        assert ".cmd-gap { flex: 1 1 auto;" in self.css()
+
+    def test_the_labels_degrade_by_ellipsis_not_by_breakpoint(self):
+        """The container query is gone, and must not come back by reflex.
+
+        It was mis-keyed twice — 720px sat below the bar's own 760px cap, so
+        it never fired at the width that broke — because a breakpoint has to
+        guess a number. Text does not need one: the pickers shrink and the
+        labels ellipsis, continuously, at every width.
+        """
         css = self.css()
-        assert "@media (max-width: 620px)" in css
-        wrapped = css[css.index("@media (max-width: 620px)"):]
-        assert "flex-wrap: wrap;" in wrapped
-        # The text field goes on top, where it is the thing being used.
-        assert "order: -1;" in wrapped
-        assert "flex: 1 0 100%;" in wrapped
+        assert "@container (max-width" not in css
+        assert "container-type: inline-size" not in css
+        # The mechanism that replaced it.
+        assert "#model-label, #search-label, #active-skill-name {" in css
+
+    def test_the_icon_buttons_are_the_ones_that_stay_rigid(self):
+        # A circle at 80% is not a smaller circle, it is a broken one. Text
+        # has a graceful way to be too long; a 36px circle does not.
+        css = self.css()
+        block = css[css.index("#cmd-row > #send-btn,"):]
+        assert "flex-shrink: 0;" in block[:block.index("}")]
+
+    def test_phone_width_gives_up_the_recoverable_label(self):
+        """The ellipsis has a floor — two icons, a chevron and the button
+        padding are ~60px per picker before any label at all — so below phone
+        width something still has to go. It is the search label, because the
+        icon carries it; the model name stays, being the one piece of state
+        you cannot read off an icon.
+
+        The desktop app never reaches this: its window has a 1024px minimum.
+        """
+        css = self.css()
+        narrow = css[css.index("@media (max-width: 560px)"):]
+        narrow = narrow[:narrow.index("}")]
+        assert "#search-label" in narrow
+        assert "#model-label" not in narrow
+
+    def test_the_model_name_still_cannot_run_away(self):
+        # The one label that is user-supplied and arbitrarily long:
+        # `mistral-small-3.2-24b-instruct-2506-q4_K_M` would push send off the
+        # end on its own.
+        block = self.css()[self.css().index("#model-label {"):]
+        block = block[:block.index("}")]
+        assert "text-overflow: ellipsis;" in block
+
+
+class TestTheComposerToolMenu:
+    """Settings behind the plus; actions and live state on the row.
+
+    Attaching a file and dictating are things you do in the middle of writing
+    a question, so they keep their own buttons — two clicks for either is one
+    too many. Temporary, Memory, Council and read-aloud are set once and then
+    stopped looking at, so they moved. Search mode and model stay because they
+    are state you need to read at a glance.
+    """
+
+    def row(self):
+        html = read("index.html")
+        return html.split('<div id="cmd-row">')[1].split('id="send-btn"')[0]
+
+    def menu(self):
+        html = read("index.html")
+        return html.split('<div id="tool-pop"')[1].split('id="attach-btn"')[0]
+
+    def test_the_settings_moved_into_the_menu(self):
+        # These handlers find their buttons by id and toggle classes on them.
+        # The menu is where they are drawn, not what they do.
+        for control in ("temp-btn", "memory-btn", "debate-btn", "speak-toggle"):
+            assert f'id="{control}"' in self.menu(), f"{control} is not in the menu"
+
+    def test_attaching_and_dictating_keep_their_own_buttons(self):
+        row = self.row()
+        for control in ("attach-btn", "mic-btn"):
+            assert f'id="{control}"' in row, f"{control} should be on the row"
+        assert f'id="{control}"' not in self.menu()
+
+    def test_the_lit_states_survived_the_move(self):
+        # `.composer-chip.on` styled the old chips. The handlers still toggle
+        # `on`, `recording` and `needs-setup`; without rules for them on the
+        # menu items the state would be set and invisible.
+        css = read("css", "style.css")
+        for rule in (".tool-item.on", ".tool-item.recording", ".tool-item.needs-setup"):
+            assert rule in css
+
+    def test_the_menu_is_the_same_glass_as_every_other_popover(self):
+        """What made it read as a foreign widget.
+
+        It rolled its own background, border and radius instead of joining the
+        shared floating-layer rule — and the radius it asked for, `--r-md`, is
+        not one of the five that exist, so it fell back to square corners next
+        to a bar with 14px ones. The surface is stated per theme, so joining
+        the selector is the only way to be right in all three.
+        """
+        css = read("css", "style.css")
+        surfaces = [line for line in css.splitlines()
+                    if "#model-pop" in line and "#tool-pop" in line]
+        assert len(surfaces) >= 4, "tool-pop is not on every themed popover surface"
+        block = css[css.index("\n#tool-pop {"):]
+        block = block[:block.index("}")]
+        assert "border-radius" not in block, "it is rolling its own radius again"
+
+    def test_a_menu_over_the_conversation_is_opaque(self):
+        """You could read the dashboard card and the placeholder straight
+        through it.
+
+        The composer's popovers are children of `#cmdbar`, which has a
+        `backdrop-filter` of its own. Nested backdrop-filters do not compose —
+        the ancestor establishes the backdrop root, so the child's blur samples
+        an already-flattened backdrop and does nothing, leaving the bare 82%
+        alpha of the glass colour. Glass is for a layer over its own
+        background; these float over arbitrary content.
+        """
+        css = read("css", "style.css")
+        block = css[css.index("#cmdbar #tool-pop,"):]
+        block = block[:block.index("}")]
+        for pop in ("#cmdbar #model-pop", "#cmdbar #search-pop"):
+            assert pop in block, f"{pop} has the same flaw and is not covered"
+        assert "background: var(--card);" in block
+        assert "backdrop-filter: none;" in block
+
+    def test_the_opaque_rule_does_not_depend_on_source_order(self):
+        # The themed glass rules are plain id selectors appearing later in the
+        # file. Matching their specificity would make this a coin flip.
+        assert "#cmdbar #tool-pop," in read("css", "style.css")
+
+    def test_no_rule_asks_for_a_variable_that_does_not_exist(self):
+        """The general form of the bug that made the menu look wrong.
+
+        `#tool-pop` asked for `var(--r-md)`, which is not one of the five
+        radius tokens, so it got square corners next to a 14px bar. The same
+        slip then put `var(--hover)` on the menu rows, where nothing is
+        defined either and the hover state simply did nothing. Neither fails
+        loudly — CSS drops the declaration and moves on.
+
+        Only bare `var(--x)` counts. `var(--panel, var(--card))` is a
+        deliberate hook with a fallback, which is valid and works.
+        """
+        css = read("css", "style.css")
+        defined = set(re.findall(r"(--[a-z0-9-]+)\s*:", css))
+        # Some are set inline by JS on the element that uses them.
+        defined |= set(re.findall(r"(--[a-z0-9-]+)\s*:", read("js", "theme.js")))
+        bare = set(re.findall(r"var\(\s*(--[a-z0-9-]+)\s*\)", css))
+        missing = sorted(bare - defined)
+        assert not missing, f"CSS asks for variables nothing defines: {missing}"
+
+    def test_it_only_uses_radius_tokens_that_exist(self):
+        css = read("css", "style.css")
+        defined = set(re.findall(r"--r-([a-z]+):", css))
+        used = set(re.findall(r"var\(--r-([a-z]+)\)", css))
+        assert used <= defined, f"undefined radius tokens: {sorted(used - defined)}"
+
+    def test_the_menu_closes_when_you_click_away(self):
+        assert "closeToolMenu()" in read("js", "app.js")
+
+    def test_the_search_menu_closes_when_you_click_away_too(self):
+        """It never did. It closed by picking a mode or by hitting the same
+        button again, so clicking anywhere else left it over the conversation."""
+        js = read("js", "app.js")
+        handler = js.split("// Click outside closes the popovers")[1].split("});")[0]
+        assert "search-pop" in handler
+
+
+class TestImagesAreNotOfferedToAModelThatCannotSeeThem:
+    """The refusal existed, but only on send, as a 400.
+
+    You found the file, attached it, wrote the question, and only then were
+    told the model cannot read images. The composer knows beforehand now.
+    """
+
+    def test_the_server_says_whether_chat_can_see(self):
+        assert '"chat_vision": chat_vision' in read_py("carrot/app.py")
+
+    def test_a_failure_to_tell_does_not_remove_the_feature(self):
+        # Claiming vision it may not have is the safe direction: the send-time
+        # check still refuses, so the cost of being wrong is the old behaviour
+        # rather than a vision model that silently will not take pictures.
+        src = read_py("carrot/app.py")
+        block = src.split("chat_vision = (ollama_mod")[1].split("return {")[0]
+        assert "chat_vision = True" in block
+
+    def test_the_picker_stops_listing_images(self):
+        assert "input.accept = canSee ? 'image/*,' + docs : docs;" in read("js", "app.js")
+
+    def test_a_pasted_or_dropped_image_is_refused_too(self):
+        """`accept` only filters the picker. A screenshot pasted in, or a photo
+        dropped on the window, never sees it."""
+        js = read("js", "app.js")
+        block = js.split("async function addAttachments(")[1].split("renderAttachTray")[0]
+        assert "modelCanSeeImages === false" in block
+
+    def test_auto_is_not_treated_as_blind(self):
+        # Under Auto the model is picked per message, so no single answer
+        # exists yet. Assume it can see and let send-time be the refusal.
+        assert "renderAttachAffordance(autoModel || data.chat_vision !== false)"             in read("js", "app.js")
 
 
 class TestThePlanChecklist:
@@ -257,3 +379,242 @@ class TestTheTerminalStartsOutOfTheWay:
 
     def test_it_is_still_one_click_away(self):
         assert 'onclick="toggleTerminal()"' in read("index.html")
+
+
+class TestTheCodeTabWatchesItsPlanToo:
+    """The checklist was built for chat and Research; the Code tab is where a
+    plan matters most, because its steps are changes to your files."""
+
+    def test_it_renders_the_same_component(self):
+        source = read("js", "features.js")
+        assert "renderPlan(wrap, payload.plan);" in source
+
+    def test_the_component_finds_the_coder_bubble(self):
+        # The Code tab's prose is `.agent-body`, not `.content`. Without this
+        # the checklist appended below the answer, where the one thing it is
+        # for — seeing what is left while you wait — cannot happen.
+        assert "host.querySelector('.content, .agent-body')" in read("js", "app.js")
+
+    def test_a_pushed_back_answer_is_dropped(self):
+        """The ACT-mode "you pasted a file instead of writing it" nudge has
+        been in the backend all along, and this panel had no handler for it.
+        `answer` only ever grew, so the rejected file rendered with the real
+        reply glued underneath, and nothing said why there were two."""
+        source = read("js", "features.js")
+        assert "if (payload.gate) {" in source
+        assert "answer = '';" in source
+
+    def test_it_says_what_sent_the_turn_back(self):
+        # A turn that silently takes extra rounds looks stuck.
+        source = read("js", "features.js")
+        assert "step(s) from the plan not done yet" in source
+
+
+class TestTheConversationPageIsYours:
+    """Four panels nobody chose, on the page you open most.
+
+    A morning recap and a deadline list are useful to some people and pure
+    noise to others, and the home page is the worst place to guess on
+    someone's behalf.
+    """
+
+    def test_every_panel_can_be_named(self):
+        # The toggle finds cards by this attribute; a panel without one is
+        # unreachable from the menu and silently permanent.
+        html = read("index.html")
+        rail = html.split('<aside id="ws-left">')[1].split("</aside>")[0]
+        for panel in ("recap", "deadlines", "milestones", "engine"):
+            assert f'data-panel="{panel}"' in rail
+
+    def test_the_choice_survives_a_restart(self):
+        js = read("js", "app.js")
+        assert "localStorage.setItem(RAIL_KEY" in js
+        assert "/api/config/ui_rail_hidden" in js
+
+    def test_it_paints_before_the_network_answers(self):
+        """Local-first for the same reason the theme is: a panel you switched
+        off must not flash on and then vanish."""
+        js = read("js", "app.js")
+        assert "let railHidden = readRailPref();" in js
+        # And the server copy must never override a local choice, which is the
+        # more recent expression of intent and what already painted.
+        sync = js.split("function syncRailFromServer(")[1].split("\n}")[0]
+        assert "if (stored ||" in sync
+
+    def test_an_unknown_panel_id_is_ignored(self):
+        # A stored list from a later version, or a hand-edited one, must not
+        # be able to hide something that no longer exists or was never a panel.
+        js = read("js", "app.js")
+        assert "filter(id => known.includes(id))" in js
+
+    def test_a_hidden_panel_is_not_fetched_for(self):
+        # Hiding it in CSS while still polling would keep the cost and lose
+        # the point.
+        js = read("js", "app.js")
+        body = js.split("async function loadWorkspace()")[1].split("\n}")[0]
+        assert "if (shown('recap')) loadRecapCard();" in body
+
+    def test_hiding_everything_removes_the_column(self):
+        """Switching them all off has to give the width back.
+
+        A 320px column standing empty is not less clutter, it is the same
+        clutter with the content taken out.
+        """
+        js = read("js", "app.js")
+        assert "?.classList.toggle('hidden', railHidden.length >= RAIL_PANELS.length)" in js
+        # The rail is a flex child with a fixed width, so `hidden` has to beat
+        # both of those, not just `display: flex`.
+        assert "#ws-left.hidden { display: none; }" in read("css", "style.css")
+
+    def test_the_control_outlives_the_thing_it_controls(self):
+        """It lives in the tabstrip, not the rail. A button that disappears
+        along with what it switches off cannot switch it back on."""
+        html = read("index.html")
+        strip = html.split('<div id="ws-tabstrip">')[1].split("</div>\n      <div id=")[0]
+        assert 'id="rail-menu"' in strip
+        rail = html.split('<aside id="ws-left">')[1].split("</aside>")[0]
+        assert 'id="rail-menu"' not in rail
+
+    def test_the_engine_card_says_what_it_answers(self):
+        """"Local Engine" named the implementation, not the question. After
+        the conversation and message counts were added it had stopped being
+        about the engine at all."""
+        html = read("index.html")
+        assert "This machine" in html
+        # The comment above the card explains the rename and names the old
+        # title, so compare against the markup rather than the file.
+        markup = re.sub(r"<!--.*?-->", "", html, flags=re.S)
+        assert "Local Engine" not in markup
+
+
+class TestTheTypefacesActuallyShip:
+    """The stylesheet referenced ten font files and the logo; none was ever
+    committed, so a fresh clone 404s all of them and the entire typography
+    system falls back to Segoe UI while the brand mark renders as an empty
+    box. The blanket `assets/` gitignore rule was swallowing them."""
+
+    def test_every_referenced_font_exists(self):
+        css = read("css", "style.css")
+        for ref in set(re.findall(r'url\("(/assets/fonts/[^"]+)"\)', css)):
+            path = WEB / ref.lstrip("/")
+            assert path.exists(), f"{ref} is referenced but not shipped"
+            assert path.stat().st_size > 1024, f"{ref} is present but empty"
+
+    def test_the_logo_exists_where_the_css_looks_for_it(self):
+        assert (WEB / "assets" / "logo.png").exists()
+
+    def test_the_gitignore_no_longer_swallows_them(self):
+        root = Path(__file__).resolve().parents[1]
+        rules = (root / ".gitignore").read_text(encoding="utf-8").splitlines()
+        # Anchored. Unanchored `assets/` matches at any depth, including
+        # `carrot/web/assets/`, which is what hid these in the first place.
+        assert "/assets/" in rules
+        assert "assets/" not in rules
+
+    def test_the_fonts_are_redistributable(self):
+        # They ship inside a public installer, so the licence has to allow it.
+        licences = list((WEB / "assets" / "fonts").glob("*-OFL.txt"))
+        assert len(licences) >= 4, "a bundled family is missing its OFL text"
+
+    def test_nothing_asks_for_a_font_that_was_removed(self):
+        css = read("css", "style.css")
+        rules = "\n".join(line for line in css.splitlines()
+                          if not line.strip().startswith(("*", "/*")))
+        for gone in ("InterVariable", "Vollkorn-", "PlayfairDisplay-"):
+            assert gone not in rules, f"{gone} is still referenced but not shipped"
+
+    def test_the_serif_role_is_gone_not_renamed_in_place(self):
+        """A token called `--serif` holding a sans is a lie the next reader
+        has to discover. The role is "things you read", so it is `--prose`."""
+        css = read("css", "style.css")
+        assert "--prose:" in css
+        assert "var(--serif)" not in css
+
+
+class TestTheCodeEditorIsAnEditor:
+    """It was Monaco — the engine VS Code runs — created with almost every
+    feature switched off, which is not a smaller editor but the same one with
+    its lights out."""
+
+    def js(self):
+        return read("js", "features.js")
+
+    def test_it_uses_the_app_mono_face(self):
+        # So code in the editor, the terminal and a chat code block match.
+        assert "fontFamily: 'DMMono" in self.js()
+
+    def test_ligatures_are_off(self):
+        # `!=` and `=>` should be the characters that are in the file.
+        assert "fontLigatures: false" in self.js()
+
+    def test_the_orientation_features_are_on(self):
+        js = self.js()
+        for opt in ("minimap: { enabled: true",
+                    "stickyScroll: { enabled: true }",
+                    "bracketPairColorization: { enabled: true }",
+                    "indentation: true",
+                    "folding: true"):
+            assert opt in js, f"{opt} is not enabled"
+
+    def test_the_jetbrains_bindings_are_aliases_not_replacements(self):
+        """Monaco keeps its own defaults, so Ctrl+D duplicates for a JetBrains
+        user and still adds a cursor for a VS Code one."""
+        js = self.js()
+        keymap = js.split("function jetbrainsKeymap(")[1].split("\n}")[0]
+        for action in ("copyLinesDownAction", "deleteLines", "formatDocument",
+                       "gotoLine", "smartSelect.expand", "rename"):
+            assert action in keymap
+
+    def test_an_unknown_action_is_skipped_not_invented(self):
+        # `addAction` on an id Monaco lacks would create a dead menu entry.
+        js = self.js()
+        assert "if (!action) continue;" in js
+
+
+class TestFormControlsInheritTheType:
+    """Buttons and inputs were rendering in Arial next to a page set in Plus
+    Jakarta. No browser inherits `font-family` into form controls — they use
+    their own UI font unless told otherwise — and it had been patched five
+    times at individual rules instead of once at the reset."""
+
+    def test_the_reset_covers_every_control(self):
+        css = read("css", "style.css")
+        assert "button, input, select, textarea, optgroup { font-family: inherit; }" in css
+
+    def test_it_only_takes_the_family(self):
+        # Plenty of controls set their own size and weight deliberately; only
+        # the family was ever wrong, so `font: inherit` would be a regression.
+        css = read("css", "style.css")
+        block = css[css.index("button, input, select, textarea, optgroup"):]
+        block = block[:block.index("}")]
+        assert "font-size" not in block and "font-weight" not in block
+
+
+class TestTheFileTreeMarksItsTypes:
+    """A tree of identical grey rows makes you read every name to find one."""
+
+    def test_common_languages_are_distinguishable(self):
+        js = read("js", "features.js")
+        marks = js.split("const FILE_MARKS = {")[1].split("\n};")[0]
+        for ext in ("py", "js", "ts", "json", "html", "css", "md", "go", "rs", "cpp"):
+            assert f"{ext}:" in marks, f"{ext} has no mark"
+
+    def test_extensionless_names_are_recognised_whole(self):
+        # `.gitignore` has no extension; `Dockerfile` would read as plain text.
+        js = read("js", "features.js")
+        by_name = js.split("const FILE_MARKS_BY_NAME = {")[1].split("\n};")[0]
+        assert "'.gitignore'" in by_name and "'dockerfile'" in by_name
+
+    def test_an_unknown_type_still_gets_a_mark(self):
+        # Returning nothing would collapse the row and misalign the tree.
+        js = read("js", "features.js")
+        assert "return mark || ['\u2022', '#6b7280'];" in js
+
+    def test_the_tree_and_the_tabs_use_the_same_mark(self):
+        js = read("js", "features.js")
+        assert js.count("fileMarkHtml(") >= 3   # definition + tree + tabs
+
+    def test_there_is_a_fallback_without_color_mix(self):
+        # Older WebKit would otherwise render every badge as an untinted box.
+        css = read("css", "style.css")
+        assert "@supports not (background: color-mix(in srgb, red 10%, transparent))" in css

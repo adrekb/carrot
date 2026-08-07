@@ -348,7 +348,10 @@ class TestTheInterface:
         # was a thing you could make — discovering it required already knowing.
         js = self.read("js", "studio.js")
         assert "chip.classList.remove('hidden');" in js
-        assert 'id="debate-btn" class="composer-chip needs-setup"' in self.read("index.html")
+        # It lives in the composer's plus menu now rather than on the row, so
+        # the class is `tool-item`. What is being pinned is unchanged: it ships
+        # marked as needing setup, and nothing hides it until it has one.
+        assert 'id="debate-btn" class="tool-item needs-setup"' in self.read("index.html")
 
     def test_an_unconfigured_chip_takes_you_to_the_setup(self):
         # A chip that does nothing teaches people the feature is broken.

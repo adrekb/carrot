@@ -352,24 +352,31 @@
     <svg class="ico chev nav-more-chev"><use href="#i-chevron"/></svg>
   </button>
   <div id="nav-more-list" class="nav-more-list hidden">
+    <!-- Eighteen destinations in one vertical wall meant reading all of
+         them to find one. Four groups, because the eye lands on a heading
+         and then scans four or five items instead of eighteen. -->
+    <div class="nav-group">Your work</div>
     <button class="nav-item sub" data-tab="chats" onclick="switchTab('chats')"><svg class="ico"><use href="#i-chat"/></svg><span class="nav-label">Chats</span></button>
     <button class="nav-item sub" data-tab="search" onclick="switchTab('search')"><svg class="ico"><use href="#i-search"/></svg><span class="nav-label">Search</span></button>
     <button class="nav-item sub" data-tab="notes" onclick="switchTab('notes')"><svg class="ico"><use href="#i-note"/></svg><span class="nav-label">Notes</span></button>
+    <button class="nav-item sub" data-tab="files" onclick="switchTab('files')"><svg class="ico"><use href="#i-archive"/></svg><span class="nav-label">Your Files</span></button>
+    <button class="nav-item sub" data-tab="workspaces" onclick="switchTab('workspaces')"><svg class="ico"><use href="#i-folder"/></svg><span class="nav-label">Workspaces</span></button>
+    <button class="nav-item sub" data-tab="inbox" onclick="switchTab('inbox')"><svg class="ico"><use href="#i-inbox"/></svg><span class="nav-label">Inbox</span><span id="notification-badge" class="notif-badge hidden">0</span></button>
+    <div class="nav-group">Tools</div>
     <button class="nav-item sub" data-tab="code" onclick="switchTab('code')"><svg class="ico"><use href="#i-terminal"/></svg><span class="nav-label">Code</span></button>
+    <button class="nav-item sub" data-tab="agent" onclick="switchTab('agent')"><svg class="ico"><use href="#i-robot"/></svg><span class="nav-label">Agent</span></button>
+    <button class="nav-item sub" data-tab="research" onclick="switchTab('research')"><svg class="ico"><use href="#i-flask"/></svg><span class="nav-label">Research</span></button>
+    <div class="nav-group">Planning</div>
     <button class="nav-item sub" data-tab="planner" onclick="switchTab('planner')"><svg class="ico"><use href="#i-cap"/></svg><span class="nav-label">Planner</span></button>
     <button class="nav-item sub" data-tab="goals" onclick="switchTab('goals')"><svg class="ico"><use href="#i-target"/></svg><span class="nav-label">Goals</span></button>
     <button class="nav-item sub" data-tab="reminders" onclick="switchTab('reminders')"><svg class="ico"><use href="#i-bell"/></svg><span class="nav-label">Reminders</span></button>
-    <button class="nav-item sub" data-tab="workspaces" onclick="switchTab('workspaces')"><svg class="ico"><use href="#i-folder"/></svg><span class="nav-label">Workspaces</span></button>
-    <button class="nav-item sub" data-tab="help" onclick="switchTab('help')"><svg class="ico"><use href="#i-help"/></svg><span class="nav-label">Help</span></button>
-    <button class="nav-item sub" data-tab="research" onclick="switchTab('research')"><svg class="ico"><use href="#i-flask"/></svg><span class="nav-label">Research</span></button>
-    <button class="nav-item sub" data-tab="agent" onclick="switchTab('agent')"><svg class="ico"><use href="#i-robot"/></svg><span class="nav-label">Agent</span></button>
     <button class="nav-item sub" data-tab="assignments" onclick="switchTab('assignments')"><svg class="ico"><use href="#i-clipboard"/></svg><span class="nav-label">Assignments</span></button>
+    <div class="nav-group">System</div>
     <button class="nav-item sub" data-tab="hub" onclick="switchTab('hub')"><svg class="ico"><use href="#i-download"/></svg><span class="nav-label">Model Hub</span></button>
     <button class="nav-item sub" data-tab="extensions" onclick="switchTab('extensions')"><svg class="ico"><use href="#i-puzzle"/></svg><span class="nav-label">Extensions</span></button>
     <button class="nav-item sub" data-tab="memory" onclick="switchTab('memory')"><svg class="ico"><use href="#i-brain"/></svg><span class="nav-label">Memory</span></button>
-    <button class="nav-item sub" data-tab="files" onclick="switchTab('files')"><svg class="ico"><use href="#i-archive"/></svg><span class="nav-label">Your Files</span></button>
-    <button class="nav-item sub" data-tab="inbox" onclick="switchTab('inbox')"><svg class="ico"><use href="#i-inbox"/></svg><span class="nav-label">Inbox</span><span id="notification-badge" class="notif-badge hidden">0</span></button>
     <button class="nav-item sub" data-tab="leaderboard" onclick="switchTab('leaderboard')"><svg class="ico"><use href="#i-trophy"/></svg><span class="nav-label">Leaderboard</span></button>
+    <button class="nav-item sub" data-tab="help" onclick="switchTab('help')"><svg class="ico"><use href="#i-help"/></svg><span class="nav-label">Help</span></button>
   </div>
 </nav>
 
@@ -408,7 +415,7 @@
   <!-- Workspace -->
   <section id="view-workspace" class="view">
     <aside id="ws-left">
-      <div class="card">
+      <div class="card" data-panel="recap">
         <div class="card-head">
           <span class="card-ico"><svg class="ico"><use href="#i-news"/></svg></span>
           <span class="card-title">Morning Recap</span>
@@ -416,7 +423,7 @@
         </div>
         <div class="card-body" id="card-recap"><div class="empty">No recap yet. Run one to get your daily briefing.</div></div>
       </div>
-      <div class="card">
+      <div class="card" data-panel="deadlines">
         <div class="card-head">
           <span class="card-ico"><svg class="ico"><use href="#i-cap"/></svg></span>
           <span class="card-title">Deadlines</span>
@@ -424,7 +431,7 @@
         </div>
         <div class="card-body" id="card-deadlines"><div class="empty">Nothing due. Add reminders to see them here.</div></div>
       </div>
-      <div class="card">
+      <div class="card" data-panel="milestones">
         <div class="card-head">
           <span class="card-ico"><svg class="ico"><use href="#i-pulse"/></svg></span>
           <span class="card-title">Milestones</span>
@@ -432,10 +439,14 @@
         </div>
         <div class="card-body" id="card-milestones"><div class="empty">No goals yet.</div></div>
       </div>
-      <div class="card">
+      <!-- "Local Engine" named the implementation, not the thing you wanted to
+           know. What this panel actually answers is "what is running, and
+           where" — and after the counts were added it stopped being about the
+           engine at all. -->
+      <div class="card" data-panel="engine">
         <div class="card-head">
           <span class="card-ico"><svg class="ico"><use href="#i-chip"/></svg></span>
-          <span class="card-title">Local Engine</span>
+          <span class="card-title">This machine</span>
         </div>
         <div class="card-body" id="card-engine"><div class="empty">Checking…</div></div>
       </div>
@@ -448,6 +459,23 @@
           <span id="chat-title">New session</span>
         </div>
         <button class="ws-tab-action" title="New chat" onclick="newChat()"><svg class="ico"><use href="#i-plus"/></svg></button>
+        <!-- Four panels nobody chose, on the page you open most. A morning
+             recap and a deadline list are useful to some people and pure noise
+             to others, and the home page is the worst place to guess.
+             The control lives here rather than in the rail because switching
+             the last panel off removes the rail entirely — a 320px column
+             holding nothing but its own settings button is worse than no
+             column. Here it is reachable whether or not there is a rail. -->
+        <div id="rail-menu">
+          <button id="rail-btn" onclick="toggleRailMenu()" title="Choose which panels show beside the conversation">
+            <svg class="ico"><use href="#i-gear"/></svg>
+            <span>Panels</span>
+          </button>
+          <div id="rail-pop" class="hidden">
+            <div class="pop-section">Show beside the conversation</div>
+            <div id="rail-pop-list"></div>
+          </div>
+        </div>
       </div>
       <div id="chat-messages">
         <div class="chat-empty" id="chat-empty">
@@ -1623,80 +1651,114 @@
     <div class="pop-section">Skills</div>
     <div id="skill-pop-list"></div>
   </div>
-  <button id="active-skill" class="hidden" title="Active skill — click to clear" onclick="clearActiveSkill()">
-    <span id="active-skill-name"></span>
-    <span class="skill-x">×</span>
-  </button>
-  <div id="model-picker">
-    <button id="model-btn" onclick="toggleModelPop()">
-      <svg class="ico"><use href="#i-chip"/></svg>
-      <span id="model-label">…</span>
-      <svg class="ico chev"><use href="#i-chevron"/></svg>
-    </button>
-    <div id="model-pop" class="hidden">
-      <div class="pop-scroll">
-        <div id="model-auto"></div>
-        <div class="pop-section">On this machine</div>
-        <div id="model-installed"></div>
-        <div id="model-remote"></div>
-        <div class="pop-section">Available to install</div>
-        <div id="model-suggested"></div>
-      </div>
-      <div class="pop-custom">
-        <input type="text" id="model-custom" placeholder="any ollama model, e.g. llama3.2:1b" onkeydown="if(event.key==='Enter')pullCustomModel()">
-        <button class="btn btn-ghost" onclick="pullCustomModel()">Pull</button>
-      </div>
-      <div id="pull-progress" class="hidden">
-        <div id="pull-label" class="pull-label"></div>
-        <div class="pull-track"><div id="pull-bar" class="pull-bar"></div></div>
-      </div>
-    </div>
-  </div>
-  <button id="temp-btn" class="composer-chip"
-          onclick="toggleTemporaryChat()"
-          title="Answered but not remembered, and deleted afterwards">
-    <svg class="ico"><use href="#i-ghost"/></svg>
-    <span>Temporary</span>
-  </button>
-  <!-- Distinct from Temporary: that one stops this chat being remembered
-       afterwards, this one stops what is already remembered being read now.
-       Asking for the news and being told about a dog you mentioned once is
-       the second problem, and the global setting was the wrong shape for
-       it — you do not want memory off, you want it off for this. -->
-  <button id="memory-btn" class="composer-chip"
-          onclick="toggleMemoryUse()"
-          title="Ignore what Carrot remembers about you for this chat">
-    <svg class="ico"><use href="#i-brain"/></svg>
-    <span>Memory</span>
-  </button>
-  <button id="debate-btn" class="composer-chip needs-setup"
-          onclick="debateCurrentQuestion()"
-          title="Set up a model council">
-    <svg class="ico"><use href="#i-chip"/></svg>
-    <span>Council</span>
-  </button>
-  <div id="search-picker">
-    <button id="search-btn" onclick="toggleSearchPop()" title="How much Carrot may search the web">
-      <svg class="ico"><use href="#i-search"/></svg>
-      <span id="search-label">Search</span>
-      <svg class="ico chev"><use href="#i-chevron"/></svg>
-    </button>
-    <div id="search-pop" class="hidden">
-      <div class="pop-section">Web search</div>
-      <div id="search-mode-list"></div>
-    </div>
-  </div>
+  <!-- The question first, on its own line and the full width of the bar.
+       Everything else is a control on the row underneath. The old shape put
+       all ten on one line and let them fight: the input was the only item
+       that would give up space, so on a 760px bar it was left with about an
+       inch, and the fix on top of the fix was a container query that hid the
+       labels one breakpoint at a time. None of that is needed once the thing
+       you type in is not competing with anything. -->
   <input type="text" id="cmd-input" placeholder="Ask anything — Ctrl+K to focus, / for skills" onkeydown="cmdKeydown(event)" oninput="cmdInputChanged()">
   <input type="file" id="attach-input" class="hidden" multiple
          accept="image/*,.pdf,.txt,.md,.csv,.json,.py,.js,.ts,.html,.css,.yaml,.yml,.log"
          onchange="addAttachments(this.files); this.value='';">
-  <button class="icon-btn" id="attach-btn" title="Attach images, PDFs or text files"
-          onclick="document.getElementById('attach-input').click()">
-    <svg class="ico"><use href="#i-paperclip"/></svg>
-  </button>
-  <button class="icon-btn" id="mic-btn" title="Voice input" onclick="toggleVoiceInput()"><svg class="ico"><use href="#i-mic"/></svg></button>
-  <button class="icon-btn" id="speak-toggle" title="Read replies aloud" onclick="toggleSpeak()"><svg class="ico"><use href="#i-speaker-off"/></svg></button>
-  <button id="send-btn" title="Send" onclick="sendChat()"><svg class="ico"><use href="#i-send"/></svg></button>
+
+  <div id="cmd-row">
+    <!-- Settings you touch once live behind the plus. What stays on the row
+         is what you either do constantly or need to read at a glance:
+         attaching a file and dictating are actions taken mid-question, and
+         search mode and model are live state. -->
+    <div id="tool-menu">
+      <button id="tool-btn" onclick="toggleToolMenu()" title="More tools">
+        <svg class="ico"><use href="#i-plus"/></svg>
+      </button>
+      <div id="tool-pop" class="hidden">
+        <button id="temp-btn" class="tool-item"
+                onclick="toggleTemporaryChat(); closeToolMenu()">
+          <svg class="ico"><use href="#i-ghost"/></svg>
+          <span>Temporary</span>
+          <span class="tool-sub">not remembered, deleted after</span>
+        </button>
+        <!-- Distinct from Temporary: that one stops this chat being remembered
+             afterwards, this one stops what is already remembered being read
+             now. Asking for the news and being told about a dog you mentioned
+             once is the second problem, and the global setting was the wrong
+             shape for it — you do not want memory off, you want it off for
+             this. -->
+        <button id="memory-btn" class="tool-item" onclick="toggleMemoryUse()">
+          <svg class="ico"><use href="#i-brain"/></svg>
+          <span>Memory</span>
+          <span class="tool-sub">use what Carrot knows about you</span>
+        </button>
+        <button id="debate-btn" class="tool-item needs-setup"
+                onclick="debateCurrentQuestion(); closeToolMenu()">
+          <svg class="ico"><use href="#i-chip"/></svg>
+          <span>Council</span>
+          <span class="tool-sub">several models, made to argue</span>
+        </button>
+        <div class="tool-sep"></div>
+        <button class="tool-item" id="speak-toggle" onclick="toggleSpeak()">
+          <svg class="ico"><use href="#i-speaker-off"/></svg>
+          <span>Read replies aloud</span>
+        </button>
+      </div>
+    </div>
+    <!-- Attaching and dictating are things you do in the middle of writing a
+         question, not settings you choose beforehand. Two clicks for either
+         is one too many. -->
+    <button class="icon-btn" id="attach-btn" title="Attach a file"
+            onclick="document.getElementById('attach-input').click()">
+      <svg class="ico"><use href="#i-paperclip"/></svg>
+    </button>
+    <button class="icon-btn" id="mic-btn" title="Voice input" onclick="toggleVoiceInput()">
+      <svg class="ico"><use href="#i-mic"/></svg>
+    </button>
+    <!-- Only present while a skill is active, and it is the one chip that is
+         genuinely per-turn state rather than a setting. -->
+    <button id="active-skill" class="hidden" title="Active skill — click to clear" onclick="clearActiveSkill()">
+      <span id="active-skill-name"></span>
+      <span class="skill-x">×</span>
+    </button>
+    <div id="search-picker">
+      <button id="search-btn" onclick="toggleSearchPop()" title="How much Carrot may search the web">
+        <svg class="ico"><use href="#i-search"/></svg>
+        <span id="search-label">Search</span>
+        <svg class="ico chev"><use href="#i-chevron"/></svg>
+      </button>
+      <div id="search-pop" class="hidden">
+        <div class="pop-section">Web search</div>
+        <div id="search-mode-list"></div>
+      </div>
+    </div>
+    <div id="model-picker">
+      <button id="model-btn" onclick="toggleModelPop()">
+        <svg class="ico"><use href="#i-chip"/></svg>
+        <span id="model-label">…</span>
+        <svg class="ico chev"><use href="#i-chevron"/></svg>
+      </button>
+      <div id="model-pop" class="hidden">
+        <div class="pop-scroll">
+          <div id="model-auto"></div>
+          <div class="pop-section">On this machine</div>
+          <div id="model-installed"></div>
+          <div id="model-remote"></div>
+          <div class="pop-section">Available to install</div>
+          <div id="model-suggested"></div>
+        </div>
+        <div class="pop-custom">
+          <input type="text" id="model-custom" placeholder="any ollama model, e.g. llama3.2:1b" onkeydown="if(event.key==='Enter')pullCustomModel()">
+          <button class="btn btn-ghost" onclick="pullCustomModel()">Pull</button>
+        </div>
+        <div id="pull-progress" class="hidden">
+          <div id="pull-label" class="pull-label"></div>
+          <div class="pull-track"><div id="pull-bar" class="pull-bar"></div></div>
+        </div>
+      </div>
+    </div>
+    <!-- Send is pushed to the far end, away from everything that is not it. -->
+    <span class="cmd-gap"></span>
+    <button id="send-btn" title="Send" onclick="sendChat()"><svg class="ico"><use href="#i-send"/></svg></button>
+  </div>
 </div>
 
 <script src="/vendor/marked.js"></script>

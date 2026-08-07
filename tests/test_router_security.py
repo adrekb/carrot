@@ -356,3 +356,80 @@ def test_security_status_endpoint(client):
     status = client.get("/api/security/status").json()
     assert status["auth_enabled"] is True
     assert status["token_header"] == security.TOKEN_HEADER
+
+
+class TestTheTokenStaysOutOfURLs:
+    """`EventSource` cannot set a header, so the two SSE endpoints carried the
+    session token in the query string — into the server log, the browser's
+    history, and anything in between. It is a local app, so the exposure is
+    small, but it was the one place the token left the header and it did so on
+    every launch.
+
+    A ticket goes there instead: minted by an authenticated POST, spent by the
+    connection, then gone. What ends up in the log is already dead.
+    """
+
+    def test_a_ticket_needs_the_session_token_to_mint(self, unauthenticated_client):
+        assert unauthenticated_client.post("/api/auth/sse-ticket").status_code == 401
+
+    def test_a_ticket_opens_the_stream_without_the_token(self, client):
+        from carrot import security
+
+        ticket = client.post("/api/auth/sse-ticket").json()["ticket"]
+        assert security.spend_ticket(ticket) is True
+
+    def test_it_is_single_use(self):
+        """The whole reason it is safe to write to a log."""
+        from carrot import security
+
+        ticket = security.mint_ticket()
+        assert security.spend_ticket(ticket) is True
+        assert security.spend_ticket(ticket) is False
+
+    def test_it_expires(self):
+        from carrot import security
+
+        original = security.TICKET_TTL_SECONDS
+        try:
+            security.TICKET_TTL_SECONDS = -1
+            stale = security.mint_ticket()
+            assert security.spend_ticket(stale) is False
+        finally:
+            security.TICKET_TTL_SECONDS = original
+
+    def test_a_ticket_is_not_a_session_token(self):
+        # It must open a stream and nothing else.
+        from carrot import security
+
+        assert security.token_valid(security.mint_ticket()) is False
+
+    def test_a_ticket_does_not_open_other_endpoints(self, unauthenticated_client):
+        from carrot import security
+
+        ticket = security.mint_ticket()
+        blocked = unauthenticated_client.get(f"/api/status?ticket={ticket}")
+        assert blocked.status_code == 401
+        # And being refused there must not have spent it.
+        assert security.spend_ticket(ticket) is True
+
+    def test_nothing_junk_gets_in(self):
+        from carrot import security
+
+        for junk in ("", None, "not-a-ticket", "../../etc/passwd"):
+            assert security.spend_ticket(junk) is False
+
+    def test_expired_tickets_do_not_accumulate(self):
+        """An unused ticket must not sit in memory for the life of the app."""
+        from carrot import security
+
+        original = security.TICKET_TTL_SECONDS
+        try:
+            security.TICKET_TTL_SECONDS = -1
+            stale = [security.mint_ticket() for _ in range(50)]
+            security.TICKET_TTL_SECONDS = original
+            security.mint_ticket()          # any mint sweeps
+            # Counting the whole dict would count tickets other tests minted
+            # and never spent; the property is that *these* are gone.
+            assert not [t for t in stale if t in security._tickets]
+        finally:
+            security.TICKET_TTL_SECONDS = original

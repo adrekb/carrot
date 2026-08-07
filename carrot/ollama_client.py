@@ -98,13 +98,22 @@ class OllamaClient:
         except Exception:
             return False
 
+    # Connect, then idle. A read timeout on a streamed response is the gap
+    # *between* chunks, not the total, so this does not cap how long a pull may
+    # take — a 40 GB model over a slow line is fine as long as bytes keep
+    # arriving. What it catches is the case `timeout=None` could not: the
+    # connection going dead mid-download, where the generator blocked forever
+    # and the progress bar sat at whatever percentage it had reached, with no
+    # error and no way to tell it apart from a slow network.
+    PULL_TIMEOUT = (10, 300)
+
     def pull_model(self, model: str) -> Generator[Dict[str, Any], None, None]:
         """Pull a model from the Ollama registry, yielding progress dicts."""
         resp = requests.post(
             self._url("/api/pull"),
             json={"model": model, "stream": True},
             stream=True,
-            timeout=None,
+            timeout=self.PULL_TIMEOUT,
         )
         resp.raise_for_status()
         for line in resp.iter_lines(decode_unicode=True):

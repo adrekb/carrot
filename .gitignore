@@ -9,7 +9,12 @@ venv/
 .env
 
 # Build artifacts
-assets/
+# Anchored to the repo root. Unanchored, `assets/` matched every directory of
+# that name at any depth — including `carrot/web/assets/`, which holds the
+# logo and the nine font files the stylesheet loads. They were never
+# committed, so a fresh clone 404s all ten and the whole typography system
+# falls back to system fonts while the brand mark renders as an empty box.
+/assets/
 dist/
 gui/dist/
 gui/node_modules/
