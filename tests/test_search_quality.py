@@ -628,3 +628,199 @@ class TestTheSourceCardsDoNotHideTheAnswer:
         assert "rail.textContent = ''" in body, (
             "the row is appended to rather than redrawn, so an early index page "
             "can never be displaced")
+
+
+# ===== Answering with the facts, not the names of the facts =====
+
+class TestAnAnswerIsNotATableOfContents:
+    """From a reported turn. Asked for "c8 zr1X specs" it searched well, found
+    the right sources, and answered:
+
+        Specs available include: 0-60 time, quarter mile times, lap times,
+        top speed, price, engine specifications
+
+    Every one of those is the *name* of a number. One of the snippets it had
+    already been given said 1,250 combined hp and 1.89s to 60. It described the
+    shape of an answer instead of giving one — and because the searching was
+    genuinely good, it reads as competence, which is why it kept happening.
+    """
+
+    def preamble(self):
+        from carrot import app as A
+
+        return A.SEARCH_PREAMBLE
+
+    def test_the_preamble_names_this_failure(self):
+        text = self.preamble()
+        assert "not with the names of the facts" in text
+        assert "table of contents" in text
+
+    def test_it_applies_to_every_mode_that_can_search(self):
+        # It was only ever going to be a preamble rule: the mode that produced
+        # this is the default one, and the detailed answer-shape guidance lived
+        # entirely in multi-turn.
+        from carrot import app as A
+
+        for directive in (A.SINGLE_SEARCH_DIRECTIVE, A.MULTI_SEARCH_DIRECTIVE):
+            assert "not with the names of the facts" in directive
+
+    def test_a_snippet_counts_as_a_fact_it_has(self):
+        # It had the numbers and did not use them, because it had been told to
+        # answer from what it read and it had read nothing.
+        assert "A snippet is a fact you have" in self.preamble()
+
+    def test_single_pass_says_what_to_do_with_the_results(self):
+        # "You may search and read a page when the question needs it" said
+        # nothing about what to do once the results came back, in the mode
+        # where most turns happen.
+        from carrot import app as A
+
+        assert "not an answer built from the result list" in A.SINGLE_SEARCH_DIRECTIVE
+        assert "open the best result" in A.SINGLE_SEARCH_DIRECTIVE
+
+
+class TestTheSinglePassGapIsNotWiredInYet:
+    """It exists, it is tested, and it is deliberately not called.
+
+    Multi-turn can push an answer back because it buffers the prose until the
+    gates pass. Single streams as it goes, so by the time the answer could be
+    judged the user is already reading it — nudging means a second answer under
+    the first, or holding the first token back and losing what single-pass is
+    for. The docstring says so; this makes sure the claim stays true.
+    """
+
+    def test_it_flags_a_turn_that_searched_read_nothing_and_cited_nothing(self):
+        from carrot import app as A
+
+        assert A._single_pass_gap(1, 0, "Specs available include 0-60 and top speed.")
+
+    def test_a_cited_snippet_answer_is_left_alone(self):
+        from carrot import app as A
+
+        assert A._single_pass_gap(
+            1, 0, "It makes 1,250 hp ([Chevrolet](https://chevrolet.com/zr1x)).") is None
+
+    def test_a_turn_that_read_a_page_is_left_alone(self):
+        from carrot import app as A
+
+        assert A._single_pass_gap(1, 1, "Anything at all.") is None
+
+    def test_a_turn_that_never_searched_is_left_alone(self):
+        from carrot import app as A
+
+        assert A._single_pass_gap(0, 0, "I already knew this.") is None
+
+    def test_the_loop_still_only_gates_multi_turn(self):
+        from pathlib import Path
+
+        source = (Path(__file__).resolve().parents[1] / "carrot" / "app.py").read_text(
+            encoding="utf-8")
+        assert "gap = _search_gate_gap(searches, reads) if gated else None" in source
+        assert "_single_pass_gap(searches, reads, content_str)" not in source
+
+
+class TestTheOpeningSearchKeepsTheQuestionsModelNumbers:
+    """From a reported turn. Asked for "c8 zr1X specs", the model searched
+    "Toyota C-HR ZR1X 2026 specifications" — it did not know what a C8 was,
+    replaced it with a car it had heard of, read eleven pages about a Toyota,
+    and delivered a confident, well-formatted answer about the wrong vehicle.
+    It never mentioned the substitution, so from outside it looked like a good
+    search that simply did not answer the question.
+
+    The drift check cannot see this. The query shares `zr1x` with the question,
+    so by its definition it is on topic. What went wrong is not that the query
+    left the subject — it is that the most specific term in the question was
+    silently swapped for a guess.
+    """
+
+    def dropped(self, question, query):
+        from carrot import app as A
+
+        return A._dropped_identifiers(question, query)
+
+    def test_the_reported_case(self):
+        assert self.dropped("c8 zr1X specs",
+                            "Toyota C-HR ZR1X 2026 specifications") == {"c8"}
+
+    def test_a_query_that_keeps_it_is_fine(self):
+        assert self.dropped("c8 zr1X specs", "Chevrolet Corvette C8 ZR1X specs") == set()
+
+    def test_case_does_not_matter(self):
+        assert self.dropped("c8 zr1X specs", "C8 ZR1X specifications") == set()
+
+    def test_hyphenated_designators_count(self):
+        assert self.dropped("what is the F-15EX program",
+                            "US Air Force fighter jets") == {"f-15ex"}
+
+    @pytest.mark.parametrize("question,query", [
+        ("best pasta recipe", "authentic carbonara recipe"),
+        ("who won the election", "2026 midterm results"),
+        ("explain quantum entanglement", "quantum entanglement explained simply"),
+    ])
+    def test_ordinary_questions_never_trigger_it(self, question, query):
+        # No identifiers in the question means nothing to drop. The check has
+        # to be silent on the overwhelming majority of turns or it is just
+        # another way to burn the round budget.
+        assert self.dropped(question, query) == set()
+
+    def test_a_bare_number_is_not_an_identifier(self):
+        # "4090" alone is a number, not a model designator, and questions are
+        # full of numbers. Requiring both a letter and a digit is what keeps
+        # this from firing on "what happened in 2026".
+        assert self.dropped("rtx 4090 vs 5090 benchmarks",
+                            "rtx4090 rtx5090 gaming benchmark") == set()
+        assert self.dropped("what happened in 2026", "news summary") == set()
+
+    def test_the_correction_names_what_was_dropped(self):
+        from carrot import app as A
+
+        message = A.QUERY_IDENTIFIER_CORRECTION.format(dropped="'c8'", query="Toyota C-HR")
+        assert "'c8'" in message
+        assert "literally" in message
+
+    def test_only_the_first_search_is_checked(self):
+        # A later query narrowing to "1250 hp coupe" has legitimately moved
+        # past the model number; the opening move has not earned that.
+        from pathlib import Path
+
+        source = (Path(__file__).resolve().parents[1] / "carrot" / "app.py").read_text(
+            encoding="utf-8")
+        assert 'if bare == "web_search" and searches == 0 else set()' in source
+
+    def test_the_preamble_says_not_to_substitute_silently(self):
+        from carrot import app as A
+
+        assert "Search the user's words before your interpretation" in A.SEARCH_PREAMBLE
+        assert "search it literally first" in A.SEARCH_PREAMBLE
+
+
+class TestTheForcedAnswerAsksForFactsNotCoverage:
+    """The last clause of this prompt was producing the reported answer.
+
+    It read "if the notes do not answer it, say exactly what is missing and
+    what they did cover" — and the model did exactly that: "Specs available
+    include: 0-60 time, quarter mile times, lap times, top speed, price." In a
+    turn whose notes also contained "1,250 combined hp" and "1.89s 0-60".
+    Describing coverage was an option; giving the numbers was never made the
+    requirement.
+    """
+
+    def prompt(self):
+        from carrot import app as A
+
+        return A.FORCED_ANSWER_PROMPT
+
+    def test_it_asks_for_the_facts_themselves(self):
+        assert "Give the facts themselves" in self.prompt()
+
+    def test_it_forbids_describing_the_notes(self):
+        text = self.prompt()
+        assert "Never list what the notes are *about*" in text
+        assert "table of contents" in text
+
+    def test_partial_beats_a_summary_of_the_reading(self):
+        # The old prompt offered "say what is missing" as an alternative to
+        # answering. It is now only available when there is no fact at all.
+        text = self.prompt()
+        assert "even if it is partial" in text
+        assert "Only if the notes contain no fact" in text

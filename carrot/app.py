@@ -187,11 +187,20 @@ class ChatRequest(BaseModel):
     # the saved picker setting; the flag exists so a caller can opt one turn in
     # or out without changing it.
     auto: Optional[bool] = None
+    # Running a turn again over a transcript that already contains the
+    # question. Without it, rerun stored the user's message a second time and
+    # the conversation grew a duplicate every time you asked for another go.
+    replay: Optional[bool] = False
 
 
 class AddMessageRequest(BaseModel):
     role: str
     content: str
+
+
+class BranchRequest(BaseModel):
+    message_id: int
+    title: Optional[str] = ""
 
 
 class CreateConversationRequest(BaseModel):
@@ -977,7 +986,7 @@ def _coder_context(conversation_id: str = ""):
 
 
 def _prepare_history(conv, message, skill_slug, extra_system=None, mode=None,
-                     images=None, coder=False, memory=None):
+                     images=None, coder=False, memory=None, replay=False):
     """Build the model message list for a turn.
 
     Order matters: the search directive, then skill instructions, then any
@@ -1048,6 +1057,11 @@ def _prepare_history(conv, message, skill_slug, extra_system=None, mode=None,
             pass
 
     history += summarize_mod.build_history(conv)
+    # On a rerun the question is already the last thing in the transcript —
+    # only the answer was rewound — so appending it again would hand the model
+    # the same question twice in a row and make it read as insistence.
+    if replay and history and history[-1].get("role") == "user":
+        return history, skill
     user_turn = {"role": "user", "content": message}
     if images:
         # Ollama takes base64 images on the message itself.
@@ -1104,6 +1118,41 @@ def _search_gate_gap(searches: int, reads: int) -> Optional[str]:
     return None
 
 
+# Any inline markdown link. Used as the signal that a turn actually attributed
+# something, rather than as a citation check — one link is weak evidence, but
+# zero links after a search is strong evidence that nothing was attributed.
+_CITED = re.compile(r"\[[^\]]+\]\(https?://")
+
+
+def _single_pass_gap(searches: int, reads: int, answer: str) -> Optional[str]:
+    """Whether a single-pass turn searched and then answered from the list.
+
+    Single is the *default* mode, so it is where most turns happen, and it had
+    no floor at all: the model could search, get a page of titles, and write a
+    summary of the titles. Reported as "it seems to be searching and doing a
+    good job of searching, yet doesn't answer my question", which is exactly
+    what it looks like from outside.
+
+    Deliberately much weaker than the multi-turn gate — one nudge, and only
+    when the turn read nothing *and* attributed nothing. A snippet that already
+    states the figure is a fact the model may use, and an answer that cites one
+    has used it; pushing that turn back would just make the fast mode slow.
+
+    NOT WIRED IN YET, and the reason is worth writing down. Multi-turn can push
+    an answer back because it buffers the model's prose until the gates pass —
+    nothing has reached the screen, so there is nothing to take back. Single
+    streams as it goes, which is the whole feel of the mode, so by the time we
+    could judge the answer the user is already reading it. Nudging there means
+    either printing a second answer under the first, or holding the first token
+    back and making the fast mode feel slow. That is a product decision about
+    what single-pass *is*, not a bug fix, so the prompt change lands first and
+    this waits for a call on it.
+    """
+    if searches > 0 and reads == 0 and not _CITED.search(answer or ""):
+        return GATE_NUDGE_NO_READ
+    return None
+
+
 def _act_mode_now() -> bool:
     """Is the coding agent allowed to change things right now?"""
     try:
@@ -1142,6 +1191,49 @@ QUERY_DRIFT_CORRECTION = (
     "That search was not run: the query {query!r} shares no word with what the "
     "user actually asked ({question!r}). Search for the user's question, using "
     "its specific names, models and numbers."
+)
+
+
+# Tokens that mix letters and digits: c8, zr1x, f-15ex, rtx4090, sm-t870. These
+# are model numbers, part numbers and version designators — the most specific
+# thing in a question and the least guessable. A model that does not recognise
+# one is exactly the model that will replace it with something it does know.
+_IDENTIFIER = re.compile(r"\b(?=[a-z0-9-]*[a-z])(?=[a-z0-9-]*\d)[a-z0-9-]{2,20}\b")
+
+
+def _identifiers(text: str) -> set:
+    return set(_IDENTIFIER.findall((text or "").lower()))
+
+
+def _dropped_identifiers(question: str, query: str) -> set:
+    """Identifiers in the question that the first search threw away.
+
+    From a reported turn. Asked for "c8 zr1X specs", the model's first search
+    was "Toyota C-HR ZR1X 2026 specifications" — it kept `zr1x`, dropped `c8`,
+    and substituted a car it had heard of. Then it read eleven pages about a
+    Toyota and delivered a confident, well-formatted answer about the wrong
+    vehicle.
+
+    The existing drift check cannot see this: the query shares a word with the
+    question, so by its definition it is on topic. The failure is not that the
+    query went somewhere unrelated, it is that the *most specific term in the
+    question was silently replaced by a guess* — and the answer never mentioned
+    the substitution, so from the outside it looked like a good search.
+
+    Only applied to the first search of a turn. A later query narrowing to
+    "1250 hp coupe" has legitimately moved past the model number; the opening
+    move has not earned that.
+    """
+    return _identifiers(question) - _identifiers(query)
+
+
+QUERY_IDENTIFIER_CORRECTION = (
+    "That search was not run. The question contains {dropped}, which you left "
+    "out of {query!r} — and you added terms the user did not use. {dropped} is "
+    "the most specific thing they gave you: search for it literally, exactly as "
+    "written, before assuming it means something you recognise. If it turns out "
+    "to mean something else, say so in your answer rather than quietly "
+    "answering about the other thing."
 )
 
 # ===== Chat search modes =====
@@ -1203,9 +1295,36 @@ SEARCH_PREAMBLE = (
     # research assistant has always said this the concrete way; chat now does.
     "Cite inline as markdown links — [The Guardian](https://...) — on the "
     "sentence the fact came from, not gathered at the end. Every claim you "
-    "took from a page gets one. Name the outlet and the date when it matters. "
-    "Answer the question that was asked in your own words: a list of what each "
-    "source covers is a description of the search, not an answer.\n"
+    "took from a page gets one. Name the outlet and the date when it matters.\n"
+    # Asked for "c8 zr1X specs" it searched well, and answered: "Specs
+    # available include: 0-60 time, quarter mile times, top speed, price,
+    # engine specifications". Every one of those is the *name* of a number, and
+    # one of the snippets it had already read said 1,250 hp and 1.89s. It
+    # described the shape of an answer instead of giving one, which is the same
+    # failure as summarising a section front — and it reads as competence,
+    # which is why it kept happening.
+    "Answer with the facts themselves, not with the names of the facts. If the "
+    "question asks for specifications, give the numbers; for a price, the "
+    "price; for a date, the date. 'Specs available include 0-60 and top speed' "
+    "is a table of contents, not an answer — and listing what each source "
+    "covers is a description of your search, not an answer either. If you have "
+    "a figure, state it and cite it. If you do not have it, go and get it, and "
+    "only then say plainly which part you could not find.\n"
+    # It had the numbers in a snippet and did not use them, because it had been
+    # told to answer from what it read and it had read nothing.
+    "A snippet is a fact you have, not a place a fact might be. If a search "
+    "result already states the figure, you may use it and cite that result — "
+    "but open the page when the question needs more than one line of it.\n"
+    # Asked for "c8 zr1X specs", it searched "Toyota C-HR ZR1X 2026
+    # specifications" — it did not know what a C8 was, replaced it with
+    # something it did know, read eleven pages about a Toyota and answered
+    # confidently about the wrong car without ever mentioning the swap.
+    "Search the user's words before your interpretation of them. A model "
+    "number, part number or version you do not recognise is the most specific "
+    "thing you were given: search it literally first. Never quietly replace it "
+    "with something you have heard of — if the results show it means something "
+    "other than you assumed, say so in the answer, and if you genuinely cannot "
+    "identify it, ask rather than answering about a different thing.\n"
 )
 
 MULTI_SEARCH_DIRECTIVE = (
@@ -1262,7 +1381,15 @@ SINGLE_SEARCH_DIRECTIVE = (
     "Search mode: single-pass. You may search the web and read a page when the "
     "question needs current information or a source you do not already have. "
     "Cite the URL for anything you take from a page. Do not search for things you "
-    "already know or that are in the conversation."
+    "already know or that are in the conversation.\n"
+    # "May read a page" was the whole problem. This is the default mode, so it
+    # is where most turns happen, and it said nothing about what to do once the
+    # results came back — so a turn that searched well ended by summarising the
+    # result list. Single-pass means one round of searching, not permission to
+    # answer from titles.
+    "Single-pass means one round of searching, not an answer built from the "
+    "result list. If the question asks for something specific and the snippets "
+    "do not already state it, open the best result and answer from the page."
 )
 
 NO_SEARCH_DIRECTIVE = (
@@ -1380,13 +1507,90 @@ def _run_tool(name, args, conversation_id):
 EVIDENCE_CHARS = 1200
 MAX_EVIDENCE_SOURCES = 6
 
+# The last clause of this prompt used to read "if the notes do not answer it,
+# say exactly what is missing and what they did cover" — and that is precisely
+# the answer that got reported: "Specs available include: 0-60 time, quarter
+# mile times, lap times, top speed, price". The model did what it was told. It
+# listed what the notes covered, in a turn where the notes also contained
+# "1,250 combined hp" and "1.89s 0-60", because describing coverage was an
+# option and giving the numbers was never made the requirement.
 FORCED_ANSWER_PROMPT = (
-    "Answer the question below using only the notes that follow. Write the "
-    "answer in plain text now — do not think silently, do not ask to search "
-    "again, and do not apologise. If the notes do not answer it, say exactly "
-    "what is missing and what they did cover.\n\n"
+    "Answer the question below from the notes that follow. Write the answer in "
+    "plain text now — do not think silently, do not ask to search again, and do "
+    "not apologise.\n"
+    "Give the facts themselves. If a note contains a number, a date, a price or "
+    "a name that answers the question, put it in the answer and cite the source "
+    "it came from. Never list what the notes are *about*: 'the sources cover "
+    "0-60 time and top speed' is a table of contents, not an answer, and it is "
+    "worthless to the person who asked.\n"
+    "Answer with whatever the notes do support, even if it is partial — a real "
+    "figure with a gap beside it beats a summary of the reading. Only if the "
+    "notes contain no fact bearing on the question at all, say that in one "
+    "sentence and name what you would need.\n\n"
     "QUESTION: {question}\n\nNOTES:\n{notes}"
 )
+
+# How many pages the server will open on the model's behalf once it is clear it
+# is not going to do it itself. Two is enough to answer most questions and
+# cheap enough not to matter when it was unnecessary.
+AUTO_READ_LIMIT = 2
+
+_RESULT_URL = re.compile(r"https?://[^\s\]<>\"']+")
+
+AUTO_READ_NOTE = (
+    "You did not open any of the search results after being asked to, so the "
+    "pages below were opened for you. They are the sources you found. Answer "
+    "the question from what they say, with the figures in them, and cite them."
+)
+
+
+def _unread_result_urls(evidence, already_read):
+    """Search-result URLs the turn has seen and not opened, best first.
+
+    Recovered from the text of the search results rather than tracked
+    separately: the tool hands the model a formatted list, and that list is
+    already in rank order, so re-reading the URLs out of it costs nothing and
+    cannot drift out of sync with what the model was actually shown.
+    """
+    seen, urls = set(already_read), []
+    for item in evidence:
+        if item["tool"] != "web_search":
+            continue
+        for url in _RESULT_URL.findall(item["text"]):
+            url = url.rstrip(".,);")
+            if url not in seen:
+                seen.add(url)
+                urls.append(url)
+    return urls
+
+
+def _auto_read(evidence, already_read, conversation_id, limit=AUTO_READ_LIMIT):
+    """Open the top unread results ourselves. Yields stream events, then a list.
+
+    The gate exists to stop a turn answering from a list of titles, and it
+    works by telling the model to open a page. That assumes the model *can* —
+    and a small local one often cannot, or will not, however many times it is
+    asked. The reported turn nudged three times, got nothing, and fell back to
+    writing from snippets, which is the failure the gate was built to prevent.
+
+    Telling it a fourth time was never going to work. Reading the page is a
+    thing the server can simply do, so it does it, and the model is handed page
+    text instead of an argument it keeps losing.
+    """
+    fetched = []
+    for url in _unread_result_urls(evidence, already_read)[:limit]:
+        yield {"tool": {"name": "carrot__read_url", "args": {"url": url},
+                        "auto": True}}
+        result = ""
+        for event in _run_tool("carrot__read_url", {"url": url}, conversation_id):
+            if "_tool_result" in event:
+                result = event["_tool_result"]
+            else:
+                yield event
+        yield {"tool_result": {"name": "carrot__read_url", "result": result[:2000]}}
+        if not result.startswith("error:"):
+            fetched.append({"url": url, "text": result})
+    yield {"_auto_read": fetched}
 
 
 def _forced_answer(resolved, question, evidence):
@@ -1418,6 +1622,33 @@ def _forced_answer(resolved, question, evidence):
     yield {"_answer": "".join(parts)}
 
 
+# A Python exception that escaped into the turn, rather than anything the
+# provider did. These are the phrasings the interpreter uses, and none of them
+# can come out of an HTTP error or a model refusal.
+_OUR_FAULT = (
+    "can only concatenate", "object has no attribute", "unsupported operand",
+    "is not subscriptable", "not callable", "takes no arguments",
+    "unexpected keyword argument", "positional argument", "NoneType",
+    "list indices must be", "string indices must be",
+)
+
+
+def _blame_for(failure: str) -> str:
+    """Say who actually broke, because the answer sends the user somewhere.
+
+    A turn died with "can only concatenate str (not "list") to str" and was
+    reported as *provider stopped the turn* — so the user went and checked
+    Mistral's rate limits for a TypeError two frames down in Carrot. "The
+    provider stopped the turn" is the right sentence for an HTTP 429 and the
+    wrong one for our own bug, and the two need different things from whoever
+    reads it.
+    """
+    if any(marker in failure for marker in _OUR_FAULT):
+        return (f"this is a fault in Carrot, not in the provider or in what you "
+                f"asked: `{failure}`. It is worth reporting.")
+    return f"the provider stopped the turn (`{failure}`)."
+
+
 def _evidence_answer(question, evidence, failure=""):
     """Write something true and useful without the model, as a last resort.
 
@@ -1431,7 +1662,7 @@ def _evidence_answer(question, evidence, failure=""):
     for completely different things from the user, and guessing between them is
     what made the last few of these unfixable.
     """
-    blame = f"\n\nThe provider stopped the turn with: `{failure}`" if failure else ""
+    blame = f"\n\n{_blame_for(failure)}" if failure else ""
     if not evidence:
         return (
             "I could not gather anything usable for that. Every source I tried "
@@ -1443,7 +1674,7 @@ def _evidence_answer(question, evidence, failure=""):
     pages = [e["source"] for e in evidence if e["tool"] == "read_url" and e["source"]]
     lines = [
         "I gathered the material for this but could not write it up — "
-        + (f"the provider stopped the turn (`{failure}`)." if failure
+        + (_blame_for(failure) if failure
            else "the model ran out of room to answer.")
         + " Here is what the turn actually collected, so it is not wasted:",
         "",
@@ -1485,6 +1716,11 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mo
 
     gated = mode == SEARCH_MULTI
     searches = reads = nudges = 0
+    # Pages the turn has opened, and whether the server has already stepped in
+    # and opened some itself. Once only: if reading them still did not produce
+    # an answer, reading two more is not the missing piece.
+    read_urls: set = set()
+    auto_read_done = False
     final_text = ""
     stalled = False
     # What the provider said when it stopped talking to us, if it did. This
@@ -1555,6 +1791,36 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mo
             # The model wants to finish. In multi-turn that is only allowed
             # once it has actually searched and read.
             gap = _search_gate_gap(searches, reads) if gated else None
+
+            # Asked once and ignored means asked twice will be ignored too. The
+            # reported turn nudged the full three times, never got a read, and
+            # fell back to writing from snippets — the exact failure the gate
+            # exists to prevent. So the second time round the server opens the
+            # pages itself rather than repeating itself at a model that cannot
+            # do it.
+            if gap is GATE_NUDGE_NO_READ and nudges >= 1 and not auto_read_done:
+                auto_read_done = True
+                fetched = []
+                for event in _auto_read(evidence, read_urls, conversation_id):
+                    if "_auto_read" in event:
+                        fetched = event["_auto_read"]
+                    else:
+                        yield event
+                if fetched:
+                    reads += len(fetched)
+                    for page in fetched:
+                        read_urls.add(page["url"])
+                        evidence.append({"tool": "read_url", "source": page["url"],
+                                         "text": page["text"][:EVIDENCE_CHARS]})
+                    working.append({"role": "assistant", "content": content_str})
+                    working.append({"role": "user", "content": AUTO_READ_NOTE + "\n\n" + "\n\n".join(
+                        f"--- {page['url']} ---\n{page['text'][:4000]}" for page in fetched)})
+                    continue
+                # Nothing could be opened either — every result blocked us, or
+                # there were none. Fall through: the model is not at fault and
+                # another nudge would only spend a round.
+                gap = None
+
             if gap and nudges < MAX_GATE_NUDGES:
                 nudges += 1
                 yield {"gate": {"reason": gap, "searches": searches, "reads": reads}}
@@ -1605,6 +1871,27 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mo
                 })
                 continue
 
+            # The opening search must keep the question's model numbers. Drift
+            # cannot catch a query that keeps one identifier, drops another and
+            # substitutes a subject the model has heard of — "c8 zr1X" became
+            # "Toyota C-HR ZR1X", which shares a word and is a different car.
+            # Only the first search: a later query narrowing past the model
+            # number is doing its job, the opening move has not earned that.
+            dropped = (_dropped_identifiers(question, str(args.get("query", "")))
+                       if bare == "web_search" and searches == 0 else set())
+            if dropped and rejected < MAX_QUERY_REJECTIONS:
+                rejected += 1
+                named = ", ".join(f"'{d}'" for d in sorted(dropped))
+                correction = QUERY_IDENTIFIER_CORRECTION.format(
+                    dropped=named, query=str(args.get("query", "")))
+                yield {"tool": {"name": name, "args": args, "rejected": True,
+                                "reason": f"dropped {named} from what you asked"}}
+                working.append({
+                    "role": "tool", "content": correction,
+                    "name": name, "tool_call_id": call.get("id", name),
+                })
+                continue
+
             yield {"tool": {"name": name, "args": args}}
             result = ""
             for event in _run_tool(name, args, conversation_id):
@@ -1624,6 +1911,7 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mo
                 topic |= _ws._terms(result[:1500])
             elif bare == "read_url":
                 reads += 1
+                read_urls.add(str(args.get("url", "")))
             yield {"tool_result": {"name": name, "result": result[:2000]}}
             if bare in ("web_search", "read_url") and not result.startswith("error:"):
                 evidence.append({
@@ -1938,9 +2226,13 @@ async def chat(req: ChatRequest):
     images, docs_system, note = _apply_attachments(req, resolved)
     history, skill = _prepare_history(conv, req.message, req.skill,
                                       extra_system=docs_system, mode=mode, images=images,
-                                      coder=bool(req.coder), memory=req.memory)
-    conv_mod.add_message(req.conversation_id, "user",
-                         f"{req.message}\n\n[{note}]" if note else req.message)
+                                      coder=bool(req.coder), memory=req.memory,
+                                      replay=bool(getattr(req, "replay", False)))
+    # A rerun runs an existing turn again, and the question is already in the
+    # transcript — storing it again grew a duplicate on every go.
+    if not getattr(req, "replay", False):
+        conv_mod.add_message(req.conversation_id, "user",
+                             f"{req.message}\n\n[{note}]" if note else req.message)
 
     if req.stream:
         return _chat_stream_response(req, conv, history, skill, resolved, mode=mode)
@@ -1997,9 +2289,13 @@ async def chat_stream(req: ChatRequest):
     images, docs_system, note = _apply_attachments(req, resolved)
     history, skill = _prepare_history(conv, req.message, req.skill,
                                       extra_system=docs_system, mode=mode, images=images,
-                                      coder=bool(req.coder), memory=req.memory)
-    conv_mod.add_message(req.conversation_id, "user",
-                         f"{req.message}\n\n[{note}]" if note else req.message)
+                                      coder=bool(req.coder), memory=req.memory,
+                                      replay=bool(getattr(req, "replay", False)))
+    # A rerun runs an existing turn again, and the question is already in the
+    # transcript — storing it again grew a duplicate on every go.
+    if not getattr(req, "replay", False):
+        conv_mod.add_message(req.conversation_id, "user",
+                             f"{req.message}\n\n[{note}]" if note else req.message)
     return _chat_stream_response(req, conv, history, skill, resolved, mode=mode)
 
 
@@ -2047,6 +2343,23 @@ async def update_conversation(conv_id: str, req: ConversationUpdateRequest):
     if result is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return result
+
+
+@app.post("/api/conversations/{conv_id}/branch")
+async def branch_conversation(conv_id: str, req: BranchRequest):
+    """Fork a conversation at a message, leaving the original untouched."""
+    try:
+        return conv_mod.branch_conversation(conv_id, req.message_id, title=req.title or "")
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.post("/api/conversations/{conv_id}/rewind")
+async def rewind_conversation(conv_id: str, req: BranchRequest):
+    """Drop a message and everything after it, so the turn can be run again."""
+    if conv_mod.get_conversation(conv_id) is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"removed": conv_mod.drop_messages_from(conv_id, req.message_id)}
 
 
 @app.post("/api/conversations/temporary/purge")

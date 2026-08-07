@@ -656,18 +656,146 @@ function showSources(assistantEl, contentEl, sources) {
     }
 }
 
-function appendMessage(role, content) {
+function appendMessage(role, content, messageId) {
     clearChatEmpty();
     const messagesEl = document.getElementById('chat-messages');
     const div = document.createElement('div');
     div.className = `message ${role}`;
+    // The rendered HTML is not the message. Copy has to hand back what was
+    // actually said — markdown and all — not innerText with the formatting
+    // flattened out of it, so the source is kept on the element.
+    div.dataset.raw = content || '';
+    if (messageId != null) div.dataset.messageId = String(messageId);
     const body = role === 'assistant' && content
         ? `<div class="content md">${mdToHtml(content)}</div>`
         : `<div class="content">${escHtml(content)}</div>`;
     div.innerHTML = `<div class="role-label">${role === 'user' ? 'You' : 'Carrot'}</div>${body}`;
     messagesEl.appendChild(div);
+    attachMessageActions(div);
     messagesEl.scrollTop = messagesEl.scrollHeight;
     return div;
+}
+
+// ===== Message actions =====
+//
+// Copy, rerun, branch. All three exist because a chat transcript is not a log
+// you only read: you want a paragraph out of it, you want the answer again
+// because the first one missed, and you want to ask the question differently
+// without losing the answer you are comparing against.
+//
+// Rerun and branch need a message id, which only exists for messages that came
+// back from the server. A turn still streaming has no id yet, so its actions
+// appear when the conversation is next opened rather than being offered and
+// then failing.
+
+function attachMessageActions(div) {
+    if (div.querySelector('.msg-actions')) return;
+    const row = document.createElement('div');
+    row.className = 'msg-actions';
+
+    row.appendChild(messageAction('Copy', 'i-clipboard', () => copyMessage(div)));
+
+    if (div.dataset.messageId) {
+        // Rerun replaces; that is what makes it a rerun rather than asking
+        // twice. It only appears on the last answer, because replacing a
+        // message from the middle would silently discard everything after it —
+        // that is what Branch is for.
+        if (div.classList.contains('assistant') && isLastMessage(div)) {
+            row.appendChild(messageAction('Rerun', 'i-refresh', () => rerunMessage(div)));
+        }
+        row.appendChild(messageAction('Branch', 'i-branch', () => branchFromMessage(div)));
+    }
+    div.appendChild(row);
+}
+
+function messageAction(label, icon, onClick) {
+    const button = document.createElement('button');
+    button.className = 'msg-action';
+    button.type = 'button';
+    button.title = label;
+    button.innerHTML = `<svg class="ico"><use href="#${icon}"/></svg><span>${label}</span>`;
+    button.onclick = onClick;
+    return button;
+}
+
+function isLastMessage(div) {
+    const all = document.querySelectorAll('#chat-messages .message');
+    return all.length && all[all.length - 1] === div;
+}
+
+async function copyMessage(div) {
+    const text = div.dataset.raw || div.querySelector('.content')?.innerText || '';
+    try {
+        await navigator.clipboard.writeText(text);
+        flashAction(div, 'Copied');
+    } catch (_) {
+        // Clipboard access can be refused; a silent no-op looks like a bug.
+        flashAction(div, 'Could not copy');
+    }
+}
+
+// A brief word on the button itself rather than a toast: the feedback belongs
+// where the click was, and an alert for a successful copy is worse than none.
+function flashAction(div, said) {
+    const button = div.querySelector('.msg-action');
+    if (!button) return;
+    const span = button.querySelector('span');
+    if (!span || button.dataset.flashing) return;
+    const original = span.textContent;
+    button.dataset.flashing = '1';
+    span.textContent = said;
+    setTimeout(() => {
+        span.textContent = original;
+        delete button.dataset.flashing;
+    }, 1200);
+}
+
+async function rerunMessage(div) {
+    const previous = div.previousElementSibling;
+    const question = previous && previous.classList.contains('user')
+        ? previous.dataset.raw : '';
+    if (!question) {
+        alert('There is no question above this answer to run again.');
+        return;
+    }
+    try {
+        // Drop the old answer server-side *before* asking again, or the model
+        // is handed a history in which it has already answered.
+        await api(`/api/conversations/${currentConversationId}/rewind`, {
+            method: 'POST',
+            body: JSON.stringify({ message_id: Number(div.dataset.messageId) }),
+        });
+    } catch (e) {
+        alert('Could not clear the old answer: ' + e.message);
+        return;
+    }
+    div.remove();
+    await streamTurn('/api/chat/stream', {
+        message: question,
+        conversation_id: currentConversationId,
+        model: autoModel ? null : currentModel,
+        provider: autoModel ? null : currentProvider,
+        auto: autoModel,
+        temporary: temporaryChat,
+        memory: useMemory,
+        search_mode: currentSearchMode,
+        // The question is already in the transcript; rewinding removed only
+        // the answer, so re-sending it must not append a duplicate.
+        replay: true,
+    });
+}
+
+async function branchFromMessage(div) {
+    try {
+        const branch = await api(`/api/conversations/${currentConversationId}/branch`, {
+            method: 'POST',
+            body: JSON.stringify({ message_id: Number(div.dataset.messageId) }),
+        });
+        await loadConversations();
+        await openConversation(branch.id);
+    } catch (e) {
+        alert('Could not branch: ' + e.message);
+    }
 }
 
 async function sendChat() {
@@ -1002,6 +1130,7 @@ async function streamTurn(url, payload, skill) {
                              + ' — see the card, bottom right', 'intent');
                     showApprovalPrompt(payload.approval_request);
                 }
+                if (payload.approval_waiting) noteApprovalWaiting(payload.approval_waiting);
                 if (payload.approval_resolved) {
                     dismissApprovalPrompt(payload.approval_resolved.id);
                     if (payload.approval_resolved.decision === 'timeout') {
@@ -1048,11 +1177,48 @@ async function streamTurn(url, payload, skill) {
                            pendingArtifacts.map(id => `[[carrot:artifact:${id}]]`).join(' '));
         }
         if (speakReplies && full) speakText(full);
+        // Copy needs the markdown, not the rendered HTML, and the answer only
+        // exists now that the stream has finished.
+        assistantEl.dataset.raw = full;
+        // Rerun and branch need ids the server assigns, and the moment you
+        // most want "run that again" is right after reading the answer — not
+        // after reopening the conversation. So the ids are collected as soon
+        // as the turn lands rather than on the next load.
+        await syncMessageIds();
     } catch (e) {
         contentEl.textContent = e.message;
         contentEl.classList.add('error');
     } finally {
         clearActiveSkill();
+    }
+}
+
+// Stamp stored ids onto messages that were rendered while streaming.
+//
+// Matched from the end backwards. The rendered list can be shorter than the
+// stored one — an older conversation scrolled off, a trace box between turns —
+// but the *last* n messages are always the same n, because that is the end
+// both of them just grew from.
+async function syncMessageIds() {
+    if (!currentConversationId) return;
+    let stored;
+    try {
+        stored = (await api(`/api/conversations/${currentConversationId}`)).messages || [];
+    } catch (_) {
+        return;   // Actions are a convenience; failing to get them is not an error.
+    }
+    const rendered = [...document.querySelectorAll('#chat-messages .message')];
+    for (let i = 1; i <= Math.min(rendered.length, stored.length); i++) {
+        const div = rendered[rendered.length - i];
+        const message = stored[stored.length - i];
+        // A mismatched role means the two lists have drifted; stop rather than
+        // hang an id on the wrong message, which is how Rerun would delete
+        // something nobody pointed at.
+        if (!div.classList.contains(message.role)) break;
+        div.dataset.messageId = String(message.id);
+        const row = div.querySelector('.msg-actions');
+        if (row) row.remove();
+        attachMessageActions(div);
     }
 }
 
@@ -1249,7 +1415,7 @@ async function openConversation(convId) {
     const messagesEl = document.getElementById('chat-messages');
     messagesEl.innerHTML = '';
     document.getElementById('chat-title').textContent = conv.title || 'Untitled';
-    const rendered = conv.messages.map(m => appendMessage(m.role, m.content));
+    const rendered = conv.messages.map(m => appendMessage(m.role, m.content, m.id));
     // Charts made earlier in this conversation are part of it — reopening a
     // chat and finding the figures gone would make them feel disposable.
     if (typeof mountArtifacts === 'function') {

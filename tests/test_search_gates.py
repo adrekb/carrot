@@ -20,12 +20,17 @@ def tool_call(name, **args):
     return [{"id": name, "function": {"name": name, "arguments": args}}]
 
 
-def drive(script, mode, question="status of the F-15EX program", synthesis=None):
+def drive(script, mode, question="status of the F-15EX program", synthesis=None,
+          tool_result="RESULT"):
     """Run one chat turn against a scripted model.
 
     `script` is a list of (assistant_text, tool_calls) per round. Once it is
     exhausted the model replies with `synthesis` and no tool calls.
+
+    `tool_result` is what every tool returns. Pass search output containing
+    URLs to exercise the path where the server opens the pages itself.
     """
+    read_urls = []
     remaining = iter(script)
 
     def fake_stream(resolved, messages, tools=None):
@@ -43,7 +48,7 @@ def drive(script, mode, question="status of the F-15EX program", synthesis=None)
             return {}
 
     with patch.object(A.router_mod, "stream_events", fake_stream), \
-         patch.object(A, "_run_tool", lambda n, a, c: iter([{"_tool_result": "RESULT"}])), \
+         patch.object(A, "_run_tool", _runner(tool_result, read_urls)), \
          patch.object(A, "_available_tools", lambda m: []):
         history = [{"role": "user", "content": question}]
         events = list(A._agentic_chat_events(history, Route(), None, None, mode))
@@ -58,7 +63,21 @@ def drive(script, mode, question="status of the F-15EX program", synthesis=None)
         "gates": [e["gate"]["reason"] for e in events if "gate" in e],
         "research_offered": any("suggest_research" in e for e in events),
         "streamed": "".join(e["chunk"] for e in events if "chunk" in e),
+        "auto_read": [e["tool"]["args"]["url"] for e in events
+                      if "tool" in e and e["tool"].get("auto")],
+        "read_urls": read_urls,
     }
+
+
+def _runner(tool_result, read_urls):
+    """Stand-in for the tool runner that records what got opened."""
+    def run(name, args, conversation_id):
+        if name.endswith("read_url"):
+            url = args.get("url", "")
+            read_urls.append(url)
+            return iter([{"_tool_result": f"PAGE TEXT from {url}"}])
+        return iter([{"_tool_result": tool_result}])
+    return run
 
 
 class TestTheGates:
@@ -98,11 +117,14 @@ class TestTheGates:
         assert A._search_gate_gap(searches=2, reads=1) is None
 
     def test_a_model_that_cannot_comply_still_answers(self):
-        """Nudging forever would mean never answering at all. After the cap we
-        take what we have — and flag it rather than passing it off."""
+        """Nudging forever would mean never answering at all.
+
+        With no URLs in these results there is nothing for the server to open
+        on the model's behalf either, so the turn falls through to taking what
+        it has — flagged, rather than passed off as researched.
+        """
         result = drive([("", tool_call("web_search", query="F-15EX a")),
                         ("Answer.", [])] * 8, A.SEARCH_MULTI)
-        assert len(result["gates"]) == A.MAX_GATE_NUDGES
         assert result["final"] == "Answer."
         assert result["research_offered"]
 
@@ -465,3 +487,107 @@ class TestTheStreamItself:
                                    json={"message": "hello", "stream": True})
         assert "the answer" in response.text
         assert '"done": true' in response.text.lower()
+
+
+# ===== When the model will not open a page, the server opens it =====
+
+SEARCH_WITH_URLS = (
+    "- F-15EX deliveries hit 12 — https://www.defensenews.com/f15ex-12 [Defense News]\n"
+    "- Boeing F-15EX programme page — https://boeing.com/f15ex [Boeing]\n"
+    "- Air Force budget request — https://af.mil/budget-2027 [Af.Mil]\n"
+)
+
+
+class TestTheServerReadsWhenTheModelWillNot:
+    """The gate assumed the model *can* open a page when told to.
+
+    From a reported turn: it searched once, was told three times that snippets
+    are not an answer, never called read_url, and fell back to writing from the
+    result list — the exact failure the gate exists to prevent. Telling it a
+    fourth time was never going to work. Reading a page is something the server
+    can just do.
+    """
+
+    def refuses_to_read(self, rounds=8):
+        return [("", tool_call("web_search", query="F-15EX status")),
+                ("Here are some outlets.", [])] * rounds
+
+    def test_the_pages_are_opened_for_it(self):
+        result = drive(self.refuses_to_read(), A.SEARCH_MULTI,
+                       tool_result=SEARCH_WITH_URLS)
+        assert result["auto_read"] == ["https://www.defensenews.com/f15ex-12",
+                                       "https://boeing.com/f15ex"]
+
+    def test_it_stops_at_the_limit(self):
+        result = drive(self.refuses_to_read(), A.SEARCH_MULTI,
+                       tool_result=SEARCH_WITH_URLS)
+        assert len(result["auto_read"]) == A.AUTO_READ_LIMIT
+
+    def test_it_happens_once_and_not_every_round(self):
+        # If page text still did not produce an answer, two more pages are not
+        # the missing piece — they are just a slower way to fail.
+        result = drive(self.refuses_to_read(rounds=12), A.SEARCH_MULTI,
+                       tool_result=SEARCH_WITH_URLS)
+        assert len(result["read_urls"]) <= A.AUTO_READ_LIMIT
+
+    def test_one_nudge_comes_first(self):
+        # Asking is cheaper than fetching, and plenty of models comply.
+        result = drive(self.refuses_to_read(), A.SEARCH_MULTI,
+                       tool_result=SEARCH_WITH_URLS)
+        assert result["gates"][:1] == [A.GATE_NUDGE_NO_READ]
+
+    def test_a_model_that_reads_on_its_own_is_left_alone(self):
+        result = drive([
+            ("", tool_call("web_search", query="F-15EX status")),
+            ("", tool_call("read_url", url="https://www.defensenews.com/f15ex-12")),
+            ("", tool_call("web_search", query="F-15EX deliveries 2026")),
+            ("Twelve delivered.", []),
+        ], A.SEARCH_MULTI, tool_result=SEARCH_WITH_URLS)
+        assert result["auto_read"] == []
+        assert result["final"] == "Twelve delivered."
+
+    def test_single_mode_never_does_it(self):
+        # Single promises one pass. Fetching pages behind the model's back
+        # would make it something else.
+        result = drive([
+            ("", tool_call("web_search", query="F-15EX status")),
+            ("From the titles.", []),
+        ], A.SEARCH_SINGLE, tool_result=SEARCH_WITH_URLS)
+        assert result["auto_read"] == []
+
+    def test_nothing_openable_falls_through_rather_than_looping(self):
+        # Every result blocked, or none at all: the model is not at fault and
+        # another nudge would only spend a round.
+        result = drive(self.refuses_to_read(), A.SEARCH_MULTI,
+                       tool_result="no results (the search backend may be unreachable)")
+        assert result["auto_read"] == []
+        assert result["final"] == "Here are some outlets."
+
+
+class TestPickingWhatToOpen:
+    def test_results_come_back_in_rank_order(self):
+        evidence = [{"tool": "web_search", "source": "q", "text": SEARCH_WITH_URLS}]
+        assert A._unread_result_urls(evidence, set())[:2] == [
+            "https://www.defensenews.com/f15ex-12", "https://boeing.com/f15ex"]
+
+    def test_a_page_already_opened_is_not_opened_again(self):
+        evidence = [{"tool": "web_search", "source": "q", "text": SEARCH_WITH_URLS}]
+        urls = A._unread_result_urls(evidence, {"https://www.defensenews.com/f15ex-12"})
+        assert "https://www.defensenews.com/f15ex-12" not in urls
+
+    def test_duplicates_across_searches_appear_once(self):
+        evidence = [{"tool": "web_search", "source": "a", "text": SEARCH_WITH_URLS},
+                    {"tool": "web_search", "source": "b", "text": SEARCH_WITH_URLS}]
+        urls = A._unread_result_urls(evidence, set())
+        assert len(urls) == len(set(urls))
+
+    def test_pages_the_model_read_are_not_candidates(self):
+        # Only search results are offered. A page already fetched is evidence,
+        # not a lead.
+        evidence = [{"tool": "read_url", "source": "https://x", "text": "https://y"}]
+        assert A._unread_result_urls(evidence, set()) == []
+
+    def test_trailing_punctuation_is_not_part_of_the_url(self):
+        evidence = [{"tool": "web_search", "source": "q",
+                     "text": "see https://example.com/story), and more"}]
+        assert A._unread_result_urls(evidence, set()) == ["https://example.com/story"]

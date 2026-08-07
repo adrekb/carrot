@@ -310,7 +310,7 @@ class TestTheToast:
         assert "if (document.hasFocus()) return;" in read_js("agentops.js")
 
     def test_the_desktop_app_path_is_used_when_present(self):
-        assert "window.carrot.notify(what, body)" in read_js("agentops.js")
+        assert "window.carrot.notify(title, body)" in read_js("agentops.js")
 
     def test_a_plain_browser_still_gets_one(self):
         source = read_js("agentops.js")
@@ -321,6 +321,22 @@ class TestTheToast:
         assert "alertAwayFromScreen(request);" in source
         assert source.index("approvalHost().appendChild(card);") < source.index(
             "alertAwayFromScreen(request);")
+
+    def test_the_code_tab_gets_one_too(self):
+        # It renders its own approval card rather than reusing the chat one, so
+        # attaching the toast to that renderer alone missed the panel most
+        # likely to be left running in the background.
+        assert "alertAwayFromScreen(request)" in read_js("features.js")
+
+    def test_a_finished_long_run_says_so(self):
+        assert "notifyWhenLongRunFinishes(startedAt" in read_js("features.js")
+        assert "notifyWhenLongRunFinishes(startedAt" in read_js("agents.js")
+
+    def test_a_short_turn_stays_quiet(self):
+        # A toast for a four-second turn is noise, and noise is how a
+        # notification stops being read.
+        source = read_js("agentops.js")
+        assert "if (Date.now() - startedAt < AWAY_NOTICE_AFTER_MS) return;" in source
 
 
 class TestBackgroundWorkersSurviveALostDatabase:
