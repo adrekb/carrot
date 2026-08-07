@@ -873,6 +873,23 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 .model-row .m-install:hover { color: var(--accent); border-color: rgba(255, 92, 31, 0.4); }
 .model-row .m-install .ico { width: 11px; height: 11px; }
 
+/* Auto is a choice about *how* to choose, so it reads as a sentence rather
+   than a model name — no mono, and a line saying what it will do. */
+.model-auto-row { align-items: flex-start; }
+.model-auto-row .m-name {
+  font-family: inherit;
+  font-size: 12.5px;
+  white-space: normal;
+  overflow: visible;
+}
+.model-auto-row .m-sub {
+  display: block;
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 1.4;
+  margin-top: 2px;
+}
+
 .pop-custom {
   display: flex; gap: 6px;
   padding: 8px;

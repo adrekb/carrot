@@ -7,6 +7,12 @@ let currentModel = null;
 // provider and a pulled tag to Ollama, and guessing wrong routed chat to a
 // model that was not there.
 let currentProvider = null;
+// Auto is not a model, so it cannot live in `currentModel`. When it is on, the
+// turn carries no model at all and the server reads the task off the message.
+let autoModel = false;
+// Whether Auto can currently only reach on-device models. The empty state's
+// privacy line depends on it, so it comes from the server rather than a guess.
+let autoIsLocal = true;
 // A chat that is answered but not remembered. Per-conversation rather than a
 // global setting, because the reason to want one is usually a single question
 // rather than a change of policy.
@@ -292,6 +298,8 @@ async function loadModels() {
         // The label has to show what chat *actually* runs on. `active_model` is
         // only the Ollama default, so reading it here made a pinned cloud model
         // silently revert to the local one in the picker on every refresh.
+        autoModel = !!data.auto;
+        autoIsLocal = data.auto_local !== false;
         if (data.chat_local === false && data.chat_model) {
             currentModel = data.chat_model;
             currentProvider = data.chat_provider || null;
@@ -299,7 +307,9 @@ async function loadModels() {
             currentModel = data.active_model;
             currentProvider = 'ollama';
         }
-        document.getElementById('model-label').textContent = currentModel;
+        // Under Auto the model is not known until the message is read, so the
+        // label must not name one. The route line on each turn says what ran.
+        document.getElementById('model-label').textContent = autoModel ? 'Auto' : currentModel;
         renderModelPop(data);
         renderEmptyStateLine();
     } catch (_) {
@@ -315,8 +325,11 @@ function renderModelPop(data) {
     suggestedEl.innerHTML = '';
     if (remoteEl) remoteEl.innerHTML = '';
 
-    // A local model is "current" only when chat isn't pinned to a provider.
-    const localActive = data.chat_local !== false ? data.active_model : null;
+    renderAutoRow(data);
+
+    // A local model is "current" only when chat isn't pinned to a provider,
+    // and never while Auto is picking.
+    const localActive = (!data.auto && data.chat_local !== false) ? data.active_model : null;
 
     if (!data.installed.length) {
         installedEl.innerHTML = '<div class="empty" style="padding:4px 9px">No models installed yet.</div>';
@@ -342,7 +355,7 @@ function renderModelPop(data) {
             remoteEl.appendChild(head);
 
             for (const name of group.models) {
-                const isActive = data.chat_local === false
+                const isActive = !data.auto && data.chat_local === false
                     && data.chat_provider === group.provider && data.chat_model === name;
                 const row = document.createElement('div');
                 row.className = 'model-row' + (isActive ? ' active' : '');
@@ -403,6 +416,42 @@ function renderModelPop(data) {
     }
 }
 
+// Auto sits above the model list because it is the answer to a different
+// question — "you decide" rather than "this one". The subtitle says what it
+// will actually do, including whether it can leave the machine, because
+// picking it is the moment that stops being obvious.
+function renderAutoRow(data) {
+    const el = document.getElementById('model-auto');
+    if (!el) return;
+    el.innerHTML = '';
+    const row = document.createElement('div');
+    row.className = 'model-row model-auto-row' + (data.auto ? ' active' : '');
+    const where = data.auto_local === false
+        ? 'code and hard questions go to your cloud provider'
+        : 'everything still runs on this machine';
+    row.innerHTML = `
+        <span class="m-name">Auto<span class="m-sub">picks a model per message — ${escHtml(where)}</span></span>
+        ${data.auto ? '<svg class="ico m-check"><use href="#i-check"/></svg>' : ''}`;
+    row.onclick = () => selectAutoModel();
+    el.appendChild(row);
+}
+
+async function selectAutoModel() {
+    try {
+        const state = await api('/api/models/auto',
+            { method: 'POST', body: JSON.stringify({ enabled: true }) });
+        autoModel = true;
+        autoIsLocal = state.auto_local !== false;
+        document.getElementById('model-label').textContent = 'Auto';
+        renderEmptyStateLine();
+        document.getElementById('model-pop').classList.add('hidden');
+        loadModels();
+        refreshStatus();
+    } catch (e) {
+        alert('Could not switch to Auto: ' + e.message);
+    }
+}
+
 // Popovers above the command bar are clamped to the space that actually
 // exists. A fixed max-height ran off the top of the screen on short
 // windows, leaving options you could see but never scroll to.
@@ -439,6 +488,11 @@ async function selectRemoteModel(provider, model) {
             method: 'PUT',
             body: JSON.stringify({ task: 'chat', provider, model }),
         });
+        // Naming a model here is the opposite of asking Carrot to name one.
+        // Pinning `chat` in Settings does not do this; the picker does.
+        await api('/api/models/auto',
+            { method: 'POST', body: JSON.stringify({ enabled: false }) }).catch(() => {});
+        autoModel = false;
         currentModel = model;
         currentProvider = provider;
         document.getElementById('model-label').textContent = model;
@@ -456,7 +510,10 @@ async function selectModel(name) {
     try {
         // Selecting a local model also releases any cloud pin on chat.
         await api('/api/router/route/chat', { method: 'DELETE' }).catch(() => {});
+        // /api/models/select clears Auto server-side; mirror it here so the
+        // label does not stay on "Auto" until the next refresh.
         await api('/api/models/select', { method: 'POST', body: JSON.stringify({ model: name }) });
+        autoModel = false;
         currentModel = name;
         currentProvider = 'ollama';
         document.getElementById('model-label').textContent = name;
@@ -633,8 +690,11 @@ async function sendChat() {
         message: msg || 'What is in the attached file?',
         attachments: attachments.map(a => ({ name: a.name, mime: a.mime, data: a.data })),
         conversation_id: currentConversationId,
-        model: currentModel,
-        provider: currentProvider,
+        // Under Auto the turn names no model: an explicit one outranks the
+        // classifier, so sending the last-known name would silence it.
+        model: autoModel ? null : currentModel,
+        provider: autoModel ? null : currentProvider,
+        auto: autoModel,
         temporary: temporaryChat,
         // null means "whatever the setting says"; false means "not this turn".
         memory: useMemory,
@@ -893,7 +953,12 @@ async function streamTurn(url, payload, skill) {
                     // Always say where the answer came from — local vs hosted is
                     // the single most important thing to be honest about here.
                     const where = payload.route.local ? 'on-device' : payload.route.provider;
-                    toolLine(`${payload.route.model} (${where})`, 'intent');
+                    // A model the user did not choose has to say why it was
+                    // chosen — otherwise Auto is just the model changing
+                    // underneath you between one message and the next.
+                    const why = payload.route.auto && payload.route.reason
+                        ? ` — ${payload.route.reason.replace(/^auto: /, '')}` : '';
+                    toolLine(`${payload.route.model} (${where})${why}`, 'intent');
                 }
                 if (payload.document) {
                     // A doc send reports what it actually attached, before any
@@ -2225,10 +2290,22 @@ document.addEventListener('DOMContentLoaded', renderTemporaryState);
 function renderEmptyStateLine() {
     const line = document.getElementById('chat-empty-line');
     if (!line) return;
-    const local = currentProvider === 'ollama' || currentProvider === null;
-    line.textContent = local
-        ? 'Everything runs on your machine. Ask anything below.'
-        : `Answers come from ${currentModel || 'a hosted model'} over the internet. `
-          + 'Ask anything below.';
+    // Under Auto there is no chosen model to name, and the promise holds only
+    // if none of the tasks Auto can reach escalates — so the claim is made
+    // from what Auto could actually do, not from what the last turn did.
+    const local = autoModel
+        ? autoIsLocal
+        : (currentProvider === 'ollama' || currentProvider === null);
+    let text;
+    if (local) {
+        text = 'Everything runs on your machine. Ask anything below.';
+    } else if (autoModel) {
+        text = 'Carrot picks a model for each message, and some go over the '
+             + 'internet. Ask anything below.';
+    } else {
+        text = `Answers come from ${currentModel || 'a hosted model'} over the internet. `
+             + 'Ask anything below.';
+    }
+    line.textContent = text;
     line.classList.toggle('cloud', !local);
 }

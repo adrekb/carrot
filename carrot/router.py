@@ -132,6 +132,10 @@ class Route:
     effort: Optional[str] = None
     kind: str = providers_mod.KIND_OLLAMA
     local: bool = True
+    # True when the task was read off the message rather than named by the
+    # caller. The UI says so on the turn's route line: a model the user did not
+    # choose has to explain itself.
+    auto: bool = False
 
     def as_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -453,6 +457,137 @@ def route(
     return _local_route(task, f"'{task}' runs on-device")
 
 
+# ===== Auto: reading the task off the message =====
+#
+# Routing has always been per-task, and the task was always named by the
+# caller — so a chat turn took whatever the model picker said and nothing ever
+# looked at what was actually asked. Auto closes that gap and nothing else: it
+# names the task, then hands the decision to ``route`` above, so the same
+# assignments, the same escalation rules and the same honest labelling apply.
+# It is not a second routing layer.
+#
+# Patterns, not a model call. A classifier turn in front of every message would
+# spend a round trip deciding something a handful of patterns get right, and
+# would be one more thing to be slow or unavailable when Ollama is down —
+# ``classify`` is local-only for exactly that reason. Every pattern carries the
+# reason it fired, and the reason travels on the Route, so the trace can say
+# why this turn went where it did instead of silently changing model.
+
+# Unmistakably about code: the message is carrying the artifact, not describing
+# the wish. Checked before the reasoning patterns because "why does this
+# traceback happen" is a code question first.
+AUTO_CODE_SIGNALS = (
+    (r"```", "the message contains a code block"),
+    (r"Traceback \(most recent call last\)", "the message contains a Python traceback"),
+    (r"(?m)^\s*(diff --git|@@ -\d|[+-]{3} [ab]/)", "the message contains a diff"),
+    (r"\b[\w./-]+\.(py|pyi|js|mjs|ts|tsx|jsx|rs|go|java|kt|rb|php|c|cc|cpp|h|hpp|cs|swift"
+     r"|sh|ps1|sql|css|scss|html|json|ya?ml|toml|ini)\b", "the message names a source file"),
+    (r"\b(segfault|segmentation fault|syntax error|compil(e|er|ation) error|type ?error"
+     r"|null ?pointer|stack ?trace|merge conflict)\b", "the message names a build or runtime error"),
+    (r"\b(git|npm|npx|pnpm|yarn|pip|poetry|uv|cargo|docker|kubectl|pytest|tsc|webpack|gradle|maven)\b",
+     "the message names a developer tool"),
+)
+
+# Worth a stronger model even with no code in sight.
+AUTO_REASONING_SIGNALS = (
+    (r"\b(step by step|think (it )?through|reason through|work through|first principles)\b",
+     "the message asks to be reasoned through"),
+    (r"\b(prove|proof|derive|derivation|theorem|lemma)\b",
+     "the message asks for a proof or a derivation"),
+    (r"\b(trade-?offs?|pros and cons|compare|comparison|versus|vs\.?)\b",
+     "the message asks for a comparison"),
+    (r"\b(design|architect(ure)?|strategy|approach for|plan for)\b",
+     "the message asks for a design or a plan"),
+    (r"\b(analy[sz]e|analysis|evaluate|assess|critique|implications)\b",
+     "the message asks for analysis"),
+    (r"\bwhy (does|do|is|are|would|did|should|can'?t|cannot)\b",
+     "the message asks why something is the case"),
+)
+
+# Code, but stated as an intention rather than shown. Checked after reasoning
+# so "how would I restructure this" is read as the question it is.
+AUTO_WEAK_CODE_SIGNALS = (
+    (r"\b(refactor|debug|unit ?tests?|regexe?s?|stack ?overflow|codebase|repo(sitory)?)\b",
+     "the message is about working on code"),
+    (r"\b(write|fix|implement|rewrite|port|optimi[sz]e|profile)\b[^.\n]{0,48}"
+     r"\b(function|class|method|script|regex|query|endpoint|component|module|test|code|bug)\b",
+     "the message asks for code to be written or fixed"),
+)
+
+# A long message with a question in it is usually a real problem pasted in
+# whole. Deliberately generous: below this, length says nothing.
+AUTO_LONG_MESSAGE_CHARS = 700
+
+
+def _compile(task: str, signals) -> List[Any]:
+    return [(task, re.compile(pattern, re.IGNORECASE), why) for pattern, why in signals]
+
+
+# Order is the whole design: strongest code evidence, then reasoning, then
+# code stated as an intention. First match wins.
+_AUTO_RULES = (
+    _compile(TASK_CODE, AUTO_CODE_SIGNALS)
+    + _compile(TASK_REASONING, AUTO_REASONING_SIGNALS)
+    + _compile(TASK_CODE, AUTO_WEAK_CODE_SIGNALS)
+)
+
+
+def classify_message(message: str, coder: bool = False) -> Dict[str, str]:
+    """Name the task a message is asking for, and why.
+
+    Returns ``{'task', 'reason'}``. Only ever names a task that routes: chat,
+    code or reasoning. It does not pick classify/extract/summarize — those are
+    Carrot's own background work, never a thing the user asked for.
+    """
+    text = (message or "").strip()
+    if coder:
+        return {"task": TASK_CODE, "reason": "the Code tab is driving this turn"}
+    if not text:
+        return {"task": TASK_CHAT, "reason": "nothing to read"}
+
+    for task, pattern, why in _AUTO_RULES:
+        if pattern.search(text):
+            return {"task": task, "reason": why}
+
+    if len(text) >= AUTO_LONG_MESSAGE_CHARS and "?" in text:
+        return {"task": TASK_REASONING, "reason": "the message is long and asks something"}
+
+    return {"task": TASK_CHAT, "reason": "it reads as ordinary conversation"}
+
+
+def auto_route(message: str, coder: bool = False, prefer_cloud: bool = False) -> Route:
+    """Route a turn by what the message asks for rather than by a picked model."""
+    verdict = classify_message(message, coder=coder)
+    resolved = route(task=verdict["task"], prefer_cloud=prefer_cloud)
+    resolved.auto = True
+    resolved.reason = (
+        f"auto: {verdict['reason']}, so it ran as '{verdict['task']}' — {resolved.reason}"
+    )
+    return resolved
+
+
+def auto_enabled() -> bool:
+    """Whether the model picker is set to Auto."""
+    return bool(get_config().get("auto_model", False))
+
+
+def set_auto(enabled: bool) -> bool:
+    """Turn Auto on or off. Task assignments are left alone — they are what
+    Auto routes *through*, so turning it off returns to exactly what was there.
+    """
+    set_config("auto_model", bool(enabled))
+    return bool(enabled)
+
+
+def auto_is_local() -> bool:
+    """Whether every task Auto can pick currently runs on-device.
+
+    The empty state promises "everything runs on your machine", and under Auto
+    that promise is only true if none of the three reachable tasks escalates.
+    """
+    return all(route(task).local for task in (TASK_CHAT, TASK_CODE, TASK_REASONING))
+
+
 def status() -> Dict[str, Any]:
     config = get_config()
     return {
@@ -462,6 +597,8 @@ def status() -> Dict[str, Any]:
         "cloud_effort": config.get("cloud_effort", DEFAULT_CLOUD_EFFORT),
         "cloud_tasks": cloud_tasks(),
         "escalation_provider": escalation_provider(),
+        "auto": auto_enabled(),
+        "auto_local": auto_is_local(),
         "sdk_installed": _sdk_available(),
         "providers": providers_mod.list_providers(),
         "presets": providers_mod.PRESETS,

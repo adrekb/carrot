@@ -288,6 +288,12 @@ you can pin any task to any model: a frontier model for research, something
 cheap for classification, everything else on-device. An explicit assignment
 always beats the automatic rules.
 
+**Auto**, at the top of the model picker, is the one that decides *for* you.
+It reads the message, decides whether it is chat, code or a reasoning problem,
+and then routes that task exactly as the table above would — so your
+assignments still apply. Every turn says which task it read and why, and
+picking a model by name turns it off again.
+
 Keys are stored locally and reduced to booleans by the config API — a saved key
 is never readable over HTTP. Every chat turn reports which provider and model
 served it.

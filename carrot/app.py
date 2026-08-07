@@ -183,6 +183,10 @@ class ChatRequest(BaseModel):
     # political news" it went and read pong.py, because that is what it had
     # just been told it was for.
     coder: Optional[bool] = False
+    # Let the message pick the task, and the task pick the model. `None` means
+    # the saved picker setting; the flag exists so a caller can opt one turn in
+    # or out without changing it.
+    auto: Optional[bool] = None
 
 
 class AddMessageRequest(BaseModel):
@@ -262,6 +266,10 @@ class ModelPullRequest(BaseModel):
 
 class ModelSelectRequest(BaseModel):
     model: str
+
+
+class AutoModelRequest(BaseModel):
+    enabled: bool = True
 
 
 class SkillRequest(BaseModel):
@@ -762,13 +770,27 @@ async def list_models():
         "chat_provider": chat_provider,
         "chat_model": chat_model,
         "chat_local": chat_local,
+        # Auto is a picker entry, not a model, so it rides alongside rather
+        # than pretending to be one of the names above. `auto_local` is what
+        # the empty state's privacy claim is allowed to depend on.
+        "auto": router_mod.auto_enabled(),
+        "auto_local": router_mod.auto_is_local(),
     }
 
 
 @app.post("/api/models/select")
 async def select_model(req: ModelSelectRequest):
     config.set_config("ollama_model", req.model)
+    # Naming a model is the opposite of asking Carrot to name one.
+    router_mod.set_auto(False)
     return {"active_model": req.model}
+
+
+@app.post("/api/models/auto")
+async def set_auto_model(req: AutoModelRequest):
+    """Let each message pick its own task, and the task pick the model."""
+    router_mod.set_auto(req.enabled)
+    return {"auto": router_mod.auto_enabled(), "auto_local": router_mod.auto_is_local()}
 
 
 @app.post("/api/models/pull")
@@ -1723,12 +1745,24 @@ def _open_conversation(req):
 
 def _resolve_chat_route(req):
     """Pick the model for this turn, failing early if nothing can serve it."""
-    resolved = router_mod.route(
-        task=getattr(req, "task", None) or router_mod.TASK_CHAT,
-        model=req.model,
-        provider=getattr(req, "provider", None),
-        prefer_cloud=bool(getattr(req, "cloud", False)),
-    )
+    resolved = None
+    # Auto only gets to decide when nobody already did: an explicit model is
+    # what the user picked in the UI, and a named task is a caller that already
+    # knows what kind of work this is. Reading the message over the top of
+    # either would be overriding an answer, not supplying a missing one.
+    if _auto_requested(req) and not req.model and not getattr(req, "task", None):
+        resolved = router_mod.auto_route(
+            getattr(req, "message", "") or "",
+            coder=bool(getattr(req, "coder", False)),
+            prefer_cloud=bool(getattr(req, "cloud", False)),
+        )
+    if resolved is None:
+        resolved = router_mod.route(
+            task=getattr(req, "task", None) or router_mod.TASK_CHAT,
+            model=req.model,
+            provider=getattr(req, "provider", None),
+            prefer_cloud=bool(getattr(req, "cloud", False)),
+        )
     if resolved.local:
         client = ollama_mod.OllamaClient()
         if not client.is_available():
@@ -1738,6 +1772,12 @@ def _resolve_chat_route(req):
         # would have to come from, before a single token is spent.
         _require_installed_model(client, resolved.model)
     return resolved
+
+
+def _auto_requested(req) -> bool:
+    """Whether this turn should route by message. ``None`` defers to the setting."""
+    asked = getattr(req, "auto", None)
+    return router_mod.auto_enabled() if asked is None else bool(asked)
 
 
 def _require_installed_model(client, model: str) -> None:
