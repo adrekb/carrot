@@ -119,7 +119,10 @@ decisions, projects, commitments — and stores them as rows you can read.
 Three rules make it auditable:
 
 - **Provenance is mandatory.** Every memory links back to the message it came
-  from. A memory with no source cannot be checked, so it is not stored.
+  from. A memory with no source cannot be checked, so it is not stored. It also
+  records where it was learned — an ordinary chat, the Code tab, a document you
+  sent, or your own hand — and the Memory tab filters on that, and on the
+  workspace the conversation belonged to.
 - **Supersede, never overwrite.** A new value marks the old one superseded and
   links forward, so "what did I used to think about X" still works.
 - **You are the authority.** Edit, pin, or reject anything in the Memory tab.

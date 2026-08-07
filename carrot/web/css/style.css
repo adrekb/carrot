@@ -1692,6 +1692,14 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 .memory-content:focus { border-bottom: 1px dashed var(--accent); }
 .memory-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 7px; }
 .memory-source { color: var(--muted); text-decoration: underline dotted; }
+
+/* Where a memory was learned. Colour-coded so a row learned somewhere you did
+   not expect stands out while scanning — which is the whole point of showing
+   it. Kept quiet: this is provenance, not a status to act on. */
+.memory-meta .tag.origin { margin-left: 0; }
+.tag.origin-code { color: #7fb2ff; background: rgba(127, 178, 255, 0.1); border-color: rgba(127, 178, 255, 0.24); }
+.tag.origin-document { color: #b48cff; background: rgba(180, 140, 255, 0.1); border-color: rgba(180, 140, 255, 0.24); }
+.tag.origin-manual { color: var(--accent); background: var(--accent-soft); border-color: rgba(255, 92, 31, 0.25); }
 .memory-actions { display: flex; flex-direction: column; gap: 4px; }
 
 /* Document index */

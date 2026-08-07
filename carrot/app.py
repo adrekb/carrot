@@ -1683,7 +1683,19 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mo
     yield {"_final_text": final_text}
 
 
-def _post_turn(conversation_id, user_message, assistant_text, message_id):
+def _memory_origin(req, override=None) -> str:
+    """Which part of Carrot produced this turn, for the memory's provenance.
+
+    Derived here rather than taken from the request body: origin is a claim
+    about what Carrot was doing, and the answer is already in front of us.
+    """
+    if override:
+        return override
+    return memory_mod.ORIGIN_CODE if getattr(req, "coder", False) else memory_mod.ORIGIN_CHAT
+
+
+def _post_turn(conversation_id, user_message, assistant_text, message_id,
+               origin=memory_mod.ORIGIN_CHAT):
     """Extract memories and refresh the rolling summary after a turn.
 
     Both call the model, so they run on a worker thread — the user gets their
@@ -1706,6 +1718,7 @@ def _post_turn(conversation_id, user_message, assistant_text, message_id):
                     conversation_id=conversation_id,
                     message_id=message_id,
                     min_confidence=settings.get("memory_min_confidence", 0.6),
+                    origin=origin,
                 )
             except Exception:
                 pass
@@ -1803,7 +1816,8 @@ def _require_installed_model(client, model: str) -> None:
     )
 
 
-def _chat_stream_response(req, conv, history, skill, resolved, prelude=None, mode=SEARCH_SINGLE):
+def _chat_stream_response(req, conv, history, skill, resolved, prelude=None,
+                          mode=SEARCH_SINGLE, origin=None):
     """Shared SSE body for the chat and doc-send endpoints.
 
     ``prelude`` is emitted as the first event, which is how a doc send reports
@@ -1850,6 +1864,7 @@ def _chat_stream_response(req, conv, history, skill, resolved, prelude=None, mod
             _post_turn(
                 req.conversation_id, req.message, final_text,
                 stored.get("id") if isinstance(stored, dict) else None,
+                origin=_memory_origin(req, origin),
             )
         except Exception:
             # Bookkeeping must never cost the user the answer they can see.
@@ -1939,6 +1954,7 @@ async def chat(req: ChatRequest):
     _post_turn(
         req.conversation_id, req.message, response,
         stored.get("id") if isinstance(stored, dict) else None,
+        origin=_memory_origin(req),
     )
     return {
         "conversation_id": req.conversation_id,
@@ -2639,18 +2655,45 @@ async def speech_voices():
 # ===== Memory =====
 
 @app.get("/api/memory")
-async def list_memories(kind: str = None, status: str = "active", subject: str = None, limit: int = 200):
+async def list_memories(kind: str = None, status: str = "active", subject: str = None,
+                        limit: int = 200, origin: str = None, workspace: str = "all"):
+    """What Carrot remembers, filterable by what produced it and where it lives.
+
+    ``workspace`` defaults to "all" rather than to the active one: this screen
+    is the audit of everything Carrot believes about you, and an audit that
+    silently hides two thirds of its subject is not an audit. Scoping is a
+    thing you ask for here, not a mode you are already in.
+    """
     return {
         "memories": memory_mod.list_memories(
-            kind=kind, status=status or None, subject=subject, limit=limit
+            kind=kind, status=status or None, subject=subject, limit=limit,
+            origin=origin or None,
+            workspace_id=workspaces_mod.resolve_scope(workspace),
         ),
         "stats": memory_mod.stats(),
+        # Two labels, because they read differently: `label` is the word on the
+        # row's tag, `filter` is the whole dropdown line. "Learned in you" is
+        # what one label for both produces.
+        "origins": [
+            {
+                "id": origin_id,
+                "label": memory_mod.ORIGIN_LABELS[origin_id],
+                "filter": memory_mod.ORIGIN_FILTER_LABELS[origin_id],
+            }
+            for origin_id in memory_mod.ORIGINS
+        ],
     }
 
 
 @app.get("/api/memory/search")
-async def search_memories(q: str, limit: int = 10, include_superseded: bool = False):
-    return {"results": memory_mod.search(q, limit=limit, include_superseded=include_superseded)}
+async def search_memories(q: str, limit: int = 10, include_superseded: bool = False,
+                          workspace: str = "all"):
+    # Typing in the search box used to drop whatever scope was set, so a search
+    # inside a workspace quietly answered from every workspace.
+    return {"results": memory_mod.search(
+        q, limit=limit, include_superseded=include_superseded,
+        workspace_id=workspaces_mod.resolve_scope(workspace),
+    )}
 
 
 @app.get("/api/memory/history/{subject}")
@@ -2664,6 +2707,9 @@ async def create_memory(req: MemoryRequest):
     return memory_mod.create(
         kind=req.kind, subject=req.subject, content=req.content,
         confidence=req.confidence, pinned=bool(req.pinned),
+        # Nothing extracted this — it arrived through the API because someone
+        # typed it, and that is the strongest provenance there is.
+        origin=memory_mod.ORIGIN_MANUAL,
     )
 
 
@@ -3351,7 +3397,8 @@ async def doc_send(req: DocSendRequest):
     )
     conv_mod.add_message(chat_req.conversation_id, "user", resolved.prompt)
     return _chat_stream_response(
-        chat_req, conv, history, skill, route, prelude=resolved.as_dict(), mode=mode
+        chat_req, conv, history, skill, route, prelude=resolved.as_dict(), mode=mode,
+        origin=memory_mod.ORIGIN_DOCUMENT,
     )
 
 

@@ -155,12 +155,17 @@ CREATE TABLE IF NOT EXISTS memories (
     pinned INTEGER DEFAULT 0,
     source_message_id INTEGER,
     source_conversation_id TEXT,
+    -- Which part of Carrot was running when this was learned. The message id
+    -- above says *where* it came from; this says *what kind of work* produced
+    -- it, which is the question people actually ask of a memory list.
+    origin TEXT NOT NULL DEFAULT 'chat',
     superseded_by TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_memories_subject ON memories(subject, status);
+-- The index on `origin` is NOT here; see ADDED_INDEXES below.
 
 CREATE TABLE IF NOT EXISTS conversation_summaries (
     conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
@@ -505,6 +510,22 @@ def _migrate_fts(conn):
 ADDED_COLUMNS = (
     ("coder_checkpoints", "tree", "TEXT DEFAULT ''"),
     ("coder_checkpoints", "head", "TEXT DEFAULT ''"),
+    # Everything remembered before this column existed came from an ordinary
+    # chat turn, because chat was the only thing that wrote memories. The
+    # default is the truth about the old rows, not a placeholder.
+    ("memories", "origin", "TEXT NOT NULL DEFAULT 'chat'"),
+)
+
+# Indexes over columns that ADDED_COLUMNS creates. These cannot live in SCHEMA,
+# and finding out why cost an upgrade path: `get_db()` runs SCHEMA on *every*
+# connection, `CREATE TABLE IF NOT EXISTS` does nothing to a table that already
+# exists, and `init_db` opens a connection before it can migrate anything. So
+# an index naming a migrated column, placed in SCHEMA, fails on every single
+# connection to an existing database — including the one the migration needed
+# to open. They are created here instead, after the column is guaranteed.
+ADDED_INDEXES = (
+    ("memories", "origin",
+     "CREATE INDEX IF NOT EXISTS idx_memories_origin ON memories(origin, status)"),
 )
 
 
@@ -516,6 +537,14 @@ def _migrate_columns(conn):
             continue
         if existing and column not in existing:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {spec}")
+
+    for table, column, statement in ADDED_INDEXES:
+        try:
+            existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+            if column in existing:
+                conn.execute(statement)
+        except sqlite3.Error:
+            continue
 
 
 def init_db():

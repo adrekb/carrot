@@ -1150,8 +1150,8 @@
       <div class="page-head"><h2>Memory</h2></div>
       <p class="muted">
         What Carrot has learned about you from your conversations. Every entry links back to
-        the message it came from — edit anything that's wrong, pin what matters, and mark
-        mistakes so they're never recorded again.
+        the message it came from and says where it was learned — edit anything that's wrong,
+        pin what matters, and mark mistakes so they're never recorded again.
       </p>
       <div id="memory-stats" class="subtle"></div>
       <div class="composer">
@@ -1170,6 +1170,15 @@
           <option value="superseded">Superseded</option>
           <option value="rejected">Rejected</option>
           <option value="">Everything</option>
+        </select>
+        <!-- Where it was learned, and where it lives. Two different questions:
+             the first is what part of Carrot was running, the second is which
+             project the conversation belonged to. -->
+        <select id="memory-origin" onchange="setMemoryFilter('origin', this.value)">
+          <option value="">Learned anywhere</option>
+        </select>
+        <select id="memory-workspace" onchange="setMemoryFilter('workspace', this.value)">
+          <option value="all">All workspaces</option>
         </select>
         <button class="btn btn-ghost" onclick="loadMemory()">Refresh</button>
       </div>
