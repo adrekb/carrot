@@ -792,3 +792,35 @@ class TestTheOpeningSearchKeepsTheQuestionsModelNumbers:
 
         assert "Search the user's words before your interpretation" in A.SEARCH_PREAMBLE
         assert "search it literally first" in A.SEARCH_PREAMBLE
+
+
+class TestTheForcedAnswerAsksForFactsNotCoverage:
+    """The last clause of this prompt was producing the reported answer.
+
+    It read "if the notes do not answer it, say exactly what is missing and
+    what they did cover" — and the model did exactly that: "Specs available
+    include: 0-60 time, quarter mile times, lap times, top speed, price." In a
+    turn whose notes also contained "1,250 combined hp" and "1.89s 0-60".
+    Describing coverage was an option; giving the numbers was never made the
+    requirement.
+    """
+
+    def prompt(self):
+        from carrot import app as A
+
+        return A.FORCED_ANSWER_PROMPT
+
+    def test_it_asks_for_the_facts_themselves(self):
+        assert "Give the facts themselves" in self.prompt()
+
+    def test_it_forbids_describing_the_notes(self):
+        text = self.prompt()
+        assert "Never list what the notes are *about*" in text
+        assert "table of contents" in text
+
+    def test_partial_beats_a_summary_of_the_reading(self):
+        # The old prompt offered "say what is missing" as an alternative to
+        # answering. It is now only available when there is no fact at all.
+        text = self.prompt()
+        assert "even if it is partial" in text
+        assert "Only if the notes contain no fact" in text

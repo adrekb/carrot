@@ -1507,13 +1507,90 @@ def _run_tool(name, args, conversation_id):
 EVIDENCE_CHARS = 1200
 MAX_EVIDENCE_SOURCES = 6
 
+# The last clause of this prompt used to read "if the notes do not answer it,
+# say exactly what is missing and what they did cover" — and that is precisely
+# the answer that got reported: "Specs available include: 0-60 time, quarter
+# mile times, lap times, top speed, price". The model did what it was told. It
+# listed what the notes covered, in a turn where the notes also contained
+# "1,250 combined hp" and "1.89s 0-60", because describing coverage was an
+# option and giving the numbers was never made the requirement.
 FORCED_ANSWER_PROMPT = (
-    "Answer the question below using only the notes that follow. Write the "
-    "answer in plain text now — do not think silently, do not ask to search "
-    "again, and do not apologise. If the notes do not answer it, say exactly "
-    "what is missing and what they did cover.\n\n"
+    "Answer the question below from the notes that follow. Write the answer in "
+    "plain text now — do not think silently, do not ask to search again, and do "
+    "not apologise.\n"
+    "Give the facts themselves. If a note contains a number, a date, a price or "
+    "a name that answers the question, put it in the answer and cite the source "
+    "it came from. Never list what the notes are *about*: 'the sources cover "
+    "0-60 time and top speed' is a table of contents, not an answer, and it is "
+    "worthless to the person who asked.\n"
+    "Answer with whatever the notes do support, even if it is partial — a real "
+    "figure with a gap beside it beats a summary of the reading. Only if the "
+    "notes contain no fact bearing on the question at all, say that in one "
+    "sentence and name what you would need.\n\n"
     "QUESTION: {question}\n\nNOTES:\n{notes}"
 )
+
+# How many pages the server will open on the model's behalf once it is clear it
+# is not going to do it itself. Two is enough to answer most questions and
+# cheap enough not to matter when it was unnecessary.
+AUTO_READ_LIMIT = 2
+
+_RESULT_URL = re.compile(r"https?://[^\s\]<>\"']+")
+
+AUTO_READ_NOTE = (
+    "You did not open any of the search results after being asked to, so the "
+    "pages below were opened for you. They are the sources you found. Answer "
+    "the question from what they say, with the figures in them, and cite them."
+)
+
+
+def _unread_result_urls(evidence, already_read):
+    """Search-result URLs the turn has seen and not opened, best first.
+
+    Recovered from the text of the search results rather than tracked
+    separately: the tool hands the model a formatted list, and that list is
+    already in rank order, so re-reading the URLs out of it costs nothing and
+    cannot drift out of sync with what the model was actually shown.
+    """
+    seen, urls = set(already_read), []
+    for item in evidence:
+        if item["tool"] != "web_search":
+            continue
+        for url in _RESULT_URL.findall(item["text"]):
+            url = url.rstrip(".,);")
+            if url not in seen:
+                seen.add(url)
+                urls.append(url)
+    return urls
+
+
+def _auto_read(evidence, already_read, conversation_id, limit=AUTO_READ_LIMIT):
+    """Open the top unread results ourselves. Yields stream events, then a list.
+
+    The gate exists to stop a turn answering from a list of titles, and it
+    works by telling the model to open a page. That assumes the model *can* —
+    and a small local one often cannot, or will not, however many times it is
+    asked. The reported turn nudged three times, got nothing, and fell back to
+    writing from snippets, which is the failure the gate was built to prevent.
+
+    Telling it a fourth time was never going to work. Reading the page is a
+    thing the server can simply do, so it does it, and the model is handed page
+    text instead of an argument it keeps losing.
+    """
+    fetched = []
+    for url in _unread_result_urls(evidence, already_read)[:limit]:
+        yield {"tool": {"name": "carrot__read_url", "args": {"url": url},
+                        "auto": True}}
+        result = ""
+        for event in _run_tool("carrot__read_url", {"url": url}, conversation_id):
+            if "_tool_result" in event:
+                result = event["_tool_result"]
+            else:
+                yield event
+        yield {"tool_result": {"name": "carrot__read_url", "result": result[:2000]}}
+        if not result.startswith("error:"):
+            fetched.append({"url": url, "text": result})
+    yield {"_auto_read": fetched}
 
 
 def _forced_answer(resolved, question, evidence):
@@ -1612,6 +1689,11 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mo
 
     gated = mode == SEARCH_MULTI
     searches = reads = nudges = 0
+    # Pages the turn has opened, and whether the server has already stepped in
+    # and opened some itself. Once only: if reading them still did not produce
+    # an answer, reading two more is not the missing piece.
+    read_urls: set = set()
+    auto_read_done = False
     final_text = ""
     stalled = False
     # What the provider said when it stopped talking to us, if it did. This
@@ -1682,6 +1764,36 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mo
             # The model wants to finish. In multi-turn that is only allowed
             # once it has actually searched and read.
             gap = _search_gate_gap(searches, reads) if gated else None
+
+            # Asked once and ignored means asked twice will be ignored too. The
+            # reported turn nudged the full three times, never got a read, and
+            # fell back to writing from snippets — the exact failure the gate
+            # exists to prevent. So the second time round the server opens the
+            # pages itself rather than repeating itself at a model that cannot
+            # do it.
+            if gap is GATE_NUDGE_NO_READ and nudges >= 1 and not auto_read_done:
+                auto_read_done = True
+                fetched = []
+                for event in _auto_read(evidence, read_urls, conversation_id):
+                    if "_auto_read" in event:
+                        fetched = event["_auto_read"]
+                    else:
+                        yield event
+                if fetched:
+                    reads += len(fetched)
+                    for page in fetched:
+                        read_urls.add(page["url"])
+                        evidence.append({"tool": "read_url", "source": page["url"],
+                                         "text": page["text"][:EVIDENCE_CHARS]})
+                    working.append({"role": "assistant", "content": content_str})
+                    working.append({"role": "user", "content": AUTO_READ_NOTE + "\n\n" + "\n\n".join(
+                        f"--- {page['url']} ---\n{page['text'][:4000]}" for page in fetched)})
+                    continue
+                # Nothing could be opened either — every result blocked us, or
+                # there were none. Fall through: the model is not at fault and
+                # another nudge would only spend a round.
+                gap = None
+
             if gap and nudges < MAX_GATE_NUDGES:
                 nudges += 1
                 yield {"gate": {"reason": gap, "searches": searches, "reads": reads}}
@@ -1772,6 +1884,7 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None, mo
                 topic |= _ws._terms(result[:1500])
             elif bare == "read_url":
                 reads += 1
+                read_urls.add(str(args.get("url", "")))
             yield {"tool_result": {"name": name, "result": result[:2000]}}
             if bare in ("web_search", "read_url") and not result.startswith("error:"):
                 evidence.append({
