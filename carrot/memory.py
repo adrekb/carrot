@@ -241,7 +241,12 @@ def history(subject: str, kind: Optional[str] = None) -> List[Dict[str, Any]]:
     if kind:
         query += " AND kind = ?"
         params.append(kind)
-    query += " ORDER BY created_at ASC"
+    # `rowid` breaks the tie, and has to. Two memories written in the same
+    # clock tick — which is a whole millisecond or more on Windows — carry the
+    # identical `created_at`, and SQLite is then free to return them in either
+    # order. That is how a superseding fact could appear *before* the fact it
+    # replaced, in the one view whose entire job is saying what changed.
+    query += " ORDER BY created_at ASC, rowid ASC"
     conn = get_db()
     rows = conn.execute(query, params).fetchall()
     conn.close()

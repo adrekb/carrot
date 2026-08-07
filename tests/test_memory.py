@@ -32,6 +32,25 @@ def test_new_value_supersedes_old_and_keeps_history(isolated_db):
     ]
 
 
+def test_history_order_survives_a_shared_timestamp(isolated_db):
+    """Two writes in the same clock tick must still read oldest-first.
+
+    `created_at` is microsecond ISO text, but the clock behind it ticks in
+    milliseconds on Windows — so this is not a hypothetical. With no tiebreak
+    the ordering was whatever SQLite felt like, and the suite flaked here.
+    """
+    from unittest.mock import patch
+
+    with patch.object(memory, "_now", lambda: "2026-08-06T10:00:00+00:00"):
+        memory.create("preference", "editor", "The user prefers Neovim.")
+        memory.create("preference", "editor", "The user prefers Zed.")
+
+    assert [m["content"] for m in memory.history("editor")] == [
+        "The user prefers Neovim.",
+        "The user prefers Zed.",
+    ]
+
+
 def test_different_kinds_do_not_collide(isolated_db):
     memory.create("preference", "python", "The user enjoys Python.")
     memory.create("project", "python", "The user is building a Python CLI.")
