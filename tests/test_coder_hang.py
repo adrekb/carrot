@@ -284,3 +284,123 @@ class TestThePanelsShowIt:
 
     def test_an_answered_card_stops_updating(self):
         assert "if (!box || box.dataset.answered) return;" in self.read_js("features.js")
+
+
+class TestALeavingClientDoesNotStrandTheTurn:
+    """A turn blocks on approval for up to half an hour.
+
+    If the browser goes away in the meantime — tab closed, window reloaded, app
+    quit — that wait used to carry on regardless: a held thread, a pending
+    question in a list nobody is reading, and eventually a timeout reported as
+    the user failing to respond. Measured at twenty-seven minutes, twenty-six
+    of them with nothing on the other end. The next run then found the stale
+    prompt still sitting there.
+    """
+
+    def test_abandoning_releases_the_waiter(self):
+        request = agent_tools.ApprovalRequest("write_file", {}, "Write x.py", "low")
+        with agent_tools._pending_lock:
+            agent_tools._pending[request.id] = request
+
+        released = threading.Event()
+
+        def wait():
+            agent_tools._wait_saying_so(request, 30, None)
+            released.set()
+
+        threading.Thread(target=wait, daemon=True).start()
+        threading.Event().wait(0.1)
+        assert agent_tools.abandon(request.id) is True
+        assert released.wait(timeout=5), "the waiting turn was not let go"
+
+    def test_it_is_not_recorded_as_a_denial(self):
+        # The action was never judged. Telling the model the user said no would
+        # have it apologise for a decision nobody made, and carry that
+        # misreading into the rest of the conversation.
+        request = agent_tools.ApprovalRequest("write_file", {}, "Write x.py", "low")
+        with agent_tools._pending_lock:
+            agent_tools._pending[request.id] = request
+        agent_tools.abandon(request.id)
+        assert request.decision == agent_tools.DECISION_ABANDONED
+        assert agent_tools.ABANDONED_REASON != agent_tools.DENIED_REASON
+
+    def test_the_reason_reaches_the_model_as_its_own_thing(self):
+        from unittest.mock import patch
+
+        request = agent_tools.ApprovalRequest("write_file", {}, "Write x.py", "low")
+
+        def fake_wait(req, timeout, emit):
+            req.decision = agent_tools.DECISION_ABANDONED
+            return True
+
+        with patch.object(agent_tools, "ApprovalRequest", lambda *a, **k: request), \
+                patch.object(agent_tools, "_wait_saying_so", fake_wait):
+            granted, reason, remembered = agent_tools.request_approval(
+                "write_file", {}, "Write x.py", "low", emit=lambda e: None)
+        assert granted is False
+        assert reason == agent_tools.ABANDONED_REASON
+        assert remembered is False
+
+    def test_abandoning_something_unknown_says_so(self):
+        assert agent_tools.abandon("no-such-id") is False
+
+    def test_it_leaves_the_pending_list_clean(self):
+        request = agent_tools.ApprovalRequest("write_file", {}, "Write x.py", "low")
+        with agent_tools._pending_lock:
+            agent_tools._pending[request.id] = request
+        agent_tools.abandon(request.id)
+        assert all(p["id"] != request.id for p in agent_tools.pending_approvals())
+
+    def test_an_answered_prompt_cannot_then_be_abandoned(self):
+        # The decision is made; a late disconnect must not rewrite it.
+        request = agent_tools.ApprovalRequest("write_file", {}, "Write x.py", "low")
+        with agent_tools._pending_lock:
+            agent_tools._pending[request.id] = request
+        agent_tools.resolve_approval(request.id, "allow")
+        assert agent_tools.abandon(request.id) is False
+        assert request.decision == "allow"
+
+
+class TestTheStreamCleansUpAfterItself:
+    def source(self):
+        from pathlib import Path
+
+        return (Path(__file__).resolve().parents[1] / "carrot" / "app.py").read_text(
+            encoding="utf-8")
+
+    def test_outstanding_prompts_are_tracked_off_the_stream(self):
+        # No plumbing through every layer between the endpoint and the gate:
+        # the ids are already in the stream, and the stream is the thing that
+        # knows whether anyone is still receiving it.
+        source = self.source()
+        assert 'outstanding.add(event["approval_request"]["id"])' in source
+        assert 'outstanding.discard(event["approval_resolved"]["id"])' in source
+
+    def test_they_are_released_however_the_generator_ends(self):
+        source = self.source()
+        block = source[source.index("    def stream():\n        \"\"\"The body, plus"):]
+        assert "finally:" in block[:block.index("return StreamingResponse")]
+        assert "agent_mod.abandon(approval)" in block[:block.index("return StreamingResponse")]
+
+    def test_a_normal_finish_costs_nothing(self, client, tmp_path, monkeypatch):
+        from carrot import agent_tools as tools
+
+        monkeypatch.setattr(tools, "workspace_root", lambda: str(tmp_path))
+        with client.stream("POST", "/api/chat/stream", json={
+            "message": "hello", "search_mode": "off",
+        }) as response:
+            body = "".join(response.iter_text())
+        assert '"done": true' in body or '"done":true' in body
+        assert agent_tools.pending_approvals() == []
+
+    def test_a_decision_in_flight_is_not_overwritten(self):
+        # The narrow window that matters: `resolve_approval` records the answer
+        # and leaves the request in the list until the waiting turn wakes and
+        # removes it. Click Allow, close the tab, and a disconnect arriving in
+        # between must not rewrite what the user already said.
+        request = agent_tools.ApprovalRequest("write_file", {}, "Write x.py", "low")
+        with agent_tools._pending_lock:
+            agent_tools._pending[request.id] = request
+        agent_tools.resolve_approval(request.id, "deny")
+        assert agent_tools.abandon(request.id) is False
+        assert request.decision == "deny"

@@ -2132,7 +2132,11 @@ def _chat_stream_response(req, conv, history, skill, resolved, prelude=None,
     Starlette runs a sync iterator in a threadpool, which is what the
     notification stream below already relies on.
     """
-    def stream():
+    # Prompts this turn has raised and not yet had answered. Kept out here so
+    # the `finally` below can reach them however the generator ends.
+    outstanding: set = set()
+
+    def _body():
         final_text = ""
         if prelude:
             yield f"data: {json.dumps({'document': prelude})}\n\n"
@@ -2148,6 +2152,14 @@ def _chat_stream_response(req, conv, history, skill, resolved, prelude=None,
                 if "_final_text" in event:
                     final_text = event["_final_text"]
                     continue
+                # Watched as they go past rather than plumbed through every
+                # layer between here and the approval gate: the ids are already
+                # in the stream, and the stream is the thing that knows whether
+                # anyone is still receiving it.
+                if "approval_request" in event:
+                    outstanding.add(event["approval_request"]["id"])
+                elif "approval_resolved" in event:
+                    outstanding.discard(event["approval_resolved"]["id"])
                 yield f"data: {json.dumps(event)}\n\n"
         except Exception as exc:
             LOG.exception("chat turn failed")
@@ -2179,6 +2191,28 @@ def _chat_stream_response(req, conv, history, skill, resolved, prelude=None,
         except Exception:
             LOG.exception("could not parse clarifying questions")
         yield f"data: {json.dumps({'done': True, 'conversation_id': req.conversation_id})}\n\n"
+
+    def stream():
+        """The body, plus the guarantee that nothing is left waiting on it.
+
+        When the browser goes away, Starlette closes this generator, which
+        raises GeneratorExit at whichever yield it was sitting on — and the
+        approval heartbeat is what makes sure there *is* a recent yield to
+        raise it at. A turn blocked with no client used to keep its thread and
+        its unanswered question for the full timeout: observed at twenty-seven
+        minutes, twenty-six of them with nobody on the other end.
+
+        `finally` rather than `except GeneratorExit`, because a turn that ends
+        by crashing has the same loose end as one that ends by being closed,
+        and on a normal finish the set is empty and this costs nothing.
+        """
+        try:
+            yield from _body()
+        finally:
+            gone = [approval for approval in list(outstanding)
+                    if agent_mod.abandon(approval)]
+            if gone:
+                LOG.info("client left; abandoned %d unanswered approval(s)", len(gone))
 
     return StreamingResponse(stream(), media_type="text/event-stream")
 
