@@ -1285,6 +1285,29 @@
 
       <div class="settings-card">
         <div class="settings-head">
+          <svg class="ico"><use href="#i-search"/></svg>
+          <h3>When a page won't open</h3>
+        </div>
+        <p class="muted small">
+          Some sites refuse to be read by anything that isn't a person clicking — you will see
+          <em>"blocks automated readers"</em> in the trace when it happens. Carrot can ask a free
+          public reader service to fetch those pages instead.
+        </p>
+        <p class="muted small">
+          <b>This sends the address of the page to that service.</b> Nothing else leaves your
+          machine, and it only happens for pages that already refused — but the address is itself
+          the private part, so it is off unless you switch it on. Expect it to work about a
+          quarter of the time and to take around ten seconds; the rest are protected by systems
+          the reader cannot get past either.
+        </p>
+        <label class="check-row">
+          <input type="checkbox" id="reader-fallback-toggle" onchange="setReaderFallback(this.checked)">
+          <span>Try a reader service for pages that refuse me</span>
+        </label>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-head">
           <svg class="ico"><use href="#i-calendar"/></svg>
           <h3>Google Calendar</h3>
         </div>

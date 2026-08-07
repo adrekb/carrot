@@ -53,6 +53,10 @@ BROWSER_HEADERS = {
     "Upgrade-Insecure-Requests": "1",
 }
 MAX_REDIRECTS = 5
+# Below this a "successful" fetch has not actually returned an article. Low on
+# purpose: a genuinely short page (a definition, a stub) must still count, so
+# this only has to be above a bot-check interstitial and an empty JS shell.
+MIN_READABLE_CHARS = 200
 MAX_BYTES = 2 * 1024 * 1024
 DEFAULT_TIMEOUT = 15.0
 DEFAULT_MAX_CHARS = 6000
@@ -465,6 +469,97 @@ def _status_message(status: int, url: str) -> str:
     return f"HTTP {status} from {host}."
 
 
+# ===== The reader fallback =====
+#
+# Some sites refuse us and always will: Cloudflare and DataDome bot management
+# is a deliberate "no" and there is no honest way around it from this machine.
+# A public reader service sits on a different network and sometimes gets through
+# where we cannot.
+#
+# It is off by default and it will stay that way. Carrot's claim is that your
+# reading happens on your machine, and routing every page through someone
+# else's server would quietly make that false — the URL you asked about is
+# itself the sensitive part. Off by default is the only setting compatible with
+# the promise on the tin.
+#
+# Measured before it was offered, on the four sites that had actually refused
+# us: one came back with real content, one still 403'd, and two returned a
+# Cloudflare interstitial or a CAPTCHA notice — which the readable-text floor
+# below correctly rejects. So this recovers roughly a quarter of blocked pages
+# and costs about ten seconds when it works. Worth having, not worth trusting.
+
+READER_ENDPOINT = "https://r.jina.ai/"
+READER_TIMEOUT = 45.0
+
+
+def reader_fallback_enabled() -> bool:
+    try:
+        from .config import get_config
+        return bool(get_config().get("reader_fallback", False))
+    except Exception:
+        return False
+
+
+def _via_reader(url: str, max_chars: int) -> Dict[str, Any]:
+    """Try a blocked page through the public reader. Never raises."""
+    out = {"text": "", "title": "", "error": ""}
+    try:
+        with httpx.Client(timeout=READER_TIMEOUT, follow_redirects=True,
+                          headers={"User-Agent": "Carrot (local assistant)"}) as client:
+            response = client.get(READER_ENDPOINT + url)
+        if response.status_code >= 400:
+            out["error"] = f"the reader service also could not open it (HTTP {response.status_code})"
+            return out
+        body = response.text
+    except Exception as exc:
+        out["error"] = f"the reader service did not answer: {exc}"
+        return out
+
+    # It answers 200 with "Just a moment..." or a CAPTCHA notice when the site
+    # beat it too. That is a failure wearing a success's status code, and the
+    # same floor that catches an empty page catches this.
+    if len(body.strip()) < MIN_READABLE_CHARS:
+        out["error"] = "the reader service got a bot check rather than the page"
+        return out
+
+    first = body.split("\n", 1)[0]
+    out["title"] = first[7:].strip() if first.startswith("Title:") else ""
+    out["text"] = body[:max_chars]
+    return out
+
+
+def _try_reader(result: Dict[str, Any], url: str, max_chars: int):
+    """Last resort for a page that refused us. Mutates `result` in place.
+
+    Only reached when the direct fetch has already failed, so the choice is
+    between this and nothing — and only when the user has turned it on. The
+    text is screened exactly like any other page: coming via a reader makes it
+    no more trustworthy, and arguably less, since a second party has now
+    handled it.
+    """
+    if not reader_fallback_enabled():
+        return
+    attempt = _via_reader(url, max_chars)
+    if not attempt["text"]:
+        # Keep the original refusal and add what the fallback found, so the
+        # model is not told simply "blocked" when the reader was tried.
+        result["error"] = f'{result["error"]} ({attempt["error"]})'
+        return
+
+    screening = policy.screen_untrusted(attempt["text"], origin=url)
+    result.update({
+        "error": "",
+        "blocked": False,
+        "title": attempt["title"],
+        "text": policy.sanitize_untrusted(attempt["text"]),
+        "screening": screening,
+        "tainted": screening["tainted"],
+        # Said out loud. The user turned this on once; they should still be
+        # able to see, per page, that this one left the machine.
+        "via_reader": True,
+    })
+
+
 def fetch(url: str, max_chars: int = DEFAULT_MAX_CHARS, timeout: float = DEFAULT_TIMEOUT) -> Dict[str, Any]:
     """Fetch one URL and return readable text, or an explained failure.
 
@@ -480,7 +575,19 @@ def fetch(url: str, max_chars: int = DEFAULT_MAX_CHARS, timeout: float = DEFAULT
 
     current = url
     try:
-        with httpx.Client(timeout=timeout, follow_redirects=False,
+        # HTTP/2, because these headers claim to be Chrome 131 and Chrome 131
+        # does not speak HTTP/1.1 to a modern site. Announcing one and doing
+        # the other is a mismatch the bigger front-ends fingerprint, and
+        # Wikipedia — the single most-cited source there is — refused every
+        # request on that basis alone: 403 on HTTP/1.1, 200 on HTTP/2, same
+        # headers, same machine. It is one flag and it is honest; we are not
+        # pretending to be anything we were not already claiming to be.
+        #
+        # It is not a general unlock. Measured over thirty major sites it
+        # recovered exactly one, because the rest of the refusals are
+        # Cloudflare and DataDome bot management, which is a deliberate "no"
+        # and is taken at its word.
+        with httpx.Client(timeout=timeout, follow_redirects=False, http2=True,
                           headers=dict(BROWSER_HEADERS)) as client:
             for _ in range(MAX_REDIRECTS + 1):
                 check = policy.check_url(current)
@@ -505,6 +612,8 @@ def fetch(url: str, max_chars: int = DEFAULT_MAX_CHARS, timeout: float = DEFAULT
             if response.status_code >= 400:
                 result["error"] = _status_message(response.status_code, current)
                 result["blocked"] = response.status_code in (401, 403, 429, 451)
+                if result["blocked"]:
+                    _try_reader(result, current, max_chars)
                 return result
 
             content_type = response.headers.get("content-type", "")
@@ -523,6 +632,30 @@ def fetch(url: str, max_chars: int = DEFAULT_MAX_CHARS, timeout: float = DEFAULT
 
     extracted = _extract(html, current)
     text = extracted["text"]
+
+    # A page that came back 200 and yielded nothing readable is a failure, and
+    # it used to be reported as a success with an empty string. That is worse
+    # than a refusal: a 403 tells the model to go and find another source,
+    # whereas an empty success tells it nothing at all, so it carries on and
+    # writes the answer from search snippets — which is the exact failure the
+    # gates exist to catch, arriving through the one door they do not watch.
+    #
+    # It is not rare. imdb.com and espn.com both answer 202 with an
+    # interstitial and no article; every JS-rendered page does the same. The
+    # status is fine, the body is a bot check or an empty shell, and the
+    # extractor correctly finds no prose in it.
+    if len(text.strip()) < MIN_READABLE_CHARS:
+        host = urlparse(current).netloc or current
+        result["error"] = (
+            f"{host} returned a page with no readable text — it renders its "
+            f"content with JavaScript, or served a bot check. Do not retry "
+            f"this URL; use a different source for the same story.")
+        result["blocked"] = True
+        # A page that renders with JavaScript is the one case the reader is
+        # genuinely better at than we are: it runs one.
+        _try_reader(result, current, max_chars)
+        return result
+
     result["truncated"] = len(text) > max_chars
     text = text[:max_chars]
 

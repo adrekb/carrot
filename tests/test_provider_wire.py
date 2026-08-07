@@ -138,3 +138,73 @@ class TestWhoGetsTheBlame:
         # Whoever reads it needs the actual words to report or search.
         for failure in ("boom", "can only concatenate str"):
             assert failure in A._blame_for(failure)
+
+
+class TestTheStreamIsDecodedAsUTF8:
+    """Every hosted provider's answer was arriving as mojibake.
+
+    Server-sent events are UTF-8 by specification, always. But the header is
+    usually a bare `text/event-stream` with no charset, and `requests` maps a
+    charset-less `text/*` to ISO-8859-1 — so an em dash arrived as "â", and
+    "Łask" as "Åask". It went into the answer, the stored message, and the
+    memory written from it.
+
+    It only bites when the provider puts raw UTF-8 on the wire. A provider
+    that escapes non-ASCII to backslash-u form is pure ASCII and survives either way, which is
+    why this hid for so long.
+    """
+
+    def sse(self, text):
+        import io, json
+        from requests.models import Response
+        from urllib3 import HTTPResponse
+
+        body = b"".join(
+            b"data: " + json.dumps({"choices": [{"delta": {"content": ch}}]},
+                                   ensure_ascii=False).encode("utf-8") + b"\n\n"
+            for ch in text
+        ) + b"data: [DONE]\n\n"
+        response = Response()
+        response.headers["Content-Type"] = "text/event-stream"   # as providers send it
+        response.raw = HTTPResponse(body=io.BytesIO(body), preload_content=False, status=200)
+        response.status_code = 200
+        import requests.utils
+        response.encoding = requests.utils.get_encoding_from_headers(response.headers)
+        return response
+
+    def read(self, response):
+        import json
+        out = []
+        for line in response.iter_lines(decode_unicode=True):
+            if not line:
+                continue
+            if isinstance(line, bytes):
+                line = line.decode("utf-8")
+            if not line.startswith("data:"):
+                continue
+            payload = line[5:].strip()
+            if payload == "[DONE]":
+                break
+            out.append(json.loads(payload)["choices"][0]["delta"]["content"])
+        return "".join(out)
+
+    def test_requests_would_mangle_it_without_the_fix(self):
+        """Pins the cause, so nobody removes the one line as redundant."""
+        from requests.utils import get_encoding_from_headers
+        assert get_encoding_from_headers({"content-type": "text/event-stream"}) == "ISO-8859-1"
+
+    def test_setting_utf8_recovers_the_text(self):
+        text = "F-35 Status \u2014 August 2026, Lots 18\u201319, \u0141ask AB"
+        broken = self.read(self.sse(text))
+        assert broken != text, "the fixture no longer reproduces the bug"
+
+        fixed_response = self.sse(text)
+        fixed_response.encoding = "utf-8"
+        assert self.read(fixed_response) == text
+
+    def test_the_client_sets_it(self):
+        from pathlib import Path
+        source = (Path(__file__).resolve().parents[1] / "carrot" / "openai_client.py").read_text(encoding="utf-8")
+        block = source.split("with self._request(payload, stream=True) as response:")[1][:900]
+        assert 'response.encoding = "utf-8"' in block
+        assert block.index('response.encoding = "utf-8"') < block.index("iter_lines")

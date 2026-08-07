@@ -225,3 +225,78 @@ class TestTheButtons:
         html = (root / "carrot" / "web" / "index.html").read_text(encoding="utf-8")
         for icon in ("i-clipboard", "i-refresh", "i-branch"):
             assert f'id="{icon}"' in html
+
+
+class TestTheEvidenceSurvivesTheReload:
+    """Reopening a conversation gave you the prose and none of the evidence.
+
+    The searches, the pages read and the plan were rendered live and thrown
+    away — which is exactly backwards: the prose is the half you can re-read,
+    and the trace is the half you cannot reconstruct. It is also the reason to
+    trust the answer at all.
+    """
+
+    def read(self, *parts):
+        from pathlib import Path
+        return Path(__file__).resolve().parents[1].joinpath(*parts).read_text(encoding="utf-8")
+
+    def test_the_turn_is_stored_with_its_trace(self):
+        app = self.read("carrot", "app.py")
+        assert 'metadata={"trace": trace} if trace else None' in app
+
+    def test_the_answer_is_not_stored_twice(self):
+        # `chunk` is the answer and the answer is already the message row.
+        app = self.read("carrot", "app.py")
+        block = app.split("TRACE_EVENTS = (")[1].split(")")[0]
+        assert "chunk" not in block
+
+    def test_a_long_turn_cannot_bloat_the_row(self):
+        # Six pages read would otherwise carry all six into the transcript.
+        app = self.read("carrot", "app.py")
+        assert "TRACE_RESULT_CHARS" in app and "MAX_TRACE_EVENTS" in app
+
+    def test_reopening_replays_it(self):
+        js = self.read("carrot", "web", "js", "app.js")
+        assert "replayTrace(el, (m.metadata || {}).trace)" in js
+
+    def test_it_replays_the_same_shapes_it_streamed(self):
+        # So a reopened turn reads like the one that was watched.
+        js = self.read("carrot", "web", "js", "app.js")
+        body = js.split("function replayTrace(")[1].split("\n}")[0]
+        for name in ("event.tool", "event.tool_result", "event.gate", "event.plan"):
+            assert name in body
+
+    def test_an_old_turn_without_a_trace_still_renders(self):
+        # Every conversation stored before this existed has no trace at all.
+        js = self.read("carrot", "web", "js", "app.js")
+        body = js.split("function replayTrace(")[1].split("\n}")[0]
+        assert "!Array.isArray(trace)" in body
+
+
+class TestACodingTurnSaysWhenItIsDone:
+    """It used to just stop: the caret vanished and the prose sat there, often
+    ending in a question, with nothing to distinguish finished from thinking.
+    And the prose describes intentions — the files are what happened."""
+
+    def read(self, *parts):
+        from pathlib import Path
+        return Path(__file__).resolve().parents[1].joinpath(*parts).read_text(encoding="utf-8")
+
+    def test_it_reports_what_changed(self):
+        js = self.read("carrot", "web", "js", "features.js")
+        assert "function agentFinished(" in js
+        assert "agentFinished(wrap, touched, commandsRun" in js
+
+    def test_a_rejected_call_is_not_counted(self):
+        js = self.read("carrot", "web", "js", "features.js")
+        assert "if (!payload.tool.rejected) {" in js
+
+    def test_changing_nothing_is_reported_too(self):
+        """In ACT mode that is the whole complaint; in Plan mode it is the
+        correct outcome. Either way it is information."""
+        js = self.read("carrot", "web", "js", "features.js")
+        assert "nothing changed on disk" in js
+
+    def test_it_does_not_stack_on_repeat(self):
+        js = self.read("carrot", "web", "js", "features.js")
+        assert "wrap.querySelector('.agent-done')) return;" in js

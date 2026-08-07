@@ -11,7 +11,12 @@ dependencies = [
     "fastapi>=0.104.0",
     "uvicorn>=0.24.0",
     "requests>=2.31.0",
-    "httpx>=0.27.0",
+    # The http2 extra is not optional. The page reader speaks HTTP/2 because
+    # its headers claim to be Chrome, and a client that claims Chrome while
+    # speaking HTTP/1.1 is refused by Wikipedia among others. Without `h2`
+    # installed httpx raises on `http2=True`, so this has to be declared
+    # rather than inherited from whatever else happens to pull it in.
+    "httpx[http2]>=0.27.0",
     "feedparser>=6.0.11",
     "jinja2>=3.1.0",
     "pydantic>=2.0.0",

@@ -956,3 +956,184 @@ class TestWhatCountsAsWork:
                "I'll update the docs too.\n")
         with patch.object(A.router_mod, "complete", lambda r, m: raw):
             assert A._coder_plan(object(), "q") == ["Edit cli.py to add --json"]
+
+
+class TestAnIdentifierSpeltBetterIsStillTheIdentifier:
+    """The guard fired on its own subject and made the search worse.
+
+    Asked for "f35 status", the model's first search was "F-35 delivery status
+    2025 2026 Lockheed Martin production deliveries TR-3 Block 4" — a better
+    query than the question. It was refused for "dropping f35", because `f35`
+    and `f-35` are different strings. The model then complied literally and
+    searched `f35`, which is the worst query it could have run.
+
+    So the check produced the exact failure it exists to prevent, on the turn
+    it was watching. Hyphens, dots and spaces inside a model number are
+    typography; the point is catching a substitution, never a spelling.
+    """
+
+    @pytest.mark.parametrize("question,query", [
+        ("f35 status", "F-35 delivery status 2026 Lockheed Martin production"),
+        ("f-15ex specs", "F15EX engine specifications"),
+        ("gpt4 pricing", "GPT-4 pricing per token"),
+        ("c8 zr1x specs", "C8 ZR1X engine specifications"),
+    ])
+    def test_a_spelling_variant_is_not_a_dropped_identifier(self, question, query):
+        assert A._dropped_identifiers(question, query) == set()
+
+    def test_a_real_substitution_is_still_caught(self):
+        # The turn this check was built for: `c8` dropped, a car it had heard
+        # of substituted, eleven pages read about a Toyota.
+        assert A._dropped_identifiers(
+            "c8 zr1x specs", "Toyota C-HR ZR1X 2026 specifications") == {"c8"}
+
+    def test_a_different_model_number_is_still_caught(self):
+        assert A._dropped_identifiers("f35 status", "F-22 Raptor status") == {"f35"}
+
+    def test_the_normaliser_only_removes_separators(self):
+        assert A._identifier_key("f-35") == "f35"
+        assert A._identifier_key("gpt-4o") == "gpt4o"
+        assert A._identifier_key("c8") == "c8"
+        # It must not collapse two genuinely different identifiers.
+        assert A._identifier_key("f35") != A._identifier_key("f22")
+
+
+class TestTheFirstHalfOfTheAnswerSurvives:
+    """Reported: an answer that begins at a bullet, heading and intro gone.
+
+    `content_parts` resets each round, so only the last round's prose became
+    the answer. A model that writes its opening, realises it needs one more
+    lookup, and then continues had its opening deleted — and because that text
+    went into the transcript as something the assistant had already said, the
+    model never wrote it again. It believed it had been delivered.
+    """
+
+    def test_prose_written_before_a_tool_call_is_kept(self):
+        result = drive([
+            ("", tool_call("web_search", query="c8 zr1x specs")),
+            ("", tool_call("read_url", url="http://example.com/zr1x")),
+            ("## C8 ZR1X\n\nThe hybrid flagship Corvette.",
+             tool_call("web_search", query="c8 zr1x horsepower")),
+            ("* Engine: 5.5L twin-turbo V8\n* Front motor: 186 hp", []),
+        ], A.SEARCH_MULTI, question="c8 zr1x specs")
+        assert "C8 ZR1X" in result["final"], "the heading was dropped"
+        assert "hybrid flagship" in result["final"], "the opening was dropped"
+        assert "Front motor" in result["final"], "the closing was dropped"
+
+    def test_narration_is_not_glued_to_the_answer(self):
+        """"Let me search for that" is not answer text and belongs nowhere
+        near it. Restoring everything indiscriminately would trade one bug for
+        a different one."""
+        assert A._restore_carried(["Let me search for that."], "1,250 hp.") == "1,250 hp."
+        assert A._restore_carried(["I'll look up the figures."], "1,250 hp.") == "1,250 hp."
+        assert A._restore_carried(["Okay, searching now."], "1,250 hp.") == "1,250 hp."
+
+    def test_a_restated_opening_is_not_duplicated(self):
+        # A model that continues from its own opening usually restates it with
+        # small edits, so the check is on a prefix rather than the whole.
+        carried = ["The ZR1X is the hybrid flagship Corvette."]
+        final = "The ZR1X is the hybrid flagship Corvette. It makes 1,250 hp."
+        assert A._restore_carried(carried, final).count("hybrid flagship") == 1
+
+    def test_several_pieces_keep_their_order(self):
+        assert A._restore_carried(["## Heading", "First paragraph."], "* bullet") == (
+            "## Heading\n\nFirst paragraph.\n\n* bullet")
+
+    def test_a_turn_with_nothing_carried_is_untouched(self):
+        assert A._restore_carried([], "Just the answer.") == "Just the answer."
+
+
+def drive_checked(script, verdict, question="c8 zr1x specs"):
+    """Drive a turn with a scripted answer-support checker.
+
+    `router_mod.complete` serves both the plan and the check; returning JSON
+    means the plan parser finds no questions in it and the turn runs unplanned,
+    which is what isolates this gate.
+    """
+    from unittest.mock import patch
+    with patch.object(A.router_mod, "complete", verdict):
+        return drive(script, A.SEARCH_MULTI, question=question)
+
+
+def support_gates(result):
+    return [g for g in result["gates"] if "not in any page" in g]
+
+
+class TestTheAnswerIsCheckedAgainstThePages:
+    """Reported: asked for the C8 ZR1X, the answer said it has "two electric
+    motors, one on each front wheel". It has one, and the page it had just
+    read said so. Everything around the invention was correct, sourced and
+    specific — which is what makes this the worst shape in the app, a
+    confident answer with a fabricated detail inside it.
+
+    The search gates force it to look; the goal check forces it to cover the
+    question. Neither asks whether what it wrote is what the pages said.
+    """
+
+    LIE = "The ZR1X has two electric motors, one on each front wheel. It makes 1,250 hp."
+    TRUE = "The ZR1X has one front-axle electric motor of 186 hp. It makes 1,250 hp."
+
+    def searched(self, *answers):
+        return [
+            ("", tool_call("web_search", query="c8 zr1x specs")),
+            ("", tool_call("read_url", url="http://example.com/zr1x")),
+            ("", tool_call("web_search", query="c8 zr1x motor")),
+        ] + [(a, []) for a in answers]
+
+    def test_a_fabricated_detail_is_sent_back(self):
+        result = drive_checked(
+            self.searched(self.LIE, self.TRUE),
+            lambda r, m: '{"unsupported": ["two electric motors, one on each front wheel"]}')
+        assert support_gates(result), "the invention was not caught"
+        assert "two electric motors" not in result["final"]
+
+    def test_the_fabrication_never_reaches_the_user(self):
+        """Multi-turn withholds prose until the gates are met, so an answer we
+        intend to replace must not have been streamed."""
+        result = drive_checked(
+            self.searched(self.LIE, self.TRUE),
+            lambda r, m: '{"unsupported": ["two electric motors, one on each front wheel"]}')
+        assert "two electric motors" not in result["streamed"]
+
+    def test_a_clean_answer_is_left_alone(self):
+        result = drive_checked(self.searched(self.TRUE, self.TRUE),
+                               lambda r, m: '{"unsupported": []}')
+        assert support_gates(result) == []
+        assert result["final"] == self.TRUE
+
+    def test_a_checker_that_cannot_run_does_not_block_the_answer(self):
+        """Failing closed would mean an unavailable check can withhold answers
+        over its own availability."""
+        def boom(resolved, messages):
+            raise RuntimeError("checker offline")
+        result = drive_checked(self.searched(self.TRUE, self.TRUE), boom)
+        assert result["final"] == self.TRUE
+        assert support_gates(result) == []
+
+    def test_a_checker_that_invents_a_quotation_is_ignored(self):
+        """It has to quote the answer. A checker that hallucinates is the same
+        problem one layer up, and must not be able to send a turn back."""
+        result = drive_checked(
+            self.searched(self.TRUE, self.TRUE),
+            lambda r, m: '{"unsupported": ["a sentence never in the answer at all"]}')
+        assert support_gates(result) == []
+
+    def test_junk_from_the_checker_is_ignored(self):
+        result = drive_checked(self.searched(self.TRUE, self.TRUE),
+                               lambda r, m: "not json at all")
+        assert support_gates(result) == []
+
+    def test_it_is_capped(self):
+        # It costs a model call and a round; a checker allowed to argue twice
+        # about the same paragraph would spend the budget on style.
+        result = drive_checked(
+            self.searched(*([self.TRUE] * 8)),
+            lambda r, m: '{"unsupported": ["' + self.TRUE[:45] + '"]}')
+        assert len(support_gates(result)) <= A.MAX_SUPPORT_NUDGES
+
+    def test_single_pass_is_not_checked(self):
+        # It costs an extra round, and single-pass promises one pass.
+        result = drive_checked(
+            [("", tool_call("web_search", query="q")), (self.LIE, [])],
+            lambda r, m: '{"unsupported": ["two electric motors"]}')
+        assert support_gates(result) == []

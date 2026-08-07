@@ -824,3 +824,60 @@ class TestTheForcedAnswerAsksForFactsNotCoverage:
         text = self.prompt()
         assert "even if it is partial" in text
         assert "Only if the notes contain no fact" in text
+
+
+class TestAPageThatReadsAsNothingIsAFailure:
+    """A 200 that yields no prose used to be reported as a success.
+
+    That is worse than a refusal. A 403 tells the model to go and find another
+    source; an empty success tells it nothing, so it carries on and writes the
+    answer from search snippets — the exact failure the gates exist to catch,
+    arriving through the one door they do not watch.
+
+    It is not rare: imdb.com and espn.com both answer 202 with an interstitial
+    and no article, and every JS-rendered page does the same.
+    """
+
+    def test_an_empty_page_is_reported_as_blocked(self):
+        from carrot import websearch
+        from unittest.mock import patch
+
+        # A real shape: valid HTML, chrome only, no article.
+        shell = "<html><head><title>Loading</title></head><body><div id='root'></div></body></html>"
+        with patch.object(websearch, "_extract",
+                          lambda html, url: {"text": "", "title": "Loading", "links": []}), \
+             patch.object(websearch.httpx, "Client") as client:
+            response = client.return_value.__enter__.return_value.get.return_value
+            response.is_redirect = False
+            response.status_code = 202
+            response.headers = {"content-type": "text/html"}
+            response.content = shell.encode()
+            response.encoding = "utf-8"
+            result = websearch.fetch("https://example.com/spa")
+
+        assert result["error"], "an empty page came back as a success"
+        assert "no readable text" in result["error"]
+        assert result["blocked"] is True
+
+    def test_the_threshold_leaves_room_for_a_genuinely_short_page(self):
+        # A definition or a stub is still an answer. This only has to clear a
+        # bot check and an empty shell.
+        from carrot import websearch
+        assert websearch.MIN_READABLE_CHARS <= 300
+
+
+class TestTheReaderSpeaksTheProtocolItClaims:
+    def test_http2_is_on(self):
+        """These headers claim to be Chrome 131, and Chrome 131 does not speak
+        HTTP/1.1 to a modern site. Wikipedia refuses on that mismatch alone:
+        403 on HTTP/1.1, 200 on HTTP/2, same headers, same machine."""
+        from pathlib import Path
+        source = (Path(__file__).resolve().parents[1] / "carrot" / "websearch.py").read_text(encoding="utf-8")
+        assert "http2=True" in source
+
+    def test_the_dependency_is_declared(self):
+        """`http2=True` raises without `h2`, and it was only ever installed as
+        somebody else's transitive dependency."""
+        from pathlib import Path
+        pyproject = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(encoding="utf-8")
+        assert "httpx[http2]" in pyproject
