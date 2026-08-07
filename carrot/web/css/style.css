@@ -873,6 +873,14 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 
 #cmd-input {
   flex: 1;
+  /* `min-width: auto` on a flex item floors it at its content width, which for
+     a text input is a browser default of about 160px. The bar then had to find
+     that space somewhere, and took it from the only items that would give:
+     every fixed-size control beside it. In a narrow window the send button was
+     squeezed to 16px wide while staying 36 tall — a `border-radius: 50%`
+     circle rendered as a tall orange ellipse, which is what got reported.
+     The input is the one thing here that can usefully be narrow. */
+  min-width: 0;
   background: none;
   border: none;
   outline: none;
@@ -882,8 +890,32 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 }
 #cmd-input::placeholder { color: var(--faint); }
 
+/* Nothing in the bar with a declared size may be squeezed out of shape. A
+   control that is 20% narrower is not a smaller control, it is a broken one —
+   and these are all circles and squares, where it shows immediately. */
+#cmdbar > button,
+#cmdbar > #model-picker,
+#cmdbar > #search-picker,
+#cmdbar > .composer-chip { flex-shrink: 0; }
+
+/* Nine controls plus a text field do not fit on one line in a narrow window,
+   and refusing to deform them only moves the problem: the row overflows and
+   the send button is clipped by the edge instead of squashed by its
+   neighbours. So below this width the bar becomes two rows — the text field
+   on top, where it is the thing you are actually using, and the controls
+   underneath in their proper shapes. */
+@media (max-width: 620px) {
+  #cmdbar { flex-wrap: wrap; }
+  #cmd-input {
+    order: -1;
+    flex: 1 0 100%;
+    padding-bottom: 4px;
+  }
+}
+
 #send-btn {
   width: 36px; height: 36px;
+  flex-shrink: 0;
   border-radius: 50%;
   border: none;
   background: var(--accent);

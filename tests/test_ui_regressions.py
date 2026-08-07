@@ -164,3 +164,47 @@ class TestTheAgentSaysWhichModelItUses:
 
     def test_the_choice_survives_a_restart(self):
         assert "carrot-agent-model" in read("js", "features.js")
+
+
+class TestTheComposerKeepsItsShape:
+    """Reported with a screenshot: the send button as a tall orange sliver.
+
+    `#cmd-input` is a flex item, and `min-width: auto` floors a text input at
+    its content width — about 160px. The bar had to find that space somewhere
+    and took it from the only items that would give: every fixed-size control
+    beside it. In a narrow window the send button was squeezed to 16px wide
+    while staying 36 tall, and a `border-radius: 50%` circle rendered at those
+    dimensions is an ellipse.
+
+    Refusing to deform them is only half the fix. Nine controls and a text
+    field do not fit on one line in a narrow window, so without wrapping the
+    row simply overflows and the send button is clipped by the edge instead of
+    squashed by its neighbours — which is the other thing in the screenshot.
+    """
+
+    def css(self):
+        return read("css", "style.css")
+
+    def test_the_input_is_what_gives_up_space(self):
+        block = self.css()[self.css().index("#cmd-input {"):]
+        assert "min-width: 0;" in block[:block.index("}")]
+
+    def test_the_controls_do_not_shrink(self):
+        assert "#cmdbar > button," in self.css()
+        assert "flex-shrink: 0;" in self.css()
+
+    def test_the_send_button_holds_its_own_size(self):
+        block = self.css()[self.css().index("#send-btn {"):]
+        block = block[:block.index("}")]
+        assert "flex-shrink: 0" in block
+        # A circle is only a circle while the two are equal.
+        assert "width: 36px; height: 36px;" in block
+
+    def test_a_narrow_window_wraps_instead_of_overflowing(self):
+        css = self.css()
+        assert "@media (max-width: 620px)" in css
+        wrapped = css[css.index("@media (max-width: 620px)"):]
+        assert "flex-wrap: wrap;" in wrapped
+        # The text field goes on top, where it is the thing being used.
+        assert "order: -1;" in wrapped
+        assert "flex: 1 0 100%;" in wrapped
