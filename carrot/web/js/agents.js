@@ -367,6 +367,8 @@ function prepareAgentPanes() {
 }
 
 async function runAgentStream(url, payload) {
+    const startedAt = Date.now();
+    let ending = '';
     try {
         await streamTrace(url, payload,
             event => {
@@ -406,6 +408,8 @@ async function runAgentStream(url, payload) {
                 if (event.question) agentStep(`<strong>Carrot asks:</strong> ${escHtml(event.question)}`, 'question');
                 if (event.error) agentStep(escHtml(event.error), 'denied');
                 if (event.done) {
+                    ending = `${event.status.replace('_', ' ')} — `
+                           + (event.result || event.error || '');
                     const result = document.getElementById('agent-result');
                     result.classList.remove('hidden');
                     result.className = 'agent-result status-' + escHtml(event.status);
@@ -421,6 +425,14 @@ async function runAgentStream(url, payload) {
         agentRunId = null;
         document.getElementById('agent-run-btn').classList.remove('hidden');
         document.getElementById('agent-stop-btn').classList.add('hidden');
+        // An agent run is the longest thing in the app and the least likely to
+        // be watched all the way through. The status is in the toast, so a run
+        // that ended in "needs input" is distinguishable from one that worked
+        // without coming back to the window to find out.
+        if (typeof notifyWhenLongRunFinishes === 'function') {
+            notifyWhenLongRunFinishes(startedAt, 'Carrot Agent finished',
+                                      ending || 'The run has ended.');
+        }
         loadAgent();
     }
 }

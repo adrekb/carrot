@@ -95,14 +95,32 @@ function showApprovalPrompt(request) {
 // toast per step during an attended run is its own kind of broken.
 // Clicking the toast raises the window, which is where the card is waiting.
 function alertAwayFromScreen(request) {
-    if (document.hasFocus()) return;
     const what = request.tool === 'start_task'
         ? 'Carrot is ready to start a task'
         : 'Carrot needs your approval';
-    const body = String(request.summary || request.tool || 'An action is waiting.').slice(0, 160);
+    notifyIfAway(what, String(request.summary || request.tool || 'An action is waiting.'));
+}
+
+// A run that finished while you were elsewhere is the other half of the same
+// problem: the approval notification saves the time a blocked run wastes, this
+// one saves the time a *finished* run wastes sitting there unread.
+//
+// Only for work that ran long enough for someone to have walked away. A toast
+// for a turn that took four seconds is noise, and noise is how a notification
+// stops being read.
+const AWAY_NOTICE_AFTER_MS = 20000;
+
+function notifyWhenLongRunFinishes(startedAt, title, body) {
+    if (Date.now() - startedAt < AWAY_NOTICE_AFTER_MS) return;
+    notifyIfAway(title, body);
+}
+
+function notifyIfAway(title, body) {
+    if (document.hasFocus()) return;
+    body = String(body || '').slice(0, 160);
     try {
         if (window.carrot && window.carrot.notify) {
-            window.carrot.notify(what, body);
+            window.carrot.notify(title, body);
             return;
         }
         // In a plain browser rather than the desktop app. Same idea, and the
@@ -110,11 +128,11 @@ function alertAwayFromScreen(request) {
         // where it would be a prompt about nothing.
         if (typeof Notification === 'undefined') return;
         if (Notification.permission === 'granted') {
-            new Notification(what, { body }).onclick = () => window.focus();
+            new Notification(title, { body }).onclick = () => window.focus();
         } else if (Notification.permission !== 'denied') {
             Notification.requestPermission().then(granted => {
                 if (granted === 'granted') {
-                    new Notification(what, { body }).onclick = () => window.focus();
+                    new Notification(title, { body }).onclick = () => window.focus();
                 }
             });
         }

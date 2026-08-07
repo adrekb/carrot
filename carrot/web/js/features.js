@@ -1830,6 +1830,7 @@ async function sendAgentTask() {
     agentAbort = new AbortController();
 
     const context = agentContext();
+    const startedAt = Date.now();
     let answer = '';
     try {
         const response = await fetch('/api/chat/stream', {
@@ -1928,6 +1929,13 @@ async function sendAgentTask() {
         send.disabled = false;
         stop.hidden = true;
         if (!answer.trim() && body.querySelector('.caret')) body.textContent = '(done)';
+        // A coding turn is the kind of work people start and then go and do
+        // something else during. Finishing unread costs the same time as being
+        // blocked unread does.
+        if (typeof notifyWhenLongRunFinishes === 'function') {
+            notifyWhenLongRunFinishes(startedAt, 'Carrot finished in the Code tab',
+                                      answer.trim().slice(0, 160) || 'The turn is done.');
+        }
         // The agent just touched the workspace; the tree and git state are
         // stale the instant it did.
         loadCodeTree();
@@ -2167,6 +2175,13 @@ function agentApproval(wrap, request) {
     box.appendChild(row);
     wrap.appendChild(box);
     document.getElementById('agent-log').scrollTop = 1e9;
+
+    // The Code tab renders its own approval card rather than reusing the
+    // chat one, which meant the desktop notification — attached to the other
+    // renderer — never fired here. A coding turn blocks in exactly the same
+    // way and is if anything more likely to be left running while you do
+    // something else, so it is the case that needed it most.
+    if (typeof alertAwayFromScreen === 'function') alertAwayFromScreen(request);
 }
 
 // Says how the prompt ended, once. The button that answers it and the
