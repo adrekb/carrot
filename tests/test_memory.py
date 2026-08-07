@@ -418,6 +418,13 @@ class TestMemoryCanBeLeftOutOfOneTurn:
                                         memory=memory)
         return " ".join(m["content"] for m in history if m["role"] == "system")
 
+    # No teardown restoring memory_enabled, deliberately. `isolated_db` is
+    # function-scoped and config lives in that database, so switching the
+    # setting off inside a test cannot outlive it. A fixture that put it back
+    # ran *after* isolated_db's monkeypatch had been undone, which wrote the
+    # setting to the real config instead — a leak invented to fix one that
+    # was not there.
+
     def _remember_the_dog(self):
         from carrot import config, memory as memory_mod
 

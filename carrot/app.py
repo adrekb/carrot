@@ -1200,10 +1200,26 @@ MULTI_SEARCH_DIRECTIVE = (
     "- A gap is something the question needs and you do not have. It is not every "
     "headline you happened to see: an index page lists everything a site has, and "
     "chasing each one answers a question nobody asked.\n"
-    "- Two or three focused rounds beat one broad one. Use the words a source would "
-    "use, not the words of the question.\n"
+    # Persistence was never the problem — the run that went wrong searched
+    # eight times and the good one searched more. Keep going; the fix is where
+    # it is pointed and what it hands over, not how hard it works.
+    "- Keep going until you can actually answer, and do not stop at a round "
+    "count. If a page will not load or a lead is thin, find the same fact "
+    "somewhere else rather than reporting that you could not. Each round should "
+    "be narrower than the last: use the words a source would use, not the words "
+    "of the question.\n"
     "- Cite the URL for anything you learned from a page, and say plainly when the "
     "sources disagree or when you could not find something.\n"
+    # The shape of an answer people actually want back: grouped, specific,
+    # sourced. Not a topic-by-topic status report of the searching.
+    "- Group what you found under a few plain headings, and make every line a "
+    "concrete fact — who, what, when, how much — with its source. A heading with "
+    "one vague sentence under it means you stopped too early; go and get the "
+    "detail.\n"
+    "- Offering to go deeper is welcome, and is not the same as leaving the job "
+    "unfinished: 'I can go further on Congress or the midterms' is an offer, "
+    "while 'this remains unanswered, searching X might find it' is work handed "
+    "back. Do the search instead, then offer.\n"
     # It shipped its own working notes: "Here's what the second search
     # uncovered, filling in the gaps from earlier", a status table, and a
     # closing "What Remains Unanswered" listing the searches it might run next.
