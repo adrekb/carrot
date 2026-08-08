@@ -1499,13 +1499,21 @@ def _restore_carried(carried: List[str], final: str) -> str:
 # reason it can mark its own work here at all.
 
 MAX_SUPPORT_NUDGES = 1
-SUPPORT_EVIDENCE_CHARS = 2500
+# The checker has to see at least what the model saw. It was 2500 against a
+# 6000-character page, so it was grading an answer on 40% of the source — and
+# in the reported case the sentence that *disproves* the claim sits at
+# character 3085, outside the window entirely. A checker that cannot see the
+# contradiction is not lenient, it is guessing, and it will strike out true
+# statements as readily as false ones.
+SUPPORT_EVIDENCE_CHARS = 8000
 
 SUPPORT_PROMPT = """Below is an answer, and the source text it was written from.
 
 Find statements in the answer that the sources do not support. A statement is unsupported if the sources do not say it — not if it is merely phrased differently, and not if it is general knowledge that the sources happen not to mention.
 
 Be strict about specifics: counts, quantities, names, dates and configurations are exactly where an answer invents detail, and "two motors" where the source says one is the failure to catch.
+
+Check who each fact is ABOUT, not just whether the words appear. A page about one product routinely describes its rivals, its predecessor and the rest of its range in the same paragraphs — a sentence saying competitors "have two motors up front" is not a statement about the subject, and an answer that reports it as one is wrong even though every word of it is on the page. This is the most common way a sourced answer is false, because nothing about it looks invented.
 
 ANSWER:
 {answer}
@@ -2002,7 +2010,16 @@ def _run_tool(name, args, conversation_id):
 # How much of each source is kept for the forced-answer digest. Six sources at
 # 1200 characters is ~2k tokens, which fits in a 4k-context local model with
 # room to write — the full transcript emphatically does not.
-EVIDENCE_CHARS = 1200
+# How much of each page is kept for the checker and the fallback digest.
+#
+# 1200 of a 6000-character page: a fifth of what the model read, so anything
+# it wrote from the rest could not be verified either way. It was sized when
+# every local model ran in a 4k window; with the context fix that constraint
+# is gone, and the one path that genuinely needs a small digest clips for
+# itself where it builds one.
+EVIDENCE_CHARS = 6000
+# What the last-resort digest may use per source, so it fits any window.
+DIGEST_CHARS = 1200
 MAX_EVIDENCE_SOURCES = 6
 
 # The last clause of this prompt used to read "if the notes do not answer it,
@@ -2098,8 +2115,11 @@ def _forced_answer(resolved, question, evidence):
     prompt is rebuilt from scratch instead of appended to the working history,
     because the history is exactly what made the model run out of room.
     """
+    # Clipped here rather than where the evidence is stored. This retry exists
+    # because the transcript overran the model's window, so it is the one path
+    # that has to stay small — the checker and everything else want the page.
     notes = "\n\n".join(
-        f"[{item['tool']}] {item['source']}\n{item['text']}"
+        f"[{item['tool']}] {item['source']}\n{item['text'][:DIGEST_CHARS]}"
         for item in evidence[-MAX_EVIDENCE_SOURCES:]
     ) or "(nothing was successfully gathered)"
     messages = [{
@@ -2430,7 +2450,12 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
             # whether the answer is *true to the pages*. It runs after the
             # others so it grades the finished text rather than a draft that
             # was going to be replaced anyway.
-            if gated and not stalled and evidence and support_nudges < MAX_SUPPORT_NUDGES:
+            # Not `gated`. This was multi-turn only, and the reported failure
+            # came back "no matter which mode I try" — correctly, because a
+            # single-pass turn that reads a page can misattribute exactly as
+            # easily. Single-pass promises one round of *searching*, not that
+            # it will hand over a fact it can see is wrong.
+            if not stalled and evidence and support_nudges < MAX_SUPPORT_NUDGES:
                 rounds_left = rounds - round_index - 1
                 unsupported = (_unsupported_claims(resolved, answer, evidence)
                                if rounds_left >= 1 else [])

@@ -1131,9 +1131,27 @@ class TestTheAnswerIsCheckedAgainstThePages:
             lambda r, m: '{"unsupported": ["' + self.TRUE[:45] + '"]}')
         assert len(support_gates(result)) <= A.MAX_SUPPORT_NUDGES
 
-    def test_single_pass_is_not_checked(self):
-        # It costs an extra round, and single-pass promises one pass.
-        result = drive_checked(
-            [("", tool_call("web_search", query="q")), (self.LIE, [])],
-            lambda r, m: '{"unsupported": ["two electric motors"]}')
-        assert support_gates(result) == []
+    def test_every_mode_is_checked(self):
+        """Reported as coming back "no matter which mode I try" — correctly,
+        because this was multi-turn only. A single-pass turn that reads a page
+        can misattribute just as easily; single-pass promises one round of
+        searching, not that it will hand over a fact it can see is wrong."""
+        from unittest.mock import patch
+        with patch.object(A.router_mod, "complete",
+                          lambda r, m: '{"unsupported": ["two motors up front"]}'):
+            result = drive([("", tool_call("read_url", url="http://example.com/zr1x")),
+                            ("The ZR1X has two motors up front.", []),
+                            ("The ZR1X has one front motor.", [])],
+                           A.SEARCH_SINGLE, question="c8 zr1x specs")
+        assert support_gates(result), "single-pass was not checked"
+        assert "two motors up front" not in result["final"]
+
+    def test_the_check_asks_who_the_fact_is_about(self):
+        """The reported failure was not an invention. Road & Track says three
+        times that the ZR1X has one front motor, and then — on the same page —
+        that the Lamborghini, Ferrari and Aston "have two motors up front".
+        The model lifted the competitor sentence and attached it to the
+        Corvette. Every word of it was on the page, which is why it survives a
+        check that only asks whether the words appear."""
+        assert "Check who each fact is ABOUT" in A.SUPPORT_PROMPT
+        assert "rivals" in A.SUPPORT_PROMPT
