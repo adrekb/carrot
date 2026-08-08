@@ -1499,7 +1499,13 @@ def _restore_carried(carried: List[str], final: str) -> str:
 # reason it can mark its own work here at all.
 
 MAX_SUPPORT_NUDGES = 1
-SUPPORT_EVIDENCE_CHARS = 2500
+# The checker has to see at least what the model saw. It was 2500 against a
+# 6000-character page, so it was grading an answer on 40% of the source — and
+# in the reported case the sentence that *disproves* the claim sits at
+# character 3085, outside the window entirely. A checker that cannot see the
+# contradiction is not lenient, it is guessing, and it will strike out true
+# statements as readily as false ones.
+SUPPORT_EVIDENCE_CHARS = 8000
 
 SUPPORT_PROMPT = """Below is an answer, and the source text it was written from.
 
@@ -2004,7 +2010,16 @@ def _run_tool(name, args, conversation_id):
 # How much of each source is kept for the forced-answer digest. Six sources at
 # 1200 characters is ~2k tokens, which fits in a 4k-context local model with
 # room to write — the full transcript emphatically does not.
-EVIDENCE_CHARS = 1200
+# How much of each page is kept for the checker and the fallback digest.
+#
+# 1200 of a 6000-character page: a fifth of what the model read, so anything
+# it wrote from the rest could not be verified either way. It was sized when
+# every local model ran in a 4k window; with the context fix that constraint
+# is gone, and the one path that genuinely needs a small digest clips for
+# itself where it builds one.
+EVIDENCE_CHARS = 6000
+# What the last-resort digest may use per source, so it fits any window.
+DIGEST_CHARS = 1200
 MAX_EVIDENCE_SOURCES = 6
 
 # The last clause of this prompt used to read "if the notes do not answer it,
@@ -2100,8 +2115,11 @@ def _forced_answer(resolved, question, evidence):
     prompt is rebuilt from scratch instead of appended to the working history,
     because the history is exactly what made the model run out of room.
     """
+    # Clipped here rather than where the evidence is stored. This retry exists
+    # because the transcript overran the model's window, so it is the one path
+    # that has to stay small — the checker and everything else want the page.
     notes = "\n\n".join(
-        f"[{item['tool']}] {item['source']}\n{item['text']}"
+        f"[{item['tool']}] {item['source']}\n{item['text'][:DIGEST_CHARS]}"
         for item in evidence[-MAX_EVIDENCE_SOURCES:]
     ) or "(nothing was successfully gathered)"
     messages = [{

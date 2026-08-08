@@ -59,7 +59,20 @@ MAX_REDIRECTS = 5
 MIN_READABLE_CHARS = 200
 MAX_BYTES = 2 * 1024 * 1024
 DEFAULT_TIMEOUT = 15.0
-DEFAULT_MAX_CHARS = 6000
+# How much of a page the model gets to read.
+#
+# 6000 was sized for a 4k context window. Measured against real articles it
+# meant the model saw 12% of a Wikipedia page, 35% of a magazine review and
+# 78% of a news story — every page tested was cut. The facts people ask for
+# (a spec table, a figures section) are exactly what lives past the intro, so
+# the model would read the opening, not find them, and report that the page
+# does not contain them.
+#
+# With the context fix a turn can hold several times this. Not unbounded: four
+# pages at this size is about 15k tokens, which leaves room for the directive,
+# the tools and the conversation inside a 32k window, and does not make a
+# hosted turn expensive.
+DEFAULT_MAX_CHARS = 15000
 
 TEXTUAL_TYPES = ("text/html", "text/plain", "application/xhtml", "application/json", "text/markdown")
 

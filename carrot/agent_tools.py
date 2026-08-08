@@ -752,7 +752,24 @@ def _tool_read_url(url: str, **_) -> str:
                 f"Read one of these for the actual story.",
                 origin=page["final_url"], screening=page["screening"],
             )
-    return policy.wrap_untrusted(page["text"], origin=page["final_url"], screening=page["screening"])
+    body = policy.wrap_untrusted(page["text"], origin=page["final_url"],
+                                 screening=page["screening"])
+    # Say when the page was cut. The flag was computed and never surfaced, so
+    # a model that had been handed the first tenth of a Wikipedia article had
+    # no way to know it — it looked for the spec table, did not find it, and
+    # reported that the page does not contain one. Absence has to be
+    # distinguishable from a page that simply stopped.
+    #
+    # Outside the untrusted envelope on purpose: this is Carrot speaking about
+    # the fetch, not something the page said.
+    if page.get("truncated"):
+        body += (
+            "\n\n[Carrot: this page was longer than could be shown and you have "
+            "the beginning of it. If what you need is not here it may be further "
+            "down — narrow your search or try another source, rather than "
+            "concluding the page does not contain it.]"
+        )
+    return body
 
 
 def _tool_start_research(question: str, depth: str = "quick", **_) -> str:

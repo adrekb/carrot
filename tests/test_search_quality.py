@@ -881,3 +881,84 @@ class TestTheReaderSpeaksTheProtocolItClaims:
         from pathlib import Path
         pyproject = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(encoding="utf-8")
         assert "httpx[http2]" in pyproject
+
+
+class TestTheModelGetsEnoughOfThePage:
+    """Every page tested was cut, and the model was never told.
+
+    6000 characters was sized for a 4k context window. Measured against real
+    articles it meant 12% of a Wikipedia page, 35% of a magazine review and
+    78% of a news story — and the facts people ask for (a spec table, a
+    figures section) are exactly what lives past the intro. So the model read
+    the opening, did not find them, and reported that the page does not
+    contain them. That is indistinguishable from a page that genuinely does
+    not, which is what made it dangerous rather than merely lossy.
+    """
+
+    def test_the_page_budget_matches_the_context_window(self):
+        from carrot import websearch
+        # Four pages at this size sits inside a 32k window alongside the
+        # directive, the tools and the conversation.
+        assert 12000 <= websearch.DEFAULT_MAX_CHARS <= 20000
+
+    def test_a_cut_page_says_so(self):
+        """Absence has to be distinguishable from a page that just stopped."""
+        from unittest.mock import patch
+        from carrot import agent_tools, websearch
+
+        page = {"text": "x" * 500, "final_url": "https://example.com/a",
+                "screening": {"tainted": False, "signals": []}, "links": [],
+                "error": "", "truncated": True}
+        with patch.object(websearch, "fetch", return_value=page), \
+             patch.object(websearch, "looks_like_an_index", return_value=False):
+            out = agent_tools._tool_read_url(url="https://example.com/a")
+        assert "this page was longer than could be shown" in out
+
+    def test_a_whole_page_does_not(self):
+        from unittest.mock import patch
+        from carrot import agent_tools, websearch
+
+        page = {"text": "x" * 500, "final_url": "https://example.com/a",
+                "screening": {"tainted": False, "signals": []}, "links": [],
+                "error": "", "truncated": False}
+        with patch.object(websearch, "fetch", return_value=page), \
+             patch.object(websearch, "looks_like_an_index", return_value=False):
+            out = agent_tools._tool_read_url(url="https://example.com/a")
+        assert "longer than could be shown" not in out
+
+    def test_the_notice_is_outside_the_untrusted_envelope(self):
+        """It is Carrot speaking about the fetch, not something the page said —
+        and a note inside the envelope is a note the page could have forged."""
+        from pathlib import Path
+        source = (Path(__file__).resolve().parents[1] / "carrot" / "agent_tools.py").read_text(encoding="utf-8")
+        block = source.split("def _tool_read_url")[1][:2400]
+        assert block.index("wrap_untrusted") < block.index("[Carrot: this page was longer")
+
+
+class TestTheCheckerSeesWhatTheModelSaw:
+    """It was grading an answer against a fifth of the source.
+
+    Stored evidence was clipped to 1200 characters of a 6000-character page,
+    and the checker then clipped that to 2500. In the reported case the
+    sentence that *disproves* the claim sits at character 3085 — outside the
+    window entirely. A checker that cannot see the contradiction is not
+    lenient, it is guessing, and it strikes out true statements as readily as
+    false ones.
+    """
+
+    def test_the_checker_window_is_not_smaller_than_the_stored_evidence(self):
+        from carrot import app
+        assert app.SUPPORT_EVIDENCE_CHARS >= app.EVIDENCE_CHARS
+
+    def test_the_stored_evidence_is_not_smaller_than_the_page(self):
+        from carrot import app, websearch
+        assert app.EVIDENCE_CHARS >= websearch.DEFAULT_MAX_CHARS * 0.4
+
+    def test_the_last_resort_digest_stays_small(self):
+        """That retry exists because the transcript overran the window, so it
+        is the one path that has to clip — everything else wants the page."""
+        from carrot import app
+        assert app.DIGEST_CHARS < app.EVIDENCE_CHARS
+        source = __import__("pathlib").Path(
+            app.__file__).read_text(encoding="utf-8")
+        assert "item['text'][:DIGEST_CHARS]" in source
