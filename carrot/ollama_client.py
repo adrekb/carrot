@@ -8,34 +8,67 @@ from carrot.config import get_config
 class ThinkTagStreamFilter:
     """Splits a token stream into 'thinking' and 'content' parts.
 
-    Some models embed reasoning inside <think>...</think> tags in the content
-    stream. This stateful filter routes text to the right channel even when
-    tags are split across chunk boundaries.
+    Models mark their reasoning in whatever convention their trainer picked,
+    and getting it wrong is not cosmetic: an unrecognised marker means the
+    whole chain of thought is printed as the answer. Reported from a local
+    model that emitted `<|channel>thought` — the user got several screens of
+    "Analyze the Request:", "Self-Correction during writing", and a list of
+    the tools it had been given, with the actual reply at the bottom.
+
+    So this is a set of conventions rather than one tag, matched with a regex
+    that still holds back a tail for markers split across chunk boundaries.
+
+    What it cannot do is catch a model that reasons in plain prose with no
+    marker at all. That is not a parsing problem and pretending otherwise —
+    guessing at "The user asked..." — would eventually eat a real answer that
+    happened to open that way.
     """
 
-    OPEN, CLOSE = "<think>", "</think>"
+    # Ordered longest-first so `<|channel|>analysis` is not half-matched by a
+    # shorter opener that shares a prefix.
+    OPENERS = [
+        "<|channel|>analysis", "<|channel|>thought",
+        "<|channel>analysis", "<|channel>thought",
+        "<thinking>", "<reasoning>", "<think>",
+    ]
+    CLOSERS = [
+        "<|message|>", "<|channel|>final", "<|channel>final",
+        "</thinking>", "</reasoning>", "</think>",
+    ]
+    # The longest marker, which is how much tail has to be held back.
+    _TAIL = max(len(m) for m in OPENERS + CLOSERS)
+
+    OPEN, CLOSE = "<think>", "</think>"          # kept for callers that read them
 
     def __init__(self):
         self.in_think = False
         self.buf = ""
 
+    def _find(self, markers):
+        """The earliest marker in the buffer, as (index, length)."""
+        best = (-1, 0)
+        for marker in markers:
+            idx = self.buf.find(marker)
+            if idx != -1 and (best[0] == -1 or idx < best[0]):
+                best = (idx, len(marker))
+        return best
+
     def feed(self, text: str) -> List[Dict[str, str]]:
         self.buf += text
         out = []
         while True:
-            tag = self.CLOSE if self.in_think else self.OPEN
-            idx = self.buf.find(tag)
+            idx, width = self._find(self.CLOSERS if self.in_think else self.OPENERS)
             kind = "thinking" if self.in_think else "content"
             if idx == -1:
-                # Hold back a tag-length tail in case a tag spans chunks.
-                safe = len(self.buf) - len(tag)
+                # Hold back the longest marker's worth, in case one spans chunks.
+                safe = len(self.buf) - self._TAIL
                 if safe > 0:
                     out.append({"type": kind, "text": self.buf[:safe]})
                     self.buf = self.buf[safe:]
                 break
             if idx > 0:
                 out.append({"type": kind, "text": self.buf[:idx]})
-            self.buf = self.buf[idx + len(tag):]
+            self.buf = self.buf[idx + width:]
             self.in_think = not self.in_think
         return out
 
@@ -143,6 +176,61 @@ class OllamaClient:
         self._capabilities[model] = caps
         return caps
 
+    # ===== Context window =====
+    #
+    # Ollama defaults `num_ctx` to 4096 and we never set it, so every local
+    # model ran in 4k however much it could actually hold — `gemma4:e4b`
+    # advertises 131,072. Anything past 4k is silently dropped from the *front*
+    # of the prompt, which is where the system directive, the plan and the tool
+    # results all live.
+    #
+    # That is the cause of the whole family of local-model complaints in this
+    # app: a turn that read three pages and then answered "the provided notes
+    # do not contain that" was telling the truth — by the time it answered, the
+    # notes had been truncated away. Proven directly: a marker 9k tokens into a
+    # conversation is invisible at the default and recalled perfectly at 32k.
+    #
+    # Capped rather than maximised. The KV cache grows with this number, and a
+    # 128k window on a laptop is how you turn a working setup into a swapping
+    # one. 32k holds the directive, the tools, a plan and several read pages,
+    # which is what a turn here actually needs.
+    DEFAULT_NUM_CTX = 32768
+    _context_length: Dict[str, int] = {}
+
+    def context_length(self, model: str) -> int:
+        """How much context to ask for, for this model."""
+        if model in self._context_length:
+            return self._context_length[model]
+
+        wanted = self.DEFAULT_NUM_CTX
+        try:
+            wanted = int(get_config().get("ollama_num_ctx", self.DEFAULT_NUM_CTX))
+        except (TypeError, ValueError):
+            pass
+
+        limit = 0
+        try:
+            resp = requests.post(self._url("/api/show"), json={"model": model}, timeout=10)
+            resp.raise_for_status()
+            info = resp.json().get("model_info", {}) or {}
+            # The key is namespaced by architecture (`gemma4.context_length`,
+            # `llama.context_length`), so it is found by suffix rather than by
+            # guessing the family.
+            for key, value in info.items():
+                if key.endswith("context_length") and isinstance(value, int):
+                    limit = max(limit, value)
+        except Exception:
+            limit = 0
+
+        # Never ask for more than the model has — Ollama will accept it and
+        # then behave unpredictably. Never go below Ollama's own default.
+        resolved = min(wanted, limit) if limit else wanted
+        self._context_length[model] = max(4096, resolved)
+        return self._context_length[model]
+
+    def _options(self, model: str) -> Dict[str, Any]:
+        return {"num_ctx": self.context_length(model)}
+
     def supports_thinking(self, model: str) -> bool:
         """Check (and cache) whether a model advertises the thinking capability."""
         if model in self._thinking_support:
@@ -171,7 +259,8 @@ class OllamaClient:
         in the content stream.
         """
         model = model or self.default_model
-        body = {"model": model, "messages": messages, "stream": True}
+        body = {"model": model, "messages": messages, "stream": True,
+                "options": self._options(model)}
         if tools:
             body["tools"] = tools
         if self.supports_thinking(model):
@@ -214,6 +303,7 @@ class OllamaClient:
             "model": model or self.default_model,
             "prompt": prompt,
             "stream": stream,
+            "options": self._options(model or self.default_model),
         }
         if system:
             body["system"] = system
@@ -240,6 +330,7 @@ class OllamaClient:
             "model": model or self.default_model,
             "messages": messages,
             "stream": stream,
+            "options": self._options(model or self.default_model),
         }
         resp = requests.post(
             self._url("/api/chat"),
@@ -305,6 +396,7 @@ class OllamaClient:
             "model": model or self.default_model,
             "messages": messages,
             "stream": False,
+            "options": self._options(model or self.default_model),
         }
         if response_format:
             body["format"] = response_format

@@ -208,3 +208,103 @@ class TestTheStreamIsDecodedAsUTF8:
         block = source.split("with self._request(payload, stream=True) as response:")[1][:900]
         assert 'response.encoding = "utf-8"' in block
         assert block.index('response.encoding = "utf-8"') < block.index("iter_lines")
+
+
+class TestLocalModelsGetTheirWholeContextWindow:
+    """Every local model was running in 4k however much it could hold.
+
+    Ollama defaults `num_ctx` to 4096 and nothing here ever set it, while
+    `gemma4:e4b` advertises 131,072. Anything past 4k is dropped from the
+    *front* of the prompt — where the system directive, the plan and the tool
+    results live. A turn that read three pages and then said "the provided
+    notes do not contain that" was telling the truth: by the time it answered,
+    the notes had been truncated away.
+    """
+
+    def client(self, context_length=131072):
+        from unittest.mock import patch
+        from carrot.ollama_client import OllamaClient
+
+        client = OllamaClient()
+        OllamaClient._context_length = {}
+        response = type("R", (), {
+            "raise_for_status": lambda self: None,
+            "json": lambda self: {"model_info": {"gemma4.context_length": context_length}},
+        })()
+        return client, patch("carrot.ollama_client.requests.post", return_value=response)
+
+    def test_every_request_carries_it(self):
+        from pathlib import Path
+        source = (Path(__file__).resolve().parents[1] / "carrot" / "ollama_client.py").read_text(encoding="utf-8")
+        # chat, chat_stream_events, generate and structured_chat. Missing one
+        # means that path silently keeps the 4k window.
+        assert source.count('"options": self._options') == 4
+
+    def test_it_asks_for_the_configured_window(self):
+        client, patched = self.client()
+        with patched:
+            assert client.context_length("gemma4:e4b") == client.DEFAULT_NUM_CTX
+
+    def test_it_never_exceeds_what_the_model_has(self):
+        """Ollama accepts a larger number and then behaves unpredictably."""
+        client, patched = self.client(context_length=8192)
+        with patched:
+            assert client.context_length("small:1b") == 8192
+
+    def test_it_never_drops_below_ollamas_own_default(self):
+        client, patched = self.client(context_length=512)
+        with patched:
+            assert client.context_length("tiny:0.5b") == 4096
+
+    def test_a_model_that_reports_nothing_still_gets_a_window(self):
+        # Failing to read the limit must not put it back to 4k.
+        from unittest.mock import patch
+        from carrot.ollama_client import OllamaClient
+
+        client = OllamaClient()
+        OllamaClient._context_length = {}
+        with patch("carrot.ollama_client.requests.post", side_effect=RuntimeError("offline")):
+            assert client.context_length("unknown:latest") == client.DEFAULT_NUM_CTX
+
+    def test_the_cap_is_deliberate(self):
+        """The KV cache grows with this, and a 128k window on a laptop turns a
+        working setup into a swapping one."""
+        from carrot.ollama_client import OllamaClient
+        assert 8192 <= OllamaClient.DEFAULT_NUM_CTX <= 65536
+
+
+class TestReasoningIsNotPrintedAsTheAnswer:
+    """Models mark reasoning in whatever convention their trainer picked, and
+    an unrecognised marker means the whole chain of thought becomes the reply."""
+
+    def split(self, raw):
+        from carrot.ollama_client import ThinkTagStreamFilter
+        f = ThinkTagStreamFilter()
+        parts = f.feed(raw) + f.flush()
+        return ("".join(p["text"] for p in parts if p["type"] == "content").strip(),
+                "".join(p["text"] for p in parts if p["type"] == "thinking").strip())
+
+    @pytest.mark.parametrize("raw", [
+        "<think>reasoning</think>The answer.",
+        "<thinking>reasoning</thinking>The answer.",
+        "<reasoning>reasoning</reasoning>The answer.",
+        "<|channel>thought reasoning<|message|>The answer.",
+        "<|channel|>analysis reasoning<|channel|>final The answer.",
+    ])
+    def test_each_convention_is_recognised(self, raw):
+        content, thinking = self.split(raw)
+        assert content == "The answer."
+        assert "reasoning" in thinking
+
+    def test_a_marker_split_across_chunks_still_works(self):
+        from carrot.ollama_client import ThinkTagStreamFilter
+        f = ThinkTagStreamFilter()
+        parts = []
+        for chunk in ["<|chan", "nel>thou", "ght reasoning", "<|mess", "age|>The answer."]:
+            parts += f.feed(chunk)
+        parts += f.flush()
+        content = "".join(p["text"] for p in parts if p["type"] == "content").strip()
+        assert content == "The answer."
+
+    def test_an_answer_with_no_marker_is_untouched(self):
+        assert self.split("The answer.")[0] == "The answer."
