@@ -279,8 +279,11 @@ def test_the_directive_reaches_the_model(isolated_db, fake_ollama):
     history, _ = carrot_app._prepare_history(
         conv_mod.get_conversation(conv["id"]), "hello", None, mode=carrot_app.SEARCH_OFF
     )
-    assert history[0]["role"] == "system"
-    assert "no web access" in history[0]["content"]
+    # Across the system messages rather than at a fixed index: the house
+    # answer style is prepended before these, and the property being
+    # pinned is that the directive reaches the model, not where it sits.
+    system = [m["content"] for m in history if m["role"] == "system"]
+    assert any("no web access" in block for block in system)
 
 
 def test_search_modes_endpoint_lists_all_three(client):

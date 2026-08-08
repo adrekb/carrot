@@ -74,8 +74,11 @@ def test_skill_injected_into_chat(client, skills_dir):
         {"messages": []}, "hi", "poet",
     )
     assert skill["slug"] == "poet"
-    assert history[0]["role"] == "system"
-    assert "Answer in rhyme." in history[0]["content"]
+    # Across the system messages rather than at a fixed index: the house
+    # answer style is prepended before these, and the property being
+    # pinned is that the directive reaches the model, not where it sits.
+    system = [m["content"] for m in history if m["role"] == "system"]
+    assert any("Answer in rhyme." in block for block in system)
 
 
 # ===== MCP server config CRUD =====

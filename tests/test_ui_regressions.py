@@ -618,3 +618,52 @@ class TestTheFileTreeMarksItsTypes:
         # Older WebKit would otherwise render every badge as an untinted box.
         css = read("css", "style.css")
         assert "@supports not (background: color-mix(in srgb, red 10%, transparent))" in css
+
+
+class TestInlineCitationsAreChips:
+    """A paragraph carrying five source links read as a paragraph with five
+    interruptions in it — and when the model wrote the link flush against the
+    last word you got "architectural interestsAl Jazeera", a sentence that
+    appears to end in a proper noun."""
+
+    def test_a_glued_citation_gets_its_space_back(self):
+        from carrot import app
+        assert app._tidy_answer("architectural interests[Al Jazeera](https://x.com).") == \
+            "architectural interests [Al Jazeera](https://x.com)."
+        assert app._tidy_answer("at 15%[Pew](https://p.com).") == "at 15% [Pew](https://p.com)."
+
+    def test_it_does_not_touch_correct_markdown(self):
+        from carrot import app
+        for text in ("a normal [link](https://w.com) here", "**bold**[link](https://z.com)"):
+            assert app._tidy_answer(text) == text
+
+    def test_the_repair_is_only_whitespace(self):
+        """Anything that rewrites the model's words belongs in the directive
+        where it can be argued with, not in a regex that silently edits what
+        the user is told."""
+        from carrot import app
+        text = "The Senate voted 86-11[Democrats](https://d.com)."
+        assert app._tidy_answer(text).replace(" ", "") == text.replace(" ", "")
+
+    def test_only_short_source_names_become_chips(self):
+        # A link whose text is a sentence is the author linking a phrase, and
+        # turning that into a chip would be rewriting their prose.
+        js = read("js", "features.js")
+        block = js.split("function markCitations(")[1].split("\n}")[0]
+        assert "CITE_MAX_CHARS" in block
+        assert "split(/\s+/).length > 4" in block
+
+    def test_a_standalone_source_link_is_left_alone(self):
+        # A link that is the whole of its own line is a sources list, which
+        # already reads correctly.
+        js = read("js", "features.js")
+        block = js.split("function markCitations(")[1].split("\n}")[0]
+        assert "childNodes.length === 1" in block
+
+    def test_no_favicons_are_fetched(self):
+        """Asking every cited domain for an image on every render tells those
+        sites what you are reading — the one thing this app exists not to do."""
+        css = read("css", "style.css")
+        block = css[css.index(".md a.cite-chip::before"):]
+        block = block[:block.index("}")]
+        assert "url(" not in block

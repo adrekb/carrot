@@ -1088,6 +1088,12 @@ def _prepare_history(conv, message, skill_slug, extra_system=None, mode=None,
     """
     history = []
     skill = None
+    # How the user wants an answer to read. First, so anything more specific
+    # later in the prompt — a skill's instructions, a document's format — can
+    # still override it.
+    style = answer_style_directive()
+    if style:
+        history.append({"role": "system", "content": style})
     if mode:
         history.append({"role": "system", "content": search_directive(mode)})
     if skill_slug:
@@ -1476,6 +1482,28 @@ NARRATION = re.compile(
     r"^\s*(?:okay|ok|alright|sure|got it|let me|let's|i'?ll|i am going to|"
     r"i'?m going to|i will|first,? i|now i|next,? i|searching|looking|"
     r"let me search|let me look|one moment|hold on)\b", re.I)
+
+
+# A citation written straight onto the end of a word.
+#
+# Reported as "architectural interestsAl Jazeera" and "at 15%Pew Research
+# Center" — the model wrote `interests[Al Jazeera](url)` with nothing between,
+# so the link renders flush against the last letter and the sentence appears
+# to end in a proper noun. Asking it not to is a request; this is the fix.
+#
+# Only when a link *follows* text with no space. A link that already has one,
+# and markdown like `**bold**[link]`, are left exactly as they are.
+GLUED_CITATION = re.compile(r"(?<=[\w%),.;:])(\[[^\]]{1,60}\]\((?:https?:)?//)")
+
+
+def _tidy_answer(text: str) -> str:
+    """Small, safe repairs to the finished answer.
+
+    Deliberately only whitespace. Anything that rewrites the model's words
+    belongs in the directive where it can be argued with, not in a regex that
+    silently edits what the user is told.
+    """
+    return GLUED_CITATION.sub(" " + chr(92) + "1", text or "")
 
 
 def _restore_carried(carried: List[str], final: str) -> str:
@@ -1999,6 +2027,74 @@ def search_mode(requested: Optional[str] = None) -> str:
     """The mode for this turn: the request's choice, else the saved default."""
     mode = (requested or config.get_config().get("chat_search_mode", SEARCH_SINGLE) or "").lower()
     return mode if mode in SEARCH_MODES else SEARCH_SINGLE
+
+
+# ===== How the answer should read =====
+#
+# Two answers to the same question, one rated "good" and one "hard to read",
+# differed in shape rather than content. The readable one led every point with
+# the claim in bold and explained underneath it; ours ran four dense
+# paragraphs with the facts buried mid-sentence. Same research, same sources.
+#
+# And how much shape someone wants is a preference, not a fact about writing.
+# Some people want the bullets; some find them a wall of fragments and would
+# rather have prose. So it is a setting, with a default rather than a rule.
+
+STYLE_BALANCED = "balanced"
+STYLE_BRIEF = "brief"
+STYLE_FULL = "full"
+STYLE_DEFAULT = STYLE_BALANCED
+
+ANSWER_STYLES = {
+    STYLE_BRIEF: (
+        "Answer in as few words as carry the facts. Lead with the answer "
+        "itself, skip the preamble, and leave out anything the question did "
+        "not ask for."
+    ),
+    STYLE_BALANCED: (
+        "Open with one sentence saying what the answer is. Then, when there "
+        "is more than one finding, give them as a short list where each point "
+        "starts with its claim in bold and explains underneath — "
+        "\"**The court blocked construction.** A three-judge panel ruled "
+        "that...\" — because that is what makes an answer skimmable without "
+        "losing the detail. Close with a line on what it adds up to, if it "
+        "adds up to something."
+    ),
+    STYLE_FULL: (
+        "Explain as well as report. Give the finding, then why it matters and "
+        "what it follows from, in prose rather than fragments. Assume the "
+        "reader wants to understand the subject, not just be told the facts "
+        "about it."
+    ),
+}
+
+# Structure is the axis people most often want turned down: the same content
+# as prose rather than as headings and bullets.
+STRUCTURE_LESS = (
+    "Prefer flowing prose. Use a heading or a list only when the content is "
+    "genuinely a list; do not impose structure on an answer that is really a "
+    "paragraph."
+)
+
+
+def answer_style_directive() -> str:
+    """The user's own preference for how an answer should read."""
+    try:
+        cfg = config.get_config()
+    except Exception:
+        return ANSWER_STYLES[STYLE_DEFAULT]
+
+    parts = [ANSWER_STYLES.get(cfg.get("answer_style", STYLE_DEFAULT),
+                               ANSWER_STYLES[STYLE_DEFAULT])]
+    if cfg.get("answer_structure") == "less":
+        parts.append(STRUCTURE_LESS)
+    # Free text, last, so it can override anything above it — it is the most
+    # specific thing the user has said about what they want.
+    custom = str(cfg.get("answer_custom", "") or "").strip()
+    if custom:
+        parts.append("The user has asked for this specifically, and it takes "
+                     "precedence over the guidance above:\n" + custom[:600])
+    return "\n".join(parts)
 
 
 def search_directive(mode: str) -> str:
@@ -2761,6 +2857,10 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
                 "reason": "this turn answered from "
                           f"{searches} search(es) and {reads} page(s) read",
             }}
+
+    # Whitespace repairs, applied once at the end so the stored message and the
+    # rendered one agree. Anything that rewrites words belongs in the directive.
+    final_text = _tidy_answer(final_text)
 
     yield {"_final_text": final_text}
 
