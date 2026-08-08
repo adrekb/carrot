@@ -198,35 +198,40 @@ class OllamaClient:
     _context_length: Dict[str, int] = {}
 
     def context_length(self, model: str) -> int:
-        """How much context to ask for, for this model."""
-        if model in self._context_length:
-            return self._context_length[model]
+        """How much context to ask for, for this model.
 
+        Only the model's own limit is cached — that needs a round trip and
+        never changes. The configured value is read every time, so changing it
+        in Settings takes effect on the next turn rather than at the next
+        restart, which is what a setting is supposed to mean.
+        """
         wanted = self.DEFAULT_NUM_CTX
         try:
             wanted = int(get_config().get("ollama_num_ctx", self.DEFAULT_NUM_CTX))
         except (TypeError, ValueError):
             pass
 
-        limit = 0
-        try:
-            resp = requests.post(self._url("/api/show"), json={"model": model}, timeout=10)
-            resp.raise_for_status()
-            info = resp.json().get("model_info", {}) or {}
-            # The key is namespaced by architecture (`gemma4.context_length`,
-            # `llama.context_length`), so it is found by suffix rather than by
-            # guessing the family.
-            for key, value in info.items():
-                if key.endswith("context_length") and isinstance(value, int):
-                    limit = max(limit, value)
-        except Exception:
+        if model not in self._context_length:
             limit = 0
+            try:
+                resp = requests.post(self._url("/api/show"), json={"model": model}, timeout=10)
+                resp.raise_for_status()
+                info = resp.json().get("model_info", {}) or {}
+                # The key is namespaced by architecture (`gemma4.context_length`,
+                # `llama.context_length`), so it is found by suffix rather than
+                # by guessing the family.
+                for key, value in info.items():
+                    if key.endswith("context_length") and isinstance(value, int):
+                        limit = max(limit, value)
+            except Exception:
+                limit = 0
+            self._context_length[model] = limit
 
-        # Never ask for more than the model has — Ollama will accept it and
-        # then behave unpredictably. Never go below Ollama's own default.
+        limit = self._context_length[model]
+        # Never ask for more than the model has — Ollama accepts it and then
+        # behaves unpredictably. Never go below Ollama's own default.
         resolved = min(wanted, limit) if limit else wanted
-        self._context_length[model] = max(4096, resolved)
-        return self._context_length[model]
+        return max(4096, resolved)
 
     def _options(self, model: str) -> Dict[str, Any]:
         return {"num_ctx": self.context_length(model)}

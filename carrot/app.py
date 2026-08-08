@@ -14,6 +14,7 @@ import os
 import re
 import json
 import contextlib
+from urllib.parse import urlparse
 import queue
 import logging
 import threading
@@ -823,6 +824,21 @@ async def list_models():
     except Exception:
         pass
 
+    # The context window each installed model will actually get. Cheap: the
+    # client caches per model, and a model it cannot reach is simply omitted
+    # rather than blocking the picker.
+    context_info: Dict[str, Any] = {}
+    try:
+        client = ollama_mod.OllamaClient()
+        for entry in installed:
+            name = entry.get("name", "")
+            if name:
+                context_info[name] = client.context_length(name)
+        context_info["_default"] = client.DEFAULT_NUM_CTX
+        context_info["_configured"] = cfg.get("ollama_num_ctx", client.DEFAULT_NUM_CTX)
+    except Exception:
+        context_info = {}
+
     # Whether the model now answering can read an image at all.
     #
     # The server has always refused images a model cannot see, but only on
@@ -843,6 +859,11 @@ async def list_models():
         "installed": installed,
         "active_model": active,
         "chat_vision": chat_vision,
+        # What each local model is actually being run with. Ollama's default is
+        # 4096 whatever the model can hold, and the difference is not subtle —
+        # a model in 4k loses the directive and the pages it just read — so the
+        # number belongs where the model is chosen rather than buried.
+        "context": context_info,
         "default_model": bootstrap_mod.DEFAULT_MODEL,
         "suggested": suggested,
         "remote": remote,
@@ -1511,6 +1532,8 @@ SUPPORT_PROMPT = """Below is an answer, and the source text it was written from.
 
 Find statements in the answer that the sources do not support. A statement is unsupported if the sources do not say it — not if it is merely phrased differently, and not if it is general knowledge that the sources happen not to mention.
 
+A number the answer worked out is not a number the sources state. If a figure appears in the answer but in no source — a combined total, a sum, a converted unit — it is unsupported however reasonable the arithmetic looks.
+
 Be strict about specifics: counts, quantities, names, dates and configurations are exactly where an answer invents detail, and "two motors" where the source says one is the failure to catch.
 
 Check who each fact is ABOUT, not just whether the words appear. A page about one product routinely describes its rivals, its predecessor and the rest of its range in the same paragraphs — a sentence saying competitors "have two motors up front" is not a statement about the subject, and an answer that reports it as one is wrong even though every word of it is on the page. This is the most common way a sourced answer is false, because nothing about it looks invented.
@@ -1695,6 +1718,55 @@ def _identifier_key(token: str) -> str:
     return re.sub(r"[-_.\s]", "", token or "")
 
 
+# ===== One site is not the web =====
+#
+# Asked for "recent us politics news", a turn opened whitehouse.gov five times
+# out of six reads and answered entirely from administration press releases:
+# the mining announcement, two executive orders, a tariff, a prices statement.
+# Every fact was true and correctly cited, and the answer was still wrong —
+# for that question, reading one government press office is not research, it
+# is a press summary, and the reader cannot tell from the citations that no
+# second view was ever consulted.
+#
+# The search results held Reuters, AP, PBS and Wikipedia. Nothing steered
+# towards them and nothing objected when they were skipped.
+#
+# So a host gets a budget. This is not corroboration — requiring two sources
+# to agree before a fact may be stated would suppress whatever only the
+# primary source says. It is diversity of *reading*, which is a different
+# thing: go and look elsewhere before you write, not agree with the crowd
+# before you speak.
+MAX_READS_PER_HOST = 2
+
+HOST_CONCENTRATION_CORRECTION = (
+    "That page was not opened. You have already read {count} pages from {host} "
+    "and this would be another. One site's account of a story is one account, "
+    "however authoritative it is — for anything contested or political it is a "
+    "party to the subject, not a neutral record of it.\n"
+    "Open one of the other results instead. If the remaining results are all "
+    "from the same place, search again for the story as a different kind of "
+    "outlet would report it."
+)
+
+
+def _host_of(url: str) -> str:
+    """The registrable-ish host, so `www.x.com` and `x.com` are one place."""
+    try:
+        host = (urlparse(url).netloc or "").lower()
+    except ValueError:
+        return ""
+    return host[4:] if host.startswith("www.") else host
+
+
+def _over_read_host(url: str, read_urls) -> str:
+    """The host this read would exceed the budget for, if any."""
+    host = _host_of(url)
+    if not host:
+        return ""
+    already = sum(1 for seen in read_urls if _host_of(seen) == host)
+    return host if already >= MAX_READS_PER_HOST else ""
+
+
 def _dropped_identifiers(question: str, query: str) -> set:
     """Identifiers in the question that the first search threw away.
 
@@ -1859,6 +1931,23 @@ MULTI_SEARCH_DIRECTIVE = (
     "is a table, not an answer.\n"
     # The shape of an answer people actually want back: grouped, specific,
     # sourced. Not a topic-by-topic status report of the searching.
+    # Headings are topics, not the questions the planner asked itself. A
+    # model handed a plan will otherwise reply to it item by item and the
+    # answer arrives as a worksheet with its own scaffolding still on.
+    # A reported answer gave "approximately 953 lb-ft combined torque" for a
+    # car whose two figures are 828 and 145. The sum is 973, no source said
+    # either number, and combined hybrid torque is not additive anyway —
+    # the two peaks arrive at different speeds. A figure nobody published,
+    # arrived at by arithmetic nobody checked, reads exactly like a fact.
+    "- Do not calculate figures. Quote the numbers your sources state and "
+    "leave them separate: if no source gives a combined or derived total, "
+    "there is no such number to report, and adding two of them yourself "
+    "produces something that looks sourced and is not.\n"
+    "- Headings name the subject, not the question: \"Powertrain\", "
+    "\"Performance\", \"Price\" — never \"What are the engine "
+    "specifications?\". Write to the person who asked, in prose, the way you "
+    "would explain it out loud; the plan is how you worked, not the shape of "
+    "the reply.\n"
     "- Group what you found under a few plain headings, and make every line a "
     "concrete fact — who, what, when, how much — with its source. A heading with "
     "one vague sentence under it means you stopped too early; go and get the "
@@ -2295,8 +2384,20 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
         if goals:
             working.append({
                 "role": "user",
-                "content": ("Work to this plan. Answer every one of these before you"
-                            " stop:\n" + "\n".join(f"- {goal}" for goal in goals)),
+                # "Answer every one of these" got taken literally: the model
+                # made each planning question a heading and replied underneath
+                # it, so the answer came back as its own worksheet — "What are
+                # the engine specifications of the c8 zr1X?" as a section title,
+                # four times over. The plan is how it decides what to go and
+                # find; it is not the shape of what comes back.
+                "content": ("Work to this plan — every one of these has to be covered"
+                            " before you stop:\n"
+                            + "\n".join(f"- {goal}" for goal in goals)
+                            + "\n\nThis list is for your own working. Do not answer it"
+                              " question by question and do not use these questions as"
+                              " headings: write one piece of prose to the request as it"
+                              " was actually asked, and let the facts land where they"
+                              " belong in it."),
             })
             last_open = list(goals)
             yield {"plan": {"goals": goals, "done": []}}
@@ -2547,6 +2648,24 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
                 })
                 continue
 
+            # A third page from a site already read twice. Refused rather than
+            # discouraged: a rule about balance in the directive is a request,
+            # and the turn that prompted this read one press office five times
+            # with the directive in front of it the whole way.
+            crowded = (_over_read_host(str(args.get("url", "")), read_urls)
+                       if bare == "read_url" and rejected < MAX_QUERY_REJECTIONS else "")
+            if crowded:
+                rejected += 1
+                correction = HOST_CONCENTRATION_CORRECTION.format(
+                    count=MAX_READS_PER_HOST, host=crowded)
+                yield {"tool": {"name": name, "args": args, "rejected": True,
+                                "reason": f"already read {MAX_READS_PER_HOST} pages from {crowded}"}}
+                working.append({
+                    "role": "tool", "content": correction,
+                    "name": name, "tool_call_id": call.get("id", name),
+                })
+                continue
+
             yield {"tool": {"name": name, "args": args}}
             result = ""
             for event in _run_tool(name, args, conversation_id):
@@ -2661,8 +2780,27 @@ TRACE_RESULT_CHARS = 400
 MAX_TRACE_EVENTS = 200
 
 
+# Reasoning arrives token by token, so it cannot be stored event by event —
+# a single turn's thinking is hundreds of them and would spend the whole cap
+# before the first tool call. It is accumulated into one entry instead, which
+# is also how it is displayed: one collapsible block, not a stream.
+MAX_THINKING_CHARS = 12000
+
+
 def _remember_trace(trace: List[Dict[str, Any]], event: Dict[str, Any]):
     """Keep the parts of an event worth reopening the conversation for."""
+    if "thinking" in event:
+        # Appended to the open block, or started if the last thing that
+        # happened was something else — so a turn that thinks, calls a tool,
+        # then thinks again keeps those as two blocks in the right places,
+        # which is what makes the trace readable rather than one lump at top.
+        if trace and "thinking" in trace[-1]:
+            if len(trace[-1]["thinking"]) < MAX_THINKING_CHARS:
+                trace[-1]["thinking"] += event["thinking"]
+        elif len(trace) < MAX_TRACE_EVENTS:
+            trace.append({"thinking": event["thinking"]})
+        return
+
     if len(trace) >= MAX_TRACE_EVENTS:
         return
     kind = next((k for k in TRACE_EVENTS if k in event), "")

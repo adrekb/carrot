@@ -754,7 +754,7 @@
           <svg class="ico"><use href="#i-help"/></svg>
           <h3>Everything Carrot knows — edit anything</h3>
         </summary>
-        <div id="planner-intake"><div class="empty">Loading…</div></div>
+        <div id="planner-intake"><div class="skeleton" aria-busy="true" aria-label="Loading"><div class="skeleton-row"></div><div class="skeleton-row"></div><div class="skeleton-row"></div></div></div>
       </details>
 
       <div class="settings-card">
@@ -1092,7 +1092,7 @@
         Models add up fast — an 8B here, a 14B there, and the disk is gone. Everything installed
         is listed with its real size; one click removes it (models can always be re-downloaded).
       </p>
-      <div id="hub-storage"><div class="empty">Loading…</div></div>
+      <div id="hub-storage"><div class="skeleton" aria-busy="true" aria-label="Loading"><div class="skeleton-row"></div><div class="skeleton-row"></div><div class="skeleton-row"></div></div></div>
     </div>
   </section>
 
@@ -1285,6 +1285,26 @@
 
       <div class="settings-card">
         <div class="settings-head">
+          <svg class="ico"><use href="#i-chip"/></svg>
+          <h3>How much a local model holds in mind</h3>
+        </div>
+        <p class="muted small">
+          Every model has a limit on how much it can consider at once — the question, the
+          pages it read, and Carrot's own instructions all share it. Ollama's own default is
+          small enough that a turn which reads three pages loses the beginning of its own
+          instructions, then answers as though it had never had them.
+        </p>
+        <p class="muted small">
+          Bigger is not free: this reserves memory on your graphics card or in RAM, and a
+          machine that runs out will get slower rather than fail. Carrot never asks for more
+          than the model actually supports. <b>This does not affect cloud models.</b>
+        </p>
+        <div class="ctx-choices" id="ctx-choices"></div>
+        <p class="muted small" id="ctx-current"></p>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-head">
           <svg class="ico"><use href="#i-search"/></svg>
           <h3>When a page won't open</h3>
         </div>
@@ -1399,7 +1419,7 @@
           Together, DeepSeek, Mistral, LM Studio, vLLM, your own endpoint). Keys are stored
           locally and never returned by the API once saved.
         </p>
-        <div id="providers-panel"><div class="empty">Loading…</div></div>
+        <div id="providers-panel"><div class="skeleton" aria-busy="true" aria-label="Loading"><div class="skeleton-row"></div><div class="skeleton-row"></div><div class="skeleton-row"></div></div></div>
 
         <details class="provider-add">
           <summary>Add a provider</summary>
@@ -1432,7 +1452,7 @@
           OAuth flow. Carrot never reads your browser's cookies or drives the web app: if a
           provider offers no sign-in flow, it says so rather than working around it.
         </p>
-        <div id="auth-panel"><div class="empty">Loading…</div></div>
+        <div id="auth-panel"><div class="skeleton" aria-busy="true" aria-label="Loading"><div class="skeleton-row"></div><div class="skeleton-row"></div><div class="skeleton-row"></div></div></div>
       </div>
 
       <div class="settings-card">
@@ -1446,7 +1466,7 @@
           there for when you would rather rent someone else's GPU — and Carrot reuses a key you
           already pasted for chat rather than asking twice.
         </p>
-        <div id="media-panel"><div class="empty">Loading…</div></div>
+        <div id="media-panel"><div class="skeleton" aria-busy="true" aria-label="Loading"><div class="skeleton-row"></div><div class="skeleton-row"></div><div class="skeleton-row"></div></div></div>
         <div class="settings-row" style="margin-top:12px">
           <input type="text" id="media-prompt" placeholder="Try it: describe a picture…" spellcheck="false">
           <button class="btn btn-primary" onclick="tryGenerate()">Generate</button>
@@ -1501,7 +1521,7 @@
           is not to be kept. Nothing here is capture. This is the gate capture has to
           get through, and you can try it below on a window that does not exist.
         </p>
-        <div id="ambient-panel"><div class="empty">Loading…</div></div>
+        <div id="ambient-panel"><div class="skeleton" aria-busy="true" aria-label="Loading"><div class="skeleton-row"></div><div class="skeleton-row"></div><div class="skeleton-row"></div></div></div>
         <div class="settings-row" style="margin-top:12px">
           <select id="ambient-kind" aria-label="What to exclude">
             <option value="app">App named…</option>
@@ -1576,7 +1596,7 @@
           also add your own tasks and call them from the API with
           <span class="mono">task=&lt;id&gt;</span>.
         </p>
-        <div id="routing-panel"><div class="empty">Loading…</div></div>
+        <div id="routing-panel"><div class="skeleton" aria-busy="true" aria-label="Loading"><div class="skeleton-row"></div><div class="skeleton-row"></div><div class="skeleton-row"></div></div></div>
 
         <details class="provider-add">
           <summary>Add a custom task</summary>

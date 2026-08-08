@@ -1155,3 +1155,53 @@ class TestTheAnswerIsCheckedAgainstThePages:
         check that only asks whether the words appear."""
         assert "Check who each fact is ABOUT" in A.SUPPORT_PROMPT
         assert "rivals" in A.SUPPORT_PROMPT
+
+
+class TestOneSiteIsNotTheWeb:
+    """Asked for "recent us politics news", a turn opened whitehouse.gov five
+    times out of six reads and answered entirely from administration press
+    releases. Every fact was true and correctly cited, and the answer was
+    still wrong: for that question, reading one government press office is a
+    press summary, not research — and nothing in the citations tells the
+    reader that no second view was ever consulted.
+
+    The search results held Reuters, AP, PBS and Wikipedia. Nothing steered
+    towards them and nothing objected when they were skipped.
+    """
+
+    def test_a_third_page_from_the_same_site_is_refused(self):
+        result = drive([
+            ("", tool_call("web_search", query="recent us politics news")),
+            ("", tool_call("read_url", url="https://www.whitehouse.gov/a")),
+            ("", tool_call("read_url", url="https://www.whitehouse.gov/b")),
+            ("", tool_call("read_url", url="https://www.whitehouse.gov/c")),
+            ("", tool_call("read_url", url="https://www.reuters.com/x")),
+            ("Answer.", []),
+        ], A.SEARCH_MULTI, question="recent us politics news")
+        assert "https://www.whitehouse.gov/c" not in result["read_urls"]
+        assert "https://www.reuters.com/x" in result["read_urls"]
+
+    def test_the_budget_is_not_one_page(self):
+        # Two from a site is normal reporting; the failure is five.
+        result = drive([
+            ("", tool_call("web_search", query="q")),
+            ("", tool_call("read_url", url="https://www.reuters.com/a")),
+            ("", tool_call("read_url", url="https://www.reuters.com/b")),
+            ("Answer.", []),
+        ], A.SEARCH_MULTI)
+        assert len([u for u in result["read_urls"] if "reuters" in u]) == 2
+
+    def test_www_and_the_bare_domain_are_one_place(self):
+        assert A._host_of("https://www.whitehouse.gov/a") == A._host_of("https://whitehouse.gov/b")
+
+    def test_it_is_refused_not_discouraged(self):
+        """A rule about balance in the directive is a request. The turn that
+        prompted this read one press office five times with the directive in
+        front of it the whole way."""
+        assert "That page was not opened" in A.HOST_CONCENTRATION_CORRECTION
+
+    def test_this_is_not_corroboration(self):
+        """Diversity of reading, not agreement before asserting. Requiring two
+        sources to agree would suppress whatever only the primary source says;
+        this only asks that somewhere else was looked at first."""
+        assert A.MAX_READS_PER_HOST >= 2

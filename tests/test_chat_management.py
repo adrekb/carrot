@@ -111,3 +111,65 @@ def test_weather_location_saved_to_config(client):
     assert cfg["label"] == "London"
     # Default keys preserved on merge.
     assert cfg["units"] == "c"
+
+
+class TestTheHistoryIsABudgetNotAMessageCount:
+    """A count of messages is not a size.
+
+    Twenty short exchanges are 18k characters and twenty long ones are 152k —
+    measured, not guessed, on a real database whose largest stored answer is
+    7,599 characters. At the top of that range the recent window alone is 116%
+    of a 32k context, and a turn that reads three pages adds another 44%.
+
+    Nothing errors when a request exceeds the window. The provider drops the
+    *front* of the prompt, which is where the system directive and the tool
+    definitions live, so the model answers without either — the same failure as
+    running in a 4k window, arriving from the other end.
+    """
+
+    def messages(self, count, each):
+        return [{"role": "assistant" if i % 2 else "user", "content": "x" * each}
+                for i in range(count)]
+
+    def test_a_short_conversation_is_kept_whole(self):
+        from carrot import summarize
+        kept = summarize._within_budget(self.messages(20, 900))
+        assert len(kept) == 20
+
+    def test_a_long_one_is_trimmed_to_fit(self):
+        from carrot import summarize
+        kept = summarize._within_budget(self.messages(20, 7599))
+        assert len(kept) < 20
+        assert sum(len(m["content"]) for m in kept) <= summarize.HISTORY_BUDGET_CHARS * 1.2
+
+    def test_it_keeps_the_newest_not_the_oldest(self):
+        """Recency is what the budget buys. Anything dropped is already in the
+        rolling summary above it."""
+        from carrot import summarize
+        msgs = [{"role": "user", "content": f"{i}" + "x" * 20000} for i in range(10)]
+        kept = summarize._within_budget(msgs)
+        assert kept[-1]["content"].startswith("9")
+
+    def test_order_is_preserved(self):
+        from carrot import summarize
+        msgs = [{"role": "user", "content": str(i)} for i in range(6)]
+        assert [m["content"] for m in summarize._within_budget(msgs)] == list("012345")
+
+    def test_one_enormous_answer_cannot_evict_its_own_question(self):
+        from carrot import summarize
+        kept = summarize._within_budget(
+            [{"role": "user", "content": "q"},
+             {"role": "assistant", "content": "y" * 200000}])
+        assert kept[0]["content"] == "q"
+
+    def test_there_is_a_floor(self):
+        from carrot import summarize
+        kept = summarize._within_budget(self.messages(10, 99999))
+        assert len(kept) >= summarize.MIN_RECENT_MESSAGES
+
+    def test_the_budget_leaves_room_for_the_rest_of_the_turn(self):
+        """The tools, the directive and the pages a turn reads all have to fit
+        beside it inside the same window."""
+        from carrot import summarize
+        window_chars = 32768 * 4
+        assert summarize.HISTORY_BUDGET_CHARS <= window_chars * 0.4
