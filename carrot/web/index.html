@@ -1285,6 +1285,26 @@
 
       <div class="settings-card">
         <div class="settings-head">
+          <svg class="ico"><use href="#i-chat"/></svg>
+          <h3>How answers are written</h3>
+        </div>
+        <p class="muted small">
+          The same research can be handed over as a wall of paragraphs or as something you
+          can skim. Which one is better is a matter of taste, not of correctness — so it is
+          yours to set.
+        </p>
+        <div class="pop-section">Length and depth</div>
+        <div class="ctx-choices" id="style-choices"></div>
+        <div class="pop-section">Headings and lists</div>
+        <div class="ctx-choices" id="structure-choices"></div>
+        <div class="pop-section">Anything else</div>
+        <textarea id="answer-custom" rows="2" placeholder="e.g. never use emoji; always give figures in metric"
+                  onchange="setAnswerCustom(this.value)"></textarea>
+        <p class="muted small">Applies to every answer, and overrides the choices above.</p>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-head">
           <svg class="ico"><use href="#i-chip"/></svg>
           <h3>How much a local model holds in mind</h3>
         </div>

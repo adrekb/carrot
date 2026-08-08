@@ -291,6 +291,60 @@ function renderEngineCard(s) {
         </div>`;
 }
 
+// How answers are written.
+//
+// The same research handed over as dense paragraphs or as something skimmable
+// is the difference people actually notice, and which one is better is taste
+// rather than correctness. So it is a setting with a default, not a rule.
+const STYLE_CHOICES = [
+    { id: 'brief',    label: 'Brief',    hint: 'the answer, and little else' },
+    { id: 'balanced', label: 'Balanced', hint: 'recommended — a claim per point, then the detail' },
+    { id: 'full',     label: 'Detailed', hint: 'explains why, not only what' },
+];
+const STRUCTURE_CHOICES = [
+    { id: 'normal', label: 'Normal', hint: 'headings and lists where they help' },
+    { id: 'less',   label: 'Fewer',  hint: 'prose unless it is really a list' },
+];
+
+function renderAnswerStyle(cfg) {
+    _paint('style-choices', STYLE_CHOICES, cfg.answer_style || 'balanced',
+           id => _saveStyle('answer_style', id, cfg));
+    _paint('structure-choices', STRUCTURE_CHOICES, cfg.answer_structure || 'normal',
+           id => _saveStyle('answer_structure', id, cfg));
+    const box = document.getElementById('answer-custom');
+    if (box) box.value = cfg.answer_custom || '';
+}
+
+function _paint(hostId, choices, current, onPick) {
+    const host = document.getElementById(hostId);
+    if (!host) return;
+    host.innerHTML = '';
+    for (const choice of choices) {
+        const btn = document.createElement('button');
+        btn.className = 'ctx-choice' + (choice.id === current ? ' on' : '');
+        btn.onclick = () => onPick(choice.id);
+        btn.innerHTML = `<span class="ctx-label">${escHtml(choice.label)}</span>`
+            + `<span class="ctx-hint">${escHtml(choice.hint)}</span>`;
+        host.appendChild(btn);
+    }
+}
+
+async function _saveStyle(key, value, cfg) {
+    cfg[key] = value;
+    renderAnswerStyle(cfg);              // paint first; the write is the slow part
+    try {
+        await api(`/api/config/${key}`, { method: 'PUT', body: JSON.stringify(value) });
+    } catch (_) { /* the next load will show what actually stuck */ }
+}
+
+async function setAnswerCustom(text) {
+    try {
+        await api('/api/config/answer_custom', {
+            method: 'PUT', body: JSON.stringify(String(text || '').slice(0, 600)),
+        });
+    } catch (_) { /* ignore */ }
+}
+
 // How much a local model may hold in mind at once.
 //
 // Presented as three choices rather than a token count, because "num_ctx" is
@@ -380,6 +434,7 @@ async function loadRecapConfig() {
         // Same fetch, so the rail's server copy costs nothing extra.
         syncRailFromServer(cfg);
         renderReaderFallback(cfg);
+        renderAnswerStyle(cfg);
         _pendingCtxCfg = cfg;
         renderContextChoices(cfg, _lastModels || {});
     } catch (_) {}

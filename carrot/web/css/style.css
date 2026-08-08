@@ -5472,3 +5472,49 @@ body #cmdbar:focus-within {
 @media (prefers-reduced-motion: reduce) {
   .skeleton-row { animation: none; }
 }
+
+/* ===== Inline citations =====
+ *
+ * A source link written mid-sentence renders as ordinary link text, so a
+ * paragraph carrying five of them reads as a paragraph with five
+ * interruptions. Worse, a model that writes the link flush against the last
+ * word produces "architectural interestsAl Jazeera" — the sentence appears to
+ * end in a proper noun.
+ *
+ * A chip is the shape people already read as "this is where that came from":
+ * small, quiet, and skimmable past without losing the sentence. */
+.md a.cite-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 1px 0 3px;
+  padding: 1px 7px 1px 6px;
+  border: 1px solid var(--border-hi);
+  border-radius: var(--r-pill);
+  background: var(--card2);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  line-height: 1.45;
+  text-decoration: none;
+  white-space: nowrap;
+  vertical-align: baseline;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.md a.cite-chip::before {
+  /* A dot, not a favicon. Fetching one asks every cited domain for an image
+     on every render, which tells those sites what you are reading. */
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.55;
+  flex-shrink: 0;
+}
+.md a.cite-chip:hover {
+  color: var(--text);
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+.md a.cite-chip:hover::before { opacity: 1; }

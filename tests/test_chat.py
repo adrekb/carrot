@@ -125,3 +125,68 @@ class TestStreamingDoesNotBlockTheServer:
             "research and agent streams share this helper; async here stalls "
             "the server for the length of a research run"
         )
+
+
+class TestHowAnswersAreWritten:
+    """Two answers to the same question, one rated good and one hard to read,
+    differed in shape rather than content. The readable one led each point
+    with its claim in bold and explained underneath; ours ran four dense
+    paragraphs with the facts buried mid-sentence. Same research, same
+    sources, same facts.
+
+    And how much shape someone wants is taste, not correctness — so it is a
+    setting with a default rather than a rule.
+    """
+
+    def setup_method(self):
+        from carrot import config
+        for key in ("answer_style", "answer_structure", "answer_custom"):
+            config.set_config(key, "")
+
+    def teardown_method(self):
+        self.setup_method()
+
+    def test_each_style_says_something_different(self, isolated_db):
+        from carrot import app, config
+        seen = set()
+        for style in (app.STYLE_BRIEF, app.STYLE_BALANCED, app.STYLE_FULL):
+            config.set_config("answer_style", style)
+            seen.add(app.answer_style_directive())
+        assert len(seen) == 3
+
+    def test_the_default_is_the_skimmable_one(self, isolated_db):
+        from carrot import app
+        assert "skimmable" in app.answer_style_directive()
+
+    def test_structure_can_be_turned_down(self, isolated_db):
+        from carrot import app, config
+        config.set_config("answer_structure", "less")
+        assert "flowing prose" in app.answer_style_directive()
+
+    def test_a_custom_instruction_comes_last_and_wins(self, isolated_db):
+        """It is the most specific thing the user has said about what they
+        want, so it has to be able to override the preset above it."""
+        from carrot import app, config
+        config.set_config("answer_custom", "never use emoji")
+        assert app.answer_style_directive().rstrip().endswith("never use emoji")
+
+    def test_a_custom_instruction_is_bounded(self, isolated_db):
+        from carrot import app, config
+        config.set_config("answer_custom", "x" * 5000)
+        assert len(app.answer_style_directive()) < 3000
+
+    def test_it_reaches_the_turn_before_anything_more_specific(self, isolated_db):
+        """A skill's instructions or a document's format should still be able
+        to override the house style."""
+        from carrot import app
+        out = app._prepare_history({"id": "x", "messages": []}, "hi", None,
+                                   mode=app.SEARCH_MULTI)
+        history = out[0] if isinstance(out, tuple) else out
+        assert "skimmable" in history[0]["content"]
+        assert any("multi-turn" in m["content"] for m in history if m["role"] == "system")
+
+    def test_a_broken_config_still_answers(self, isolated_db):
+        from unittest.mock import patch
+        from carrot import app
+        with patch.object(app.config, "get_config", side_effect=RuntimeError("no db")):
+            assert app.answer_style_directive() == app.ANSWER_STYLES[app.STYLE_DEFAULT]

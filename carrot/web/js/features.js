@@ -37,7 +37,42 @@ function mdToHtml(md) {
             el.setAttribute('rel', 'noopener noreferrer');
         }
     });
+    markCitations(tpl.content);
     return tpl.innerHTML;
+}
+
+// Inline citations as chips.
+//
+// A source link written mid-sentence renders as ordinary blue text, so a
+// paragraph carrying five of them reads as a paragraph with five interruptions
+// in it — and when the model writes the link flush against the last word you
+// get "architectural interestsAl Jazeera". A chip is the shape people already
+// read as "this is where that came from": small, quiet, and skimmable past.
+//
+// No favicons. Fetching one means asking every cited domain for an image on
+// every render, which tells those sites what you are reading — the one thing
+// this app exists not to do.
+const CITE_MAX_CHARS = 34;
+
+function markCitations(root) {
+    for (const link of root.querySelectorAll('a[href]')) {
+        const href = link.getAttribute('href') || '';
+        if (!/^https?:/i.test(href)) continue;
+        const text = (link.textContent || '').trim();
+        // A citation names its source. A link whose text is a sentence is the
+        // author linking a phrase, and turning that into a chip would be
+        // rewriting their prose.
+        if (!text || text.length > CITE_MAX_CHARS || text.split(/\s+/).length > 4) continue;
+        // A bare URL as the text is not a name either.
+        if (/^https?:/i.test(text)) continue;
+        // Only mid-flow links: one that is the whole of its own line is a
+        // list of sources, which already reads correctly.
+        const parent = link.parentElement;
+        if (parent && parent.childNodes.length === 1) continue;
+
+        link.classList.add('cite-chip');
+        link.title = href;
+    }
 }
 
 // ===== Vendor lazy loaders (offline bundles) =====
