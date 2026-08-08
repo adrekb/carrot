@@ -308,3 +308,65 @@ class TestReasoningIsNotPrintedAsTheAnswer:
 
     def test_an_answer_with_no_marker_is_untouched(self):
         assert self.split("The answer.")[0] == "The answer."
+
+
+class TestTheContextWindowIsVisibleAndAdjustable:
+    """The number that broke every local turn was invisible and unchangeable.
+
+    Ollama's default of 4096 is what made a model lose its own instructions
+    mid-turn, and nothing in the app showed it or let anyone move it.
+    """
+
+    def test_the_setting_takes_effect_without_a_restart(self):
+        """Only the model's own limit is cached — that needs a round trip and
+        never changes. Caching the resolved value meant changing the setting
+        did nothing until the backend was restarted, which is not what a
+        setting means."""
+        from unittest.mock import patch
+        from carrot import config
+        from carrot.ollama_client import OllamaClient
+
+        client = OllamaClient()
+        OllamaClient._context_length = {}
+        response = type("R", (), {
+            "raise_for_status": lambda self: None,
+            "json": lambda self: {"model_info": {"gemma4.context_length": 131072}},
+        })()
+        original = config.get_config().get("ollama_num_ctx")
+        try:
+            with patch("carrot.ollama_client.requests.post", return_value=response):
+                config.set_config("ollama_num_ctx", 8192)
+                assert client.context_length("gemma4:e4b") == 8192
+                config.set_config("ollama_num_ctx", 65536)
+                assert client.context_length("gemma4:e4b") == 65536
+        finally:
+            if original is not None:
+                config.set_config("ollama_num_ctx", original)
+
+    def test_the_models_endpoint_reports_it(self, client):
+        body = client.get("/api/models").json()
+        assert "context" in body
+
+    def test_the_picker_shows_it(self):
+        from pathlib import Path
+        js = (Path(__file__).resolve().parents[1] / "carrot" / "web" / "js" / "app.js").read_text(encoding="utf-8")
+        assert "ctxLabel(data, m.name)" in js
+        assert "function fmtCtx(" in js
+
+    def test_it_is_offered_as_a_choice_not_a_token_box(self):
+        """`num_ctx` is not something a person should have to know, and the
+        real decision behind it is a trade against the memory in their
+        machine."""
+        from pathlib import Path
+        js = (Path(__file__).resolve().parents[1] / "carrot" / "web" / "js" / "app.js").read_text(encoding="utf-8")
+        block = js.split("const CTX_CHOICES = [")[1].split("];")[0]
+        for word in ("Small", "Balanced", "Large"):
+            assert word in block
+        # The numbers are still shown; hiding them from someone who does know
+        # would be its own kind of rude.
+        assert "tokens" in js.split("function renderContextChoices(")[1][:900]
+
+    def test_a_model_capped_below_the_setting_says_so(self):
+        from pathlib import Path
+        js = (Path(__file__).resolve().parents[1] / "carrot" / "web" / "js" / "app.js").read_text(encoding="utf-8")
+        assert "its own limit, which is lower than the setting" in js

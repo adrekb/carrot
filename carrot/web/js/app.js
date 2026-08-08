@@ -291,6 +291,62 @@ function renderEngineCard(s) {
         </div>`;
 }
 
+// How much a local model may hold in mind at once.
+//
+// Presented as three choices rather than a token count, because "num_ctx" is
+// not a thing a person should have to know, and the real decision behind it is
+// a trade against the memory on their machine. The numbers are still shown —
+// hiding them from someone who does know would be its own kind of rude.
+let _pendingCtxCfg = null;
+let _lastModels = null;
+
+const CTX_CHOICES = [
+    { tokens: 8192,  label: 'Small',    hint: 'least memory; short turns only' },
+    { tokens: 32768, label: 'Balanced', hint: 'recommended — holds several pages' },
+    { tokens: 65536, label: 'Large',    hint: 'long documents; needs a strong machine' },
+];
+
+function renderContextChoices(cfg, data) {
+    const host = document.getElementById('ctx-choices');
+    if (!host) return;
+    const context = (data || {}).context || {};
+    const current = Number(cfg.ollama_num_ctx || context._default || 32768);
+
+    host.innerHTML = '';
+    for (const choice of CTX_CHOICES) {
+        const btn = document.createElement('button');
+        btn.className = 'ctx-choice' + (choice.tokens === current ? ' on' : '');
+        btn.onclick = () => setContextWindow(choice.tokens);
+        btn.innerHTML = `<span class="ctx-label">${choice.label}</span>`
+            + `<span class="ctx-tokens">${fmtCtx(choice.tokens)} tokens</span>`
+            + `<span class="ctx-hint">${escHtml(choice.hint)}</span>`;
+        host.appendChild(btn);
+    }
+
+    // What the model in front of you actually got, which is not always what
+    // was asked for: a model that tops out lower than the setting is capped to
+    // its own limit, and saying so is better than the number quietly differing.
+    const line = document.getElementById('ctx-current');
+    if (!line) return;
+    const active = data && data.active_model;
+    const got = active ? context[active] : 0;
+    line.textContent = got
+        ? `${active} is running with ${fmtCtx(got)} tokens`
+          + (got < current ? ' — its own limit, which is lower than the setting.' : '.')
+        : '';
+}
+
+async function setContextWindow(tokens) {
+    try {
+        await api('/api/config/ollama_num_ctx', {
+            method: 'PUT', body: JSON.stringify(tokens),
+        });
+        // The client caches per model, so the new value only applies once the
+        // backend re-reads it. Reloading the picker is what shows that.
+        loadModels();
+    } catch (_) { /* leave the buttons as they were */ }
+}
+
 // The reader fallback, for pages that refuse to be read.
 //
 // Off unless asked for. It sends the page's address to a third party, and the
@@ -324,6 +380,8 @@ async function loadRecapConfig() {
         // Same fetch, so the rail's server copy costs nothing extra.
         syncRailFromServer(cfg);
         renderReaderFallback(cfg);
+        _pendingCtxCfg = cfg;
+        renderContextChoices(cfg, _lastModels || {});
     } catch (_) {}
 }
 
@@ -365,6 +423,8 @@ async function loadModels() {
         // "can it see" exists yet — assume it can, and let the send-time check
         // be the one that refuses.
         renderAttachAffordance(autoModel || data.chat_vision !== false);
+        _lastModels = data;
+        if (_pendingCtxCfg) renderContextChoices(_pendingCtxCfg, data);
         renderModelPop(data);
         renderEmptyStateLine();
     } catch (_) {
@@ -392,6 +452,23 @@ function renderAttachAffordance(canSee) {
         : `${currentModel} cannot read images — PDFs and text files only`;
 }
 
+// How much a local model is actually being run with.
+//
+// Ollama's default is 4096 whatever the model can hold, and the difference is
+// not cosmetic: in 4k a turn loses the system directive and the pages it just
+// read, then answers as though neither existed. That number belongs next to
+// the model you are choosing, not buried in a config file nobody opens.
+function fmtCtx(tokens) {
+    if (!tokens) return '';
+    return tokens >= 1000 ? `${Math.round(tokens / 1024)}k` : String(tokens);
+}
+
+function ctxLabel(data, name) {
+    const ctx = (data.context || {})[name];
+    if (!ctx) return '';
+    return ` · ${fmtCtx(ctx)} context`;
+}
+
 function renderModelPop(data) {
     const installedEl = document.getElementById('model-installed');
     const suggestedEl = document.getElementById('model-suggested');
@@ -414,7 +491,7 @@ function renderModelPop(data) {
         row.className = 'model-row' + (m.name === localActive ? ' active' : '');
         row.innerHTML = `
             <span class="m-name">${escHtml(m.name)}</span>
-            <span class="m-meta">${escHtml(m.parameter_size || '')} ${fmtBytes(m.size)}</span>
+            <span class="m-meta">${escHtml(m.parameter_size || '')} ${fmtBytes(m.size)}${ctxLabel(data, m.name)}</span>
             ${m.name === localActive ? '<svg class="ico m-check"><use href="#i-check"/></svg>' : ''}`;
         row.onclick = () => selectModel(m.name);
         installedEl.appendChild(row);

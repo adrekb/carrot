@@ -1285,6 +1285,26 @@
 
       <div class="settings-card">
         <div class="settings-head">
+          <svg class="ico"><use href="#i-chip"/></svg>
+          <h3>How much a local model holds in mind</h3>
+        </div>
+        <p class="muted small">
+          Every model has a limit on how much it can consider at once — the question, the
+          pages it read, and Carrot's own instructions all share it. Ollama's own default is
+          small enough that a turn which reads three pages loses the beginning of its own
+          instructions, then answers as though it had never had them.
+        </p>
+        <p class="muted small">
+          Bigger is not free: this reserves memory on your graphics card or in RAM, and a
+          machine that runs out will get slower rather than fail. Carrot never asks for more
+          than the model actually supports. <b>This does not affect cloud models.</b>
+        </p>
+        <div class="ctx-choices" id="ctx-choices"></div>
+        <p class="muted small" id="ctx-current"></p>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-head">
           <svg class="ico"><use href="#i-search"/></svg>
           <h3>When a page won't open</h3>
         </div>

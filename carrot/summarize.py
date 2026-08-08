@@ -147,11 +147,49 @@ def build_history(conversation: Dict[str, Any], recent_window: int = RECENT_WIND
                 ),
             }
         )
-    history += [
-        {"role": m["role"], "content": m["content"]}
-        for m in messages[-recent_window:]
-    ]
+    history += _within_budget(messages[-recent_window:])
     return history
+
+
+# How much of the window the conversation may take.
+#
+# A count of messages is not a size. Twenty short exchanges are 18k characters
+# and twenty long ones are 152k — measured on this database, where the biggest
+# stored answer is 7,599 characters. At the top of that range the recent window
+# alone is 116% of a 32k context, and a turn that reads three pages adds
+# another 44%, so the request goes out at 160% of what the model can hold.
+#
+# Nothing errors when that happens. The provider silently drops the *front* of
+# the prompt, which is where the system directive and the tool definitions
+# live, and the model answers without either — the same failure as running in a
+# 4k window, arriving from the other end.
+#
+# So the window is a budget as well as a count. Roughly a third of a 32k
+# context, leaving room for the directive, the tools and the pages a turn
+# reads.
+HISTORY_BUDGET_CHARS = 40000
+# Never drop below this many, however long they are. A single enormous answer
+# must not be able to take the question that produced it out of the history.
+MIN_RECENT_MESSAGES = 4
+
+
+def _within_budget(messages: List[Dict[str, Any]],
+                   budget: int = HISTORY_BUDGET_CHARS) -> List[Dict[str, str]]:
+    """The newest messages that fit, oldest-first.
+
+    Walked backwards from the newest because recency is what the budget should
+    buy. Anything dropped is already covered by the rolling summary above.
+    """
+    kept: List[Dict[str, str]] = []
+    spent = 0
+    for message in reversed(messages):
+        content = message["content"] or ""
+        if kept and len(kept) >= MIN_RECENT_MESSAGES and spent + len(content) > budget:
+            break
+        kept.append({"role": message["role"], "content": content})
+        spent += len(content)
+    kept.reverse()
+    return kept
 
 
 def delete_summary(conversation_id: str):

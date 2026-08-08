@@ -5416,3 +5416,27 @@ body #cmdbar:focus-within {
   font-family: var(--mono);
   font-size: var(--text-xs);
 }
+
+/* Choosing how much a local model holds in mind. Three choices rather than a
+   token box: "num_ctx" is not something a person should have to know, and the
+   real decision behind it is a trade against the memory in their machine. */
+.ctx-choices { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.ctx-choice {
+  flex: 1 1 150px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--card2);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.ctx-choice:hover { border-color: var(--accent-line); }
+.ctx-choice.on { border-color: var(--accent); background: var(--accent-soft); }
+.ctx-label { font-weight: 600; font-size: var(--text-md); }
+.ctx-tokens { font-family: var(--mono); font-size: var(--text-xs); color: var(--muted); }
+.ctx-hint { font-size: var(--text-xs); color: var(--faint); }
