@@ -1701,6 +1701,16 @@ function replayTrace(messageEl, trace) {
 
     let plan = null;
     for (const event of trace) {
+        // Collapsed, and labelled the way a finished one is labelled live.
+        // Reopening a conversation and finding the reasoning gone made the
+        // turn look like it had simply produced an answer from nowhere.
+        if (event.thinking) {
+            const block = document.createElement('details');
+            block.className = 'think';
+            block.innerHTML = '<summary>Thought process</summary>'
+                + `<div class="think-body">${escHtml(event.thinking)}</div>`;
+            box.appendChild(block);
+        }
         if (event.skill) line('skill: ' + event.skill.name, 'intent');
         if (event.search_mode) line('search: ' + event.search_mode, 'intent');
         if (event.plan) plan = event.plan;          // the last one is the outcome

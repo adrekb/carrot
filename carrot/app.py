@@ -2780,8 +2780,27 @@ TRACE_RESULT_CHARS = 400
 MAX_TRACE_EVENTS = 200
 
 
+# Reasoning arrives token by token, so it cannot be stored event by event —
+# a single turn's thinking is hundreds of them and would spend the whole cap
+# before the first tool call. It is accumulated into one entry instead, which
+# is also how it is displayed: one collapsible block, not a stream.
+MAX_THINKING_CHARS = 12000
+
+
 def _remember_trace(trace: List[Dict[str, Any]], event: Dict[str, Any]):
     """Keep the parts of an event worth reopening the conversation for."""
+    if "thinking" in event:
+        # Appended to the open block, or started if the last thing that
+        # happened was something else — so a turn that thinks, calls a tool,
+        # then thinks again keeps those as two blocks in the right places,
+        # which is what makes the trace readable rather than one lump at top.
+        if trace and "thinking" in trace[-1]:
+            if len(trace[-1]["thinking"]) < MAX_THINKING_CHARS:
+                trace[-1]["thinking"] += event["thinking"]
+        elif len(trace) < MAX_TRACE_EVENTS:
+            trace.append({"thinking": event["thinking"]})
+        return
+
     if len(trace) >= MAX_TRACE_EVENTS:
         return
     kind = next((k for k in TRACE_EVENTS if k in event), "")

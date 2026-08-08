@@ -300,3 +300,49 @@ class TestACodingTurnSaysWhenItIsDone:
     def test_it_does_not_stack_on_repeat(self):
         js = self.read("carrot", "web", "js", "features.js")
         assert "wrap.querySelector('.agent-done')) return;" in js
+
+
+class TestTheReasoningSurvivesTheReloadToo:
+    """Reopening a chat lost the thinking as well as the trace.
+
+    The tool chain and the plan were being stored; reasoning was not, and it
+    could not simply be added to the list — it arrives token by token, so a
+    single turn is hundreds of events and would spend the whole cap before the
+    first tool call.
+    """
+
+    def test_streamed_reasoning_becomes_one_block(self):
+        from carrot import app
+        trace = []
+        for part in ("Let me ", "check the ", "specs."):
+            app._remember_trace(trace, {"thinking": part})
+        assert trace == [{"thinking": "Let me check the specs."}]
+
+    def test_a_tool_call_between_them_starts_a_new_block(self):
+        """So a turn that thinks, acts, then thinks again keeps those in the
+        right places rather than as one lump at the top."""
+        from carrot import app
+        trace = []
+        app._remember_trace(trace, {"thinking": "first"})
+        app._remember_trace(trace, {"tool": {"name": "web_search", "args": {}}})
+        app._remember_trace(trace, {"thinking": "second"})
+        assert [next(iter(e)) for e in trace] == ["thinking", "tool", "thinking"]
+
+    def test_runaway_reasoning_cannot_fill_the_row(self):
+        from carrot import app
+        trace = []
+        for _ in range(400):
+            app._remember_trace(trace, {"thinking": "x" * 200})
+        assert len(trace[0]["thinking"]) <= app.MAX_THINKING_CHARS + 200
+
+    def read(self, *parts):
+        from pathlib import Path
+        return Path(__file__).resolve().parents[1].joinpath(*parts).read_text(encoding="utf-8")
+
+    def test_it_is_replayed_collapsed(self):
+        # Live, a finished block is collapsed and labelled "Thought process".
+        # A reopened one should not be shouting the reasoning at you.
+        js = self.read("carrot", "web", "js", "app.js")
+        block = js.split("function replayTrace(")[1].split("\n}")[0]
+        assert "event.thinking" in block
+        assert "Thought process" in block

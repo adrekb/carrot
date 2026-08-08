@@ -5440,3 +5440,35 @@ body #cmdbar:focus-within {
 .ctx-label { font-weight: 600; font-size: var(--text-md); }
 .ctx-tokens { font-family: var(--mono); font-size: var(--text-xs); color: var(--muted); }
 .ctx-hint { font-size: var(--text-xs); color: var(--faint); }
+
+/* ===== Waiting, without saying "Loading…" =====
+ *
+ * Seven panels in Settings opened with the word "Loading…" and sat on it for
+ * a couple of seconds while the provider registry and the model list came
+ * back. It is the smallest possible thing and it is the one that makes an app
+ * feel unfinished: the shape of what is coming is information, and the word
+ * "Loading" is not.
+ *
+ * Bars the size of the rows that will replace them, so the panel does not
+ * jump when the content lands. */
+.skeleton { display: flex; flex-direction: column; gap: 9px; padding: 4px 0; }
+.skeleton-row {
+  height: 13px;
+  border-radius: var(--r-xs);
+  background: linear-gradient(90deg,
+      var(--card2) 0%, var(--card3) 50%, var(--card2) 100%);
+  background-size: 200% 100%;
+  animation: skeleton-sweep 1.4s ease-in-out infinite;
+}
+.skeleton-row:nth-child(2) { width: 78%; }
+.skeleton-row:nth-child(3) { width: 55%; }
+
+@keyframes skeleton-sweep {
+  from { background-position: 200% 0; }
+  to   { background-position: -200% 0; }
+}
+
+/* Someone who has asked not to see motion gets the shape without the sweep. */
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-row { animation: none; }
+}
