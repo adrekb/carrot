@@ -298,6 +298,157 @@ def source_rank(url: str) -> int:
     return 1
 
 
+# ===== Who is speaking =====
+#
+# `source_rank` answers "should this sort above that", which is enough to
+# choose what to read and nothing like enough to cite. Two pages can both be
+# rank 1 and be completely different kinds of thing: General Motors publishing
+# a production figure, and a site that read the GM release and reworded it.
+# The number is the same number. The second one is where a transcription error
+# becomes a fact, because by the time it is quoted the original is out of view.
+#
+# So the pipeline needs the distinction the ranking throws away: is this the
+# party the claim is *about*, an outlet with someone's name on the masthead, a
+# site nobody has heard of, or filler. A report that cannot say which is
+# offering a figure and a rumour of a figure in the same typeface.
+#
+# `first-party` is the only tier that cannot be read off the domain alone —
+# gm.com is primary for a question about GM and an interested party for a
+# question about Ford — so it is resolved against the subject at call time.
+
+TIER_FIRST_PARTY = "first-party"   # the organisation the claim is about
+TIER_OFFICIAL = "official"         # government, standards body, court, registry
+TIER_REPUTABLE = "reputable"       # named outlet, editorial accountability
+TIER_UNKNOWN = "unknown"           # long tail: no signal either way
+TIER_LOW = "low"                   # content-farm shape
+
+# Ordered best-evidence first. Used for sorting and for deciding whether a
+# claim rests on anything better than filler.
+TIER_ORDER = (TIER_FIRST_PARTY, TIER_OFFICIAL, TIER_REPUTABLE,
+              TIER_UNKNOWN, TIER_LOW)
+
+TIER_RANK = {tier: index for index, tier in enumerate(TIER_ORDER)}
+
+# What each tier means, in the words the report prompt and the UI both use.
+# One copy, because a legend that disagrees with the labels is worse than none.
+TIER_MEANING = {
+    TIER_FIRST_PARTY: "published by the party the claim is about",
+    TIER_OFFICIAL: "government, standards body or official record",
+    TIER_REPUTABLE: "established outlet with editorial accountability",
+    TIER_UNKNOWN: "no signal either way",
+    TIER_LOW: "shape of a content farm — likely rewording another source",
+}
+
+# Tiers that can carry a bare factual assertion. Anything below has to be
+# attributed in the prose rather than stated as fact.
+CITABLE_TIERS = {TIER_FIRST_PARTY, TIER_OFFICIAL, TIER_REPUTABLE}
+
+_OFFICIAL_SUFFIXES = (".gov", ".mil", ".int", ".gov.uk", ".gov.au", ".europa.eu")
+_OFFICIAL_DOMAINS = {
+    "who.int", "congress.gov", "supremecourt.gov", "federalregister.gov",
+    "gao.gov", "census.gov", "bls.gov", "cdc.gov", "nasa.gov", "noaa.gov",
+    "nih.gov", "sec.gov", "ietf.org", "w3.org", "iso.org", "unicode.org",
+}
+
+# Words that appear in a company's name but say nothing about which company.
+_ENTITY_NOISE = {
+    "the", "inc", "incorporated", "corp", "corporation", "company", "co",
+    "ltd", "limited", "llc", "plc", "group", "holdings", "motors", "systems",
+    "technologies", "labs", "international", "global", "and",
+}
+
+_MIN_ENTITY_LEN = 3
+
+
+def domain_label(host: str) -> str:
+    """The registrable label: ``bls.gov`` -> ``bls``, ``www.gm.com`` -> ``gm``."""
+    host = (host or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    parts = [p for p in host.split(".") if p]
+    if not parts:
+        return ""
+    # Two-part public suffixes (.co.uk, .com.au) put the name one place further
+    # left, so a naive parts[-2] returns "co" for bbc.co.uk.
+    if len(parts) >= 3 and parts[-2] in {"co", "com", "org", "net", "gov", "ac", "edu"}:
+        return parts[-3]
+    return parts[0] if len(parts) == 1 else parts[-2]
+
+
+def subject_entities(text: str) -> set:
+    """Candidate organisation names in a question, for the first-party check.
+
+    Deliberately crude. A false positive costs a source one tier of credit it
+    did not earn; a false negative costs a primary source its promotion and it
+    is still cited as whatever the domain says it is. Neither invents a fact,
+    which is the property that matters.
+    """
+    words = re.findall(r"[A-Za-z][A-Za-z0-9&+-]*", text or "")
+    out = set()
+    for word in words:
+        lowered = word.lower()
+        if lowered in _ENTITY_NOISE or len(lowered) < _MIN_ENTITY_LEN:
+            # Acronyms are the common case for a company whose name is short —
+            # GM, BP, IBM — and they are the ones a length filter eats. Keep a
+            # short token only when it was written in capitals.
+            if not (2 <= len(word) <= 5 and word.isupper()):
+                continue
+        out.add(lowered)
+    return out
+
+
+def authority(url: str, subject: str = "") -> dict:
+    """Who is speaking on this page, as a tier plus the reason for it.
+
+    ``subject`` is the research question or claim under consideration. It is
+    what allows ``gm.com`` to be first-party for a GM figure without being
+    first-party for everything else.
+    """
+    host = domain_of(url)
+    if not host:
+        return {"tier": TIER_LOW, "site": "", "host": "",
+                "reason": "no resolvable host"}
+
+    site = site_name(url)
+    label = domain_label(host)
+
+    def result(tier, reason):
+        return {"tier": tier, "site": site, "host": host, "reason": reason}
+
+    if host in _OFFICIAL_DOMAINS or host.endswith(_OFFICIAL_SUFFIXES):
+        return result(TIER_OFFICIAL, "official domain")
+
+    # First-party beats the outlet tier: a company's own newsroom is a better
+    # source for its own numbers than a wire report of them, and a worse one
+    # for whether those numbers are any good. Both facts belong in the report.
+    #
+    # Farm-shaped hosts are excluded from the promotion rather than merely
+    # ranked below it. Matching the subject name is exactly what a squatter on
+    # `<brand>.info` does, so a rule that reads "the name matches, therefore it
+    # is them" hands the strongest tier to the weakest source. The check that
+    # is easiest to game is the one that must not be the deciding one.
+    if label and len(label) >= 2 and subject and not _FARM_HINTS.search(host):
+        if label in subject_entities(subject):
+            return result(TIER_FIRST_PARTY,
+                          f"{label} is named in the question — this is its own site")
+
+    if host in REPUTABLE_DOMAINS or any(host.endswith(d) for d in REPUTABLE_DOMAINS):
+        return result(TIER_REPUTABLE, "known outlet")
+    if host.endswith(REPUTABLE_SUFFIXES):
+        return result(TIER_OFFICIAL, "institutional domain")
+    if _FARM_HINTS.search(host):
+        return result(TIER_LOW, "matches content-farm patterns")
+    return result(TIER_UNKNOWN, "unrecognised domain")
+
+
+def best_tier(tiers) -> str:
+    """The strongest tier in a set. ``TIER_LOW`` for an empty one."""
+    present = [t for t in tiers if t in TIER_RANK]
+    if not present:
+        return TIER_LOW
+    return min(present, key=lambda t: TIER_RANK[t])
+
+
 # ===== What kind of page this is =====
 #
 # Asked for "recent us politics news", six of six results were section fronts:
@@ -323,6 +474,24 @@ _MONTHS = {m: i for i, m in enumerate(
      "jul", "aug", "sep", "oct", "nov", "dec"], start=1)}
 
 
+# Corporate newsrooms write the day as `MMDD` glued to the slug:
+# news.gm.com/…/2025/jun/0617-2026-Corvette-ZR1X-hypercar.html. The general
+# pattern above wants a separator before the day and so reads nothing at all,
+# which on a press release is the worst place to lose a date — a manufacturer's
+# announcement is exactly the source whose age decides whether it still
+# describes the present.
+#
+# It is safe to be this loose because the shape validates itself: the `MM` has
+# to agree with the month already named in the path, so a four-digit number
+# that is not a date almost never survives.
+_PACKED_DATE_IN_PATH = re.compile(
+    r"[/-](20\d{2})[/-]"
+    r"(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*[/-]"
+    r"(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])(?=[-/_.]|$)",
+    re.I,
+)
+
+
 def date_from_url(url: str) -> str:
     """The publication date a news URL carries, as ISO, or ``""``.
 
@@ -331,16 +500,21 @@ def date_from_url(url: str) -> str:
     2026" and one that says nothing.
     """
     match = _DATE_IN_PATH.search(url or "")
-    if not match:
-        return ""
-    year, raw_month, day = match.groups()
-    if raw_month.isdigit():
-        month = int(raw_month)
-    else:
-        month = _MONTHS.get(raw_month.lower()[:3], 0)
-    if not 1 <= month <= 12:
-        return ""
-    return f"{int(year):04d}-{month:02d}-{int(day):02d}"
+    if match:
+        year, raw_month, day = match.groups()
+        month = int(raw_month) if raw_month.isdigit() else _MONTHS.get(
+            raw_month.lower()[:3], 0)
+        if 1 <= month <= 12:
+            return f"{int(year):04d}-{month:02d}-{int(day):02d}"
+
+    packed = _PACKED_DATE_IN_PATH.search(url or "")
+    if packed:
+        year, name, mm, dd = packed.groups()
+        named = _MONTHS.get(name.lower()[:3], 0)
+        # The two have to agree, or this is not a date.
+        if named and named == int(mm):
+            return f"{int(year):04d}-{named:02d}-{int(dd):02d}"
+    return ""
 
 
 def page_kind(url: str) -> str:
@@ -419,15 +593,59 @@ def _is_textual(content_type: str) -> bool:
     return any(kind in content_type.lower() for kind in TEXTUAL_TYPES)
 
 
+# Where a page states its own date, in the order worth trusting. Publishers
+# agree on almost none of this, so it is a sweep rather than a lookup.
+_DATE_META = (
+    ("meta", {"property": "article:published_time"}, "content"),
+    ("meta", {"property": "article:modified_time"}, "content"),
+    ("meta", {"name": "publish-date"}, "content"),
+    ("meta", {"name": "publication_date"}, "content"),
+    ("meta", {"itemprop": "datePublished"}, "content"),
+    ("meta", {"name": "date"}, "content"),
+    ("time", {"datetime": True}, "datetime"),
+)
+
+_ISO_DATE = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
+
+
+def page_date(soup, url: str = "") -> str:
+    """When the page says it was published, as ``YYYY-MM-DD``, or ``""``.
+
+    Currency is a separate axis from authority and the pipeline needs both.
+    A manufacturer's launch announcement is first-party and authoritative
+    about what was announced; it is not evidence of what is true fourteen
+    months later, and the same company's current product page may say
+    something different. Without a date the two are indistinguishable, and
+    the report picks whichever was read first and calls it settled.
+    """
+    for tag, attrs, field in _DATE_META:
+        try:
+            found = soup.find(tag, attrs=attrs)
+        except Exception:
+            continue
+        if not found:
+            continue
+        match = _ISO_DATE.search(str(found.get(field) or ""))
+        if match:
+            return match.group(0)
+    # The URL is the fallback, not the first choice: it is right often but a
+    # page that states its own date is stating it.
+    return date_from_url(url)
+
+
 def _extract(html: str, base_url: str) -> Dict[str, Any]:
-    """HTML to readable text plus the page title and its outbound links."""
+    """HTML to readable text plus the page title, date and outbound links."""
     try:
         from bs4 import BeautifulSoup
     except ImportError:
-        return {"title": "", "text": re.sub(r"<[^>]+>", " ", html), "links": []}
+        return {"title": "", "text": re.sub(r"<[^>]+>", " ", html),
+                "links": [], "date": date_from_url(base_url)}
 
     soup = BeautifulSoup(html, "html.parser")
     title = soup.title.get_text(strip=True) if soup.title else ""
+    # Read before the strip below: <time> and <meta> live in places that
+    # _STRIP_TAGS removes, so this has to happen while the tree is intact.
+    published = page_date(soup, base_url)
 
     # Hidden text is the classic injection carrier: white-on-white, zero-size,
     # or display:none content that a reader never sees but a scraper does.
@@ -443,7 +661,8 @@ def _extract(html: str, base_url: str) -> Dict[str, Any]:
             links.append({"text": text[:120], "url": urljoin(base_url, anchor["href"])})
 
     lines = [line.strip() for line in soup.get_text("\n", strip=True).split("\n") if line.strip()]
-    return {"title": title, "text": "\n".join(lines), "links": links}
+    return {"title": title, "text": "\n".join(lines), "links": links,
+            "date": published}
 
 
 # A section front — nytimes.com/section/politics, politico.com/politics — is a
@@ -583,7 +802,7 @@ def fetch(url: str, max_chars: int = DEFAULT_MAX_CHARS, timeout: float = DEFAULT
     result: Dict[str, Any] = {
         "url": url, "final_url": url, "title": "", "text": "", "links": [],
         "error": "", "screening": {"tainted": False, "signals": []}, "tainted": False,
-        "truncated": False,
+        "truncated": False, "date": "",
     }
 
     current = url
@@ -677,6 +896,9 @@ def fetch(url: str, max_chars: int = DEFAULT_MAX_CHARS, timeout: float = DEFAULT
         "title": extracted["title"],
         "text": policy.sanitize_untrusted(text),
         "links": extracted["links"],
+        # When the page says it was written. Authority says whether to believe
+        # a source; this says whether it is still describing the present.
+        "date": extracted.get("date", ""),
         "screening": screening,
         "tainted": screening["tainted"],
     })

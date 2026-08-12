@@ -683,6 +683,117 @@ def _tool_web_search(query: str, emit=None, **_) -> str:
     return "\n".join(lines)
 
 
+# ===== Handing one step to a different model =====
+#
+# Routing has always been per *turn*: the whole conversation goes to whatever
+# the picker says, and a local 4B that meets one genuinely hard sub-problem
+# halfway through has two options, both bad. Grind at it and get a worse
+# answer, or make the user notice, switch model and ask again — by which point
+# the turn's context is gone.
+#
+# This buys one step. The cheap model stays in charge of the turn and delegates
+# the part it cannot do, which is the shape the router's per-task assignments
+# already describe and which nothing could previously reach at runtime.
+#
+# Four constraints, each closing a specific failure:
+#
+# **The delegate gets no tools.** It is one completion, in and out. A delegate
+# that could call tools could call `ask_model`, and there is no natural bottom
+# to that — a recursion limit would be arbitrary where "it cannot recurse" is
+# exact.
+#
+# **The target is named by task, not by model.** `ask_model(task="reasoning")`
+# goes wherever the user assigned reasoning. Letting the model name a model
+# would route around the user's own configuration and, on a metered provider,
+# spend their money on a model they did not choose. The delegation says what
+# *kind* of help it wants; the user has already said who provides it.
+#
+# **It is capped per turn.** Below, and enforced by the caller.
+#
+# **It is visible.** The trace names the task, the model and the question, so
+# a turn that quietly cost four frontier calls cannot look like one local turn.
+
+MAX_DELEGATION_CHARS = 6000
+MAX_DELEGATION_ANSWER = 4000
+
+DELEGATE_SYSTEM = (
+    "You are being consulted by another model working on a larger task. You "
+    "have been given one self-contained question and no tools, no conversation "
+    "history and no way to ask for more. Answer the question as fully as the "
+    "information allows and stop.\n\n"
+    "If what you were given is not enough to answer, say exactly what is "
+    "missing in one sentence. Do not guess to be helpful — a confident answer "
+    "built on information you were not given is worse than useless here, "
+    "because the model that receives it cannot tell the difference and will "
+    "put it in front of the user."
+)
+
+
+def _tool_ask_model(question: str, task: str = "reasoning", context: str = "",
+                    emit=None, **_) -> str:
+    """Put one self-contained question to whichever model serves ``task``."""
+    from . import router as router_mod
+
+    question = (question or "").strip()
+    if not question:
+        return "error: ask_model needs a question"
+
+    task = (task or "reasoning").strip().lower()
+    try:
+        known = router_mod.task_ids()
+    except Exception:
+        known = []
+    if known and task not in known:
+        return (f"error: '{task}' is not a task. Available: {', '.join(known)}. "
+                "Pick the one that describes the kind of help you want.")
+
+    try:
+        route = router_mod.route(task=task)
+    except Exception as exc:
+        return f"error: could not resolve a model for '{task}': {exc}"
+
+    prompt = question if not context else f"{context.strip()}\n\n{question}"
+    # Clipped rather than refused. A delegation that fails because the context
+    # was long is a delegation the model will simply retry with the same
+    # context, and the useful part of a long context is almost always at the
+    # front where the question was framed.
+    if len(prompt) > MAX_DELEGATION_CHARS:
+        prompt = prompt[:MAX_DELEGATION_CHARS] + "\n\n[context truncated]"
+
+    if emit:
+        try:
+            emit({"delegation": {
+                "task": task, "provider": route.provider, "model": route.model,
+                "local": bool(route.local), "question": question[:200],
+            }})
+        except Exception:
+            LOG.warning("could not emit delegation for task %r", task)
+
+    try:
+        # No `tools` argument, deliberately. See the note above.
+        answer = router_mod.complete(route, [
+            {"role": "system", "content": DELEGATE_SYSTEM},
+            {"role": "user", "content": prompt},
+        ])
+    except Exception as exc:
+        # Returned as a fact rather than raised: the delegating model has a
+        # turn to finish, and "the specialist was unreachable" is something it
+        # can work around. Killing the turn over it would make the whole tool
+        # a liability on a flaky connection.
+        return (f"error: {route.provider}/{route.model} could not answer: {exc}. "
+                "Carry on without it and say in your reply that this part is "
+                "less certain.")
+
+    answer = (answer or "").strip()
+    if not answer:
+        return f"error: {route.provider}/{route.model} returned nothing"
+    # Attributed. The delegating model tends to absorb a delegate's answer as
+    # its own knowledge, and an answer that came from somewhere else is
+    # something the user is entitled to know about.
+    return (f"[answered by {route.provider}/{route.model}]\n"
+            f"{answer[:MAX_DELEGATION_ANSWER]}")
+
+
 def _tool_current_datetime(**_) -> str:
     """What day it is, locally.
 
@@ -1165,6 +1276,54 @@ TOOLS: Dict[str, Dict[str, Any]] = {
             "type": "object",
             "properties": {"query": {"type": "string"}},
             "required": ["query"],
+        },
+    },
+    "ask_model": {
+        "handler": _tool_ask_model,
+        # Not mutating: it changes nothing and touches nothing. It can cost
+        # money on a metered provider, which is why the caller caps it per
+        # turn and the trace names the model — but an approval prompt on every
+        # one would make it unusable for the case it exists for.
+        "mutating": False,
+        "risk": "low",
+        "wants_emit": True,
+        "description": (
+            "Put ONE self-contained question to a different model — the one "
+            "assigned to the kind of work you name. Use it when a single step "
+            "is beyond you and the rest of the turn is not: a proof, a subtle "
+            "algorithm, a piece of reasoning you keep getting wrong. Do not "
+            "use it to answer the user's question for you, and do not use it "
+            "for anything a search would settle.\n\n"
+            "It gets no tools and no history, so put everything it needs in "
+            "`context` — it cannot look anything up or ask you to clarify. "
+            "The reply is one answer; there is no conversation."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "The single question to ask. Self-contained.",
+                },
+                "task": {
+                    "type": "string",
+                    "description": (
+                        "The kind of help you want: 'reasoning' for hard "
+                        "multi-step problems, 'code' for code, 'research' for "
+                        "source work. This picks the model the user assigned "
+                        "to that kind of work — you do not name a model."
+                    ),
+                },
+                "context": {
+                    "type": "string",
+                    "description": (
+                        "Everything the other model needs in order to answer: "
+                        "the code, the figures, the constraints. It sees "
+                        "nothing else."
+                    ),
+                },
+            },
+            "required": ["question"],
         },
     },
     "current_datetime": {

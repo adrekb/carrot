@@ -625,3 +625,261 @@ class TestAResearchRunCannotEndInSilence:
 
     def test_the_run_is_closed_off_rather_than_left_spinning(self):
         assert '"type": "done"' in self.drive(self.exploding())
+
+
+# ===== Source authority =====
+#
+# The complaint these cover: a figure published by the company it is about and
+# a content farm's rewording of that figure used to render identically —
+# same `[S3]`, same grey row, same weight in the writer's prompt. Being able to
+# trace a claim to a page is worth much less if every page looks alike.
+
+class TestAuthority:
+    """Who is speaking, decided from the domain and the question."""
+
+    def test_the_subject_of_the_question_is_first_party(self):
+        from carrot import websearch
+        verdict = websearch.authority("https://www.gm.com/newsroom/q1",
+                                      "What were GM production figures in Q1?")
+        assert verdict["tier"] == websearch.TIER_FIRST_PARTY
+
+    def test_a_subdomain_of_the_subject_is_still_first_party(self):
+        from carrot import websearch
+        verdict = websearch.authority("https://media.gm.com/q1", "GM Q1 figures")
+        assert verdict["tier"] == websearch.TIER_FIRST_PARTY
+
+    def test_an_unrelated_company_is_not_first_party(self):
+        """gm.com is primary for GM and an interested party for Ford."""
+        from carrot import websearch
+        verdict = websearch.authority("https://www.gm.com/x", "Ford Q1 figures")
+        assert verdict["tier"] != websearch.TIER_FIRST_PARTY
+
+    def test_a_squatter_matching_the_name_is_not_promoted(self):
+        """Matching the subject name is exactly what a squatter does.
+
+        If a name match alone were enough, the rule would hand the strongest
+        tier to the weakest source — the check easiest to game deciding the
+        outcome.
+        """
+        from carrot import websearch
+        verdict = websearch.authority("https://gm.blogspot.com/figures",
+                                      "GM Q1 figures")
+        assert verdict["tier"] == websearch.TIER_LOW
+
+    def test_government_domains_are_official(self):
+        from carrot import websearch
+        assert websearch.authority("https://www.bls.gov/x", "unemployment")["tier"] \
+            == websearch.TIER_OFFICIAL
+
+    def test_a_known_outlet_is_reputable_not_primary(self):
+        from carrot import websearch
+        assert websearch.authority("https://www.reuters.com/x", "GM Q1 figures")["tier"] \
+            == websearch.TIER_REPUTABLE
+
+    def test_the_long_tail_is_unknown_rather_than_rejected(self):
+        """An unrecognised site is usable and cited — it is just not a confirmation."""
+        from carrot import websearch
+        assert websearch.authority("https://someones-blog.net/x", "GM Q1")["tier"] \
+            == websearch.TIER_UNKNOWN
+
+    def test_best_tier_of_nothing_is_the_weakest(self):
+        from carrot import websearch
+        assert websearch.best_tier([]) == websearch.TIER_LOW
+        assert websearch.best_tier(["low", "reputable", "unknown"]) == "reputable"
+
+
+class TestTierReachesTheReport:
+    """A tier nobody downstream can see is the same as no tier at all."""
+
+    def test_sources_carry_their_tier_into_the_store(self, isolated_db):
+        store = research.SourceStore(research.create_run("q", "quick"),
+                                     "GM Q1 production figures")
+        farm = store.add("web", "https://cars.blogspot.com/x", "Farm", "", "body")
+        gm = store.add("web", "https://www.gm.com/x", "GM", "", "body")
+        from carrot import websearch
+        assert farm["tier"] == websearch.TIER_LOW
+        assert gm["tier"] == websearch.TIER_FIRST_PARTY
+
+    def test_the_users_own_files_are_first_party_to_them(self, isolated_db):
+        """A paper you indexed outranks a wire service for a question about it."""
+        from carrot import websearch
+        store = research.SourceStore(research.create_run("q", "quick"), "my thesis")
+        doc = store.add("document", "/home/me/thesis.pdf#chunk1", "thesis", "", "body")
+        assert doc["tier"] == websearch.TIER_FIRST_PARTY
+
+    def test_a_finding_records_the_best_tier_it_rests_on(self, isolated_db):
+        from carrot import websearch
+        store = research.SourceStore(research.create_run("q", "quick"), "GM Q1")
+        store.add("web", "https://cars.blogspot.com/x", "Farm", "", "body")   # S1 low
+        store.add("web", "https://www.reuters.com/x", "Reuters", "", "body")  # S2
+        parsed = {"findings": [
+            {"claim": "farm only", "sources": ["S1"]},
+            {"claim": "both", "sources": ["S1", "S2"]},
+        ]}
+        rows = research._finding_rows(parsed, store.known_ids(), "q", store)
+        assert rows[0]["tier"] == websearch.TIER_LOW
+        assert rows[1]["tier"] == websearch.TIER_REPUTABLE
+
+    def test_weakly_sourced_claims_are_marked_for_the_writer(self, isolated_db):
+        """Verified but weak is a different problem from unverified.
+
+        The claim is not dropped — the page really does say it. It is flagged,
+        so the writer attributes it instead of asserting it.
+        """
+        store = research.SourceStore(research.create_run("q", "quick"), "GM Q1")
+        store.add("web", "https://cars.blogspot.com/x", "Farm", "", "body")
+        findings = [{"subquestion": "q", "claim": "Weak claim",
+                     "source_ids": ["S1"], "verdict": "supported", "tier": "low"}]
+        prompt = research.build_report_prompt("Q?", findings, store, [])
+        assert "Weak claim" in prompt
+        assert "WEAK SOURCING" in prompt
+        assert "rest only on unrecognised or content-farm sources" in prompt
+
+    def test_a_strong_claim_is_not_marked(self, isolated_db):
+        store = research.SourceStore(research.create_run("q", "quick"), "GM Q1")
+        store.add("web", "https://www.gm.com/x", "GM", "", "body")
+        findings = [{"subquestion": "q", "claim": "Strong claim",
+                     "source_ids": ["S1"], "verdict": "supported",
+                     "tier": "first-party"}]
+        prompt = research.build_report_prompt("Q?", findings, store, [])
+        assert "WEAK SOURCING" not in prompt
+
+    def test_the_appendix_says_what_kind_of_source_each_one_is(self, isolated_db):
+        store = research.SourceStore(research.create_run("q", "quick"), "GM Q1")
+        store.add("web", "https://cars.blogspot.com/x", "Farm", "", "body")
+        store.add("web", "https://www.gm.com/x", "GM", "", "body")
+        appendix = research.source_appendix(store)
+        assert "first-party" in appendix and "low" in appendix
+        # Strongest first, so the reading order is an argument about weight
+        # rather than an accident of which page the backend returned first.
+        assert appendix.index("[S2]") < appendix.index("[S1]")
+
+    def test_the_extractor_is_told_who_is_speaking(self, isolated_db):
+        store = research.SourceStore(research.create_run("q", "quick"), "GM Q1")
+        source = store.add("web", "https://cars.blogspot.com/x", "Farm", "", "body")
+        block = research._evidence_block([source], 100)
+        assert "Source type: low" in block
+
+
+# ===== Strong sources that disagree with each other =====
+#
+# The case that exposed this: GM's June 2025 launch release calls the car a
+# 2026 Corvette ZR1X; GM's own current product pages have partly moved to 2027.
+# Both are first-party. Verification passes both, because each really does say
+# what it says. Tier cannot separate them. So the writer received two
+# established facts, picked one, and produced an answer that was accurate about
+# its citation and wrong about the world — the most expensive kind of wrong,
+# because it checks out.
+
+class TestCurrency:
+    """Authority does not expire. Currency does. They are different fields."""
+
+    def test_a_page_states_its_own_date(self):
+        from bs4 import BeautifulSoup
+        from carrot import websearch
+        html = ('<html><head><meta property="article:published_time" '
+                'content="2025-06-17T09:00:00Z"></head><body>x</body></html>')
+        assert websearch.page_date(BeautifulSoup(html, "html.parser")) == "2025-06-17"
+
+    def test_the_url_is_the_fallback_not_the_first_choice(self):
+        from bs4 import BeautifulSoup
+        from carrot import websearch
+        soup = BeautifulSoup("<html></html>", "html.parser")
+        assert websearch.page_date(soup, "https://news.gm.com/2025/jun/0617-zr1x") \
+            == "2025-06-17"
+
+    def test_an_undated_page_says_so_rather_than_guessing(self, isolated_db):
+        store = research.SourceStore(research.create_run("q", "quick"), "GM")
+        source = store.add("web", "https://example.test/x", "T", "", "body")
+        assert "undated" in research._tier_label(source)
+
+    def test_the_date_reaches_the_writer(self, isolated_db):
+        store = research.SourceStore(research.create_run("q", "quick"), "GM ZR1X")
+        store.add("web", "https://www.gm.com/a", "Launch release", "", "body",
+                  published="2025-06-17")
+        findings = [{"subquestion": "q", "claim": "It is a 2026 model",
+                     "source_ids": ["S1"], "verdict": "supported",
+                     "tier": "first-party"}]
+        prompt = research.build_report_prompt("Q?", findings, store, [])
+        assert "2025-06-17" in prompt
+        assert "Authority does not expire but currency does" in prompt
+
+
+class TestConflicts:
+    """A third pass, with its own narrow job: do the survivors agree?"""
+
+    LAUNCH = {"subquestion": "model year", "claim": "The ZR1X is a 2026 model year car",
+              "source_ids": ["S1"], "verdict": "supported", "tier": "first-party"}
+    CURRENT = {"subquestion": "model year", "claim": "The ZR1X is a 2027 model year car",
+               "source_ids": ["S2"], "verdict": "supported", "tier": "first-party"}
+
+    def test_a_conflict_between_supported_claims_is_found(self, monkeypatch):
+        monkeypatch.setattr(research, "_ask_json", lambda *a, **k: {"conflicts": [
+            {"claims": [1, 2], "subject": "model year",
+             "note": "GM's own pages give different years"},
+        ]})
+        found = research.find_conflicts([self.LAUNCH, self.CURRENT], lambda e: None)
+        assert len(found) == 1
+        assert found[0]["subject"] == "model year"
+        assert found[0]["tiers"] == ["first-party", "first-party"]
+
+    def test_a_conflict_naming_a_claim_that_does_not_exist_is_dropped(self, monkeypatch):
+        """Same treatment as a citation to a source that does not exist."""
+        monkeypatch.setattr(research, "_ask_json", lambda *a, **k: {"conflicts": [
+            {"claims": [1, 99], "subject": "nonsense"},
+            {"claims": [1, 1], "subject": "itself"},
+            {"claims": ["x", "y"], "subject": "unparseable"},
+        ]})
+        assert research.find_conflicts([self.LAUNCH, self.CURRENT], lambda e: None) == []
+
+    def test_one_claim_cannot_conflict(self):
+        """No model call is worth making to compare a list of one."""
+        assert research.find_conflicts([self.LAUNCH], lambda e: None) == []
+
+    def test_rejected_claims_are_not_compared(self, monkeypatch):
+        """A claim the sources did not support is not evidence of a dispute."""
+        called = []
+        monkeypatch.setattr(research, "_ask_json",
+                            lambda *a, **k: called.append(1) or {"conflicts": []})
+        dropped = {**self.CURRENT, "verdict": "unsupported"}
+        assert research.find_conflicts([self.LAUNCH, dropped], lambda e: None) == []
+        assert not called, "the model was asked to compare one usable claim"
+
+    def test_a_broken_conflict_pass_costs_the_caveats_not_the_report(self, monkeypatch):
+        monkeypatch.setattr(research, "_ask_json", lambda *a, **k: "not json at all")
+        assert research.find_conflicts([self.LAUNCH, self.CURRENT], lambda e: None) == []
+
+    def test_same_tier_conflicts_forbid_picking_a_winner(self, isolated_db):
+        """The rule the ZR1X answer needed and did not have.
+
+        Told only to prefer the stronger source, a writer facing two
+        first-party pages picks whichever it read first and writes it as
+        settled — accurate about its citation, wrong about the world.
+        """
+        store = research.SourceStore(research.create_run("q", "quick"), "GM ZR1X")
+        store.add("web", "https://www.gm.com/a", "Launch", "", "b", published="2025-06-17")
+        store.add("web", "https://www.gm.com/b", "Current", "", "b", published="2026-08-01")
+        conflicts = [{
+            "claims": ["It is a 2026 model", "It is a 2027 model"],
+            "tiers": ["first-party", "first-party"],
+            "sources": [["S1"], ["S2"]],
+            "subject": "model year", "note": "GM's own pages differ",
+        }]
+        prompt = research.build_report_prompt(
+            "What model year?", [self.LAUNCH, self.CURRENT], store, [], conflicts)
+        assert "CONFLICT" in prompt
+        assert "there is no stronger one" in prompt
+        assert "Do NOT pick one" in prompt
+
+    def test_a_cross_tier_conflict_still_prefers_the_stronger(self, isolated_db):
+        store = research.SourceStore(research.create_run("q", "quick"), "GM ZR1X")
+        store.add("web", "https://www.gm.com/a", "GM", "", "b")
+        conflicts = [{
+            "claims": ["1250 hp", "1100 hp"],
+            "tiers": ["first-party", "low"],
+            "sources": [["S1"], ["S2"]],
+            "subject": "power output", "note": "a farm has a different figure",
+        }]
+        prompt = research.build_report_prompt("Q?", [self.LAUNCH], store, [], conflicts)
+        assert "Lead with the stronger source" in prompt
+        assert "Do NOT pick one" not in prompt

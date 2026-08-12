@@ -241,8 +241,12 @@ class TestTheEvidenceSurvivesTheReload:
         return Path(__file__).resolve().parents[1].joinpath(*parts).read_text(encoding="utf-8")
 
     def test_the_turn_is_stored_with_its_trace(self):
+        # The metadata dict grew a second key when a turn gained the ability to
+        # end on a question, so this checks that the trace is still what goes
+        # into it rather than matching the whole expression literally.
         app = self.read("carrot", "app.py")
-        assert 'metadata={"trace": trace} if trace else None' in app
+        assert '{"trace": trace} if trace else {}' in app
+        assert "metadata=meta or None" in app
 
     def test_the_answer_is_not_stored_twice(self):
         # `chunk` is the answer and the answer is already the message row.

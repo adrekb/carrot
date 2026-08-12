@@ -401,6 +401,80 @@ async function setContextWindow(tokens) {
     } catch (_) { /* leave the buttons as they were */ }
 }
 
+// ===== Advanced: an exact number =====
+//
+// The three presets are the right shape for the decision most people are
+// making. For the ones they are not — someone who knows their card has 24GB
+// and their model holds 128k — being told the choices are Small, Balanced and
+// Large is worse than useless. This is behind a fold, so it costs the first
+// group nothing.
+//
+// The overhead line is the part that matters. "8,192 tokens" reads as eight
+// thousand tokens of conversation and is nothing of the sort: the directive
+// and the tool schemas are in the window before the question is, and on a
+// multi-turn search they are over a third of an 8k window on their own.
+// Someone setting a small window without knowing that will conclude Carrot
+// forgets things, which is true, and blame the wrong thing.
+
+const CTX_MIN = 1024;
+
+function renderContextOverhead(overhead) {
+    const line = document.getElementById('ctx-overhead');
+    if (!line || !overhead) return;
+    const worst = Number(overhead.worst || 0);
+    if (!worst) { line.textContent = ''; return; }
+    const multi = overhead.multi || {};
+    line.innerHTML =
+        `Carrot's own instructions and its ${escHtml(String(multi.tools || ''))} tool `
+        + `definitions occupy about <b>${fmtCtx(worst)} tokens</b> of whatever you set, `
+        + 'before your question or any page it reads. With multi-turn search on, that is '
+        + `${Math.round(worst / 8192 * 100)}% of an 8K window and `
+        + `${Math.round(worst / 32768 * 100)}% of a 32K one. Anything below about `
+        + `${fmtCtx(8192)} leaves very little room for the conversation itself.`;
+}
+
+function renderCustomContext(cfg) {
+    const input = document.getElementById('ctx-custom');
+    const note = document.getElementById('ctx-custom-note');
+    if (!input) return;
+    const current = Number(cfg.ollama_num_ctx || 32768);
+    input.value = current;
+    // Opened on load when the stored value is not one of the presets —
+    // otherwise a number set here would be invisible behind a closed fold
+    // with none of the three buttons lit, which reads as nothing being set.
+    const isPreset = CTX_CHOICES.some(c => c.tokens === current);
+    const fold = document.getElementById('ctx-advanced');
+    if (fold && !isPreset) fold.open = true;
+    if (note) {
+        note.textContent = isPreset
+            ? ''
+            : `Currently set to ${fmtCtx(current)} tokens, which is not one of the presets above.`;
+    }
+}
+
+function ctxCustomKeydown(event) {
+    if (event.key === 'Enter') { event.preventDefault(); applyCustomContext(); }
+}
+
+async function applyCustomContext() {
+    const input = document.getElementById('ctx-custom');
+    const note = document.getElementById('ctx-custom-note');
+    const tokens = Math.floor(Number(input.value));
+    // Refused here as well as on the server. A 0 reaches Ollama as "use your
+    // default", which is 4096 — so the failure would be silent and would look
+    // exactly like the bug this whole setting exists to fix.
+    if (!Number.isFinite(tokens) || tokens < CTX_MIN) {
+        if (note) note.textContent = `That has to be a whole number of at least ${fmtCtx(CTX_MIN)}.`;
+        return;
+    }
+    if (note) note.textContent = 'Saving…';
+    await setContextWindow(tokens);
+    if (note) {
+        note.textContent = `Set to ${fmtCtx(tokens)} tokens. Carrot still never asks a model `
+            + 'for more than it supports, so a model with a smaller limit is capped to its own.';
+    }
+}
+
 // The reader fallback, for pages that refuse to be read.
 //
 // Off unless asked for. It sends the page's address to a third party, and the
@@ -437,6 +511,8 @@ async function loadRecapConfig() {
         renderAnswerStyle(cfg);
         _pendingCtxCfg = cfg;
         renderContextChoices(cfg, _lastModels || {});
+        renderCustomContext(cfg);
+        renderContextOverhead((_lastModels || {}).overhead);
     } catch (_) {}
 }
 
@@ -480,6 +556,9 @@ async function loadModels() {
         renderAttachAffordance(autoModel || data.chat_vision !== false);
         _lastModels = data;
         if (_pendingCtxCfg) renderContextChoices(_pendingCtxCfg, data);
+        // The overhead figure is measured on the server and arrives with the
+        // models, so it lands whichever of the two fetches finishes last.
+        renderContextOverhead(data.overhead);
         renderModelPop(data);
         renderEmptyStateLine();
     } catch (_) {
@@ -513,15 +592,105 @@ function renderAttachAffordance(canSee) {
 // not cosmetic: in 4k a turn loses the system directive and the pages it just
 // read, then answers as though neither existed. That number belongs next to
 // the model you are choosing, not buried in a config file nobody opens.
+// Context windows are quoted in two different bases and rendering both in one
+// is how you get a number nobody recognises. Local models are genuinely powers
+// of two — 131072 is "128k" and calling it "131k" is wrong. Hosted models are
+// quoted in decimal — Mistral's Codestral is 256,000 and dividing by 1024 shows
+// "250k", which matches no figure in any documentation the user can check.
+//
+// So: powers of two get binary, everything else gets decimal, and a million is
+// written as a million because "1024k" is not how anyone says it.
 function fmtCtx(tokens) {
     if (!tokens) return '';
-    return tokens >= 1000 ? `${Math.round(tokens / 1024)}k` : String(tokens);
+    if (tokens < 1000) return String(tokens);
+    const isPowerOfTwo = (tokens & (tokens - 1)) === 0;
+    if (tokens >= 1_000_000) {
+        const millions = tokens / (isPowerOfTwo ? 1_048_576 : 1_000_000);
+        return `${millions % 1 === 0 ? millions : millions.toFixed(1)}M`;
+    }
+    return `${Math.round(tokens / (isPowerOfTwo ? 1024 : 1000))}k`;
+}
+
+// ===== The context marker =====
+//
+// Every model in the picker says how much it can hold. Local models always
+// could — Ollama reports a context length — but a Claude or a GPT showed only
+// the word "cloud", and a model served by someone's own endpoint showed that
+// and nothing else. Which is backwards: the window is the single most
+// consequential fact about a model for how Carrot behaves, and it was
+// displayed only for the models where it was easiest to obtain rather than
+// where it mattered most.
+//
+// It also says *where the number came from*, because the confidence differs.
+// "131k · reported" is the model answering. "200k · known" is Carrot matching
+// the family name against a table that will be out of date the week a
+// provider ships something new. Presenting a guess in the same typeface as a
+// measurement is the same mistake the research pipeline makes when a content
+// farm and a press release get the same citation — and worth not repeating
+// two features apart.
+
+const WINDOW_SOURCE_SHORT = {
+    probed: 'reported',
+    known: 'known',
+    set: 'you set this',
+    unknown: 'unknown',
+};
+
+function windowFor(data, provider, model) {
+    return ((data || {}).windows || {})[`${provider}/${model}`] || null;
+}
+
+function windowChip(win) {
+    if (!win) return '';
+    if (!win.tokens) {
+        // Said out loud rather than left blank. A blank reads as "no window
+        // configured for this UI"; unknown is a fact about the model, and it
+        // is the one that tells you the Advanced box is where to go next.
+        return `<span class="m-ctx unknown" title="${escHtml(win.why || '')}">context unknown</span>`;
+    }
+    const tag = WINDOW_SOURCE_SHORT[win.source] || win.source;
+    return `<span class="m-ctx src-${escHtml(win.source)}" title="${escHtml(win.why || '')}">`
+         + `${fmtCtx(win.tokens)} ctx · ${escHtml(tag)}</span>`;
 }
 
 function ctxLabel(data, name) {
+    // For a local model, what it is *running* with, which is not the same as
+    // what it can hold: the configured window caps it, and its own limit caps
+    // that. The chip beside this shows the ceiling; this shows the setting.
     const ctx = (data.context || {})[name];
     if (!ctx) return '';
-    return ` · ${fmtCtx(ctx)} context`;
+    return ` · running at ${fmtCtx(ctx)}`;
+}
+
+// "Set it" for a model Carrot has never heard of.
+//
+// A tiny inline control rather than a trip to Settings, because the moment
+// you learn the window is unknown is the moment you are looking at the model,
+// and a fix that lives on another screen is a fix most people will not make.
+function contextOverrideControl(provider, model) {
+    const wrap = document.createElement('div');
+    wrap.className = 'm-ctx-set';
+    wrap.innerHTML = `
+        <input type="number" min="1024" step="1024" placeholder="tokens">
+        <button class="btn btn-ghost btn-sm">Set</button>`;
+    // The row behind this selects the model. Typing a number into a control
+    // inside it must not also switch the chat to that model.
+    wrap.onclick = (e) => e.stopPropagation();
+    const input = wrap.querySelector('input');
+    const save = async () => {
+        const tokens = Math.floor(Number(input.value));
+        if (!Number.isFinite(tokens) || tokens < CTX_MIN) return;
+        try {
+            await api('/api/models/context-window', {
+                method: 'PUT',
+                body: JSON.stringify({ provider, model, tokens }),
+            });
+            loadModels();
+        } catch (_) { /* the chip stays "unknown", which is still true */ }
+    };
+    input.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); save(); } };
+    wrap.querySelector('button').onclick = save;
+    return wrap;
 }
 
 function renderModelPop(data) {
@@ -547,6 +716,7 @@ function renderModelPop(data) {
         row.innerHTML = `
             <span class="m-name">${escHtml(m.name)}</span>
             <span class="m-meta">${escHtml(m.parameter_size || '')} ${fmtBytes(m.size)}${ctxLabel(data, m.name)}</span>
+            ${windowChip(windowFor(data, 'ollama', m.name))}
             ${m.name === localActive ? '<svg class="ico m-check"><use href="#i-check"/></svg>' : ''}`;
         row.onclick = () => selectModel(m.name);
         installedEl.appendChild(row);
@@ -566,11 +736,21 @@ function renderModelPop(data) {
                     && data.chat_provider === group.provider && data.chat_model === name;
                 const row = document.createElement('div');
                 row.className = 'model-row' + (isActive ? ' active' : '');
+                const win = windowFor(data, group.provider, name);
                 row.innerHTML = `
                     <span class="m-name">${escHtml(name)}</span>
                     <span class="m-meta">cloud</span>
+                    ${windowChip(win)}
                     ${isActive ? '<svg class="ico m-check"><use href="#i-check"/></svg>' : ''}`;
                 row.onclick = () => selectRemoteModel(group.provider, name);
+                // A model Carrot has no entry for can be told what it holds,
+                // rather than dead-ending at "unknown". This is the escape
+                // hatch that lets the table be allowed to be incomplete —
+                // which it permanently is, because providers ship faster than
+                // any bundled table gets updated.
+                if (win && !win.tokens) {
+                    row.appendChild(contextOverrideControl(group.provider, name));
+                }
                 remoteEl.appendChild(row);
             }
 
@@ -910,16 +1090,40 @@ function renderPlan(host, plan) {
         host.insertBefore(box, content || null);
     }
     const done = new Set(plan.done || []);
+    // Steps this revision added, so they can be marked as new rather than
+    // just appearing. A list that grows silently between glances reads as a
+    // list you misread the first time.
+    const added = new Set(plan.added || []);
     const items = box.querySelector('.plan-items');
     items.innerHTML = '';
     for (const goal of plan.goals) {
         const row = document.createElement('div');
         const isDone = done.has(goal);
-        row.className = 'plan-item' + (isDone ? ' done' : '');
+        row.className = 'plan-item' + (isDone ? ' done' : '')
+                      + (added.has(goal) ? ' added' : '');
         row.innerHTML = `<span class="plan-mark">${isDone ? '✓' : '○'}</span>`
-            + `<span class="plan-text">${escHtml(goal)}</span>`;
+            + `<span class="plan-text">${escHtml(goal)}</span>`
+            + (added.has(goal) ? '<span class="plan-tag">new</span>' : '');
         items.appendChild(row);
     }
+
+    // A dropped step keeps its row, struck through, with the reason it was
+    // dropped. Removing it outright would make the plan shorter and the run
+    // look tidier than it was — and the reason is the only thing that lets
+    // you tell a plan adapting to what it found from a model talking itself
+    // out of the work. It is the single most important thing on this list,
+    // so it does not get to disappear.
+    for (const drop of (plan.dropped || [])) {
+        const row = document.createElement('div');
+        row.className = 'plan-item dropped';
+        row.innerHTML = `<span class="plan-mark">✕</span>`
+            + `<span class="plan-text">${escHtml(drop.step)}</span>`
+            + `<span class="plan-why">${escHtml(drop.reason || '')}</span>`;
+        items.appendChild(row);
+    }
+
+    // Dropped steps are not counted: they are no longer work, and counting
+    // them as done would report a run as more complete than it was.
     box.querySelector('.plan-count').textContent = `${done.size}/${plan.goals.length}`;
     box.classList.toggle('complete', done.size === plan.goals.length);
     return box;
@@ -1324,10 +1528,17 @@ async function streamTurn(url, payload, skill) {
     }
 
     try {
+        // The abort is the backstop, not the mechanism. Aborting alone closes
+        // the socket and leaves the provider call running and billing, and
+        // throws away the half-answer the user was reading — so the button
+        // asks the server to stop first and only aborts if that fails.
+        chatAbort = new AbortController();
+        setChatRunning(true);
         const resp = await fetch(url, {
             method: 'POST',
             headers: authHeaders(),
             body: JSON.stringify(payload),
+            signal: chatAbort.signal,
         });
         if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).detail || resp.statusText);
 
@@ -1335,6 +1546,9 @@ async function streamTurn(url, payload, skill) {
         const decoder = new TextDecoder();
         let buffer = '';
         let full = '';
+        // Set if the turn ended by asking rather than answering.
+        let askedQuestions = null;
+        let wasStopped = false;
         const pendingArtifacts = [];
         while (true) {
             const { done, value } = await reader.read();
@@ -1404,6 +1618,16 @@ async function streamTurn(url, payload, skill) {
                         ? `  ✗ not run: ${payload.tool.reason || 'refused'}` : '';
                     toolLine(`tool → ${payload.tool.name}(${JSON.stringify(payload.tool.args)})${why}`, kind);
                 }
+                // A step handed to another model. Named in the trace, with
+                // the model that answered it: the delegating model tends to
+                // absorb the reply as its own, and "which model actually
+                // said this" is not recoverable from the prose afterwards.
+                if (payload.delegation) {
+                    const d = payload.delegation;
+                    toolLine(`asked ${d.provider}/${d.model}`
+                             + (d.local ? '' : ' (cloud)')
+                             + ` — ${d.question}`, 'intent');
+                }
                 if (payload.provider_error) {
                     toolLine(`${payload.route ? '' : ''}provider stopped the turn: `
                              + payload.provider_error.message, 'error');
@@ -1449,6 +1673,17 @@ async function streamTurn(url, payload, skill) {
                     contentEl.innerHTML = mdToHtml(full);
                     box.scrollTop = box.scrollHeight;
                 }
+                // The turn ended by asking. The backend has already cut off
+                // everything the model wrote after the question, so `full` is
+                // the preamble and nothing more — there is no answer here to
+                // be overwritten by rendering the form.
+                if (payload.questions) {
+                    askedQuestions = payload;
+                }
+                // Sent as the first frame, before any model call — the wait a
+                // user most wants to end is the one before a token appears.
+                if (payload.turn_id) currentTurnId = payload.turn_id;
+                if (payload.stopped) wasStopped = true;
                 if (payload.done && payload.conversation_id) {
                     currentConversationId = payload.conversation_id;
                 }
@@ -1460,10 +1695,32 @@ async function streamTurn(url, payload, skill) {
         // text on every path, so reaching here means the connection itself
         // died mid-turn — say that, since it is the one thing the browser
         // knows and the server never will.
-        contentEl.innerHTML = full ? mdToHtml(full) : mdToHtml(
-            'The connection to Carrot ended before any answer arrived. The '
-            + 'backend may have restarted — check that it is running, then ask '
-            + 'again. Anything the turn found is in the trace above.');
+        //
+        // Unless the turn ended on a question, where empty prose is the
+        // correct outcome and not a dropped connection: the model asked
+        // before it said anything, which is the good version of this.
+        //
+        // Nor if the user stopped it. A half-answer they chose to cut short is
+        // not a failed turn, and telling them the backend may have restarted
+        // when they pressed the button themselves is nonsense.
+        if (askedQuestions && !full) {
+            contentEl.innerHTML = '';
+        } else if (wasStopped) {
+            contentEl.innerHTML = mdToHtml(full || '');
+            const note = document.createElement('div');
+            note.className = 'stopped-note';
+            note.textContent = 'Stopped.';
+            contentEl.appendChild(note);
+        } else {
+            contentEl.innerHTML = full ? mdToHtml(full) : mdToHtml(
+                'The connection to Carrot ended before any answer arrived. The '
+                + 'backend may have restarted — check that it is running, then ask '
+                + 'again. Anything the turn found is in the trace above.');
+        }
+        if (askedQuestions) {
+            chatQuestions(assistantEl, askedQuestions.questions,
+                          askedQuestions.blocking);
+        }
         // Charts and diagrams land under the finished answer, in the order the
         // model produced them.
         if (pendingArtifacts.length && typeof mountArtifacts === 'function') {
@@ -1480,11 +1737,59 @@ async function streamTurn(url, payload, skill) {
         // as the turn lands rather than on the next load.
         await syncMessageIds();
     } catch (e) {
-        contentEl.textContent = e.message;
-        contentEl.classList.add('error');
+        // An abort is the user pressing stop, not a failure, and painting it
+        // red is telling them their own action went wrong. It only gets here
+        // when the server-side stop did not take and the fetch was cut.
+        if (e.name === 'AbortError') {
+            contentEl.classList.add('md');
+            const note = document.createElement('div');
+            note.className = 'stopped-note';
+            note.textContent = 'Stopped.';
+            contentEl.appendChild(note);
+        } else {
+            contentEl.textContent = e.message;
+            contentEl.classList.add('error');
+        }
     } finally {
+        setChatRunning(false);
+        chatAbort = null;
+        currentTurnId = null;
         clearActiveSkill();
     }
+}
+
+// ===== Stopping a turn =====
+//
+// Research and Agent have had a kill switch since they were written. Chat had
+// none, and a multi-turn search that has decided to read six more pages is the
+// longest thing the app does. Closing the tab was the only way out, which
+// leaves the provider call running and discards whatever had been written.
+
+let chatAbort = null;
+let currentTurnId = null;
+
+function setChatRunning(running) {
+    // Send and Stop share a slot and swap, so the button under the cursor is
+    // always the one that applies.
+    document.getElementById('send-btn')?.classList.toggle('hidden', running);
+    document.getElementById('stop-btn')?.classList.toggle('hidden', !running);
+}
+
+async function stopChat() {
+    // Ask the server first. That stops the provider call, keeps the text
+    // already written, and stores it — none of which aborting the fetch does.
+    const stopped = currentTurnId && await api(
+        `/api/chat/turns/${currentTurnId}/stop`, { method: 'POST' },
+    ).then(r => r.stopped).catch(() => false);
+    // The abort is the fallback for a turn the server no longer knows about,
+    // or a backend that has gone away. Doing it unconditionally would race the
+    // clean stop and throw away the partial answer the clean stop preserves.
+    if (!stopped && chatAbort) chatAbort.abort();
+    // Disabled rather than hidden: a stop that is still settling should not
+    // look ignored, and it should not be pressable twice.
+    const button = document.getElementById('stop-btn');
+    if (button) button.disabled = true;
+    setTimeout(() => { if (button) button.disabled = false; }, 2000);
 }
 
 // Stamp stored ids onto messages that were rendered while streaming.
@@ -1514,6 +1819,117 @@ async function syncMessageIds() {
         if (row) row.remove();
         attachMessageActions(div);
     }
+}
+
+// The clarifying questions a chat turn ended on, as a form.
+//
+// The coder panel has had this since plans got questions; chat emitted the
+// same event and nothing listened, so in chat the questions were invisible
+// *and* self-answered. This is the listener, plus the one thing the coder
+// version does not need: a turn that asked before saying anything is waiting,
+// and has to look like it is waiting rather than like it failed.
+//
+// `blocking` comes from the server, which is the only place that knows how the
+// turn ended. Re-deriving it here from the length of the prose would be a
+// second opinion on a question that already has an answer, and the two would
+// disagree the first time either changed.
+function chatQuestions(wrap, questions, blocking) {
+    if (!questions || !questions.length) return;
+    if (wrap.querySelector('.agent-questions')) return;   // one form per turn
+
+    const box = document.createElement('div');
+    box.className = 'agent-questions' + (blocking ? ' blocking' : '');
+    const head = document.createElement('div');
+    head.className = 'questions-head';
+    head.textContent = blocking
+        ? 'Waiting on you — answer what matters, skip the rest.'
+        : 'Want to adjust any of this?';
+    box.appendChild(head);
+
+    const chosen = new Map();
+    questions.forEach((q, i) => {
+        const field = document.createElement('div');
+        field.className = 'question';
+        const label = document.createElement('div');
+        label.className = 'question-text';
+        label.textContent = q.question;
+        field.appendChild(label);
+
+        const row = document.createElement('div');
+        row.className = 'question-options';
+        q.options.forEach((option, j) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'question-option';
+            button.textContent = option;
+            // The first option is pre-selected, so the form already reads as
+            // the answer you get by skipping it.
+            if (j === 0) { button.classList.add('on'); chosen.set(i, option); }
+            button.onclick = () => {
+                row.querySelectorAll('.question-option').forEach(b => b.classList.remove('on'));
+                button.classList.add('on');
+                chosen.set(i, option);
+                custom.value = '';
+            };
+            row.appendChild(button);
+        });
+        field.appendChild(row);
+
+        const custom = document.createElement('input');
+        custom.type = 'text';
+        custom.className = 'question-custom';
+        custom.placeholder = 'or say something else…';
+        custom.oninput = () => {
+            if (!custom.value.trim()) return;
+            row.querySelectorAll('.question-option').forEach(b => b.classList.remove('on'));
+            chosen.set(i, custom.value.trim());
+        };
+        field.appendChild(custom);
+        box.appendChild(field);
+    });
+
+    const actions = document.createElement('div');
+    actions.className = 'questions-actions';
+
+    const go = document.createElement('button');
+    go.className = 'btn btn-primary';
+    go.textContent = blocking ? 'Answer' : 'Redo with these';
+    go.onclick = () => submitChatQuestions(box, questions, chosen);
+
+    const skip = document.createElement('button');
+    skip.className = 'btn btn-ghost';
+    // Skipping is a real answer in the blocking case — it accepts the model's
+    // own first option for each, which is what "just pick something" means.
+    // In the refinement case there is already an answer, so skipping is just
+    // leaving it alone, and saying "defaults" would misdescribe that.
+    skip.textContent = blocking
+        ? 'Skip — just pick sensible defaults'
+        : 'Leave it as is';
+    skip.onclick = () => {
+        if (!blocking) { box.remove(); return; }
+        questions.forEach((q, i) => chosen.set(i, q.options[0]));
+        submitChatQuestions(box, questions, chosen);
+    };
+
+    actions.append(go, skip);
+    box.appendChild(actions);
+    wrap.appendChild(box);
+    const messages = document.getElementById('chat-messages');
+    if (messages) messages.scrollTop = 1e9;
+}
+
+async function submitChatQuestions(box, questions, chosen) {
+    box.querySelectorAll('button, input').forEach(el => { el.disabled = true; });
+    const pairs = questions.map((q, i) => ({ question: q.question, answer: chosen.get(i) || '' }));
+    const answered = pairs.filter(p => p.answer);
+    box.querySelector('.questions-head').textContent =
+        answered.map(p => `${p.question} — ${p.answer}`).join('; ') || 'Using the defaults.';
+
+    const input = document.getElementById('cmd-input');
+    input.value = 'Answers to your questions:\n'
+        + answered.map(p => `- ${p.question} — ${p.answer}`).join('\n')
+        + '\n\nGo ahead on that basis.';
+    await sendChat();
 }
 
 function newChat() {
@@ -1715,6 +2131,15 @@ async function openConversation(convId) {
         // reload — reopening a chat gave you the prose and none of the
         // evidence, which is the half you cannot reconstruct by reading.
         replayTrace(el, (m.metadata || {}).trace);
+        // A turn that ended on a question is not finished, and the form is the
+        // only way to finish it. Restoring the prose without it would leave a
+        // conversation stopped mid-sentence with no way forward — the user
+        // would retype the whole request, which is the dead end the form was
+        // built to remove.
+        const meta = m.metadata || {};
+        if (meta.questions && meta.questions.length) {
+            chatQuestions(el, meta.questions, !!meta.awaiting_answers);
+        }
         return el;
     });
     // Charts made earlier in this conversation are part of it — reopening a
@@ -1768,6 +2193,14 @@ function replayTrace(messageEl, trace) {
         }
         if (event.skill) line('skill: ' + event.skill.name, 'intent');
         if (event.search_mode) line('search: ' + event.search_mode, 'intent');
+        // Replayed as well as streamed. Which model answered which step is
+        // exactly the sort of thing you want to check *after* reading an
+        // answer, which means after the page has been reloaded.
+        if (event.delegation) {
+            const d = event.delegation;
+            line(`asked ${d.provider}/${d.model}${d.local ? '' : ' (cloud)'} — ${d.question}`,
+                 'intent');
+        }
         if (event.plan) plan = event.plan;          // the last one is the outcome
         if (event.gate) {
             const unmet = (event.gate.unmet || []).length;
@@ -2290,7 +2723,18 @@ async function toggleReminder(id, completed) {
 }
 
 // ===== Recap =====
-async function runRecap() {
+// The briefing, from what you have been asking about.
+//
+// `runRecap()` is the original general one and stays: a fresh install has no
+// history to derive an interest from, and the server falls back to it on its
+// own when there is nothing recurring. This is the same renderer pointed at
+// the interest-driven endpoint, which streams Research's own event shapes —
+// so the trace gets sources and verdicts for free.
+async function runInterestRecap() {
+    return runRecap('/api/recap/run/interests');
+}
+
+async function runRecap(endpoint) {
     const el = document.getElementById('card-recap');
     el.innerHTML = '<div class="trace" id="recap-trace"></div><div class="recap-out" id="recap-out"></div>';
     const traceEl = document.getElementById('recap-trace');
@@ -2316,7 +2760,7 @@ async function runRecap() {
     }
 
     try {
-        const resp = await fetch('/api/recap/run/stream', {
+        const resp = await fetch(endpoint || '/api/recap/run/stream', {
             method: 'POST',
             headers: authHeaders(),
             body: JSON.stringify({}),
@@ -2344,6 +2788,31 @@ async function runRecap() {
                 if (p.search) {
                     traceLine(`search [${p.search.topic}] ${p.search.title || ''} — ${p.search.url || ''}`.trim(), 'search');
                 }
+                // What Carrot concluded you have been asking about, with the
+                // evidence. Shown before any research runs — an assistant that
+                // decides what you care about and then presents the results is
+                // unnerving in a way one that shows its working is not.
+                if (p.topics) {
+                    traceLine('reading your recent questions — ' + (p.detail || ''), 'intent');
+                    for (const t of p.topics) {
+                        traceLine('  · ' + t.topic + (t.why ? ' — ' + t.why : ''), 'intent');
+                    }
+                }
+                if (p.fallback) {
+                    traceLine('nothing recurring yet — general briefing instead', 'stage');
+                }
+                // Passed straight through from Research, so a source read for
+                // the briefing looks exactly like one read for a report,
+                // tier and all.
+                if (p.source) {
+                    const tier = p.source.tier || 'unknown';
+                    traceLine(`read [${p.source.id}] (${tier}) ${p.source.title || ''}`,
+                              tier === 'low' ? 'warn' : 'search');
+                }
+                if (p.verdict) {
+                    traceLine(`${p.verdict.verdict}: ${p.verdict.claim}`,
+                              p.verdict.verdict === 'supported' ? 'ok' : 'warn');
+                }
                 if (p.thinking) traceThink(p.thinking);
                 if (p.token) {
                     summary += p.token;
@@ -2351,7 +2820,14 @@ async function runRecap() {
                     outEl.scrollTop = outEl.scrollHeight;
                 }
                 if (p.error) traceLine(p.error, 'err');
-                if (p.done) traceLine('done — briefing saved', 'ok');
+                if (p.done) {
+                    traceLine('done — briefing saved'
+                        + (p.sources ? ` — ${p.sources} sources` : ''), 'ok');
+                    // The interest briefing is assembled from finished reports
+                    // rather than streamed a token at a time, so it arrives
+                    // here whole.
+                    if (p.summary && !summary) summary = p.summary;
+                }
             }
         }
         if (summary) {

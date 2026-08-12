@@ -96,7 +96,14 @@ class TestTheChoicesThatWereDeliberate:
         # Chat body is the one piece of text in the app people read at length,
         # and it was raised to 15px on purpose. A tidy-up that quietly took it
         # back to 13 would undo the fix that motivated it.
-        assert "--text-md: 15px" in css
+        #
+        # A floor rather than an exact value: it went to 16px when the app
+        # moved to a single typeface with a lower x-height, which is the same
+        # fix continuing rather than a reversal of it. What must not happen is
+        # it going *down*, and that is what this now says.
+        import re
+        size = int(re.search(r"--text-md: *(\d+)px", css).group(1))
+        assert size >= 15, size
         body = css[css.index(".message .content {"):]
         assert "font-size: var(--text-md)" in body[:body.index("}")]
 

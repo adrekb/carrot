@@ -284,6 +284,15 @@ class TestReasoningIsNotPrintedAsTheAnswer:
         return ("".join(p["text"] for p in parts if p["type"] == "content").strip(),
                 "".join(p["text"] for p in parts if p["type"] == "thinking").strip())
 
+    # The two channel cases below put the reasoning *before* `<|message|>`,
+    # which is not the shape real harmony emits — there the header is
+    # `<|channel|>analysis<|message|>` and the reasoning follows it. They are
+    # kept because a malformed stream should still not print its reasoning,
+    # but they are not the format: see test_thinking_recap.py, where the real
+    # one is covered. Reading these as the spec is what produced the bug they
+    # were meant to guard against — `<|message|>` treated as a closer, so
+    # thinking ended one token after it began and the chain of thought was
+    # emitted as the answer.
     @pytest.mark.parametrize("raw", [
         "<think>reasoning</think>The answer.",
         "<thinking>reasoning</thinking>The answer.",

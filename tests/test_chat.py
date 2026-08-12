@@ -190,3 +190,86 @@ class TestHowAnswersAreWritten:
         from carrot import app
         with patch.object(app.config, "get_config", side_effect=RuntimeError("no db")):
             assert app.answer_style_directive() == app.ANSWER_STYLES[app.STYLE_DEFAULT]
+
+
+# ===== Stopping a turn =====
+#
+# Research and Agent have had a kill switch since they were written. Chat had
+# none, so the longest-running thing in the app — a multi-turn search that has
+# decided to read six more pages — could only be ended by closing the tab,
+# which leaves the provider call running and discards the half-answer.
+
+class TestStoppingAChatTurn:
+    def read(self, *parts):
+        from pathlib import Path
+        return Path(__file__).resolve().parents[1].joinpath(*parts).read_text(encoding="utf-8")
+
+    def test_the_turn_announces_its_id_before_it_starts_working(self):
+        """The stop button has to exist from the moment there is something to
+        stop, and the longest part of a multi-turn run is before the first
+        token."""
+        app = self.read("carrot", "app.py")
+        body = app.split("def _body():")[1].split("def stream():")[0]
+        at_turn = body.index("'turn_id': turn_id")
+        at_call = body.index("_agentic_chat_events(")
+        assert at_turn < at_call
+
+    def test_stopping_an_unknown_turn_is_not_an_error(self, client):
+        """Pressing stop as the last token lands is a race the user cannot see."""
+        body = client.post("/api/chat/turns/nope/stop")
+        assert body.status_code == 200
+        assert body.json() == {"stopped": False}
+
+    def test_a_registered_turn_can_be_stopped(self, client):
+        from carrot import policy
+        context = policy.register_run(policy.RunContext("turn-x"))
+        try:
+            assert client.post("/api/chat/turns/turn-x/stop").json()["stopped"] is True
+            assert context.cancelled is True
+        finally:
+            policy.release_run("turn-x")
+
+    def test_the_run_is_released_even_if_the_client_disappears(self):
+        """A generator closed early never reaches its own last line, and a run
+        left in the kernel's table makes `active_runs` lie."""
+        app = self.read("carrot", "app.py")
+        stream = app.split("def stream():")[1].split("\n    return ")[0]
+        assert "finally:" in stream
+        assert "release_run(turn_id)" in stream
+
+    def test_chat_does_not_inherit_the_agents_step_ceiling(self):
+        """Chat has never had one. Adding it here would be a behaviour change
+        smuggled in under a feature — a long multi-turn search that used to
+        finish would start dying at 40 steps for reasons nobody asked for."""
+        app = self.read("carrot", "app.py")
+        block = app.split("stop_context = None")[1].split("def stopped()")[0]
+        assert "Budget.from_config" not in block
+        assert "10 ** 9" in block
+
+    def test_a_stopped_turn_keeps_what_was_written(self):
+        app = self.read("carrot", "app.py")
+        assert "final_text = content_str" in app
+
+    def test_a_stopped_turn_is_not_handed_a_manufactured_answer(self):
+        """The recovery path is built never to come back empty. Running it over
+        a turn the user just stopped is the opposite of what they pressed."""
+        app = self.read("carrot", "app.py")
+        assert "and not stopped()" in app
+
+    def test_the_browser_says_stopped_rather_than_showing_an_error(self):
+        js = self.read("carrot", "web", "js", "app.js")
+        assert "AbortError" in js
+        assert "stopped-note" in js
+
+    def test_the_server_is_asked_before_the_socket_is_cut(self):
+        """Aborting alone leaves the provider call running and billing, and
+        throws away the text the clean stop preserves."""
+        js = self.read("carrot", "web", "js", "app.js")
+        stop = js.split("async function stopChat()")[1].split("\n}")[0]
+        assert stop.index("/stop") < stop.index("chatAbort.abort()")
+        assert "if (!stopped && chatAbort)" in stop
+
+    def test_send_and_stop_swap_rather_than_sitting_side_by_side(self):
+        js = self.read("carrot", "web", "js", "app.js")
+        assert "send-btn')?.classList.toggle('hidden', running)" in js
+        assert "stop-btn')?.classList.toggle('hidden', !running)" in js

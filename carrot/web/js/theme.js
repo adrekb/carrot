@@ -6,13 +6,16 @@
 // It therefore cannot depend on app.js, api(), or the DOM.
 
 const THEME_MODES = ['auto', 'dark', 'light'];
+// The dots have to be the same values as --accent in style.css. They are
+// duplicated because this file is loaded from <head> before any stylesheet has
+// parsed, so it cannot read a custom property to find out.
 const THEME_ACCENTS = [
-    { id: 'carrot', label: 'Carrot', dot: '#f4813f' },
-    { id: 'ember', label: 'Ember', dot: '#f2603f' },
-    { id: 'amber', label: 'Amber', dot: '#e3a33a' },
-    { id: 'orchid', label: 'Orchid', dot: '#b57ae0' },
-    { id: 'teal', label: 'Teal', dot: '#3fbfa8' },
-    { id: 'indigo', label: 'Indigo', dot: '#7c8cf0' },
+    { id: 'carrot', label: 'Carrot', dot: '#ff7a2b' },
+    { id: 'ember', label: 'Ember', dot: '#ff4f28' },
+    { id: 'amber', label: 'Amber', dot: '#ffab1a' },
+    { id: 'orchid', label: 'Orchid', dot: '#b95cf5' },
+    { id: 'teal', label: 'Teal', dot: '#10c9a6' },
+    { id: 'indigo', label: 'Blue', dot: '#2f6bff' },
 ];
 const MODE_KEY = 'carrot.theme';
 const ACCENT_KEY = 'carrot.accent';

@@ -13,6 +13,7 @@ from typing import Optional, List, Dict, Any
 import os
 import re
 import json
+import uuid
 import contextlib
 from urllib.parse import urlparse
 import queue
@@ -56,6 +57,10 @@ from carrot import (
     doc_agent,
     router as router_mod,
     providers as providers_mod,
+    context_windows as ctxwin_mod,
+    interests as interests_mod,
+    sysmon as sysmon_mod,
+    markets as markets_mod,
     security as security_mod,
     proactive as proactive_mod,
     backup as backup_mod,
@@ -774,6 +779,105 @@ SUGGESTED_MODELS = [
 ]
 
 
+def prompt_overhead() -> Dict[str, Any]:
+    """How much of the window is gone before the user types anything.
+
+    Measured rather than written down. The tool schemas are serialised exactly
+    as they go to the provider and the directives are the real strings, so the
+    figure moves when a tool is added — which is the whole point. A number
+    hardcoded into the settings copy would be wrong by the next release and
+    nobody would find out, and this one exists specifically to stop somebody
+    setting an 8k window without knowing that a third of it is already spent.
+    """
+    out: Dict[str, Any] = {}
+    for mode in (SEARCH_OFF, SEARCH_SINGLE, SEARCH_MULTI):
+        try:
+            tools = _available_tools(mode)
+            directive = search_directive(mode)
+            out[mode] = {
+                "tools": len(tools),
+                "tokens": (ctxwin_mod.estimate_tokens(json.dumps(tools))
+                           + ctxwin_mod.estimate_tokens(directive)),
+            }
+        except Exception:
+            LOG.exception("could not measure prompt overhead for %s", mode)
+    # What the settings copy quotes: the worst case, because that is the one
+    # that bites. Quoting the average would understate it exactly for the user
+    # who has multi-turn search on and the smallest window set.
+    out["worst"] = max((v.get("tokens", 0) for v in out.values()
+                        if isinstance(v, dict)), default=0)
+    return out
+
+
+def _model_windows(installed, context_info, remote) -> Dict[str, Any]:
+    """Context window per model, keyed ``provider/model``.
+
+    Local models carry a probed value; hosted and custom ones fall through to
+    the table and then to unknown. Reported per entry with *how* it was
+    arrived at, because "200,000 because we recognised the family" and
+    "200,000 because the model said so" deserve different confidence and the
+    UI should be able to say which it has.
+    """
+    windows: Dict[str, Any] = {}
+    client = None
+    try:
+        client = ollama_mod.OllamaClient()
+    except Exception:
+        client = None
+    for entry in installed or []:
+        name = entry.get("name", "")
+        if not name:
+            continue
+        # The model's own ceiling, not the clamped value in `context_info`.
+        # That one is what the model will *run* with, which is capped by the
+        # setting — so using it here would show every local model as holding
+        # exactly the configured amount, and the chip would tell you nothing
+        # you did not already set yourself.
+        probed = 0
+        if client is not None:
+            try:
+                probed = int(client.context_limit(name) or 0)
+            except Exception:
+                probed = 0
+        windows[ctxwin_mod.key_for("ollama", name)] = ctxwin_mod.window_for(
+            "ollama", name, probed=probed)
+    for group in remote or []:
+        provider = group.get("provider", "")
+        for name in group.get("models", []) or []:
+            windows[ctxwin_mod.key_for(provider, name)] = ctxwin_mod.window_for(
+                provider, name)
+    return windows
+
+
+class ContextWindowRequest(BaseModel):
+    provider: str
+    model: str
+    # None clears the override and lets the table (or the probe) answer again.
+    tokens: Optional[int] = None
+
+
+@app.put("/api/models/context-window")
+async def set_model_context_window(req: ContextWindowRequest):
+    """Tell Carrot what a model can hold.
+
+    The escape hatch the table needs in order to be allowed to be incomplete.
+    A provider ships a new family, or someone points Carrot at their own
+    endpoint serving something it has never heard of, and rather than guessing
+    they can say. Their number outranks everything except a local model's own
+    probe — and it outranks that too, because a person reading a model card
+    beats a regular expression.
+    """
+    try:
+        ctxwin_mod.set_override(req.provider, req.model, req.tokens)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {
+        "provider": req.provider,
+        "model": req.model,
+        "window": ctxwin_mod.window_for(req.provider, req.model),
+    }
+
+
 @app.get("/api/models")
 async def list_models():
     client = ollama_mod.OllamaClient()
@@ -864,6 +968,12 @@ async def list_models():
         # a model in 4k loses the directive and the pages it just read — so the
         # number belongs where the model is chosen rather than buried.
         "context": context_info,
+        # The same question for models that will not answer it. Ollama reports
+        # a context length; no hosted provider does, so a Claude or a GPT in
+        # the picker had no window shown at all and a custom endpoint had no
+        # way to be told one. See carrot/context_windows.py.
+        "windows": _model_windows(installed, context_info, remote),
+        "overhead": prompt_overhead(),
         "default_model": bootstrap_mod.DEFAULT_MODEL,
         "suggested": suggested,
         "remote": remote,
@@ -1412,6 +1522,142 @@ def _work_terms(name: str, args: Dict[str, Any], result: str) -> str:
     return " ".join(parts)
 
 
+# ===== Revising the plan while it runs =====
+#
+# The plan was written before anything had been looked at, and then it could
+# only tick. That is the wrong shape for the thing it models: you find out what
+# a task actually involves by starting it. A plan drafted from the question
+# alone routinely contains a step that the first file read makes pointless, and
+# routinely misses the step that same file makes necessary — and neither could
+# be expressed, so the run either ground through a dead step or quietly did
+# work that appeared nowhere on the list.
+#
+# The reason it stayed fixed is a real one, and it is the whole difficulty
+# here: **a plan the model can shorten is a plan the model will shorten.** The
+# search gate and the goal nudges exist because models stop early; hand the
+# same model a way to delete the step it has not done and every one of those
+# guarantees becomes advisory. So the revision is deliberately lopsided:
+#
+# * **Adding is cheap.** A new step is more work, and nothing about the model's
+#   incentives makes it add busywork. Added steps are accepted on their face.
+# * **Dropping is expensive.** A step may be removed only for a reason about
+#   the *world* — it was already true, the file does not exist, the API was
+#   removed — never for a reason about the run ("not needed", "covered by the
+#   answer", "out of scope"). The reason is shown to the user, so a bad one is
+#   visible rather than silent.
+# * **A step cannot be dropped for being undone.** That is the loophole the
+#   whole gate exists to close, and it is named explicitly in the prompt
+#   because it is the one a model reaches for first.
+# * **Revisions are capped.** A plan that can be rewritten every round is not
+#   a plan, it is a running commentary.
+
+MAX_REPLANS = 2
+
+# Reasons that are about the run rather than about the world. A drop citing
+# one of these is the model excusing itself, and is refused. Matched on the
+# reason text because that is the only thing the model gives us — a model that
+# words its way around this list has at least had to write something that
+# sounds like a fact, which is the point.
+_EXCUSE = re.compile(
+    r"\b(not needed|unnecessary|unneeded|no longer needed|out of scope|"
+    r"redundant|already covered|covered by|not required|skip|optional|"
+    r"time|budget|too (?:long|hard|complex|difficult)|sufficient|"
+    r"enough (?:information|detail|context)|can be omitted)\b", re.I)
+
+REPLAN_PROMPT = """You are partway through this work and you now know things you did not when the plan was written.
+
+REQUEST: {question}
+
+THE PLAN, and what has been done:
+{plan}
+
+WHAT YOU HAVE ACTUALLY FOUND OR DONE SO FAR:
+{evidence}
+
+Revise the plan against what you found. Return JSON only:
+{{"add": ["a new step, in the same style as the ones above"],
+  "drop": [{{"step": "the exact text of a step above", "reason": "why it cannot or need not be done"}}]}}
+
+Rules for adding:
+- Add a step only if what you found makes it necessary and it is not already on the list.
+- At most {add_limit} new steps.
+
+Rules for dropping — these are strict, and a drop that breaks them will be refused:
+- You may drop a step ONLY because of something you have learned about the subject: the thing does not exist, the question was already answered by a source you read, the file or function is not there, the approach is impossible.
+- You may NOT drop a step because it is unfinished, difficult, slow, redundant, out of scope, or because you think you have said enough. Being undone is not a reason to remove it — it is the reason it is still there.
+- Quote the step exactly as written above, and give the specific fact that makes it moot.
+- If nothing genuinely needs to change, return {{"add": [], "drop": []}}. That is the normal answer."""
+
+
+def _replan(resolved, question: str, goals: List[str], open_goals: List[str],
+            evidence_text: str) -> Dict[str, Any]:
+    """What the plan should become, given what the run has found.
+
+    Returns ``{"add": [...], "drop": [{"step", "reason"}]}``, already filtered.
+    Best-effort in the same way as the initial plan: a model that will not
+    produce usable JSON leaves the plan exactly as it was, because a revision
+    step that could fail the turn would make every long run more fragile in
+    exchange for a refinement.
+    """
+    empty: Dict[str, Any] = {"add": [], "drop": []}
+    if not goals:
+        return empty
+
+    lines = "\n".join(
+        f"- {goal}" + ("" if goal in open_goals else "   [done]")
+        for goal in goals)
+    prompt = REPLAN_PROMPT.format(
+        question=question[:400], plan=lines,
+        evidence=(evidence_text or "(nothing yet)")[:4000],
+        add_limit=max(1, MAX_GOALS - len(goals)),
+    )
+    try:
+        raw = router_mod.complete(resolved, [{"role": "user", "content": prompt}])
+    except Exception:
+        LOG.debug("could not revise the plan", exc_info=True)
+        return empty
+
+    parsed = research_mod.extract_json(raw)
+    if not isinstance(parsed, dict):
+        return empty
+
+    room = max(0, MAX_GOALS - len(goals))
+    add = []
+    for step in parsed.get("add", []) or []:
+        text = " ".join(str(step or "").split())
+        if not 8 <= len(text) <= 200:
+            continue
+        # A "new" step that is already on the list is the model restating the
+        # plan back at us, which would double an entry and un-tick it.
+        if any(text.lower() == existing.lower() for existing in goals):
+            continue
+        add.append(text)
+        if len(add) >= room:
+            break
+
+    drop = []
+    for item in parsed.get("drop", []) or []:
+        if not isinstance(item, dict):
+            continue
+        step = " ".join(str(item.get("step", "")).split())
+        reason = " ".join(str(item.get("reason", "")).split())
+        # Match against the real list rather than trusting the quote: a
+        # paraphrase would delete nothing and report that it had.
+        actual = next((g for g in goals if g.lower() == step.lower()), None)
+        if actual is None:
+            continue
+        if not reason or _EXCUSE.search(reason):
+            LOG.info("refused a plan drop with an excuse rather than a reason: %r", reason)
+            continue
+        # Never let the plan empty itself. A run with no steps left has no
+        # gate, and "drop everything" is the shortest path to finishing.
+        if len(drop) + 1 >= len(goals):
+            break
+        drop.append({"step": actual, "reason": reason[:200]})
+
+    return {"add": add, "drop": drop}
+
+
 def _unmet_goals(goals: List[str], question: str, answer: str) -> List[str]:
     """Goals the answer does not appear to touch at all.
 
@@ -1765,6 +2011,17 @@ def _identifier_key(token: str) -> str:
 # thing: go and look elsewhere before you write, not agree with the crowd
 # before you speak.
 MAX_READS_PER_HOST = 2
+
+# How many steps one turn may hand to another model. Two is enough for the
+# case this exists for — a turn with one or two genuinely hard sub-problems —
+# and low enough that a model which has decided delegation is easier than
+# thinking runs out quickly and audibly.
+MAX_DELEGATIONS = 2
+DELEGATION_EXHAUSTED = (
+    "You have already consulted another model {count} times this turn, which is "
+    "the limit. Answer the rest yourself, and if a part is genuinely beyond you, "
+    "say so in your reply rather than leaving it out."
+)
 
 HOST_CONCENTRATION_CORRECTION = (
     "That page was not opened. You have already read {count} pages from {host} "
@@ -2399,7 +2656,7 @@ def _evidence_answer(question, evidence, failure=""):
 
 
 def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
-                         mode=SEARCH_SINGLE, coder=False):
+                         mode=SEARCH_SINGLE, coder=False, turn_id=None):
     """Yield SSE dicts for one chat turn, running the tool-calling loop.
 
     Tool calls are dispatched to built-in tools or MCP by name prefix, surfaced
@@ -2407,6 +2664,13 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
     rounds before the final answer streams as `chunk` events. Multi-turn search
     gets a larger round budget because searching, reading and re-searching is
     several rounds on its own.
+
+    ``turn_id`` registers the turn with the policy kernel so it can be stopped.
+    Research and Agent have had a kill switch since they were written; chat had
+    none, and a multi-turn search that has decided to read six more pages is
+    the single longest thing the app does with no way out of it. Closing the
+    browser tab was the only stop, and that leaves the provider call running
+    and throws away everything the turn had already written.
     """
     if skill:
         yield {"skill": {"slug": skill["slug"], "name": skill["name"]}}
@@ -2417,6 +2681,26 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
     rounds = MAX_TOOL_ROUNDS_MULTI if mode == SEARCH_MULTI else MAX_TOOL_ROUNDS
     working = list(history)
     question = next((m["content"] for m in reversed(history) if m.get("role") == "user"), "")
+
+    # The stop button, and only the stop button.
+    #
+    # The budget is deliberately enormous rather than taken from config. Chat
+    # has never had a step or time ceiling and adding one here would be a
+    # behaviour change smuggled in under a feature: a long multi-turn search
+    # that used to finish would start dying at the agent's 40-step limit for
+    # reasons no one asked for. The kernel's other limits belong to the agent,
+    # which navigates and clicks. What chat needs from the kernel is the one
+    # thing it has and chat did not: something the user can press.
+    stop_context = None
+    if turn_id:
+        stop_context = policy_mod.register_run(policy_mod.RunContext(
+            turn_id,
+            budget=policy_mod.Budget(max_steps=10 ** 9, max_seconds=10 ** 9,
+                                     max_navigations=10 ** 9, max_domains=10 ** 9),
+        ))
+
+    def stopped() -> bool:
+        return bool(stop_context and stop_context.cancelled)
 
     gated = mode == SEARCH_MULTI
     # A coding turn that may actually change things. PLAN mode is excluded on
@@ -2439,6 +2723,15 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
     # actually changes rather than after every tool call.
     last_open: List[str] = []
     goal_nudges = 0
+    # How many times the plan has been revised against what the run found.
+    # Capped: a plan rewritten every round is a running commentary.
+    replans = 0
+    # Steps handed to another model. Capped per turn because each one can be a
+    # frontier call on a metered account: the tool exists so a cheap model can
+    # buy one hard step, and a model that can buy an unlimited number of them
+    # has simply been re-routed to the expensive model without the user
+    # choosing that.
+    delegations = 0
     coverage_nudges = 0
     # Capped at one. It costs a model call and a round, and a checker allowed
     # to argue twice about the same paragraph would spend the budget on style.
@@ -2515,9 +2808,15 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
     def emit_text(text):
         return [] if gated else [{"chunk": text}]
 
+    # A question the model then answers itself is not a question. The gate cuts
+    # the reply at the marker as it streams, so the text after it never reaches
+    # the user and never reaches the transcript. See coder.QuestionGate.
+    asked: Optional[coder_mod.QuestionGate] = None
+
     for round_index in range(rounds):
         content_parts = []
         tool_calls = []
+        gate = coder_mod.QuestionGate()
         # A provider can fail mid-turn for reasons that have nothing to do with
         # the model: a 429, a dropped socket, or — after four rounds of full web
         # pages have been appended to `working` — a hard context-length error.
@@ -2529,17 +2828,57 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
                 elif event["type"] == "tool_calls":
                     tool_calls.extend(event["calls"])
                 else:
-                    content_parts.append(event["text"])
-                    for out in emit_text(event["text"]):
-                        yield out
+                    # Through the gate rather than straight out. Text held back
+                    # for one chunk is the price of catching a marker split
+                    # across a boundary; text after a marker is never released.
+                    safe = gate.feed(event["text"])
+                    if safe:
+                        content_parts.append(safe)
+                        for out in emit_text(safe):
+                            yield out
+                    if gate.tripped:
+                        break
+                    # Checked on the token loop rather than only between
+                    # rounds: the thing a user presses stop during is usually
+                    # the answer streaming, and a stop that waits for the
+                    # provider to finish the paragraph is not a stop.
+                    if stopped():
+                        break
+            tail = gate.flush()
+            if tail:
+                content_parts.append(tail)
+                for out in emit_text(tail):
+                    yield out
         except Exception as exc:
             failure = str(exc)
             yield {"provider_error": {"message": failure}}
-            final_text = "".join(content_parts)
+            final_text = "".join(content_parts) + gate.flush()
             stalled = True
             break
 
         content_str = "".join(content_parts)
+
+        # Stopped mid-answer. What was already written is kept and stored:
+        # a stop is "that is enough", not "throw it away", and half an answer
+        # the user chose to stop is usually the half they wanted.
+        if stopped():
+            final_text = content_str
+            stalled = False
+            break
+
+        # The model asked something it cannot proceed without. That ends the
+        # turn here: no more tool rounds, no forced answer, no gate nudge. Any
+        # of those would be Carrot doing the very thing the cut exists to stop
+        # — supplying an answer to a question the user has not answered yet.
+        if gate.tripped:
+            asked = gate
+            final_text = gate.prose()
+            if gate.blocking():
+                # Nothing was answered, so nothing is missing when the turn
+                # stops. Marking it stalled would offer Research as a fallback
+                # for a turn that is waiting on the user, not on evidence.
+                stalled = False
+            break
 
         if not tool_calls:
             # ACT mode's one promise is that you do not have to copy code out
@@ -2688,6 +3027,11 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
 
         working.append({"role": "assistant", "content": content_str, "tool_calls": tool_calls})
         for call in tool_calls:
+            # Between tools as well as between rounds. A round can be six page
+            # fetches, and stopping "after this round" means waiting out all
+            # six — which is the wait the button exists to end.
+            if stopped():
+                break
             function = call.get("function", {})
             name = function.get("name", "")
             args = function.get("arguments", {})
@@ -2762,6 +3106,23 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
                 })
                 continue
 
+            # Delegation, spent. Refused here rather than discouraged in the
+            # tool's description for the same reason as everything else on
+            # this path: a limit stated in a prompt is a request, and the
+            # thing being limited costs the user money.
+            if bare == "ask_model":
+                if delegations >= MAX_DELEGATIONS:
+                    yield {"tool": {"name": name, "args": args, "rejected": True,
+                                    "reason": f"already consulted another model "
+                                              f"{MAX_DELEGATIONS} times this turn"}}
+                    working.append({
+                        "role": "tool",
+                        "content": DELEGATION_EXHAUSTED.format(count=MAX_DELEGATIONS),
+                        "name": name, "tool_call_id": call.get("id", name),
+                    })
+                    continue
+                delegations += 1
+
             yield {"tool": {"name": name, "args": args}}
             result = ""
             for event in _run_tool(name, args, conversation_id):
@@ -2817,6 +3178,50 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
                     "tool_call_id": call.get("id", name),
                 }
             )
+        if stopped():
+            break
+
+        # --- the plan, revised against what this round actually found ---
+        #
+        # At the end of a round rather than after each tool: a revision judged
+        # on one page read mid-round is judged on less than the model itself
+        # has, and it costs a model call each time. Once the round is over,
+        # everything it learned is in `evidence` and the plan can be revised
+        # against all of it at once.
+        #
+        # Only while there is still something open and a round left to do it
+        # in. Revising a plan that is finished, or one there is no budget to
+        # act on, changes nothing except the picture the user is looking at.
+        rounds_left_now = rounds - round_index - 1
+        if (goals and last_open and rounds_left_now > 0
+                and replans < MAX_REPLANS and (evidence or work)):
+            gathered_all = (" ".join(work) if planning_work
+                            else " ".join(item["text"] for item in evidence))
+            revision = _replan(resolved, question, goals, last_open, gathered_all)
+            if revision["add"] or revision["drop"]:
+                replans += 1
+                dropped = {d["step"] for d in revision["drop"]}
+                goals = [g for g in goals if g not in dropped] + revision["add"]
+                last_open = _unmet_goals(goals, question, gathered_all)
+                # Named, not just applied. A plan that silently rearranges
+                # itself is worse than one that cannot change at all: you can
+                # no longer tell adapting from giving up, and the drop reason
+                # is the only thing that distinguishes them.
+                yield {"plan": {
+                    "goals": goals,
+                    "done": [g for g in goals if g not in last_open],
+                    "added": revision["add"],
+                    "dropped": revision["drop"],
+                }}
+                if revision["add"]:
+                    working.append({
+                        "role": "user",
+                        "content": ("The plan has grown from what you found. These"
+                                    " also have to be covered before you stop:\n"
+                                    + "\n".join(f"- {step}" for step in revision["add"])
+                                    + "\n\nThis is for your own working — do not use"
+                                      " these as headings in your reply."),
+                    })
     else:
         # Every round went to tool calls and the budget ran out, so the model
         # was never asked to write an answer.
@@ -2828,7 +3233,15 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
     # local model's context window, and a model with no room left produces
     # nothing. So the retry is asked with a compact digest instead of the
     # transcript — a few thousand characters that fit anywhere.
-    if not final_text.strip():
+    # A turn that ends in a question is *supposed* to have little or no prose.
+    # Running the empty-answer recovery over it would manufacture exactly the
+    # thing the gate just removed — an answer written without the answers —
+    # and would do it with more conviction, since the recovery path is built
+    # never to come back empty.
+    # A stopped turn is also exempt: the recovery exists for a turn that tried
+    # to answer and came back empty, and going off to write one anyway is the
+    # opposite of what the user just pressed.
+    if not final_text.strip() and not (asked and asked.blocking()) and not stopped():
         final_text = ""
         for event in _forced_answer(resolved, question, evidence):
             if "_answer" in event:
@@ -2850,8 +3263,12 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
         if final_text:
             yield {"chunk": final_text}
         # The user escalates to Research by hand — this only offers it, and
-        # only when the turn was visibly thin.
-        if stalled or reads < MULTI_MIN_READS or searches < MULTI_MIN_SEARCHES:
+        # only when the turn was visibly thin. A turn waiting on a question is
+        # thin by design, and offering to go and research the point instead of
+        # answering it is how the question gets bypassed again.
+        if asked and asked.blocking():
+            pass
+        elif stalled or reads < MULTI_MIN_READS or searches < MULTI_MIN_SEARCHES:
             yield {"suggest_research": {
                 "question": question,
                 "reason": "this turn answered from "
@@ -2861,6 +3278,31 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
     # Whitespace repairs, applied once at the end so the stored message and the
     # rendered one agree. Anything that rewrites words belongs in the directive.
     final_text = _tidy_answer(final_text)
+
+    # Emitted from inside the turn, not re-parsed from the finished prose by
+    # the caller. By the time the caller sees the text the block has already
+    # been cut out of it, and `blocking` is a fact about how the turn ended
+    # that cannot be recovered from the words that survived.
+    if stopped():
+        # Said plainly. A reply that just stops mid-sentence is indistinguishable
+        # from a crash, and the user who pressed the button is the one person
+        # who should never have to wonder which it was.
+        yield {"stopped": True}
+        if not final_text.strip():
+            final_text = "_Stopped before there was anything to show._"
+
+    if asked:
+        # Guarded because a broken block must cost the form, never the answer.
+        # This runs inside the SSE body, after the 200 and the headers have
+        # gone out: an exception here is a closed socket rather than an error
+        # response, and the user gets a turn that ends with no text at all.
+        try:
+            questions = asked.questions()
+        except Exception:
+            LOG.exception("could not parse clarifying questions")
+            questions = []
+        if questions:
+            yield {"questions": questions, "blocking": asked.blocking()}
 
     yield {"_final_text": final_text}
 
@@ -2873,6 +3315,10 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
 # that is what a reader cannot reconstruct from the prose.
 TRACE_EVENTS = ("tool", "tool_result", "plan", "gate", "route", "search_mode",
                 "skill", "source", "document", "suggest_research",
+                # Which steps went to a different model. Kept for the same
+                # reason the searches are: a turn that quietly spent four
+                # frontier calls must not read afterwards as one local turn.
+                "delegation",
                 "provider_error", "error")
 # A trace is stored as one JSON column on one row. A turn that read six pages
 # would otherwise carry the whole of all six into the transcript.
@@ -3077,14 +3523,27 @@ def _chat_stream_response(req, conv, history, skill, resolved, prelude=None,
     # the `finally` below can reach them however the generator ends.
     outstanding: set = set()
 
+    # What the stop button aims at. Registered inside the turn and released in
+    # the `finally` below rather than by the turn itself: a generator that is
+    # closed early — the browser going away mid-answer — never reaches its own
+    # last line, and a run left in the kernel's table is a leak that also makes
+    # `active_runs` lie about what is happening.
+    turn_id = uuid.uuid4().hex[:12]
+
     def _body():
         final_text = ""
+        # Set if the turn ended by asking rather than answering.
+        pending_questions: Optional[Dict[str, Any]] = None
         # What the turn did, kept so it survives the page. The searches, the
         # pages read and the plan were rendered live and then thrown away —
         # reopen the conversation and only the prose came back, which is the
         # half you can already read. The evidence is the half you cannot
         # reconstruct, and it is the reason to trust the answer at all.
         trace: List[Dict[str, Any]] = []
+        # First frame out, before any model call: the stop button has to exist
+        # from the moment there is something to stop, and the longest part of a
+        # multi-turn run happens before a single token is streamed.
+        yield f"data: {json.dumps({'turn_id': turn_id})}\n\n"
         if prelude:
             yield f"data: {json.dumps({'document': prelude})}\n\n"
         # The last line of defence, and the one that was missing. By the time
@@ -3096,10 +3555,16 @@ def _chat_stream_response(req, conv, history, skill, resolved, prelude=None,
         try:
             for event in _agentic_chat_events(
                     history, resolved, skill, req.conversation_id, mode,
-                    coder=bool(getattr(req, "coder", False))):
+                    coder=bool(getattr(req, "coder", False)),
+                    turn_id=turn_id):
                 if "_final_text" in event:
                     final_text = event["_final_text"]
                     continue
+                if "questions" in event:
+                    # Kept so the stored message can record that this turn is
+                    # waiting on an answer. A reopened conversation that shows
+                    # the prose without the form is a turn that looks abandoned.
+                    pending_questions = event
                 # Watched as they go past rather than plumbed through every
                 # layer between here and the approval gate: the ids are already
                 # in the stream, and the stream is the thing that knows whether
@@ -3119,28 +3584,29 @@ def _chat_stream_response(req, conv, history, skill, resolved, prelude=None,
             )
             yield f"data: {json.dumps({'chunk': final_text})}\n\n"
         try:
+            meta = {"trace": trace} if trace else {}
+            if pending_questions:
+                # Recorded on the row, so reopening the conversation restores
+                # the form rather than a paragraph that stops mid-thought.
+                meta["questions"] = pending_questions["questions"]
+                meta["awaiting_answers"] = bool(pending_questions.get("blocking"))
             stored = conv_mod.add_message(
                 req.conversation_id, "assistant", final_text,
-                metadata={"trace": trace} if trace else None)
-            _post_turn(
-                req.conversation_id, req.message, final_text,
-                stored.get("id") if isinstance(stored, dict) else None,
-                origin=_memory_origin(req, origin),
-            )
+                metadata=meta or None)
+            # A turn that ended in a question has not concluded anything, and
+            # the memory extractor works by reading conclusions out of a turn.
+            # Letting it run here files the guesses the model was asking about
+            # as things now known about the user — the exact failure the gate
+            # exists to prevent, made durable.
+            if not (pending_questions and pending_questions.get("blocking")):
+                _post_turn(
+                    req.conversation_id, req.message, final_text,
+                    stored.get("id") if isinstance(stored, dict) else None,
+                    origin=_memory_origin(req, origin),
+                )
         except Exception:
             # Bookkeeping must never cost the user the answer they can see.
             LOG.exception("could not store the assistant turn")
-        # Clarifying questions travel as their own event rather than being
-        # re-parsed from the prose in the browser: the parsing rules — what
-        # counts as a usable option, what a malformed block does — are worth
-        # having one tested copy of, and it is Python that has the tests.
-        # Guarded because a broken block must cost the form, never the answer.
-        try:
-            questions = coder_mod.parse_questions(final_text)
-            if questions:
-                yield f"data: {json.dumps({'questions': questions})}\n\n"
-        except Exception:
-            LOG.exception("could not parse clarifying questions")
         yield f"data: {json.dumps({'done': True, 'conversation_id': req.conversation_id})}\n\n"
 
     def stream():
@@ -3160,6 +3626,7 @@ def _chat_stream_response(req, conv, history, skill, resolved, prelude=None,
         try:
             yield from _body()
         finally:
+            policy_mod.release_run(turn_id)
             gone = [approval for approval in list(outstanding)
                     if agent_mod.abandon(approval)]
             if gone:
@@ -3264,6 +3731,19 @@ async def list_search_modes():
         ],
         "current": search_mode(),
     }
+
+
+@app.post("/api/chat/turns/{turn_id}/stop")
+async def stop_chat_turn(turn_id: str):
+    """Stop a chat turn in flight.
+
+    The same kill switch Research and Agent have used since they were written,
+    pointed at the one long-running thing in the app that did not have it. It
+    returns ``false`` for a turn that already finished, which is not an error:
+    pressing stop as the last token lands is a race the user cannot see and
+    should not be told about.
+    """
+    return {"stopped": policy_mod.cancel_run(turn_id)}
 
 
 @app.post("/api/chat/stream")
@@ -3526,6 +4006,36 @@ async def run_recap(req: RecapRequest = RecapRequest()):
     return recap_mod.run_recap(include_web_search=req.include_web_search, model=req.model)
 
 
+@app.get("/api/recap/interests")
+async def recap_interests(days: int = 7):
+    """What Carrot thinks you have been asking about, and why.
+
+    Readable on its own, not only as a side effect of running a briefing: an
+    assistant that has formed a view about what you care about should let you
+    look at that view, and at the evidence for it, without having to trigger
+    a two-minute research run to find out.
+    """
+    return interests_mod.derive_topics(days=max(1, min(int(days or 7), 60)))
+
+
+@app.post("/api/recap/run/interests")
+async def run_interest_recap(req: RecapRequest = RecapRequest()):
+    """The briefing built from your own recent questions, through Research.
+
+    Streams the same event shapes the Research trace already renders, so the
+    UI needs no new vocabulary for it.
+    """
+    def event_stream():
+        try:
+            for event in recap_mod.run_interest_recap_stream():
+                yield f"data: {json.dumps(event)}\n\n"
+        except Exception as exc:
+            LOG.exception("interest recap failed")
+            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
 @app.post("/api/recap/run/stream")
 async def run_recap_stream(req: RecapRequest = RecapRequest()):
     """Run the deep-research pipeline, streaming every step (analysis, searches,
@@ -3730,6 +4240,72 @@ async def create_artifact(req: ArtifactRequest):
 @app.get("/api/widgets/catalog")
 async def widget_catalog():
     return {"catalog": widgets_mod.list_catalog()}
+
+
+@app.get("/api/system/meters")
+async def system_meters():
+    """Live CPU, memory and GPU load.
+
+    `leaderboard.get_hardware_profile()` says what the machine *is*; this says
+    what it is doing. They are different questions and only the second one
+    explains why a turn is slow.
+    """
+    return sysmon_mod.meters()
+
+
+@app.get("/api/system/throughput")
+async def system_throughput():
+    """How fast the local model is actually generating.
+
+    Read from Ollama's own `eval_count`/`eval_duration` rather than timed from
+    outside — an external stopwatch includes the queue, the prompt evaluation
+    and the socket, and reports a figure well below what the model is
+    producing.
+    """
+    return sysmon_mod.throughput.snapshot()
+
+
+@app.get("/api/markets")
+async def market_quotes(symbols: str = ""):
+    wanted = [s for s in (symbols or "").split(",") if s.strip()]
+    return markets_mod.quotes(wanted or None)
+
+
+@app.get("/api/markets/catalogue")
+async def market_catalogue():
+    return {"catalogue": markets_mod.CATALOGUE,
+            "default": markets_mod.DEFAULT_SYMBOLS}
+
+
+@app.get("/api/news/headlines")
+async def news_headlines(limit: int = 12):
+    """Headlines for the dashboard, from the recap's own feeds.
+
+    Deliberately the same feed list the morning recap uses: two separate
+    notions of "your news sources" would be two things to configure and two
+    places to be surprised by what turned up.
+    """
+    try:
+        items = recap_mod.fetch_all_feeds()
+    except Exception as exc:
+        LOG.info("could not fetch headlines: %s", exc)
+        return {"items": [], "error": str(exc)}
+    seen, out = set(), []
+    for item in items:
+        link = item.get("link", "")
+        title = (item.get("title") or "").strip()
+        if not title or link in seen:
+            continue
+        seen.add(link)
+        out.append({
+            "title": title[:200],
+            "url": link,
+            "source": (item.get("source") or "")[:60],
+            "published": item.get("published", ""),
+        })
+        if len(out) >= max(1, min(int(limit or 12), 40)):
+            break
+    return {"items": out, "error": ""}
 
 
 @app.get("/api/widgets")

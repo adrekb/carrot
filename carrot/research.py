@@ -196,15 +196,45 @@ def _ask_json(task: str, prompt: str, *, system: str = RESEARCH_SYSTEM) -> Optio
 # ===== Evidence store =====
 
 class SourceStore:
-    """Per-run evidence, deduplicated by locator and safe to fill in parallel."""
+    """Per-run evidence, deduplicated by locator and safe to fill in parallel.
 
-    def __init__(self, run_id: str):
+    The store is where a source acquires its **tier** — who was speaking on
+    that page. It is resolved here rather than at the point of citation for two
+    reasons: the first-party test needs the run's question, which the store has
+    and a citation site does not; and a tier that were re-derived per citation
+    could disagree with itself between the trace, the report and the appendix.
+    One source, one answer, decided once.
+    """
+
+    def __init__(self, run_id: str, question: str = ""):
         self.run_id = run_id
+        # Kept so `authority` can tell a company publishing its own figure from
+        # a company being written about.
+        self.question = question
         self._by_locator: Dict[str, Dict[str, Any]] = {}
         self._lock = threading.Lock()
 
+    def _classify(self, kind: str, locator: str) -> Dict[str, str]:
+        """Who is speaking, for a source of any kind.
+
+        Local sources are not on the web and the web tiering does not describe
+        them. A file the user chose to index and a conversation they actually
+        had are first-party *to them* — the strongest kind of evidence for a
+        question about their own work, and the pipeline should not rank them
+        below a wire service for it.
+        """
+        if kind == "web":
+            return websearch.authority(locator, self.question)
+        return {
+            "tier": websearch.TIER_FIRST_PARTY,
+            "site": kind,
+            "host": "",
+            "reason": f"your own {kind}",
+        }
+
     def add(self, kind: str, locator: str, title: str, snippet: str,
-            content: str, tainted: bool = False) -> Dict[str, Any]:
+            content: str, tainted: bool = False,
+            published: str = "") -> Dict[str, Any]:
         with self._lock:
             existing = self._by_locator.get(locator)
             if existing:
@@ -217,6 +247,7 @@ class SourceStore:
                 return existing
 
             ordinal = len(self._by_locator) + 1
+            verdict = self._classify(kind, locator)
             source = {
                 "id": f"S{ordinal}",
                 "row_id": str(uuid.uuid4())[:12],
@@ -227,6 +258,10 @@ class SourceStore:
                 "snippet": snippet[:500],
                 "content": content,
                 "tainted": tainted,
+                "tier": verdict["tier"],
+                "tier_reason": verdict["reason"],
+                "site": verdict.get("site", ""),
+                "published": published or "",
             }
             self._by_locator[locator] = source
         self._persist(source)
@@ -236,12 +271,15 @@ class SourceStore:
         conn = get_db()
         conn.execute(
             """INSERT OR REPLACE INTO research_sources
-               (id, run_id, ordinal, kind, title, locator, snippet, content, tainted, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               (id, run_id, ordinal, kind, title, locator, snippet, content,
+                tainted, tier, tier_reason, published, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 source["row_id"], self.run_id, source["ordinal"], source["kind"],
                 source["title"][:500], source["locator"], source["snippet"],
-                source["content"][:200000], int(source["tainted"]), _now(),
+                source["content"][:200000], int(source["tainted"]),
+                source.get("tier", websearch.TIER_UNKNOWN),
+                source.get("tier_reason", ""), source.get("published", ""), _now(),
             ),
         )
         conn.commit()
@@ -256,6 +294,17 @@ class SourceStore:
 
     def known_ids(self) -> List[str]:
         return [s["id"] for s in self.all()]
+
+
+# The subset of a source that goes over the wire to the trace. One definition,
+# because a source that shows a tier in the live trace and no tier when the run
+# is reopened is the same bug as not having tiers at all.
+SOURCE_EVENT_FIELDS = ("id", "kind", "title", "locator", "tainted",
+                       "tier", "tier_reason", "published")
+
+
+def _source_event(source: Dict[str, Any]) -> Dict[str, Any]:
+    return {"source": {k: source.get(k) for k in SOURCE_EVENT_FIELDS}}
 
 
 # ===== Planner =====
@@ -390,8 +439,15 @@ def search_local(query: str, limit: int = 5) -> List[Dict[str, Any]]:
 
 # ===== Researcher subagent =====
 
-def _finding_rows(parsed: Any, known_ids: List[str], subquestion: str) -> List[Dict[str, Any]]:
-    """Validate extracted claims, dropping any that cite a source that is not real."""
+def _finding_rows(parsed: Any, known_ids: List[str], subquestion: str,
+                  store: Optional["SourceStore"] = None) -> List[Dict[str, Any]]:
+    """Validate extracted claims, dropping any that cite a source that is not real.
+
+    Each surviving claim also records the best tier among the sources it cites.
+    That single field is what lets the writer treat "the regulator published
+    this" and "four aggregators are carrying it" differently, which is the
+    whole point of tiering sources at all.
+    """
     findings: List[Dict[str, Any]] = []
     if not isinstance(parsed, dict):
         return findings
@@ -414,6 +470,13 @@ def _finding_rows(parsed: Any, known_ids: List[str], subquestion: str) -> List[D
             confidence = float(item.get("confidence", 0.6))
         except (TypeError, ValueError):
             confidence = 0.6
+        if store is not None:
+            cited = [store.by_id(sid) for sid in ids]
+            tier = websearch.best_tier(
+                s.get("tier") for s in cited if s
+            )
+        else:
+            tier = websearch.TIER_UNKNOWN
         findings.append({
             "id": str(uuid.uuid4())[:12],
             "subquestion": subquestion,
@@ -421,11 +484,36 @@ def _finding_rows(parsed: Any, known_ids: List[str], subquestion: str) -> List[D
             "source_ids": ids,
             "confidence": min(max(confidence, 0.0), 1.0),
             "verdict": "unchecked",
+            "tier": tier,
         })
     return findings
 
 
+def _tier_label(source: Dict[str, Any]) -> str:
+    """``official — government … , published 2025-06-17``.
+
+    Authority and currency are both on this line because they are separate
+    axes and the pipeline needs both. A manufacturer's launch release is
+    first-party forever; it stops describing the present the moment the
+    manufacturer changes its mind, and nothing in the tier can say so.
+    """
+    tier = source.get("tier", websearch.TIER_UNKNOWN)
+    meaning = websearch.TIER_MEANING.get(tier, "")
+    label = f"{tier} — {meaning}" if meaning else tier
+    published = source.get("published", "")
+    return f"{label}, published {published}" if published else f"{label}, undated"
+
+
 def _evidence_block(sources: List[Dict[str, Any]], chars: int) -> str:
+    """The sources as the extractor sees them, each labelled with who wrote it.
+
+    The tier is on the header line rather than left implicit in the URL because
+    the extractor's job includes noticing when a page is reporting someone
+    else's number. A page that says "GM said it built 40,000" is evidence that
+    GM said it; only gm.com is evidence that it is so. A model that cannot see
+    which kind of page it is reading cannot make that distinction, and the
+    claim it writes will read as though the figure were confirmed.
+    """
     blocks = []
     for source in sources:
         body = policy.wrap_untrusted(
@@ -433,8 +521,91 @@ def _evidence_block(sources: List[Dict[str, Any]], chars: int) -> str:
             origin=source["locator"],
             screening={"tainted": source["tainted"], "signals": [], "origin": source["locator"]},
         )
-        blocks.append(f"[{source['id']}] {source['title']} — {source['locator']}\n{body}")
+        blocks.append(
+            f"[{source['id']}] {source['title']} — {source['locator']}\n"
+            f"Source type: {_tier_label(source)}\n{body}"
+        )
     return "\n\n".join(blocks)
+
+
+# ===== Conflict detection =====
+#
+# Verification asks "does this source support this claim", one claim at a time,
+# and it is right to be that narrow. But it cannot see the failure where every
+# claim passes and two of them cannot both be true — the manufacturer's launch
+# release saying one model year and the manufacturer's current product page
+# saying another. Each is supported. Each is first-party. Tier cannot separate
+# them and verification never compares them, so the writer receives both as
+# established fact and quietly picks one.
+#
+# So this is a third pass with its own narrow job: not whether a claim is
+# supported, but whether the supported claims agree.
+
+MAX_CONFLICT_CLAIMS = 24
+
+
+def find_conflicts(findings: List[Dict[str, Any]], emit: Callable) -> List[Dict[str, Any]]:
+    """Pairs of supported claims that cannot both be true.
+
+    Returns ``[{"claims": [i, j], "subject": str, "note": str}]`` over indices
+    into ``findings``. An empty list on any failure — a conflict pass that
+    breaks should cost the report its caveats, never the report.
+    """
+    usable = [f for f in findings if f.get("verdict") in USABLE_VERDICTS]
+    if len(usable) < 2:
+        return []
+
+    listed = usable[:MAX_CONFLICT_CLAIMS]
+    numbered = "\n".join(f"{i + 1}. {f['claim']}" for i, f in enumerate(listed))
+    prompt = (
+        "Below are statements that have each been checked against the source "
+        "they came from, so each one is genuinely what its source says. Your "
+        "only job is to find pairs that cannot both be true of the world at the "
+        "same time — different values for the same quantity, different dates "
+        "for the same event, a yes and a no about the same thing.\n\n"
+        "Do not report a pair merely because it covers different aspects, uses "
+        "different wording, or gives more or less detail. Two statements about "
+        "different things are not a conflict, and a list padded with those is "
+        "worse than an empty one. If nothing genuinely conflicts, return an "
+        "empty list.\n\n"
+        f"{numbered}\n\n"
+        'Return JSON only: {"conflicts": [{"claims": [1, 2], "subject": "what '
+        'they disagree about", "note": "one sentence on the disagreement"}]}'
+    )
+    parsed = _ask_json(router_mod.TASK_RESEARCH, prompt)
+    if not isinstance(parsed, dict):
+        return []
+
+    out: List[Dict[str, Any]] = []
+    for item in parsed.get("conflicts", []):
+        if not isinstance(item, dict):
+            continue
+        raw = item.get("claims") or []
+        if not isinstance(raw, list) or len(raw) < 2:
+            continue
+        try:
+            indices = [int(n) - 1 for n in raw[:2]]
+        except (TypeError, ValueError):
+            continue
+        # A conflict naming a claim that does not exist is the same class of
+        # error as a citation to a source that does not exist, and gets the
+        # same treatment: dropped, not repaired.
+        if not all(0 <= n < len(listed) for n in indices):
+            continue
+        if indices[0] == indices[1]:
+            continue
+        pair = [listed[n] for n in indices]
+        out.append({
+            "claims": [p["claim"] for p in pair],
+            "tiers": [p.get("tier", websearch.TIER_UNKNOWN) for p in pair],
+            "sources": [p["source_ids"] for p in pair],
+            "subject": str(item.get("subject", "")).strip(),
+            "note": str(item.get("note", "")).strip(),
+        })
+        emit({"conflict": {"subject": out[-1]["subject"],
+                           "claims": out[-1]["claims"],
+                           "tiers": out[-1]["tiers"]}})
+    return out
 
 
 class Researcher:
@@ -514,8 +685,9 @@ class Researcher:
                 title=page["title"] or hit.get("title", ""),
                 snippet=hit.get("snippet", ""), content=page["text"],
                 tainted=page["tainted"],
+                published=page.get("date", "") or hit.get("date", ""),
             )
-            self.emit({"source": {k: source[k] for k in ("id", "kind", "title", "locator", "tainted")}})
+            self.emit(_source_event(source))
             gathered.append(source)
         return gathered
 
@@ -528,7 +700,7 @@ class Researcher:
                     snippet=hit["snippet"], content=hit["content"],
                 )
                 if source not in gathered:
-                    self.emit({"source": {k: source[k] for k in ("id", "kind", "title", "locator", "tainted")}})
+                    self.emit(_source_event(source))
                     gathered.append(source)
         return gathered
 
@@ -543,13 +715,21 @@ class Researcher:
             "must be something the source actually states — not an inference, not "
             "background knowledge. If a source contradicts another, record both and "
             "say so in the claim.\n\n"
+            "Each source carries a 'Source type' line saying who is speaking. Use "
+            "it. A first-party or official source stating a figure is evidence for "
+            "the figure. A page relaying someone else's figure is evidence that it "
+            "was relayed — write that claim as 'X reports that ...', not as the "
+            "fact itself. Do not merge the two into one claim, and do not upgrade "
+            "a relayed number into a confirmed one because several sites carry "
+            "it: repetition is what a rewrite looks like from the outside.\n\n"
             f"Question: {self.subquestion}\n\n"
             f"Sources:\n{_evidence_block(sources, self.profile['chars_per_page'])}\n\n"
             'Return JSON only: {"findings": [{"claim": "...", "sources": ["S1"], '
             '"confidence": 0.0-1.0}]}'
         )
         parsed = _ask_json(router_mod.TASK_RESEARCH, prompt)
-        return _finding_rows(parsed, self.store.known_ids(), self.subquestion)
+        return _finding_rows(parsed, self.store.known_ids(), self.subquestion,
+                             self.store)
 
     def _reflect(self) -> List[str]:
         """What is still missing after this round? Empty means done."""
@@ -675,12 +855,14 @@ def persist_findings(run_id: str, findings: List[Dict[str, Any]]):
     for finding in findings:
         conn.execute(
             """INSERT OR REPLACE INTO research_findings
-               (id, run_id, subquestion, claim, source_ids, confidence, verdict, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+               (id, run_id, subquestion, claim, source_ids, confidence, verdict,
+                tier, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 finding["id"], run_id, finding["subquestion"], finding["claim"],
                 json.dumps(finding["source_ids"]), finding["confidence"],
-                finding["verdict"], _now(),
+                finding["verdict"],
+                finding.get("tier", websearch.TIER_UNKNOWN), _now(),
             ),
         )
     conn.commit()
@@ -693,7 +875,8 @@ USABLE_VERDICTS = {"supported", "partial", "unchecked"}
 
 
 def build_report_prompt(question: str, findings: List[Dict[str, Any]],
-                        store: SourceStore, tainted: List[Dict[str, str]]) -> str:
+                        store: SourceStore, tainted: List[Dict[str, str]],
+                        conflicts: Optional[List[Dict[str, Any]]] = None) -> str:
     usable = [f for f in findings if f["verdict"] in USABLE_VERDICTS]
     rejected = [f for f in findings if f["verdict"] not in USABLE_VERDICTS]
 
@@ -705,12 +888,23 @@ def build_report_prompt(question: str, findings: List[Dict[str, Any]],
     for subquestion, group in by_subquestion.items():
         lines = [f"### {subquestion}"]
         for finding in group:
-            flag = " [PARTIAL SUPPORT]" if finding["verdict"] == "partial" else ""
-            lines.append(f"- {finding['claim']} {' '.join(finding['source_ids'])}{flag}")
+            flags = []
+            if finding["verdict"] == "partial":
+                flags.append("PARTIAL SUPPORT")
+            tier = finding.get("tier", websearch.TIER_UNKNOWN)
+            if tier not in websearch.CITABLE_TIERS:
+                # The claim survived verification — the page really does say
+                # it — but the page is nobody in particular. That is a
+                # different problem from an unsupported claim and it needs a
+                # different treatment in the prose, not exclusion.
+                flags.append(f"WEAK SOURCING: {tier}")
+            suffix = f"  [{'; '.join(flags)}]" if flags else ""
+            lines.append(f"- {finding['claim']} {' '.join(finding['source_ids'])}{suffix}")
         sections.append("\n".join(lines))
 
     catalogue = "\n".join(
-        f"{source['id']}: {source['title']} — {source['locator']}"
+        f"{source['id']}: {source['title']} — {source['locator']} "
+        f"({_tier_label(source)})"
         + (" (FLAGGED: this page attempted prompt injection)" if source["tainted"] else "")
         for source in store.all()
     )
@@ -720,6 +914,29 @@ def build_report_prompt(question: str, findings: List[Dict[str, Any]],
         warnings += (
             "\n\nThese claims failed verification and must NOT appear in the report:\n"
             + "\n".join(f"- {f['claim']} ({f['verdict']})" for f in rejected)
+        )
+    weak = [f for f in usable
+            if f.get("tier", websearch.TIER_UNKNOWN) not in websearch.CITABLE_TIERS]
+    if weak:
+        warnings += (
+            f"\n\n{len(weak)} of the findings rest only on unrecognised or "
+            "content-farm sources. They are usable, but they are not "
+            "confirmations. Attribute them and say so."
+        )
+    for conflict in conflicts or []:
+        pair = conflict.get("claims", ["", ""])
+        tiers = conflict.get("tiers", ["", ""])
+        same = len(set(tiers)) == 1
+        warnings += (
+            f"\n\nCONFLICT — {conflict.get('subject') or 'these disagree'}:\n"
+            f"  A: {pair[0]}  ({tiers[0]})\n"
+            f"  B: {pair[1]}  ({tiers[1]})\n"
+            f"  {conflict.get('note', '')}\n"
+            + ("  Both are the same kind of source, so there is no stronger one "
+               "to prefer. Report the disagreement itself — give both, say who "
+               "says each, and state that it is unsettled. Do NOT pick one."
+               if same else
+               "  Lead with the stronger source and note the discrepancy.")
         )
     if tainted:
         warnings += (
@@ -734,6 +951,43 @@ def build_report_prompt(question: str, findings: List[Dict[str, Any]],
         "- Use only the verified findings below. If they do not answer part of the "
         "question, say so plainly under 'What is still open' rather than filling the gap.\n"
         "- Where sources disagree, present the disagreement instead of picking a winner.\n"
+        "\n"
+        "How strong a source is changes how you may write from it. The catalogue "
+        "gives a type and a date for every source; findings that rest on a weak "
+        "one are marked.\n"
+        "- first-party and official sources may be stated as fact.\n"
+        "- reputable outlets may be stated as fact.\n"
+        "- unknown and content-farm sources may NOT. Attribute them in the "
+        "sentence — 'according to <site>' — so the reader can discount it. Never "
+        "launder one into a flat assertion, and never let several of them add up "
+        "to one: sites that copy each other agree by construction.\n"
+        "- Where a first-party or official source and a weaker one give different "
+        "figures for the same thing, lead with the stronger, give its number, and "
+        "note the discrepancy. Do not average them and do not quietly drop one.\n"
+        "- If the answer to the question rests entirely on weak sources, say that "
+        "in the opening paragraph. It is the most important thing you know.\n"
+        "\n"
+        # The ZR1X case. GM's June 2025 launch release calls the car a 2026
+        # model; GM's own current product pages have partly moved to 2027. Both
+        # are first-party, so tier alone cannot separate them, and a writer told
+        # only to prefer the stronger source picks whichever it read first and
+        # writes "2026" as settled. The answer was accurate about its source and
+        # wrong about the world.
+        "Two rules for when the strong sources disagree with each other:\n"
+        "- Sources of the SAME type disagreeing is not a tie for you to break. "
+        "It is the finding. Give both values, name who says each and when, and "
+        "say plainly that it is unsettled. An organisation contradicting itself "
+        "is more informative than either statement alone, and picking one and "
+        "presenting it as settled is the single worst thing you can do here — it "
+        "reads as confident and checks out against its citation.\n"
+        "- Authority does not expire but currency does. A dated announcement is "
+        "authoritative about what was announced on that date and says nothing "
+        "about what is true now. If the question is about the present state of "
+        "something and your sources span a long period, lead with the most "
+        "recent, date the older claim in the sentence — 'at launch in June 2025 "
+        "it was announced as X' — and never let an old first-party page silently "
+        "outrank a current one just because it is first-party.\n"
+        "\n"
         "- Markdown, no emojis. Structure: a two-to-four sentence answer up front, then "
         "'## Detail' with a section per theme, then '## What is still open', then "
         "'## Caveats' when there is anything to flag.\n\n"
@@ -803,7 +1057,7 @@ def run_research_stream(
     emit = events.put
     budget = policy.Budget.from_config({"max_seconds": get_config().get("research_max_seconds", 1800)})
     context = policy.register_run(policy.RunContext(run_id, budget=budget, emit=emit))
-    store = SourceStore(run_id)
+    store = SourceStore(run_id, question)
 
     # Probe the search backend once, before planning. A broken client does
     # not error — it returns confident nonsense, and finding that out after
@@ -831,7 +1085,7 @@ def run_research_stream(
                 content=seed.get("content", ""),
             )
             seeds.append(stored)
-            yield {"source": {k: stored[k] for k in ("id", "kind", "title", "locator", "tainted")}}
+            yield _source_event(stored)
         if seeds:
             yield {"stage": "plan", "detail": f"starting from {len(seeds)} cited document(s)"}
 
@@ -924,9 +1178,26 @@ def run_research_stream(
         if rejected:
             yield {"stage": "verify", "detail": f"dropped {len(rejected)} claim(s) the sources did not support"}
 
+        # --- do the survivors agree? ---
+        #
+        # Verification asks whether each claim is supported and cannot see two
+        # claims that are each supported and mutually exclusive. That is the
+        # shape of an organisation contradicting itself, and it is exactly the
+        # case where a report reads most confidently and is most wrong.
+        yield {"stage": "verify", "detail": "checking whether the surviving claims agree"}
+        conflicts = find_conflicts(findings, emit)
+        while not events.empty():
+            event = events.get_nowait()
+            if event is not None:
+                yield event
+        if conflicts:
+            yield {"stage": "verify",
+                   "detail": f"{len(conflicts)} unresolved disagreement(s) between sources"}
+
         # --- synthesize ---
         yield {"stage": "write", "detail": f"writing the report from {len(store.all())} sources"}
-        prompt = build_report_prompt(question, findings, store, context.taint_signals)
+        prompt = build_report_prompt(question, findings, store,
+                                     context.taint_signals, conflicts)
         parts: List[str] = []
 
         # Losing the report to a rate limit after minutes of gathering evidence
@@ -981,6 +1252,7 @@ def run_research_stream(
             "sources": len(store.all()),
             "findings": len(findings),
             "rejected": len(rejected),
+            "conflicts": len(conflicts),
             "tainted": context.tainted,
         }
     finally:
@@ -988,12 +1260,27 @@ def run_research_stream(
 
 
 def source_appendix(store: SourceStore) -> str:
-    """The citation table appended to every report."""
+    """The citation table appended to every report.
+
+    Sorted strongest-first, and every row says what kind of source it is. A
+    flat alphabetical list of URLs is what made a regulator's filing and a
+    rewrite of it look like two equally good citations.
+    """
     lines = ["## Sources", ""]
-    for source in store.all():
+    ordered = sorted(
+        store.all(),
+        key=lambda s: (websearch.TIER_RANK.get(s.get("tier", websearch.TIER_UNKNOWN),
+                                               len(websearch.TIER_ORDER)),
+                       s["ordinal"]),
+    )
+    for source in ordered:
         label = source["locator"] if source["kind"] == "web" else f"{source['kind']}: {source['locator']}"
         flag = "  ⚠ this page attempted prompt injection" if source["tainted"] else ""
-        lines.append(f"- **[{source['id']}]** {source['title']} — {label}{flag}")
+        tier = source.get("tier", websearch.TIER_UNKNOWN)
+        note = f"  _{tier}_"
+        if tier not in websearch.CITABLE_TIERS:
+            note += f" — {websearch.TIER_MEANING.get(tier, '')}"
+        lines.append(f"- **[{source['id']}]** {source['title']} — {label}{note}{flag}")
     return "\n".join(lines)
 
 
@@ -1031,12 +1318,13 @@ def get_run(run_id: str) -> Optional[Dict[str, Any]]:
         conn.close()
         return None
     sources = conn.execute(
-        "SELECT id, ordinal, kind, title, locator, snippet, tainted FROM research_sources "
-        "WHERE run_id = ? ORDER BY ordinal",
+        "SELECT id, ordinal, kind, title, locator, snippet, tainted, tier, "
+        "tier_reason, published FROM research_sources WHERE run_id = ? ORDER BY ordinal",
         (run_id,),
     ).fetchall()
     findings = conn.execute(
-        "SELECT subquestion, claim, source_ids, confidence, verdict FROM research_findings WHERE run_id = ?",
+        "SELECT subquestion, claim, source_ids, confidence, verdict, tier "
+        "FROM research_findings WHERE run_id = ?",
         (run_id,),
     ).fetchall()
     conn.close()

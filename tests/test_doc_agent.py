@@ -355,9 +355,17 @@ def test_send_streams_a_turn_and_reports_its_citations(client, tmp_path):
     events = [json.loads(line[5:]) for line in response.text.splitlines()
               if line.startswith("data:")]
 
-    # The citation report is the first event, before any tokens.
-    assert events[0]["document"]["references"][0]["ok"] is True
-    assert "ship it on friday" in events[0]["document"]["context"]
+    # The citation report arrives before any tokens. Asserted as an ordering
+    # rather than as `events[0]`, which is what it was: the turn now opens
+    # with its own id so the stop button has something to aim at from the
+    # first frame, and the guarantee that matters — you see what was cited
+    # before you see anything written from it — is untouched by that.
+    document_at = next(i for i, e in enumerate(events) if "document" in e)
+    first_chunk = next((i for i, e in enumerate(events) if "chunk" in e), len(events))
+    assert document_at < first_chunk
+
+    assert events[document_at]["document"]["references"][0]["ok"] is True
+    assert "ship it on friday" in events[document_at]["document"]["context"]
 
     assert "".join(e["chunk"] for e in events if "chunk" in e) == "Hello from Carrot"
     assert events[-1]["done"] is True

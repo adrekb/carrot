@@ -284,6 +284,14 @@ CREATE TABLE IF NOT EXISTS research_sources (
     snippet TEXT DEFAULT '',
     content TEXT DEFAULT '',
     tainted INTEGER DEFAULT 0,
+    -- Who is speaking: first-party, official, reputable, unknown, low. Set
+    -- once when the source is first stored, because the first-party test needs
+    -- the question and the question is not stored alongside the page.
+    tier TEXT NOT NULL DEFAULT 'unknown',
+    tier_reason TEXT DEFAULT '',
+    -- When the page says it was written. Separate from authority: a launch
+    -- announcement stays first-party forever and stops being current.
+    published TEXT DEFAULT '',
     created_at TEXT NOT NULL
 );
 
@@ -300,6 +308,9 @@ CREATE TABLE IF NOT EXISTS research_findings (
     source_ids TEXT DEFAULT '[]',
     confidence REAL DEFAULT 0.5,
     verdict TEXT DEFAULT 'unchecked',
+    -- Best tier among the cited sources: how strong the support is, as
+    -- distinct from `verdict`, which is whether the support exists at all.
+    tier TEXT NOT NULL DEFAULT 'unknown',
     created_at TEXT NOT NULL
 );
 
@@ -536,6 +547,16 @@ ADDED_COLUMNS = (
     # chat turn, because chat was the only thing that wrote memories. The
     # default is the truth about the old rows, not a placeholder.
     ("memories", "origin", "TEXT NOT NULL DEFAULT 'chat'"),
+    # Who was speaking on a cited page. Runs recorded before this column
+    # existed genuinely do not know, and 'unknown' is the honest label for
+    # that rather than a guess back-filled from the domain today — the
+    # first-party test depends on the question, which is not re-runnable here.
+    ("research_sources", "tier", "TEXT NOT NULL DEFAULT 'unknown'"),
+    ("research_sources", "tier_reason", "TEXT DEFAULT ''"),
+    ("research_sources", "published", "TEXT DEFAULT ''"),
+    # The best tier among the sources a claim cites — what the writer is
+    # allowed to state flat and what it has to attribute.
+    ("research_findings", "tier", "TEXT NOT NULL DEFAULT 'unknown'"),
 )
 
 # Indexes over columns that ADDED_COLUMNS creates. These cannot live in SCHEMA,

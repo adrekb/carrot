@@ -488,3 +488,116 @@ class TestClarifyingQuestionsBecomeAForm:
         # And that the offer is actionable rather than another dead end: the
         # folder is made by writing into it, which it has to be told.
         assert "creates missing folders" in guidance
+
+
+# ===== Asking is a turn-ending act =====
+#
+# The bug these cover is not that the questions were parsed wrongly — they were
+# parsed correctly, from a reply the model had already finished. The form sat
+# under an answer written without the answers, so pressing a button re-ran a
+# turn whose conclusion was already on screen.
+
+def _stream(gate, text, size=7):
+    """Feed text through the gate in awkward chunks; return what was shown.
+
+    Small chunks on purpose: the marker straddling a boundary is the case a
+    naive per-chunk filter gets wrong, and it is the case that would show up
+    only against a real provider.
+    """
+    shown = [gate.feed(text[i:i + size]) for i in range(0, len(text), size)]
+    shown.append(gate.flush())
+    return "".join(shown)
+
+
+ASKS_THEN_ANSWERS = """Sure, one thing first.
+
+```carrot-questions
+[{"question": "Scoreboard style?", "options": ["Just numbers", "Labelled"]}]
+```
+
+I'll assume just the numbers. Here is the whole plan: step one, step two.
+"""
+
+ANSWERS_THEN_ASKS = (
+    "Here is the plan. The workspace holds a Pong game in pong.py and game.py, "
+    "with a fixed window and a 60fps loop. I would track two ints on the game "
+    "object and draw them top-centre each frame, resetting on a new match. "
+    "That touches game.py only and nothing else has to move.\n\n"
+    '```carrot-questions\n'
+    '[{"question": "Scoreboard style?", "options": ["Just numbers", "Labelled"]}]\n'
+    '```\n'
+)
+
+
+class TestQuestionGate:
+    def test_the_self_answer_never_reaches_the_user(self):
+        gate = coder.QuestionGate()
+        shown = _stream(gate, ASKS_THEN_ANSWERS)
+        assert "whole plan" not in shown
+        assert "step one" not in shown
+        assert shown.strip() == "Sure, one thing first."
+
+    def test_the_marker_is_caught_across_chunk_boundaries(self):
+        """One character at a time is the worst case and must still trip."""
+        gate = coder.QuestionGate()
+        shown = _stream(gate, ASKS_THEN_ANSWERS, size=1)
+        assert gate.tripped
+        assert "whole plan" not in shown
+
+    def test_the_questions_are_still_parsed_from_the_cut_text(self):
+        gate = coder.QuestionGate()
+        _stream(gate, ASKS_THEN_ANSWERS)
+        assert gate.questions() == [
+            {"question": "Scoreboard style?", "options": ["Just numbers", "Labelled"]}
+        ]
+
+    def test_asking_before_working_blocks(self):
+        gate = coder.QuestionGate()
+        _stream(gate, ASKS_THEN_ANSWERS)
+        assert gate.blocking() is True
+
+    def test_asking_after_answering_does_not_block(self):
+        """A good answer is not thrown away because questions followed it."""
+        gate = coder.QuestionGate()
+        _stream(gate, ANSWERS_THEN_ASKS)
+        assert gate.tripped
+        assert gate.blocking() is False
+        assert "pong.py" in gate.prose()
+
+    def test_a_reply_with_no_questions_passes_through_unchanged(self):
+        gate = coder.QuestionGate()
+        plain = "An ordinary answer, with no questions anywhere in it at all."
+        assert _stream(gate, plain) == plain
+        assert gate.tripped is False
+        assert gate.questions() == []
+
+    def test_the_fence_opening_the_block_is_not_shown(self):
+        gate = coder.QuestionGate()
+        shown = _stream(gate, ASKS_THEN_ANSWERS)
+        assert "```" not in shown
+
+    def test_prose_matches_what_was_streamed(self):
+        """The stored message and the rendered one have to agree.
+
+        They are produced by different paths — one accumulates the chunks, the
+        other cuts the finished text — and a disagreement shows up as a reply
+        that changes when the page is reloaded.
+        """
+        gate = coder.QuestionGate()
+        shown = _stream(gate, ASKS_THEN_ANSWERS)
+        assert shown.strip() == gate.prose().strip()
+
+    def test_a_malformed_block_still_ends_the_turn(self):
+        """A broken block costs the form, never the cut.
+
+        If the JSON is unparseable the user gets no buttons — but the model
+        still asked, and the text after the marker is still it answering
+        itself. Letting that through because the options were malformed would
+        make the guarantee depend on the model's punctuation.
+        """
+        gate = coder.QuestionGate()
+        shown = _stream(gate, "Quick check.\n```carrot-questions\n[{oh no\n```\n"
+                              "Anyway I'll just guess and here is the answer.")
+        assert gate.tripped
+        assert "just guess" not in shown
+        assert gate.questions() == []
