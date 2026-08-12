@@ -1112,6 +1112,32 @@ async function renderThroughputWidget(w, body) {
 // of "your news sources" would be two things to configure and two places to be
 // surprised by what turned up.
 
+// How old a headline is, in the terms a person actually uses.
+//
+// "3h" and "yesterday" answer the question you have when scanning a feed —
+// is this news — which an absolute timestamp does not. Past a couple of days
+// the relative form stops helping ("11d" is not a date anybody holds in their
+// head) so it switches to a calendar date.
+//
+// Reads `published_iso`, which the backend normalised from feedparser's
+// parsed struct. Feeds disagree about the raw string's format and the Date
+// parser returns Invalid Date on the least common of them, which is how a
+// list ends up with dates on some rows and nothing on others.
+function newsWhen(item) {
+    const raw = item.published_iso || '';
+    if (!raw) return '';
+    const then = new Date(raw);
+    if (isNaN(then)) return '';
+    const mins = Math.round((Date.now() - then.getTime()) / 60000);
+    // A feed whose clock is ahead of yours is common enough not to render as
+    // a negative age.
+    if (mins < 1) return 'just now';
+    if (mins < 60) return mins + 'm';
+    if (mins < 60 * 24) return Math.round(mins / 60) + 'h';
+    if (mins < 60 * 48) return 'yesterday';
+    return then.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
 async function renderNewsWidget(w, body) {
     const limit = (w.config || {}).limit || 8;
     let data;
@@ -1130,7 +1156,11 @@ async function renderNewsWidget(w, body) {
         '<a class="news-item" href="' + escHtml(item.url) +
         '" target="_blank" rel="noopener noreferrer">' +
           '<span class="news-title">' + escHtml(item.title) + '</span>' +
-          '<span class="news-source">' + escHtml(item.source) + '</span>' +
+          '<span class="news-meta">' +
+            '<span class="news-source">' + escHtml(item.source) + '</span>' +
+            (newsWhen(item) ? '<span class="news-when">' + escHtml(newsWhen(item)) +
+                              '</span>' : '') +
+          '</span>' +
         '</a>').join('') + '</div>';
 }
 

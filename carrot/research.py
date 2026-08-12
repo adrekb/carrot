@@ -874,9 +874,86 @@ def persist_findings(run_id: str, findings: List[Dict[str, Any]]):
 USABLE_VERDICTS = {"supported", "partial", "unchecked"}
 
 
+# ===== The last pass: is anything here out of date? =====
+#
+# The failure this exists for, from a real F-35 run. The report said the PTMU
+# contract award was "imminent — in the next few months (mid-2026)" and cited
+# Defense Daily. The article was real, it genuinely discussed PTMU, and the
+# claim was a faithful summary of it. It was published in July 2024, and
+# described a contract expected in Fall 2024. By the time it was quoted the
+# programme had not yet even chosen a technical approach.
+#
+# Every check in this pipeline passed. The source was reputable. The claim was
+# supported by the text. Nothing contradicted it, because nothing else in the
+# evidence pool was about PTMU at all. Authority, support and consistency were
+# all satisfied by a two-year-old page — because none of them are about time.
+#
+# So the run ends by looking at the dates. Not to drop old sources: an old
+# source is often the right one, and for a historical question it is the only
+# one. What matters is the *gap* — a claim resting on a page markedly older
+# than the rest of the evidence, in an answer about a live programme, is the
+# shape of a figure that has since moved.
+
+# How much older than the run's newest evidence a source has to be before it
+# is worth flagging. Six months: shorter and every run flags half its sources,
+# longer and a fast-moving procurement story slips through.
+STALE_AFTER_DAYS = 180
+
+
+def _as_date(value: str):
+    from datetime import date as _date
+    try:
+        return _date.fromisoformat((value or "")[:10])
+    except (TypeError, ValueError):
+        return None
+
+
+def stale_findings(findings: List[Dict[str, Any]],
+                   store: SourceStore) -> List[Dict[str, Any]]:
+    """Claims whose newest source is much older than the run's newest source.
+
+    Returns ``[{"claim", "source_date", "newest_date", "days_behind"}]``.
+    Compared against the evidence actually gathered rather than against today,
+    because that is the comparison that means something: if every page found
+    is from 2019 the subject is simply old, and flagging all of them says
+    nothing. A single 2024 page among a dozen from 2026 is the one to look at.
+    """
+    dated = [(f, _as_date(s.get("published", "")))
+             for f in findings
+             for s in (store.by_id(sid) for sid in f.get("source_ids", []))
+             if s]
+    known = [d for _, d in dated if d]
+    if len(known) < 2:
+        # Nothing to compare against. Reporting everything as stale because
+        # the pipeline could not read a date would be worse than silence.
+        return []
+    newest = max(known)
+
+    best_per_claim: Dict[str, Any] = {}
+    for finding, when in dated:
+        if when is None:
+            continue
+        key = finding["id"]
+        if key not in best_per_claim or when > best_per_claim[key][1]:
+            best_per_claim[key] = (finding, when)
+
+    out = []
+    for finding, when in best_per_claim.values():
+        behind = (newest - when).days
+        if behind >= STALE_AFTER_DAYS:
+            out.append({
+                "claim": finding["claim"],
+                "source_date": when.isoformat(),
+                "newest_date": newest.isoformat(),
+                "days_behind": behind,
+            })
+    return out
+
+
 def build_report_prompt(question: str, findings: List[Dict[str, Any]],
                         store: SourceStore, tainted: List[Dict[str, str]],
-                        conflicts: Optional[List[Dict[str, Any]]] = None) -> str:
+                        conflicts: Optional[List[Dict[str, Any]]] = None,
+                        stale: Optional[List[Dict[str, Any]]] = None) -> str:
     usable = [f for f in findings if f["verdict"] in USABLE_VERDICTS]
     rejected = [f for f in findings if f["verdict"] not in USABLE_VERDICTS]
 
@@ -937,6 +1014,27 @@ def build_report_prompt(question: str, findings: List[Dict[str, Any]],
                "says each, and state that it is unsettled. Do NOT pick one."
                if same else
                "  Lead with the stronger source and note the discrepancy.")
+        )
+    if stale:
+        warnings += (
+            "\n\nOUT OF DATE — each of these rests on a page much older than the "
+            "newest evidence in this run. The page may still be correct, but a "
+            "figure that has moved since would look exactly like this, so none "
+            "of them may be written as the current position. Date them in the "
+            "sentence — 'as of <month year>' — and say the current position was "
+            "not established:\n"
+            + "\n".join(
+                f"- {s['claim']}\n    (source dated {s['source_date']}; the "
+                f"newest evidence here is {s['newest_date']}, "
+                f"{s['days_behind']} days later)"
+                for s in stale
+            )
+            + "\n  Take particular care with anything worded as imminent, "
+              "upcoming, expected shortly or in the next few months. Those are "
+              "claims about a future that, on a page this old, has already "
+              "happened or already slipped — and repeating one as though it "
+              "were still ahead is the most confidently wrong thing a report "
+              "can do."
         )
     if tainted:
         warnings += (
@@ -1194,10 +1292,23 @@ def run_research_stream(
             yield {"stage": "verify",
                    "detail": f"{len(conflicts)} unresolved disagreement(s) between sources"}
 
+        # --- is any of it out of date? ---
+        #
+        # Last, deliberately: it compares each claim's source against the
+        # newest evidence the whole run gathered, so it cannot run until the
+        # run is done. Cheap — dates, no model call.
+        stale = stale_findings(findings, store)
+        if stale:
+            yield {"stage": "verify",
+                   "detail": f"{len(stale)} claim(s) rest on sources much older "
+                             f"than the rest of the evidence"}
+            for item in stale:
+                yield {"stale": item}
+
         # --- synthesize ---
         yield {"stage": "write", "detail": f"writing the report from {len(store.all())} sources"}
         prompt = build_report_prompt(question, findings, store,
-                                     context.taint_signals, conflicts)
+                                     context.taint_signals, conflicts, stale)
         parts: List[str] = []
 
         # Losing the report to a rate limit after minutes of gathering evidence

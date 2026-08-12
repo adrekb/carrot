@@ -140,6 +140,11 @@
   --w-semi: 600;      /* buttons, active nav, section headings */
   --w-bold: 700;      /* card titles, strong inline emphasis */
   --w-display: 700;   /* page headings and the brand — the top of the axis */
+  /* The sidebar's width, as a token because more than one thing needs to
+     know it. The command bar is fixed-position and centres itself; with the
+     width written only inside `.app-nav`, the bar had no way to know the left
+     216px of the viewport was already spoken for, and centred over it. */
+  --nav-w: 216px;
   --radius: 14px;
   --radius-sm: 10px;
   --radius-lg: 20px;
@@ -1074,10 +1079,17 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 /* ===== Command bar ===== */
 #cmdbar {
   position: fixed;
-  left: 50%;
+  /* Centred on the *content*, not on the window. `left: 50%` with a translate
+     put a 760px bar at viewport centre, which on a 1200px window starts 76px
+     inside the 216px sidebar — and since the bar is opaque it sat on top of
+     the nav items rather than beside them. Bounding it to the content column
+     and letting the margins centre it needs no transform and no arithmetic
+     that has to be redone when either width changes. */
+  left: var(--nav-w);
+  right: 0;
   bottom: 16px;
-  transform: translateX(-50%);
-  width: min(760px, calc(100vw - 32px));
+  margin-inline: auto;
+  width: min(760px, calc(100vw - var(--nav-w) - 32px));
   /* Two rows, always: the question, then the controls. Not a flex row that
      wraps under pressure — the rows are the design, so there is no width at
      which the layout is a compromise. */
@@ -1085,8 +1097,8 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   flex-direction: column;
   align-items: stretch;
   gap: 4px;
-  background: rgba(22, 22, 27, 0.92);
-  border: 1px solid var(--border-hi);
+  background: var(--surface-pop);
+  border: 1px solid var(--surface-pop-edge);
   border-radius: var(--r-lg);
   padding: 10px 12px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
@@ -1734,7 +1746,7 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 
 /* ----- Left app nav ----- */
 .app-nav {
-  width: 216px;
+  width: var(--nav-w);
   flex-shrink: 0;
   background: var(--bg2);
   border-right: 1px solid var(--border);
@@ -3421,8 +3433,8 @@ body::before {
 
 /* The command bar floats over the conversation. */
 #cmdbar {
-  background: rgba(30, 33, 41, 0.78);
-  border: 1px solid var(--border-hi);
+  background: var(--surface-pop);
+  border: 1px solid var(--surface-pop-edge);
   box-shadow: var(--shadow);
 }
 
@@ -3551,9 +3563,9 @@ body::before {
   box-shadow: var(--shadow-lg), inset 0 1px 0 rgba(255, 255, 255, 0.07);
 }
 #cmdbar {
-  background: rgba(30, 33, 42, 0.55);
-  border: 1px solid rgba(255, 255, 255, 0.11);
-  box-shadow: var(--shadow-lg), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  background: var(--surface-pop);
+  border: 1px solid var(--surface-pop-edge);
+  box-shadow: var(--shadow-lg);
 }
 /* The terminal and editors stay opaque — code needs a steady ground. */
 #terminal-body, .monaco-host, .milkdown-host {}
@@ -5846,7 +5858,26 @@ body #cmdbar:focus-within {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.news-source { font-size: var(--text-2xs); color: var(--faint); }
+/* Source and age on one line under the headline. The age is what tells you
+   whether a feed is live or has quietly stopped updating, which is the thing
+   a headline list is least able to say for itself. */
+.news-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: var(--text-2xs);
+  color: var(--faint);
+}
+.news-source {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.news-when {
+  flex: none;
+  margin-left: auto;
+  font-family: var(--mono);
+}
 
 /* --- Markets --- */
 .mkt-list { display: flex; flex-direction: column; }

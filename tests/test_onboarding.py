@@ -46,8 +46,15 @@ class TestTheFlow:
         assert "onboardingBootstrapStarted = true;" in APP_JS
 
     def test_onboarding_runs_before_the_splash(self):
+        # An ordering assertion rather than an adjacency one. It used to match
+        # `loadWorkspaces()` followed by exactly one comment line and then the
+        # call, which broke the moment anything else was added to the boot
+        # sequence between them — a false failure about a property that had
+        # not changed.
         assert "maybeShowOnboarding();" in APP_JS
-        assert re.search(r"loadWorkspaces\(\);\s*\n\s*//[^\n]*\n\s*maybeShowOnboarding\(\);", APP_JS)
+        boot = APP_JS[APP_JS.index("document.addEventListener('DOMContentLoaded'"):]
+        assert boot.index("loadWorkspaces();") < boot.index("maybeShowOnboarding();")
+        assert boot.index("maybeShowOnboarding();") < boot.index("switchTab('dashboard');")
 
     def test_a_backend_it_cannot_reach_does_not_block_the_app(self):
         """If /api/config fails, showing an unfinishable wizard is worse than

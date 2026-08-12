@@ -883,3 +883,86 @@ class TestConflicts:
         prompt = research.build_report_prompt("Q?", [self.LAUNCH], store, [], conflicts)
         assert "Lead with the stronger source" in prompt
         assert "Do NOT pick one" not in prompt
+
+
+class TestNothingHereIsAboutTime:
+    """The last gap in the pipeline, from a real run.
+
+    A report said the F-35's PTMU contract award was "imminent — in the next
+    few months (mid-2026)" and cited Defense Daily. The article was real, it
+    genuinely discussed PTMU, and the claim summarised it faithfully. It was
+    published in July 2024 and described a contract expected that autumn.
+
+    The source was reputable. The claim was supported by its text. Nothing
+    contradicted it, because nothing else in the evidence was about PTMU at
+    all. Every check passed — because authority, support and consistency are
+    none of them about time.
+    """
+
+    def _store_and_findings(self, isolated_db):
+        store = research.SourceStore(research.create_run("q", "quick"), "F-35")
+        store.add("web", "https://defensedaily.test/ptmu", "PTMU", "", "b",
+                  published="2024-07-22")
+        store.add("web", "https://gao.gov/x", "GAO", "", "b", published="2026-06-01")
+        store.add("web", "https://airforcetimes.test/y", "AFT", "", "b",
+                  published="2026-06-24")
+        findings = [
+            {"id": "a", "subquestion": "q", "verdict": "supported", "tier": "reputable",
+             "claim": "The PTMU contract award is imminent", "source_ids": ["S1"]},
+            {"id": "b", "subquestion": "q", "verdict": "supported", "tier": "official",
+             "claim": "Full mission capable rate fell to 25%", "source_ids": ["S2"]},
+        ]
+        return store, findings
+
+    def test_a_claim_from_a_much_older_page_is_flagged(self, isolated_db):
+        store, findings = self._store_and_findings(isolated_db)
+        stale = research.stale_findings(findings, store)
+        assert [s["claim"] for s in stale] == ["The PTMU contract award is imminent"]
+        assert stale[0]["days_behind"] > 600
+
+    def test_a_current_claim_is_left_alone(self, isolated_db):
+        store, findings = self._store_and_findings(isolated_db)
+        claims = {s["claim"] for s in research.stale_findings(findings, store)}
+        assert "Full mission capable rate fell to 25%" not in claims
+
+    def test_it_compares_against_the_evidence_not_against_today(self, isolated_db):
+        """If every page found is from 2019 the subject is simply old, and
+        flagging all of them says nothing."""
+        store = research.SourceStore(research.create_run("q", "quick"), "history")
+        store.add("web", "https://a.test/1", "A", "", "b", published="2019-01-01")
+        store.add("web", "https://a.test/2", "B", "", "b", published="2019-03-01")
+        findings = [
+            {"id": "a", "subquestion": "q", "claim": "old thing",
+             "source_ids": ["S1"], "verdict": "supported"},
+            {"id": "b", "subquestion": "q", "claim": "other old thing",
+             "source_ids": ["S2"], "verdict": "supported"},
+        ]
+        assert research.stale_findings(findings, store) == []
+
+    def test_undated_sources_do_not_produce_a_verdict(self, isolated_db):
+        """Reporting everything as stale because no date could be read would
+        be worse than silence."""
+        store = research.SourceStore(research.create_run("q", "quick"), "x")
+        store.add("web", "https://a.test/1", "A", "", "b")
+        findings = [{"id": "a", "subquestion": "q", "claim": "c",
+                     "source_ids": ["S1"], "verdict": "supported"}]
+        assert research.stale_findings(findings, store) == []
+
+    def test_a_claims_newest_source_is_what_counts(self, isolated_db):
+        """A claim corroborated by something current is not stale just
+        because it also cites something old."""
+        store = research.SourceStore(research.create_run("q", "quick"), "x")
+        store.add("web", "https://a.test/old", "Old", "", "b", published="2024-01-01")
+        store.add("web", "https://a.test/new", "New", "", "b", published="2026-06-01")
+        findings = [{"id": "a", "subquestion": "q", "claim": "c",
+                     "source_ids": ["S1", "S2"], "verdict": "supported"}]
+        assert research.stale_findings(findings, store) == []
+
+    def test_the_writer_is_told_not_to_state_it_as_current(self, isolated_db):
+        store, findings = self._store_and_findings(isolated_db)
+        stale = research.stale_findings(findings, store)
+        prompt = research.build_report_prompt("Q?", findings, store, [], None, stale)
+        assert "OUT OF DATE" in prompt
+        assert "may be written as the current position" in prompt
+        # The specific wording that goes wrong worst on an old page.
+        assert "imminent" in prompt
