@@ -50,11 +50,22 @@ class Pack:
         capabilities: Optional[List[Dict[str, Any]]] = None,
         settings: Optional[List[Dict[str, Any]]] = None,
         default_enabled: bool = False,
+        tabs: Optional[List[str]] = None,
     ):
         self.id = pack_id
         self.name = name
         self.description = description
         self.version = version
+        # Nav tabs this pack provides, hidden until it is enabled.
+        #
+        # Packs were tools, skills and settings — things the *model* reaches
+        # for. A tab is the first thing a pack has contributed that the user
+        # reaches for, and it is the same idea: a whole feature you either do
+        # or do not want, as one switch. The Planner is the case that made
+        # this necessary — a semester scheduler is not something most people
+        # installing a local assistant are ever going to open, and it sat in
+        # the sidebar between Research and Goals for all of them.
+        self.tabs = tabs or []
         self.tools = tools or {}
         # A pack whose skill text depends on its settings passes a callable, so
         # changing the target venue rewrites the instructions rather than
@@ -77,6 +88,7 @@ class Pack:
             "enabled": is_enabled(self.id),
             "tool_count": len(self.tools),
             "skill_count": len(self.skills),
+            "tabs": list(self.tabs),
         }
         if not deep:
             return summary
@@ -132,6 +144,26 @@ def enabled_ids() -> List[str]:
 
 def is_enabled(pack_id: str) -> bool:
     return pack_id in enabled_ids()
+
+
+def pack_tabs() -> Dict[str, Any]:
+    """Which pack-provided tabs exist, and which are currently on.
+
+    The browser needs both. It knows the full nav markup at load time and has
+    to hide the tabs whose pack is off — so it needs the complete list of
+    *managed* tabs as well as the enabled subset, or a tab belonging to a
+    disabled pack would be indistinguishable from an ordinary one and would
+    stay visible.
+    """
+    managed: Dict[str, str] = {}
+    enabled: List[str] = []
+    for pack in _PACKS.values():
+        on = is_enabled(pack.id)
+        for tab in pack.tabs:
+            managed[tab] = pack.id
+            if on:
+                enabled.append(tab)
+    return {"managed": managed, "enabled": enabled}
 
 
 def set_enabled(pack_id: str, enabled: bool) -> Dict[str, Any]:
@@ -322,3 +354,4 @@ def call(
 
 # Registering the bundled packs at import time keeps discovery in one place.
 from .packs import academia  # noqa: E402,F401  (registers itself)
+from .packs import planner  # noqa: E402,F401  (registers itself)

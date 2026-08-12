@@ -5,8 +5,26 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Carrot — Quick Ask</title>
 <style>
-  /* A soft floating command bar: heavy blur, deep round corners, one
-     accent. The window itself is transparent, so all the shape lives here. */
+  /* A floating command bar. The window itself is transparent, so all the
+     shape lives here.
+
+     The blur is gone with the rest of the app's glass — a 97%-opaque fill
+     exists to let a blur show through, and with no blur it is just an
+     imprecise colour. The panel is solid now.
+
+     The typeface is bundled beside this file rather than fetched from the
+     backend. The overlay opens on a global shortcut and is often the first
+     thing on screen; a font arriving over localhost once the backend has
+     finished starting means the first frame is in Segoe UI and the second is
+     not. `public/**/*` already ships in the Electron build, so this costs
+     nothing to package. */
+  @font-face {
+    font-family: "SpaceGrotesk";
+    src: url("SpaceGrotesk.woff2") format("woff2");
+    font-weight: 300 700;
+    font-style: normal;
+    font-display: swap;
+  }
   /* Kept in step with the main window's palette. The overlay is a file://
      page, so it cannot read the app's stored theme; the desktop shell
      relays it and stamps data-theme / data-accent on <html> (see the
@@ -19,6 +37,11 @@
     --accent: #ff7a2b;
     --accent-soft: rgba(255, 122, 43, 0.18);
     --accent-line: rgba(255, 122, 43, 0.42);
+    /* The accent as a *background for text* — a different requirement from
+       the accent as ink — and the foreground that sits on it. One dark value
+       cannot be right for both a yellow and a blue. */
+    --accent-fill: #e0620f;
+    --on-accent: #1a1208;
     --sheen: transparent;
     --drop: rgba(0, 0, 0, 0.5);
     --drop-sm: rgba(0, 0, 0, 0.3);
@@ -33,15 +56,15 @@
     --drop: rgba(38, 30, 22, 0.22);
     --drop-sm: rgba(38, 30, 22, 0.12);
   }
-  :root[data-accent="ember"]  { --accent: #ff4f28; --accent-soft: rgba(255, 79, 40, 0.18);  --accent-line: rgba(255, 79, 40, 0.42); }
-  :root[data-accent="amber"]  { --accent: #ffab1a; --accent-soft: rgba(255, 171, 26, 0.18); --accent-line: rgba(255, 171, 26, 0.42); }
-  :root[data-accent="orchid"] { --accent: #b95cf5; --accent-soft: rgba(185, 92, 245, 0.18); --accent-line: rgba(185, 92, 245, 0.42); }
-  :root[data-accent="teal"]   { --accent: #10c9a6; --accent-soft: rgba(16, 201, 166, 0.18); --accent-line: rgba(16, 201, 166, 0.42); }
-  :root[data-accent="indigo"] { --accent: #2f6bff; --accent-soft: rgba(47, 107, 255, 0.18); --accent-line: rgba(47, 107, 255, 0.44); }
+  :root[data-accent="ember"]  { --accent: #ff4f28; --accent-soft: rgba(255, 79, 40, 0.18);  --accent-line: rgba(255, 79, 40, 0.42); --accent-fill: #df3d17; --on-accent: #1a1208; }
+  :root[data-accent="amber"]  { --accent: #ffab1a; --accent-soft: rgba(255, 171, 26, 0.18); --accent-line: rgba(255, 171, 26, 0.42); --accent-fill: #e09000; --on-accent: #1a1208; }
+  :root[data-accent="orchid"] { --accent: #b95cf5; --accent-soft: rgba(185, 92, 245, 0.18); --accent-line: rgba(185, 92, 245, 0.42); --accent-fill: #8e2fd0; --on-accent: #ffffff; }
+  :root[data-accent="teal"]   { --accent: #10c9a6; --accent-soft: rgba(16, 201, 166, 0.18); --accent-line: rgba(16, 201, 166, 0.42); --accent-fill: #0a9b80; --on-accent: #0a1a16; }
+  :root[data-accent="indigo"] { --accent: #2f6bff; --accent-soft: rgba(47, 107, 255, 0.18); --accent-line: rgba(47, 107, 255, 0.44); --accent-fill: #1f55dd; --on-accent: #ffffff; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { background: transparent; overflow: hidden; }
   body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+    font-family: "SpaceGrotesk", -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
     padding: 14px;
     color: var(--text);
@@ -250,7 +273,14 @@
     font: inherit; font-size: 12.5px; text-align: left; cursor: pointer;
   }
   .menu-item:hover { background: var(--sheen); }
-  .menu-item.on { color: var(--accent); }
+  /* Filled, like the main window's nav. A tint of the accent and an ordinary
+     hover look almost identical, which on a short menu is the one piece of
+     state it exists to communicate. */
+  .menu-item.on {
+    background: var(--accent-fill);
+    color: var(--on-accent);
+    border-radius: 999px;
+  }
   .menu-empty { padding: 8px 9px; font-size: 11.5px; color: var(--muted); }
 
   /* Whole-panel drop target */

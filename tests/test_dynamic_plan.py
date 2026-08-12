@@ -148,3 +148,101 @@ class TestItIsWiredIn:
         css = self.read("carrot", "web", "css", "style.css")
         assert ".plan-item.dropped" in css
         assert ".plan-why" in css
+
+
+class TestTheSubjectDecidesTheRestOfThePlan:
+    """The opening plan is written before anything is known about the subject.
+
+    It can therefore only ask what the thing *is*. Once that is answered the
+    plan reads as finished while the answer is still thin: a real turn about
+    the Corvette ZR1X established the model year and the production date,
+    ticked every box, and never went after the acceleration, top speed or
+    price that a reader of a performance-car answer is obviously waiting for.
+    It answered the question asked and left four more to ask.
+    """
+
+    def read(self, *parts):
+        from pathlib import Path
+        return Path(__file__).resolve().parents[1].joinpath(*parts).read_text(encoding="utf-8")
+
+    def test_the_replan_is_told_to_expand_once_the_subject_is_known(self):
+        app = self.read("carrot", "app.py")
+        assert "just learned what kind of thing the subject is" in app
+
+    def test_the_guidance_is_general_rather_than_a_list_of_car_facts(self):
+        """Overfitting to the example would fix cars and nothing else."""
+        app = self.read("carrot", "app.py")
+        block = app[app.index("Rules for adding:"):]
+        block = block[:block.index("Rules for dropping")]
+        for other in ("aircraft", "drug", "law"):
+            assert other in block, f"{other} not covered — the rule is car-specific"
+
+    def test_a_completed_plan_can_still_be_expanded(self):
+        """The trigger used to require an *open* goal, which excluded exactly
+        this case: the narrow plan finishes, and that is the moment the
+        expansion is needed."""
+        app = self.read("carrot", "app.py")
+        assert "plan_complete = bool(goals) and not last_open" in app
+        assert "(last_open or (plan_complete and replans == 0))" in app
+
+    def test_a_finished_plan_is_only_expanded_once(self):
+        """A finished plan that keeps growing never finishes."""
+        app = self.read("carrot", "app.py")
+        assert "plan_complete and replans == 0" in app
+
+
+class TestItWorksInCodeMode:
+    """The same machinery, both surfaces.
+
+    `_replan` lives in the shared turn loop, and `goals` is populated from
+    `_coder_plan` in ACT mode exactly as it is from `_research_plan` in
+    multi-turn search — so a coding plan is revisable too. Asserted rather
+    than assumed, because the two paths compute "what has been done" from
+    different things (tool calls versus page text) and it would be easy for
+    one of them to stop feeding the revision.
+    """
+
+    def read(self, *parts):
+        from pathlib import Path
+        return Path(__file__).resolve().parents[1].joinpath(*parts).read_text(encoding="utf-8")
+
+    def test_the_revision_is_not_gated_on_search_mode(self):
+        app = self.read("carrot", "app.py")
+        block = app[app.index("rounds_left_now = rounds - round_index - 1"):]
+        block = block[:block.index("revision = _replan")]
+        assert "gated" not in block, "the revision only runs for search turns"
+
+    def test_a_coding_turn_feeds_its_own_work_to_the_revision(self):
+        """A coding step is met by what was *run*; checking it against page
+        text would leave every step open."""
+        app = self.read("carrot", "app.py")
+        assert 'gathered_all = (" ".join(work) if planning_work' in app
+
+    def test_the_prompt_is_worded_for_both(self):
+        app = self.read("carrot", "app.py")
+        prompt = app[app.index("REPLAN_PROMPT = "):]
+        prompt = prompt[:prompt.index('"""', prompt.index('"""') + 3)]
+        assert "FOUND OR DONE" in prompt, "the prompt assumes research"
+
+
+class TestDatesAreCheckedBeforeFinishing:
+    """The PTMU failure: a claim that a contract award was "imminent — in the
+    next few months", faithfully summarised from a real, reputable page that
+    was two years old. Every check passed. Authority, support and consistency
+    are none of them about time."""
+
+    def read(self, *parts):
+        from pathlib import Path
+        return Path(__file__).resolve().parents[1].joinpath(*parts).read_text(encoding="utf-8")
+
+    def test_the_replan_is_told_to_check_publication_dates(self):
+        app = self.read("carrot", "app.py")
+        assert "Check the dates before you finish" in app
+
+    def test_it_names_the_words_that_go_stale_worst(self):
+        """"Imminent" on a two-year-old page reads exactly like today's news."""
+        app = self.read("carrot", "app.py")
+        block = app[app.index("Check the dates before you finish"):]
+        block = block[:block.index("\n- **If you have just learned")]
+        for word in ("imminent", "upcoming"):
+            assert word in block

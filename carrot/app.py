@@ -1581,6 +1581,8 @@ Revise the plan against what you found. Return JSON only:
 Rules for adding:
 - Add a step only if what you found makes it necessary and it is not already on the list.
 - At most {add_limit} new steps.
+- **Check the dates before you finish.** Look at when the pages you read were published. If anything you are relying on comes from a page noticeably older than the others — and especially if it says something is upcoming, imminent, expected shortly or planned for a date that has since passed — add a step to check whether a more recent figure exists. A two-year-old page describing a contract as "imminent" reads exactly like today's news and is the single most confident way to be wrong.
+- **If you have just learned what kind of thing the subject is, add the facts an answer about that kind of thing is expected to contain.** This is the most valuable thing you can do here. The opening plan was written before you knew what you were looking at, so it could only ask what the thing *is*; now that you know, you know what a good answer looks like. Having established that something is a performance car, a reader expects acceleration, top speed, power and price — and an answer that gives only the model year and the production date has answered the question asked and left the reader to ask four more. The same applies to any subject: an aircraft has range and payload, a drug has efficacy and side effects, a law has who it applies to and when it takes effect. Add the two or three that are most conspicuous by their absence.
 
 Rules for dropping — these are strict, and a drop that breaks them will be refused:
 - You may drop a step ONLY because of something you have learned about the subject: the thing does not exist, the question was already answered by a source you read, the file or function is not there, the approach is impossible.
@@ -1742,14 +1744,92 @@ NARRATION = re.compile(
 GLUED_CITATION = re.compile(r"(?<=[\w%),.;:])(\[[^\]]{1,60}\]\((?:https?:)?//)")
 
 
+# The model's own gap analysis, written into the top of the answer.
+#
+# Reported twice, most legibly on an F-35 turn that opened:
+#
+#     From the current results, I still cannot answer the following:
+#     1. The exact status of the F-35's Full Operational Capability …
+#     2. Any recent updates on the engine modernization program …
+#     I will now search for F-35 Full Operational Capability 2026 …
+#     The F-35 Lightning II remains in active production …
+#
+# Everything before that last line is the multi-turn loop reflecting on what it
+# still has to find — genuinely useful, and addressed to itself. It is not the
+# tag-marker problem: there is no marker, and `ThinkTagStreamFilter` correctly
+# refuses to guess at unmarked prose because doing so in general would
+# eventually eat a real answer.
+#
+# This is narrower than the general case and that is what makes it safe. It
+# fires only when all three hold: the block is at the very *start*, it ends
+# with an explicit statement of intent to go and search, and substantial
+# answer text follows it. An answer that merely mentions searching in passing
+# has no such opening, and one that is nothing *but* narration keeps every
+# word — there is nothing after the transition to keep instead.
+
+# The hand-off sentence: the model announcing the search it is about to run.
+_SEARCH_INTENT = re.compile(
+    r"^[ \t]*(?:so |now |next,? |okay,? |ok,? )?"
+    r"(?:i(?:'| a|’a)?m going to|i will|i'?ll|let me|let's|i need to|i should)\s+"
+    # A small adverb slot. "Let me *also* look up the second thing" is the
+    # second announcement in a list of them, and a slot that admitted only
+    # "now" left it behind — so the first announcement was cut and the second
+    # became the opening line of the answer, which is worse than cutting
+    # neither.
+    r"(?:(?:now|also|then|next|first|quickly|briefly)\s+){0,2}"
+    r"(?:search|look up|look for|check|find out|dig into|research)"
+    r"\b[^\n]*\n",
+    re.I | re.M)
+
+# The shapes a gap list opens with. One of these has to be present too, so a
+# reply that simply begins "Let me check that for you." followed by an answer
+# is left alone — that is a greeting, not a leaked reflection.
+_GAP_PREAMBLE = re.compile(
+    r"(?:still (?:cannot|can'?t|could not|do not|don'?t)\s+(?:answer|find|confirm|"
+    r"determine|establish)|cannot yet answer|from the current results|"
+    r"based on the (?:current|available) results|remain(?:s)? unanswered|"
+    r"to fill (?:these|the) gaps|still (?:missing|unresolved|open)|"
+    r"the following (?:gaps|questions|remain))",
+    re.I)
+
+# How much answer has to survive for the cut to be worth making. Below this
+# the "preamble" is most of what there is, and removing it would leave the
+# user with less than the model actually produced.
+_MIN_ANSWER_AFTER = 400
+# How far into the reply to look. A transition sentence in the middle of a
+# long answer is the model narrating mid-flow, which is a different thing and
+# not something to cut a thousand words on.
+_PREAMBLE_WINDOW = 2500
+
+
+def strip_process_preamble(text: str) -> str:
+    """Remove a leading gap-analysis block the model addressed to itself."""
+    text = text or ""
+    head = text[:_PREAMBLE_WINDOW]
+    if not _GAP_PREAMBLE.search(head):
+        return text
+    # The *last* intent sentence inside the window: a model that lists three
+    # gaps and then announces two searches should lose both announcements.
+    cut = None
+    for match in _SEARCH_INTENT.finditer(head):
+        cut = match.end()
+    if cut is None:
+        return text
+    remainder = text[cut:].lstrip()
+    if len(remainder) < _MIN_ANSWER_AFTER:
+        return text
+    return remainder
+
+
 def _tidy_answer(text: str) -> str:
     """Small, safe repairs to the finished answer.
 
-    Deliberately only whitespace. Anything that rewrites the model's words
-    belongs in the directive where it can be argued with, not in a regex that
-    silently edits what the user is told.
+    Whitespace, and one bounded excision: a gap-analysis preamble the model
+    wrote to itself and left at the top of the reply. Anything that rewrites
+    the model's *words* still belongs in the directive where it can be argued
+    with, rather than in a regex that silently edits what the user is told.
     """
-    return GLUED_CITATION.sub(" " + chr(92) + "1", text or "")
+    return GLUED_CITATION.sub(" " + chr(92) + "1", strip_process_preamble(text))
 
 
 def _restore_carried(carried: List[str], final: str) -> str:
@@ -3193,8 +3273,21 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
         # in. Revising a plan that is finished, or one there is no budget to
         # act on, changes nothing except the picture the user is looking at.
         rounds_left_now = rounds - round_index - 1
-        if (goals and last_open and rounds_left_now > 0
-                and replans < MAX_REPLANS and (evidence or work)):
+        # Open goals mean the plan can still be corrected. A *complete* plan is
+        # the other case worth revising, and the more valuable one: the opening
+        # plan was written before anything was known about the subject, so it
+        # could only ask what the thing is. Once that is answered the plan
+        # reads as finished while the answer is still thin — the ZR1X turn
+        # established the model year and the production date, ticked every box,
+        # and never went after the acceleration figures a reader of a
+        # performance-car answer is obviously waiting for.
+        #
+        # Allowed once in that state, not every round, because a finished plan
+        # that keeps growing never finishes.
+        plan_complete = bool(goals) and not last_open
+        if (goals and rounds_left_now > 0 and replans < MAX_REPLANS
+                and (evidence or work)
+                and (last_open or (plan_complete and replans == 0))):
             gathered_all = (" ".join(work) if planning_work
                             else " ".join(item["text"] for item in evidence))
             revision = _replan(resolved, question, goals, last_open, gathered_all)
@@ -4302,6 +4395,12 @@ async def news_headlines(limit: int = 12):
             "url": link,
             "source": (item.get("source") or "")[:60],
             "published": item.get("published", ""),
+            # The normalised one is what the widget renders. Feeds disagree
+            # wildly about the raw string's format, and the browser's Date
+            # parser returns "Invalid Date" for the least common of them —
+            # which is how a headline list ends up with dates on some rows
+            # and nothing on others.
+            "published_iso": item.get("published_iso", ""),
         })
         if len(out) >= max(1, min(int(limit or 12), 40)):
             break
@@ -5104,6 +5203,18 @@ async def router_recommendation():
 @app.get("/api/extensions")
 async def list_extensions():
     return {"extensions": extensions_mod.list_packs()}
+
+
+@app.get("/api/extensions/tabs")
+async def extension_tabs():
+    """Which nav tabs belong to a pack, and which of those are switched on.
+
+    Both halves are needed. The page ships the full nav markup, so to hide a
+    tab whose pack is off it has to know which tabs are pack-managed at all —
+    otherwise one belonging to a disabled pack is indistinguishable from an
+    ordinary tab and simply stays visible.
+    """
+    return extensions_mod.pack_tabs()
 
 
 @app.get("/api/extensions/{pack_id}")

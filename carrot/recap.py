@@ -1,7 +1,7 @@
 import json
 import os
 import feedparser
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 
 import httpx
 from carrot.database import get_db
@@ -19,6 +19,27 @@ DUCKDUCKGO_QUERY = "latest tech breakthroughs AI programming science news 2026"
 WEB_SEARCH_MAX_RESULTS = 5
 
 
+def _published_iso(entry) -> str:
+    """The entry's date as ISO 8601, or "".
+
+    From `published_parsed`, which feedparser has already normalised, rather
+    than from the `published` string. Feeds are wildly inconsistent about that
+    string — RFC 2822, ISO, and several things that are neither — and asking
+    the browser's Date parser to cope with all of them produces "Invalid Date"
+    on exactly the feeds that use the least common format. The struct_time is
+    the same shape whatever the feed sent.
+    """
+    for key in ("published_parsed", "updated_parsed"):
+        stamp = entry.get(key)
+        if not stamp:
+            continue
+        try:
+            return datetime(*stamp[:6], tzinfo=timezone.utc).isoformat()
+        except (TypeError, ValueError):
+            continue
+    return ""
+
+
 def fetch_feed(url: str):
     try:
         feed = feedparser.parse(url)
@@ -30,6 +51,11 @@ def fetch_feed(url: str):
                     "summary": entry.get("summary", ""),
                     "link": entry.get("link", ""),
                     "published": entry.get("published", ""),
+                    # Normalised alongside the raw string rather than
+                    # replacing it: the recap prompt has always been handed
+                    # whatever the feed said, and changing that would change
+                    # the briefing for a reason unrelated to dates.
+                    "published_iso": _published_iso(entry),
                     "source": feed.feed.get("title", ""),
                 }
             )

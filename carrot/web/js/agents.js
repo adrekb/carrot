@@ -247,6 +247,16 @@ function makeResearchHandler() {
         // seeing in the trace rather than only as a line in the report: it is
         // the case where the report is least able to give you a straight
         // answer, and knowing that early is the point.
+        // A claim resting on a page much older than the rest of the evidence.
+        // The one that motivated this said a contract award was "imminent"
+        // from a page two years old — every other check passed, because none
+        // of them are about time.
+        if (event.stale) {
+            traceLine('research-trace',
+                `dated ${event.stale.source_date}, `
+                + `${event.stale.days_behind} days behind the newest source: `
+                + event.stale.claim.slice(0, 120), 'warn');
+        }
         if (event.conflict) {
             const tiers = (event.conflict.tiers || []).join(' vs ');
             traceLine('research-trace',
@@ -729,6 +739,10 @@ async function setPackEnabled(packId, enabled) {
     // A pack's skills land in the ordinary skills list, so refresh that too.
     if (typeof loadSkillsList === 'function') loadSkillsList();
     if (typeof loadSkillCatalog === 'function') loadSkillCatalog();
+    // And its tabs appear or disappear from the sidebar. Without this the
+    // switch reads as broken: you turn the Planner on, the card says enabled,
+    // and the nav does not change until the next reload.
+    if (typeof applyExtensionTabs === 'function') await applyExtensionTabs();
 }
 
 async function savePackSetting(packId, key, value) {

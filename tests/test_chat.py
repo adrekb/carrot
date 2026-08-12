@@ -273,3 +273,83 @@ class TestStoppingAChatTurn:
         js = self.read("carrot", "web", "js", "app.js")
         assert "send-btn')?.classList.toggle('hidden', running)" in js
         assert "stop-btn')?.classList.toggle('hidden', !running)" in js
+
+
+class TestTheGapAnalysisDoesNotReachTheAnswer:
+    """The multi-turn loop reflecting on what it still has to find, left at
+    the top of the reply.
+
+    Reported from an F-35 turn that opened "From the current results, I still
+    cannot answer the following: 1... 2... 3... I will now search for X and Y
+    to fill these gaps." and only then began the answer.
+
+    This is not the marker problem — there is no marker, and the tag filter
+    correctly refuses to guess at unmarked prose because in general that would
+    eventually eat a real answer. This is narrower, which is what makes it
+    safe: at the start, ending in an explicit statement of intent to search,
+    with a substantial answer after it.
+    """
+
+    # Comfortably over the floor below which the strip declines — a real
+    # answer is thousands of characters, and a fixture that skirts the limit
+    # would be testing the guard rather than the strip.
+    BODY = ("The F-35 Lightning II remains in active production and deployment, "
+            "but its readiness and modernization efforts face significant "
+            "challenges in 2026. The full mission capable rate fell to 25% in "
+            "fiscal 2025, down from 38% in 2021. The Pentagon launched a $13.7 "
+            "billion sustainment reset to address spare parts shortages and "
+            "software issues, but progress has been slow throughout the year. "
+            "The TR-3 avionics package remains incomplete, with the Pentagon "
+            "accepting a downgraded build that lacks full combat capability, "
+            "and no retrofit is planned for the aircraft already delivered "
+            "with the earlier hardware configuration. ")
+
+    def test_the_reflection_is_removed(self):
+        from carrot import app as A
+        text = ("From the current results, I still cannot answer the following:\n"
+                "1. The status of Full Operational Capability.\n"
+                "2. Engine modernization updates.\n\n"
+                "I will now search for F-35 FOC 2026 to fill these gaps.\n" + self.BODY)
+        out = A.strip_process_preamble(text)
+        assert out.startswith("The F-35 Lightning II")
+        assert "still cannot answer" not in out
+
+    def test_several_announcements_are_all_removed(self):
+        """A model that lists three gaps and announces two searches should
+        lose both announcements, not just the first."""
+        from carrot import app as A
+        text = ("From the current results, I still cannot answer the following:\n"
+                "I will now search for the first thing.\n"
+                "Let me also look up the second thing.\n" + self.BODY)
+        assert A.strip_process_preamble(text).startswith("The F-35")
+
+    def test_an_ordinary_opening_line_is_kept(self):
+        """"Let me check that for you" is a greeting, not a leaked
+        reflection — there is no gap list with it."""
+        from carrot import app as A
+        text = "Let me check that for you.\n" + self.BODY
+        assert A.strip_process_preamble(text) == text
+
+    def test_searching_mentioned_mid_answer_is_kept(self):
+        """A transition sentence in the middle of a long answer is the model
+        narrating mid-flow, and cutting there would delete the answer above
+        it."""
+        from carrot import app as A
+        text = self.BODY + "\nI will now search for the engine details.\n" + self.BODY
+        assert A.strip_process_preamble(text) == text
+
+    def test_a_reply_that_is_nothing_but_narration_keeps_every_word(self):
+        """Below the floor there is no answer to keep instead, and stripping
+        would leave the user with less than the model produced."""
+        from carrot import app as A
+        text = ("From the current results, I still cannot answer this.\n"
+                "I will now search for more.\nA short answer.")
+        assert A.strip_process_preamble(text) == text
+
+    def test_it_runs_on_every_finished_answer(self):
+        from pathlib import Path
+        from carrot import app as A
+        source = Path(A.__file__).read_text(encoding="utf-8")
+        tidy = source[source.index("def _tidy_answer"):]
+        tidy = tidy[:tidy.index("\n\n\n")]
+        assert "strip_process_preamble" in tidy

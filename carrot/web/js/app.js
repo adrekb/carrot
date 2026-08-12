@@ -3133,6 +3133,38 @@ async function runBootstrap() {
 }
 
 // ===== Init =====
+// ===== Tabs that belong to an extension =====
+//
+// A pack used to ship tools, skills and settings — things the model reaches
+// for. A tab is the first thing a pack contributes that the *user* reaches
+// for, and it works the same way: one switch for a whole feature.
+//
+// The page ships the full nav markup, so hiding a tab means knowing which
+// tabs are pack-managed at all. Without that list a tab whose pack is off is
+// indistinguishable from an ordinary one and simply stays visible.
+//
+// Hidden, not removed. The view and its routes stay mounted, so enabling the
+// pack is instant and a bookmarked URL into a disabled feature still works
+// rather than 404ing.
+async function applyExtensionTabs() {
+    let info;
+    try {
+        info = await api('/api/extensions/tabs');
+    } catch (_) {
+        return;   // A failed probe must not hide a tab that should be there.
+    }
+    const managed = Object.keys(info.managed || {});
+    const enabled = new Set(info.enabled || []);
+    for (const tab of managed) {
+        const on = enabled.has(tab);
+        document.querySelectorAll(`.nav-item[data-tab="${tab}"]`)
+            .forEach(el => el.classList.toggle('hidden', !on));
+        // Somebody sitting on a tab when its pack is switched off should not
+        // be left looking at a view they can no longer navigate back to.
+        if (!on && currentTab === tab) switchTab('dashboard');
+    }
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
     // Before the first await, so the workspace never paints a frame with the
     // composer sitting on top of the terminal.
@@ -3144,6 +3176,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     loadSkillCatalog();
     loadSearchModes();
     loadWorkspaces();
+    // Before the first switchTab, so a disabled pack's tab never paints.
+    await applyExtensionTabs();
     // Onboarding decides whether the bootstrap splash runs at all.
     maybeShowOnboarding();
     switchTab('dashboard');
