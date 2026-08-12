@@ -40,6 +40,80 @@ def test_think_filter_flushes_unclosed_think():
     assert _join(events, "content") == ""
 
 
+# ===== The harmony channel format =====
+#
+# Reported against a real answer: a well-sourced reply about the Corvette ZR1X
+# arrived with the model's own planning inside it. The cause was not a missing
+# marker — `<|channel|>analysis` was in the opener list — but `<|message|>`
+# being in the *closer* list. It is the token that follows the opener, so
+# thinking opened and closed one token later, and the whole chain of thought
+# was emitted as the answer.
+#
+# Every one of these is a chunk-size sweep. The filter buffers, and a bug that
+# only appears when a marker straddles a boundary is a bug that only appears
+# against a real provider.
+
+HARMONY = ("<|start|>assistant<|channel|>analysis<|message|>"
+           "The user asks about the ZR1X. I should structure this."
+           "<|end|><|start|>assistant<|channel|>final<|message|>"
+           "The ZR1X is a 2026 model year vehicle.")
+
+CHUNK_SIZES = (1, 3, 7, 19, 1000)
+
+
+def _sweep(text):
+    """Feed `text` at several chunk sizes; return (content, thinking) per size."""
+    out = {}
+    for size in CHUNK_SIZES:
+        events = _drain(ThinkTagStreamFilter(),
+                        [text[i:i + size] for i in range(0, len(text), size)])
+        out[size] = (_join(events, "content"), _join(events, "thinking"))
+    return out
+
+
+def test_harmony_reasoning_does_not_reach_the_answer():
+    for size, (content, _) in _sweep(HARMONY).items():
+        assert content == "The ZR1X is a 2026 model year vehicle.", f"chunk={size}"
+
+
+def test_harmony_reasoning_is_kept_as_thinking():
+    """Routed, not discarded — the trace pane is where it belongs."""
+    for size, (_, thinking) in _sweep(HARMONY).items():
+        assert "I should structure this" in thinking, f"chunk={size}"
+
+
+def test_harmony_control_tokens_are_dropped_not_printed():
+    """`<|start|>assistant` is neither an opener nor a closer.
+
+    Under the old two-list model anything unmatched was prose by default, so
+    the scaffolding was printed to the user alongside the answer.
+    """
+    for size, (content, _) in _sweep(HARMONY).items():
+        for token in ("<|start|>", "<|message|>", "<|end|>", "assistant"):
+            assert token not in content, f"chunk={size} leaked {token}"
+
+
+def test_the_single_pipe_channel_variant_is_handled():
+    """Seen in the wild from a local build: `<|channel>` with one pipe."""
+    text = ("<|channel>thought<|message|>hidden working"
+            "<|channel>final<|message|>Visible answer.")
+    for size, (content, thinking) in _sweep(text).items():
+        assert content == "Visible answer.", f"chunk={size}"
+        assert "hidden working" in thinking, f"chunk={size}"
+
+
+def test_an_answer_that_merely_mentions_a_marker_word_is_untouched():
+    """The filter matches tokens, not vocabulary.
+
+    A reply about prompt formats will contain the word "analysis" and must
+    not lose everything after it.
+    """
+    text = "The analysis shows a final result. No markers here."
+    for size, (content, thinking) in _sweep(text).items():
+        assert content == text, f"chunk={size}"
+        assert thinking == "", f"chunk={size}"
+
+
 def _parse_sse(text):
     payloads = []
     for frame in text.split("\n\n"):

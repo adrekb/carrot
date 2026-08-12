@@ -2152,7 +2152,9 @@ async function sendAgentTask() {
                 if (payload.approval_resolved) {
                     agentApprovalResolved(wrap, payload.approval_resolved);
                 }
-                if (payload.questions) agentQuestions(wrap, payload.questions);
+                if (payload.questions) {
+                    agentQuestions(wrap, payload.questions, payload.blocking);
+                }
                 // The steps this turn is working to, ticking as the tools
                 // actually touch them. Same component as chat and Research,
                 // from the same event.
@@ -2254,15 +2256,21 @@ function stripQuestions(text) {
     return (head.trimEnd() + '\n' + tail.trimStart()).trim();
 }
 
-function agentQuestions(wrap, questions) {
+function agentQuestions(wrap, questions, blocking) {
     if (!questions || !questions.length) return;
     if (wrap.querySelector('.agent-questions')) return;   // one form per turn
 
     const box = document.createElement('div');
-    box.className = 'agent-questions';
+    // `blocking` says the model asked before it planned, so there is nothing
+    // above the form to read and the form has to look like the turn rather
+    // than like an appendix to it. The server decides this, because it is the
+    // only place that saw where the question fell in the reply.
+    box.className = 'agent-questions' + (blocking ? ' blocking' : '');
     const head = document.createElement('div');
     head.className = 'questions-head';
-    head.textContent = 'Before it starts — answer what matters, skip the rest.';
+    head.textContent = blocking
+        ? 'Waiting on you — answer what matters, skip the rest.'
+        : 'Before it starts — answer what matters, skip the rest.';
     box.appendChild(head);
 
     const chosen = new Map();

@@ -590,13 +590,18 @@ class TestTheQuestionFormIsWiredUp:
         # The parse sits in the SSE body, after the 200 and the headers have
         # gone out: an exception there is a closed socket, not an error
         # response, and the user gets a turn that ends with no text at all.
+        #
+        # The parse moved when questions became turn-ending — it reads the
+        # gate's accumulated text rather than the finished reply, because by
+        # then the block has already been cut out of it. The guarantee did not
+        # move, so this follows it to the new call site rather than retiring.
         lines = Path(A.__file__).read_text(encoding="utf-8").splitlines()
         at = next(i for i, line in enumerate(lines)
-                  if "parse_questions(final_text)" in line)
-        before = "\n".join(lines[max(0, at - 4):at])
+                  if "asked.questions()" in line)
+        before = "\n".join(lines[max(0, at - 6):at])
         after = "\n".join(lines[at:at + 6])
-        assert "try:" in before, "parse_questions is not inside a try"
-        assert "except" in after, "the try around parse_questions has no except"
+        assert "try:" in before, "the questions parse is not inside a try"
+        assert "except" in after, "the try around the questions parse has no except"
 
     def test_answering_switches_to_act(self):
         # The whole point: the form is the moment Act was waiting for, so the
@@ -618,6 +623,55 @@ class TestTheQuestionFormIsWiredUp:
         assert "stripQuestions(answer)" in js, (
             "the answer is rendered without stripping, so the user sees the raw "
             "JSON as well as the form built from it")
+
+    def test_chat_listens_for_questions_too(self):
+        """The Code panel had a form; chat had the event and no listener.
+
+        So in ordinary chat the questions were invisible *and* self-answered —
+        the server parsed them, emitted them, and nothing on the page read the
+        event. A form that only exists in one of the two places the model can
+        ask from is not a form, it is a coincidence.
+        """
+        js = self.read("js", "app.js")
+        assert "payload.questions" in js, "chat never sees the questions event"
+        assert "function chatQuestions" in js
+
+    def test_the_blocking_flag_reaches_both_panels(self):
+        """Whether a turn is waiting is decided by the server.
+
+        It is the only side that saw where the question fell in the reply.
+        Re-deriving it in the browser would be a second opinion on a settled
+        question, and the two would disagree the first time either changed.
+        """
+        server = Path(A.__file__).read_text(encoding="utf-8")
+        assert '"blocking": asked.blocking()' in server
+        for name in ("app.js", "features.js"):
+            assert "blocking" in self.read("js", name), f"{name} ignores it"
+
+    def test_a_waiting_turn_does_not_get_a_manufactured_answer(self):
+        """The empty-answer recovery must not fire on a turn that asked.
+
+        That path is built never to come back empty — it falls through to an
+        answer written from the evidence. Running it over a question would
+        rebuild exactly what the cut just removed, with more conviction.
+        """
+        server = Path(A.__file__).read_text(encoding="utf-8")
+        assert "not (asked and asked.blocking())" in server
+
+    def test_a_waiting_turn_does_not_write_memories(self):
+        """Memory extraction reads conclusions out of a turn.
+
+        A turn that ended on a question has not concluded anything, so letting
+        it run files the guesses the model was asking about as things now
+        known about the user — the failure the gate exists to prevent, made
+        durable.
+        """
+        server = Path(A.__file__).read_text(encoding="utf-8")
+        # The call site in the SSE body, not the `def` — searching for the bare
+        # name finds the definition first and would pass against anything.
+        at = server.index("                _post_turn(")
+        window = server[max(0, at - 400):at]
+        assert "pending_questions" in window and "blocking" in window
 
 
 class TestTheCodingAgentCanLookThingsUp:

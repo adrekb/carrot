@@ -121,6 +121,7 @@ async function openResearchRun(runId) {
     document.getElementById('research-report').innerHTML = mdToHtml(run.report || '_No report._');
     renderResearchSources(run.sources.map(s => ({
         id: s.id, kind: s.kind, title: s.title, locator: s.locator, tainted: s.tainted,
+        tier: s.tier, tier_reason: s.tier_reason,
     })));
     const trace = document.getElementById('research-trace');
     trace.innerHTML = '';
@@ -135,6 +136,19 @@ async function deleteResearchRun(runId) {
     loadResearch();
 }
 
+// Who is speaking, in the words the report uses. The backend decides the tier;
+// this only decides how loud it looks. Keeping the wording identical to
+// carrot/websearch.py's TIER_MEANING matters — a legend in the panel that
+// disagrees with the legend in the report teaches the reader to trust neither.
+const TIER_MEANING = {
+    'first-party': 'published by the party the claim is about',
+    'official': 'government, standards body or official record',
+    'reputable': 'established outlet with editorial accountability',
+    'unknown': 'no signal either way',
+    'low': 'shape of a content farm — likely rewording another source',
+};
+const TIER_ORDER = ['first-party', 'official', 'reputable', 'unknown', 'low'];
+
 function renderResearchSources(sources) {
     const host = document.getElementById('research-sources');
     if (!host) return;
@@ -142,13 +156,27 @@ function renderResearchSources(sources) {
         host.innerHTML = '<div class="empty">No sources read yet.</div>';
         return;
     }
-    host.innerHTML = sources.map(source => `
-        <div class="source-item${source.tainted ? ' tainted' : ''}">
+    // Strongest first, matching the report's appendix. Read order is an
+    // argument about what matters, and the old insertion order was making
+    // that argument on behalf of whichever page the search backend returned
+    // first — which is the one thing about a result that carries no meaning.
+    const ranked = sources.slice().sort((a, b) => {
+        const ai = TIER_ORDER.indexOf(a.tier || 'unknown');
+        const bi = TIER_ORDER.indexOf(b.tier || 'unknown');
+        return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);
+    });
+    host.innerHTML = ranked.map(source => {
+        const tier = source.tier || 'unknown';
+        const why = source.tier_reason || TIER_MEANING[tier] || '';
+        return `
+        <div class="source-item tier-${escHtml(tier)}${source.tainted ? ' tainted' : ''}">
             <span class="source-id">${escHtml(source.id)}</span>
+            <span class="source-tier" title="${escHtml(why)}">${escHtml(tier)}</span>
             <span class="source-kind">${escHtml(source.kind)}</span>
             <span class="source-title">${escHtml(source.title || source.locator)}</span>
             ${source.tainted ? '<span class="source-flag" title="This page tried to give the agent instructions">flagged</span>' : ''}
-        </div>`).join('');
+        </div>`;
+    }).join('');
 }
 
 // A run can start from the question box or from a note sent here. Both produce
@@ -198,7 +226,13 @@ function makeResearchHandler() {
         if (event.source) {
             sources.push(event.source);
             renderResearchSources(sources);
-            traceLine('research-trace', `read [${event.source.id}] ${event.source.title}`, 'search');
+            const tier = event.source.tier || 'unknown';
+            traceLine('research-trace',
+                `read [${event.source.id}] (${tier}) ${event.source.title}`,
+                // A content farm entering the evidence pool is worth seeing as
+                // it happens, not only in the appendix once the report is
+                // already written around it.
+                tier === 'low' ? 'warn' : 'search');
         }
         if (event.finding) {
             traceLine('research-trace',
@@ -208,6 +242,17 @@ function makeResearchHandler() {
             traceLine('research-trace',
                 `${event.verdict.verdict}: ${event.verdict.claim}`,
                 event.verdict.verdict === 'supported' ? 'ok' : 'warn');
+        }
+        // Two claims that each checked out and cannot both be true. Worth
+        // seeing in the trace rather than only as a line in the report: it is
+        // the case where the report is least able to give you a straight
+        // answer, and knowing that early is the point.
+        if (event.conflict) {
+            const tiers = (event.conflict.tiers || []).join(' vs ');
+            traceLine('research-trace',
+                `sources disagree (${tiers}) on ${event.conflict.subject}`, 'warn');
+            (event.conflict.claims || []).forEach(claim =>
+                traceLine('research-trace', `  · ${claim}`, 'stage'));
         }
         if (event.injection_warning) {
             traceLine('research-trace',
@@ -221,7 +266,9 @@ function makeResearchHandler() {
         if (event.error) traceLine('research-trace', event.error, 'err');
         if (event.done) {
             traceLine('research-trace',
-                `done — ${event.sources} sources, ${event.findings} findings, ${event.rejected} rejected`,
+                `done — ${event.sources} sources, ${event.findings} findings, `
+                + `${event.rejected} rejected`
+                + (event.conflicts ? `, ${event.conflicts} unresolved disagreement(s)` : ''),
                 'ok');
             document.getElementById('research-report').innerHTML = mdToHtml(event.report);
         }

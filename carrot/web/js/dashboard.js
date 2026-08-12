@@ -116,6 +116,34 @@ function buildWidgetCard(w) {
         body.innerHTML = '<div class="muted small">Loading…</div>';
         card.appendChild(body);
         renderQuickNotesWidget(w, body);
+    } else if (w.type === 'system') {
+        card.innerHTML = widgetHead('i-chip', 'Machine Load', w.id);
+        const body = document.createElement('div');
+        body.className = 'widget-body';
+        body.innerHTML = '<div class="muted small">Reading…</div>';
+        card.appendChild(body);
+        renderSystemWidget(w, body);
+    } else if (w.type === 'throughput') {
+        card.innerHTML = widgetHead('i-gauge', 'Model Speed', w.id);
+        const body = document.createElement('div');
+        body.className = 'widget-body';
+        body.innerHTML = '<div class="muted small">Loading…</div>';
+        card.appendChild(body);
+        renderThroughputWidget(w, body);
+    } else if (w.type === 'news') {
+        card.innerHTML = widgetHead('i-news', 'Headlines', w.id);
+        const body = document.createElement('div');
+        body.className = 'widget-body';
+        body.innerHTML = '<div class="muted small">Loading…</div>';
+        card.appendChild(body);
+        renderNewsWidget(w, body);
+    } else if (w.type === 'markets') {
+        card.innerHTML = widgetHead('i-trending', 'Markets', w.id);
+        const body = document.createElement('div');
+        body.className = 'widget-body';
+        body.innerHTML = '<div class="muted small">Loading…</div>';
+        card.appendChild(body);
+        renderMarketsWidget(w, body);
     } else {
         card.innerHTML = widgetHead('i-grid', w.type, w.id);
     }
@@ -919,4 +947,233 @@ function topSearch() {
     const input = document.getElementById('search-input');
     if (input) { input.value = val; }
     if (typeof doSearch === 'function') doSearch();
+}
+
+// ===== Machine load =====
+//
+// The static hardware profile has been in the Hub since the beginning: what
+// CPU, how much RAM, which GPU. What was missing is what any of it is *doing*,
+// which is the only version of the question that explains why a local turn is
+// slow. A 7B that has spilled out of VRAM and is running half on the CPU looks
+// identical from the outside to one that is simply a big model — the meters
+// are how you tell the two apart.
+//
+// Polled rather than pushed. A websocket for four numbers is machinery to
+// maintain for no gain, and the poll stops as soon as the card leaves the page.
+
+const systemTimers = new Map();
+
+// A row of numbers, not a bar chart.
+//
+// This was a filled track per resource. Four of them stacked in a 220px rail
+// read as a settings panel full of sliders — the shape says "drag me", and
+// none of them are draggable. They also spent the widest part of a narrow
+// column on the least precise version of the information: a bar answers "is
+// this a lot" approximately, and the number answers it exactly in a third of
+// the room.
+//
+// So the number is the widget. Colour carries the warning that the fill used
+// to, applied to the figure itself, which is where the eye already is.
+function meterRow(label, percent, detail, tone) {
+    const value = (percent === null || percent === undefined)
+        ? null : Math.max(0, Math.min(100, percent));
+    // A null reading is written out rather than shown as zero. Apple Silicon
+    // reports no GPU load without elevated privileges, and a 0% there reads
+    // as "idle" when the truth is "not measurable".
+    return '<div class="meter">' +
+        '<div class="meter-top">' +
+          '<span class="meter-label">' + escHtml(label) + '</span>' +
+          '<span class="meter-value' + (tone ? ' ' + tone : '') + '">' +
+            (value === null ? 'n/a' : value.toFixed(0) + '%') +
+          '</span>' +
+        '</div>' +
+        (detail ? '<div class="meter-detail">' + escHtml(detail) + '</div>' : '') +
+    '</div>';
+}
+
+function meterTone(percent) {
+    if (percent === null || percent === undefined) return '';
+    if (percent >= 90) return 'hot';
+    if (percent >= 70) return 'warm';
+    return '';
+}
+
+async function renderSystemWidget(w, body) {
+    const draw = async () => {
+        let m;
+        try {
+            m = await api('/api/system/meters');
+        } catch (_) {
+            body.innerHTML = '<div class="muted small">Could not read the machine.</div>';
+            return;
+        }
+        if (m.available === false) {
+            body.innerHTML = '<div class="muted small">' + escHtml(m.why || 'Unavailable.') + '</div>';
+            return;
+        }
+        const parts = [
+            meterRow('CPU', m.cpu_percent,
+                [m.cpu_cores ? m.cpu_cores + ' threads' : '',
+                 m.cpu_temp_c ? m.cpu_temp_c + '°C' : ''].filter(Boolean).join(' · '),
+                meterTone(m.cpu_percent)),
+            meterRow('Memory', m.ram_percent,
+                m.ram_used_gb + ' of ' + m.ram_total_gb + ' GB',
+                meterTone(m.ram_percent)),
+        ];
+        for (const g of (m.gpus || [])) {
+            parts.push(meterRow(g.name || 'GPU', g.gpu_percent,
+                g.why || (g.temp_c ? g.temp_c + '°C' : ''),
+                meterTone(g.gpu_percent)));
+            // VRAM decides whether a model runs on the GPU at all, so it gets
+            // its own bar rather than being a footnote to the utilisation one.
+            if (g.vram_total_gb) {
+                parts.push(meterRow('VRAM', g.vram_percent,
+                    g.vram_used_gb + ' of ' + g.vram_total_gb + ' GB',
+                    meterTone(g.vram_percent)));
+            }
+        }
+        body.innerHTML = '<div class="meters">' + parts.join('') + '</div>';
+    };
+
+    await draw();
+    // One timer per widget id, cleared first: re-rendering the dashboard
+    // rebuilds the card, and without this every rebuild left its poll running.
+    if (systemTimers.has(w.id)) clearInterval(systemTimers.get(w.id));
+    const interval = Math.max(1000, ((w.config || {}).refresh_seconds || 3) * 1000);
+    const timer = setInterval(() => {
+        // Stop once the card has left the document. A dashboard the user
+        // navigated away from should not keep polling forever.
+        if (!body.isConnected) { clearInterval(timer); systemTimers.delete(w.id); return; }
+        draw();
+    }, interval);
+    systemTimers.set(w.id, timer);
+}
+
+// ===== Model speed =====
+//
+// Read from Ollama's own eval counters, never timed from out here: an external
+// stopwatch includes the queue, the prompt evaluation and the socket, and
+// reports a figure well below what the model is actually producing. That is
+// the sort of plausible wrong number that sends someone off to buy a graphics
+// card they did not need.
+
+async function renderThroughputWidget(w, body) {
+    let data;
+    try {
+        data = await api('/api/system/throughput');
+    } catch (_) {
+        body.innerHTML = '<div class="muted small">Could not read throughput.</div>';
+        return;
+    }
+    if (!data.latest) {
+        body.innerHTML = '<div class="muted small">No local generations yet. '
+                       + 'Ask something and this fills in.</div>';
+        return;
+    }
+
+    const latest = data.latest;
+    // A sparkline over the window, so a machine slowing down under thermal
+    // load looks different from one that was always this fast.
+    const series = (data.samples || []).map(s => s.tps);
+    const max = Math.max.apply(null, series.concat([1]));
+    const bars = series.slice(-30).map(v =>
+        '<span class="spark-bar" style="height:' + Math.max(6, v / max * 100) +
+        '%" title="' + v + ' tok/s"></span>').join('');
+
+    const models = Object.entries(data.by_model || {})
+        .sort((a, b) => b[1].runs - a[1].runs)
+        .slice(0, 3)
+        .map(entry => '<div class="tps-row">' +
+            '<span class="tps-model">' + escHtml(entry[0]) + '</span>' +
+            '<span class="tps-avg">' + entry[1].average + ' tok/s</span>' +
+            '<span class="tps-runs">' + entry[1].runs +
+              ' run' + (entry[1].runs === 1 ? '' : 's') + '</span>' +
+        '</div>').join('');
+
+    body.innerHTML =
+        '<div class="tps-headline">' +
+          '<span class="tps-big">' + latest.tps + '</span>' +
+          '<span class="tps-unit">tokens/sec</span>' +
+        '</div>' +
+        '<div class="muted small">last run · ' + escHtml(latest.model || 'local model') +
+          ' · ' + latest.tokens + ' tokens in ' + latest.seconds + 's</div>' +
+        (latest.prompt_tps
+            ? '<div class="muted small">prompt read at ' + latest.prompt_tps + ' tok/s</div>'
+            : '') +
+        '<div class="spark">' + bars + '</div>' +
+        '<div class="muted small">' + data.average + ' tok/s average over the last ' +
+          series.length + ' run' + (series.length === 1 ? '' : 's') + '</div>' +
+        models;
+}
+
+// ===== Headlines =====
+//
+// The same feeds the morning recap reads, deliberately. Two separate notions
+// of "your news sources" would be two things to configure and two places to be
+// surprised by what turned up.
+
+async function renderNewsWidget(w, body) {
+    const limit = (w.config || {}).limit || 8;
+    let data;
+    try {
+        data = await api('/api/news/headlines?limit=' + encodeURIComponent(limit));
+    } catch (_) {
+        body.innerHTML = '<div class="muted small">Could not fetch headlines.</div>';
+        return;
+    }
+    if (!data.items || !data.items.length) {
+        body.innerHTML = '<div class="muted small">' +
+            escHtml(data.error || 'No headlines. Check your feeds in Settings.') + '</div>';
+        return;
+    }
+    body.innerHTML = '<div class="news-list">' + data.items.map(item =>
+        '<a class="news-item" href="' + escHtml(item.url) +
+        '" target="_blank" rel="noopener noreferrer">' +
+          '<span class="news-title">' + escHtml(item.title) + '</span>' +
+          '<span class="news-source">' + escHtml(item.source) + '</span>' +
+        '</a>').join('') + '</div>';
+}
+
+// ===== Markets =====
+
+async function renderMarketsWidget(w, body) {
+    const symbols = ((w.config || {}).symbols || []).join(',');
+    let data;
+    try {
+        data = await api('/api/markets' +
+            (symbols ? '?symbols=' + encodeURIComponent(symbols) : ''));
+    } catch (_) {
+        body.innerHTML = '<div class="muted small">Could not fetch quotes.</div>';
+        return;
+    }
+    const rows = (data.quotes || []).map(q => {
+        if (q.unavailable) {
+            return '<div class="mkt-row"><span class="mkt-label">' + escHtml(q.label) +
+                   '</span><span class="mkt-none">no data</span></div>';
+        }
+        const up = (q.change_percent || 0) >= 0;
+        const price = q.price >= 1000
+            ? q.price.toLocaleString(undefined, { maximumFractionDigits: 2 })
+            : q.price.toLocaleString(undefined, { maximumFractionDigits: 4 });
+        return '<div class="mkt-row' + (q.stale ? ' stale' : '') + '">' +
+            '<span class="mkt-label">' + escHtml(q.label) + '</span>' +
+            '<span class="mkt-price">' + price + '</span>' +
+            '<span class="mkt-change ' + (up ? 'up' : 'down') + '">' +
+              (q.change_percent === null ? '—'
+                 : (up ? '+' : '') + q.change_percent.toFixed(2) + '%') +
+            '</span>' +
+        '</div>';
+    }).join('');
+
+    // Delayed, and it says so. A price with no indication of its age is
+    // indistinguishable from a live one, which is the failure that matters
+    // here — the widget looks identical while being hours out of date.
+    const when = (data.quotes || []).map(q => q.at).filter(Boolean).sort().pop();
+    const asOf = when
+        ? 'as of ' + new Date(when * 1000).toLocaleString(undefined,
+              { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+        : '';
+    body.innerHTML = '<div class="mkt-list">' + rows + '</div>' +
+        '<div class="muted small mkt-foot">' + escHtml(asOf) + (asOf ? ' · ' : '') +
+        'delayed' + (data.stale ? ' · last known values' : '') + '</div>';
 }

@@ -53,6 +53,40 @@ WIDGET_CATALOG: List[Dict[str, Any]] = [
         "slot": "rail",
         "needs_setup": False,
     },
+    {
+        "type": "system",
+        "name": "Machine Load",
+        "name_short": "System",
+        "desc": "Live CPU, memory and GPU use. The reason a local turn is slow "
+                "is usually here.",
+        "slot": "rail",
+        "needs_setup": False,
+    },
+    {
+        "type": "throughput",
+        "name": "Model Speed",
+        "name_short": "Speed",
+        "desc": "Tokens per second from the local model, read from Ollama's own "
+                "counters rather than timed from outside.",
+        "slot": "rail",
+        "needs_setup": False,
+    },
+    {
+        "type": "news",
+        "name": "Headlines",
+        "name_short": "News",
+        "desc": "The feeds your morning recap already reads, as they arrive.",
+        "slot": "canvas",
+        "needs_setup": False,
+    },
+    {
+        "type": "markets",
+        "name": "Markets",
+        "desc": "Indices, shares, crypto and FX. Delayed, and every quote says "
+                "when it is from.",
+        "slot": "rail",
+        "needs_setup": False,
+    },
 ]
 
 # Default per-instance config for each widget type.
@@ -62,6 +96,13 @@ DEFAULT_CONFIG: Dict[str, Dict[str, Any]] = {
     "calendar": {},
     "weather": {"lat": None, "lon": None, "label": "", "units": "c"},
     "quicknotes": {"note_id": ""},
+    "system": {"refresh_seconds": 3},
+    "throughput": {},
+    "news": {"limit": 8},
+    # Empty rather than a copy of the default list: the widget falls back to
+    # markets.DEFAULT_SYMBOLS while this is empty, so the defaults can change
+    # without every already-installed widget being pinned to the old set.
+    "markets": {"symbols": []},
 }
 
 

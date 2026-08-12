@@ -119,7 +119,18 @@ MODE_PREAMBLE = {
         "corner\", never \"option A\". Put the one you would pick first: "
         "skipping the form accepts it. Ask only about things that change what "
         "you would write. Keep the questions in your prose as well, for anyone "
-        "reading the plan on its own."
+        "reading the plan on its own.\n\n"
+        # The block used to arrive under a finished plan built on assumed
+        # answers, so the buttons were a vote on a decision already taken.
+        # Everything after the block is now discarded before it is shown, so
+        # this paragraph describes what happens rather than requesting it.
+        "The block ENDS your reply. Nothing you write after it will be shown "
+        "to the user — it is cut off at the marker — so do not answer your own "
+        "questions, do not say which way you are leaning, and do not carry on "
+        "planning underneath them. If a decision genuinely blocks the plan, "
+        "ask and stop; the answers come back as the next turn and you write "
+        "the plan then. If it does not block anything, do not ask at all: "
+        "decide it yourself and say what you decided."
     ),
     MODE_ACT: (
         "You are in ACT mode, and you have the tools to change the workspace: "
@@ -294,6 +305,149 @@ def strip_questions(text: str) -> str:
     tail = text[end:]
     tail = re.sub(r"^\s*```[a-zA-Z]*\s*", "", tail)
     return (head.rstrip() + "\n" + tail.lstrip()).strip()
+
+
+# ===== Asking is a turn-ending act =====
+#
+# The form worked and the questions still did nothing, because of *when* they
+# were read. `parse_questions` ran on the finished reply, which meant the model
+# had already written past its own question:
+#
+#     ...so I'll assume you want the numbers only, and here is the plan.
+#     ```carrot-questions
+#     [{"question": "How should the scoreboard look?", ...}]
+#     ```
+#
+# Buttons under an answer that was written without them. Answering re-ran a
+# turn whose conclusion was already on screen, and the model — now seeing its
+# own confident reply in the history — mostly restated it. The user was being
+# asked to ratify a guess, and it read as being consulted.
+#
+# The fix is not a firmer instruction. It is that the reply *stops* at the
+# marker: everything after it is discarded before it is ever streamed, so
+# asking a question costs the model the ability to answer it. An instruction
+# is a request; a cut is a guarantee. This is the same reasoning the search
+# gate and the host-concentration check are built on.
+#
+# What is *not* discarded is the prose before the marker, and where that prose
+# sits decides what kind of question this is:
+#
+#   * Almost nothing before it — the model asked before working. The turn is
+#     **blocking**: there is no answer yet and the form is the way forward.
+#   * A substantial reply before it — the model answered and then thought of
+#     something. Cutting that would throw away work the user can see is good.
+#     The answer stands and the form is a **refinement**.
+#
+# Both cases lose everything after the marker, which is the part where the
+# model was talking itself out of having asked.
+
+# Enough prose to be an answer rather than a preamble. Tuned to the shape of
+# the failure: "Sure — a couple of things first." is 40 characters and is not
+# an answer; anything that has actually said something clears this easily.
+BLOCKING_PROSE_CHARS = 240
+
+# How much text has to be held back while streaming so a marker split across
+# chunk boundaries is still caught. The marker plus the longest fence that can
+# precede it, with room to spare — cheap insurance, and the cost is that the
+# last few characters of a reply arrive with the final flush.
+_HOLD_BACK = 64
+
+
+class QuestionGate:
+    """Streaming filter that ends a reply at its clarifying questions.
+
+    Fed the model's content chunks, it returns only what is safe to show. Once
+    the ``carrot-questions`` marker appears, it emits nothing further: the
+    caller sees ``tripped`` go true and stops the turn.
+
+    Holding text back is what makes this work on a stream. The marker can
+    straddle a chunk boundary, and a filter that only inspected each chunk in
+    isolation would miss ``carrot-que`` + ``stions`` and let the whole
+    self-answer through — which is the exact bug, just harder to reproduce.
+    """
+
+    def __init__(self):
+        self._raw: List[str] = []
+        self._emitted = 0
+        self.tripped = False
+
+    @property
+    def raw(self) -> str:
+        return "".join(self._raw)
+
+    def feed(self, text: str) -> str:
+        """Accept a chunk; return the part of it that may be shown now."""
+        if self.tripped:
+            # Still accumulated, so the questions can be parsed out of the full
+            # text afterwards — but nothing more reaches the user.
+            self._raw.append(text)
+            return ""
+        self._raw.append(text)
+        whole = self.raw
+
+        marker = QUESTIONS_MARKER.search(whole)
+        if marker:
+            self.tripped = True
+            visible = self._cut_at(whole, marker)
+            out = visible[self._emitted:]
+            self._emitted = len(visible)
+            return out
+
+        # No marker yet. Emit everything except a tail that could be the start
+        # of one.
+        safe_to = max(0, len(whole) - _HOLD_BACK)
+        if safe_to <= self._emitted:
+            return ""
+        out = whole[self._emitted:safe_to]
+        self._emitted = safe_to
+        return out
+
+    def flush(self) -> str:
+        """Whatever was held back, once the stream is over."""
+        if self.tripped:
+            return ""
+        whole = self.raw
+        out = whole[self._emitted:]
+        self._emitted = len(whole)
+        return out
+
+    @staticmethod
+    def _cut_at(whole: str, marker) -> str:
+        """The prose up to the line the marker sits on, fences included."""
+        start = whole.rfind("\n", 0, marker.start()) + 1
+        head = whole[:start].rstrip()
+        # A fence line opening the block is part of the block, not the prose.
+        while True:
+            previous = head.rstrip()
+            last = previous.rsplit("\n", 1)[-1].strip()
+            if last.startswith("```") and last.strip("`").strip() == "":
+                head = previous[:previous.rfind("\n")] if "\n" in previous else ""
+                continue
+            break
+        return head.rstrip()
+
+    # --- what the caller does with it ---
+
+    def prose(self) -> str:
+        """The reply, with the question block and everything after it removed."""
+        if not self.tripped:
+            return self.raw.rstrip()
+        marker = QUESTIONS_MARKER.search(self.raw)
+        return self._cut_at(self.raw, marker) if marker else self.raw.rstrip()
+
+    def questions(self) -> List[Dict[str, Any]]:
+        return parse_questions(self.raw)
+
+    def blocking(self) -> bool:
+        """Is the form the way forward, or a refinement of an answer already given?
+
+        Judged on how much was said before the question, because that is the
+        thing that actually differs. A model that asks first has nothing to
+        show yet; a model that asks last has already committed.
+        """
+        if not self.tripped:
+            return False
+        return len(self.prose().strip()) < BLOCKING_PROSE_CHARS
 
 
 def answers_message(pairs: List[Dict[str, str]]) -> str:

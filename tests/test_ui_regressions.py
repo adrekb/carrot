@@ -241,12 +241,18 @@ class TestTheComposerToolMenu:
         """You could read the dashboard card and the placeholder straight
         through it.
 
-        The composer's popovers are children of `#cmdbar`, which has a
-        `backdrop-filter` of its own. Nested backdrop-filters do not compose —
-        the ancestor establishes the backdrop root, so the child's blur samples
-        an already-flattened backdrop and does nothing, leaving the bare 82%
-        alpha of the glass colour. Glass is for a layer over its own
-        background; these float over arbitrary content.
+        Originally this was one rule's job: the composer's popovers are
+        children of `#cmdbar`, which had a `backdrop-filter` of its own, and
+        nested backdrop-filters do not compose — the ancestor establishes the
+        backdrop root, so the child's blur sampled an already-flattened
+        backdrop and did nothing, leaving the bare 82% alpha of the glass
+        colour showing whatever was underneath.
+
+        The glass is gone from the whole app now, so the fix is no longer a
+        local override; it is that there is nothing left to override. The
+        assertion follows: the popovers take an opaque fill, and nothing
+        anywhere reintroduces a blur that would put them back over a
+        translucent ancestor.
         """
         css = read("css", "style.css")
         block = css[css.index("#cmdbar #tool-pop,"):]
@@ -254,7 +260,29 @@ class TestTheComposerToolMenu:
         for pop in ("#cmdbar #model-pop", "#cmdbar #search-pop"):
             assert pop in block, f"{pop} has the same flaw and is not covered"
         assert "background: var(--card);" in block
-        assert "backdrop-filter: none;" in block
+
+    def test_nothing_reintroduces_glass(self):
+        """The de-glassing has to stay done.
+
+        One `backdrop-filter` added back to an ancestor recreates the exact
+        bug above — and it would do it silently, because the popover's own
+        rule would still look correct.
+        """
+        import re
+        css = read("css", "style.css")
+        # Comments still discuss the old behaviour, and should: the reasoning
+        # is why the rules look the way they do. Only declarations count.
+        declarations = re.findall(r"^[^/*\n]*backdrop-filter\s*:", css, re.M)
+        assert declarations == [], declarations
+
+    def test_surfaces_are_opaque(self):
+        """A translucent fill with no blur behind it is not glass, it is a
+        card you can see the page through."""
+        import re
+        css = read("css", "style.css")
+        translucent = re.findall(
+            r"--surface-(?:bar|nav|card|pop|card-hi)\s*:\s*rgba\([^)]*\)", css)
+        assert translucent == [], translucent
 
     def test_the_opaque_rule_does_not_depend_on_source_order(self):
         # The themed glass rules are plain id selectors appearing later in the

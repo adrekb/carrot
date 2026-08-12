@@ -272,3 +272,121 @@ def get_recaps(limit: int = 7):
         }
         for r in rows
     ]
+
+# ===== The recap, rebuilt on Carrot Research =====
+#
+# Everything above this line is the original: four fixed feeds, a hardcoded
+# DuckDuckGo query for "latest tech breakthroughs AI programming science news",
+# and one prompt telling the model to brief "a CS student". Two problems with
+# it, and they compound.
+#
+# It was the same briefing for everybody. The query was written once, by
+# somebody guessing at who would install this, and nothing about it moved when
+# the person using it turned out to be interested in aircraft, or law, or
+# rowing. Carrot knew that — it has every conversation and a memory store full
+# of extracted facts — and the recap never asked.
+#
+# And it was uncited. Feed summaries went into a prompt, prose came out, and
+# nothing connected a sentence in the briefing to a source. The rest of the app
+# spent a lot of effort making that impossible in Research: evidence stored
+# before use, claims re-checked against the text they came from, a content farm
+# rendered differently from a press release. The morning briefing — the one
+# thing here that runs unattended, that you read before you are properly awake,
+# and that you are least likely to fact-check — had none of it.
+#
+# So this version derives the topics from what the person has actually been
+# returning to (see carrot/interests.py) and researches each one through the
+# ordinary Research pipeline, which brings the verification and the source
+# tiering with it. The old path stays and is still reachable: a fresh install
+# has nothing to derive an interest from, and a general briefing is the right
+# answer then rather than an error.
+
+INTEREST_RECAP_DEPTH = "quick"
+MAX_INTEREST_TOPICS = 3
+
+
+def _interest_section(topic, report: str) -> str:
+    return f"## {topic['topic']}\n\n{report.strip()}\n"
+
+
+def run_interest_recap_stream(days: int = 7, depth: str = INTEREST_RECAP_DEPTH,
+                              max_topics: int = MAX_INTEREST_TOPICS):
+    """The briefing, from what you have been asking about, with citations.
+
+    Yields the same event shapes the Research trace already renders, so the UI
+    needs no new vocabulary: ``{"stage"|"topics"|"source"|"finding"|"verdict"|
+    "token"|"done"|"error"}``.
+
+    Falls back to the general briefing when there is nothing to derive. That is
+    not a failure — a fresh install genuinely has no interests to read, and
+    inventing one would be worse than the fixed feed list it replaced.
+    """
+    from carrot import interests as interests_mod, research as research_mod
+
+    yield {"stage": "interests", "detail": "reading what you have been asking about"}
+    try:
+        derived = interests_mod.derive_topics(days=days, limit=max_topics)
+    except Exception as exc:
+        yield {"stage": "interests", "detail": f"could not read your history: {exc}"}
+        derived = {"topics": [], "why": str(exc)}
+
+    topics = derived.get("topics", [])[:max_topics]
+    if not topics:
+        yield {"stage": "interests",
+               "detail": (derived.get("why") or "nothing recurring yet")
+                         + " — falling back to a general briefing"}
+        yield {"fallback": True}
+        for event in run_recap_stream():
+            yield event
+        return
+
+    # Shown before any research runs. The user should be able to see what
+    # Carrot concluded about them and why *before* it spends two minutes
+    # acting on it — an assistant that decides what you care about and then
+    # presents the results is unnerving in a way one that shows its working
+    # is not.
+    yield {"topics": topics,
+           "detail": f"from {derived.get('questions', 0)} recent questions "
+                     f"across {derived.get('conversations', 0)} conversations"}
+
+    sections = []
+    all_sources = 0
+    for topic in topics:
+        question = interests_mod.topic_query(topic)
+        yield {"stage": "research", "detail": f"{topic['topic']}: {question}"}
+        report = []
+        try:
+            for event in research_mod.run_research_stream(question, depth=depth):
+                if event.get("done"):
+                    report.append(event.get("report", ""))
+                    all_sources += event.get("sources", 0)
+                elif event.get("error"):
+                    yield {"stage": "research",
+                           "detail": f"{topic['topic']}: {event['error']}"}
+                else:
+                    # Sources, findings and verdicts pass straight through, so
+                    # the briefing's trace looks exactly like a research run's
+                    # — because it is one.
+                    yield event
+        except Exception as exc:
+            yield {"stage": "research", "detail": f"{topic['topic']} failed: {exc}"}
+            continue
+        if report and report[0].strip():
+            sections.append(_interest_section(topic, report[0]))
+
+    if not sections:
+        yield {"error": "None of your topics could be researched — the web may "
+                        "be unreachable. Your indexed files and chat still work."}
+        return
+
+    header = ["# Your recap", "",
+              "Built from what you have been asking about lately:",
+              ""]
+    for topic in topics:
+        header.append(f"- **{topic['topic']}** — {topic['why']}")
+    header.append("")
+
+    summary = "\n".join(header) + "\n" + "\n".join(sections)
+    save_recap_to_db({"summary": summary}, [])
+    yield {"done": True, "summary": summary, "topics": len(topics),
+           "sources": all_sources}
