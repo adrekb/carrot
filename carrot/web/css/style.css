@@ -1522,9 +1522,13 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 .si-sub { font-size: var(--text-sm); color: var(--muted); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .split-main { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
 
+/* Wraps rather than overflowing. Narrow, the open-file tabs and the four
+   buttons could not fit on one line and simply overlapped each other and the
+   text underneath — Run sitting on top of the empty-state sentence. */
 .editor-toolbar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
   padding: 10px 14px;
   border-bottom: 1px solid var(--border);
@@ -1543,9 +1547,13 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 .title-input:focus { outline: none; }
 .editor-status { font-size: var(--text-sm); color: var(--muted); white-space: nowrap; }
 .editor-words { font-size: var(--text-sm); color: var(--faint); white-space: nowrap; font-family: var(--mono); }
+/* In the flow, filling what is left, rather than absolutely positioned 52px
+   from the top of the pane. That 52px was the toolbar's height written down
+   as a number, and the moment the toolbar wrapped to two rows the empty-state
+   text was underneath it. */
 .editor-empty {
-  position: absolute;
-  inset: 52px 0 0 0;
+  flex: 1;
+  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -5023,9 +5031,36 @@ td, th, .si-sub, .small, .editor-status {
 @media (max-width: 1200px) {
   .agent-side { width: 320px; }
 }
+/* Before the 900px block, not after it. Both match at 700px and both are one
+   id and one class, so source order decides — written the other way round,
+   the narrow rule below was silently overridden by this one and the tree
+   stayed a 200px column in a 400px window. */
+@media (max-width: 1200px) {
+  #view-code .split-side { width: 200px; }
+}
 @media (max-width: 900px) {
   #view-code .split { flex-wrap: wrap; }
   .agent-side { width: 100%; border-left: none; border-top: 1px solid var(--border); }
+  /* The file tree stops being a column. At this width it was taking 260 of
+     the 400 pixels the window had left after the nav, so the editor — the
+     thing the tab is for — got a strip too narrow to show a line of code,
+     and the toolbar buttons piled up on each other inside it. A short
+     scrolling strip above the editor costs a fifth of the height and gives
+     the whole width back. */
+  #view-code .split-side {
+    width: 100%;
+    max-height: 30vh;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+  /* `flex: 1` means a basis of 0, and a zero-width item still "fits" on a
+     line that is already completely full — so the editor stayed on the tree's
+     row at zero pixels wide and overflowed off the right edge instead of
+     wrapping under it. A basis of 100% is what actually forces the new line. */
+  #view-code .split-main { flex: 1 0 100%; width: 100%; min-width: 0; min-height: 55vh; }
+  /* Both panes are full width now, so the split has to scroll as one column
+     rather than clipping whatever did not fit. */
+  #view-code .split { overflow-y: auto; }
 }
 
 /* The agent's tray sits inline above its box rather than floating over the
@@ -6151,3 +6186,68 @@ select { min-width: 5ch; }
  * back to looking idle the moment the popup takes over, which reads as the
  * click having missed. */
 select.dd-open { border-color: var(--accent-line); }
+
+/* ===== A server the agent left running =====
+ *
+ * The only thing in the agent panel that is still true after the turn ends,
+ * and the only one with a control on it — so it is a card with a live dot and
+ * a Stop button, not a line of trace that scrolls away above the next task. */
+.server-card {
+  margin: var(--s-4) 0;
+  padding: var(--s-4);
+  background: var(--card2);
+  border: 1px solid var(--border-hi);
+  border-radius: var(--r-lg);
+}
+.server-card.stopped { opacity: 0.7; }
+.server-head { display: flex; align-items: center; gap: var(--s-3); }
+.server-head .spacer { flex: 1; }
+.server-label {
+  font-weight: var(--w-semi);
+  font-size: var(--text-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Green while it is serving, muted once it is not. The dot is the only thing
+ * on the card that answers the question you actually have when you glance at
+ * it, which is whether the thing is still up. */
+.server-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
+.server-dot.live { background: var(--green); }
+.server-dot.dead { background: var(--faint); }
+.server-exit { font-size: var(--text-xs); color: var(--faint); font-family: var(--mono); }
+.server-url {
+  display: inline-block;
+  margin-top: var(--s-3);
+  font-family: var(--mono);
+  font-size: var(--text-sm);
+  color: var(--accent);
+  word-break: break-all;
+}
+.server-url:hover { text-decoration: underline; }
+.server-cmd {
+  margin-top: var(--s-2);
+  font-size: var(--text-2xs);
+  color: var(--faint);
+  word-break: break-all;
+}
+.server-logs { margin-top: var(--s-3); }
+.server-logs > summary {
+  cursor: pointer;
+  font-size: var(--text-xs);
+  color: var(--muted);
+  list-style: none;
+}
+.server-logs > summary:hover { color: var(--accent); }
+/* Capped and scrolling: a watch-mode bundler's output is not a thing that
+   should push the composer off the bottom of the panel. */
+.server-log {
+  margin-top: var(--s-2);
+  max-height: 220px;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: var(--text-2xs);
+  color: var(--muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
