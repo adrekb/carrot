@@ -108,3 +108,42 @@ class TestTheBrowserApplies:
     def test_someone_sitting_on_the_tab_is_moved_off_it(self):
         js = self.read("carrot", "web", "js", "app.js")
         assert "currentTab === tab) switchTab('dashboard')" in js
+
+
+class TestEveryPackExplainsItself:
+    """A pack card listed its tools and its skills, which says what it *has*.
+
+    Reading "latex_compile, bib_check, matlab_run" and knowing where to begin
+    is a different question from wanting the pack, and the gap was left to the
+    user: switch it on, then work out what changed. The first useful moment is
+    what decides whether the switch stays on.
+    """
+
+    def test_every_bundled_pack_has_one(self):
+        for pack in extensions.list_packs():
+            assert pack["has_tutorial"], f"{pack['id']} has no tutorial"
+
+    def test_the_steps_have_a_title_and_a_body(self):
+        for pack_id in ("academia", "planner"):
+            for step in extensions.get_pack(pack_id).tutorial:
+                assert step.get("title") and step.get("body"), pack_id
+
+    def test_it_reaches_the_api(self, client):
+        body = client.get("/api/extensions/academia").json()
+        assert len(body["tutorial"]) >= 3
+        assert body["tutorial"][0]["title"]
+
+    def test_the_summary_says_whether_there_is_one(self, client):
+        packs = {p["id"]: p for p in client.get("/api/extensions").json()["extensions"]}
+        assert packs["academia"]["has_tutorial"] is True
+
+    def test_it_is_rendered_first(self):
+        """Above the tool list: what to do with the pack outranks what it
+        contains."""
+        from pathlib import Path
+        js = Path(__file__).resolve().parents[1].joinpath(
+            "carrot", "web", "js", "agents.js").read_text(encoding="utf-8")
+        block = js[js.index("host.innerHTML = `\n        ${tutorial"):]
+        block = block[:block.index("host.classList.remove('hidden')")]
+        assert block.index("Getting started") < block.index("On this machine")
+        assert block.index("Getting started") < block.index("Tools")

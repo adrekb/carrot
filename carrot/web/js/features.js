@@ -5,6 +5,92 @@
 // ===== Markdown rendering =====
 // Renders markdown via the vendored `marked`, then sanitizes: drop dangerous
 // tags/attributes and force links to open safely in a new tab.
+// ===== Maths =====
+//
+// Models write LaTeX constantly — a physics question, anything from the
+// Academia pack, half of what a maths answer contains — and every surface
+// except the notes editor printed the source. `$\nabla \cdot B = 0$` arrived
+// as literal dollars and backslashes.
+//
+// Extracted *before* markdown, put back after. This ordering is the whole
+// difficulty: `marked` treats `_` as emphasis and `*` as a list, so
+// `$a_1 * b_2$` reaches KaTeX as `$a<em>1 </em> b<em>2</em>$` if it is parsed
+// first — mangled beyond recovery, and silently, because what comes out is
+// still valid HTML. So each expression is lifted out, replaced by an inert
+// placeholder that contains no markdown-significant characters, and restored
+// once the parser has finished.
+//
+// Rendered by KaTeX rather than left to the browser: it is already bundled
+// for the notes editor, and rendering the same expression with two different
+// engines in two panels of one app is how a subtle difference in spacing
+// becomes a bug report nobody can reproduce.
+
+// Display first, so `$$…$$` is never read as two empty inline spans. `\[…\]`
+// and `\(…\)` are included because models emit them about as often as dollars.
+const MATH_PATTERNS = [
+    { re: /\$\$([\s\S]+?)\$\$/g, display: true },
+    { re: /\\\[([\s\S]+?)\\\]/g, display: true },
+    { re: /\\\(([\s\S]+?)\\\)/g, display: false },
+    // Inline dollars, with the two guards that stop prices becoming maths:
+    // no space directly inside the delimiters, and no digit immediately after
+    // the closing one — so "$5 and $10" is left alone while "$x=1$" is not.
+    { re: /\$(?!\s)((?:[^$\n\\]|\\.)+?)(?<!\s)\$(?!\d)/g, display: false },
+];
+
+function extractMath(text, store) {
+    let out = String(text);
+    for (const { re, display } of MATH_PATTERNS) {
+        out = out.replace(re, (whole, body) => {
+            // A placeholder with nothing markdown cares about. Letters and
+            // digits only — an underscore here would itself become emphasis.
+            const token = `KTXMATH${store.length}KTXEND`;
+            store.push({ body, display });
+            return token;
+        });
+    }
+    return out;
+}
+
+function restoreMath(root, store) {
+    if (!store.length) return;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const hits = [];
+    while (walker.nextNode()) {
+        if (/KTXMATH\d+KTXEND/.test(walker.currentNode.nodeValue)) hits.push(walker.currentNode);
+    }
+    for (const node of hits) {
+        const frag = document.createDocumentFragment();
+        const parts = node.nodeValue.split(/(KTXMATH\d+KTXEND)/);
+        for (const part of parts) {
+            const match = /^KTXMATH(\d+)KTXEND$/.exec(part);
+            if (!match) {
+                if (part) frag.appendChild(document.createTextNode(part));
+                continue;
+            }
+            const item = store[Number(match[1])];
+            const span = document.createElement('span');
+            try {
+                window.katex.render(item.body, span, {
+                    displayMode: item.display,
+                    // Malformed LaTeX shows as the source in red rather than
+                    // throwing — a model that writes a broken expression
+                    // should cost the reader that expression, not the answer
+                    // it was part of.
+                    throwOnError: false,
+                    // `\href` in model-authored LaTeX is a link the user did
+                    // not ask for, in a place no sanitiser is looking.
+                    trust: false,
+                    strict: false,
+                });
+            } catch (_) {
+                span.textContent = item.display ? `$$${item.body}$$` : `$${item.body}$`;
+            }
+            frag.appendChild(span);
+        }
+        node.parentNode.replaceChild(frag, node);
+    }
+}
+
 function mdToHtml(md) {
     if (md == null) return '';
     if (!window.marked) {
@@ -12,9 +98,12 @@ function mdToHtml(md) {
         div.textContent = String(md);
         return div.innerHTML.replace(/\n/g, '<br>');
     }
+    // Lifted out before the parser sees them; see extractMath.
+    const math = [];
+    const source = window.katex ? extractMath(md, math) : String(md);
     let html;
     try {
-        html = window.marked.parse(String(md), { breaks: true, gfm: true });
+        html = window.marked.parse(source, { breaks: true, gfm: true });
     } catch (_) {
         const div = document.createElement('div');
         div.textContent = String(md);
@@ -38,6 +127,9 @@ function mdToHtml(md) {
         }
     });
     markCitations(tpl.content);
+    // After sanitising, so KaTeX's own markup is not stripped by the attribute
+    // pass — and after citations, which only look at links.
+    if (window.katex) restoreMath(tpl.content, math);
     return tpl.innerHTML;
 }
 

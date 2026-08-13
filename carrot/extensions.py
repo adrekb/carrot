@@ -22,12 +22,15 @@ disabling removes them and takes its tools out of the agent's reach.
 
 from __future__ import annotations
 
+import logging
 import shutil
 import subprocess
 from typing import Any, Callable, Dict, List, Optional
 
 from . import agent_tools, skills as skills_mod
 from .config import get_config, set_config
+
+LOG = logging.getLogger(__name__)
 
 # Pack tools are namespaced so the chat loop can route a call by prefix alone,
 # the same way it separates built-ins from MCP.
@@ -51,6 +54,7 @@ class Pack:
         settings: Optional[List[Dict[str, Any]]] = None,
         default_enabled: bool = False,
         tabs: Optional[List[str]] = None,
+        tutorial: Optional[List[Dict[str, str]]] = None,
     ):
         self.id = pack_id
         self.name = name
@@ -66,6 +70,19 @@ class Pack:
         # installing a local assistant are ever going to open, and it sat in
         # the sidebar between Research and Goals for all of them.
         self.tabs = tabs or []
+        # How to actually use the thing, in steps.
+        #
+        # A pack's card lists its tools and its skills, which tells you what it
+        # *has* and not what to do with it. Reading "latex_compile, bib_check,
+        # matlab_run" and knowing where to begin is a different skill from
+        # wanting the pack in the first place, and the gap was left to the
+        # user: switch it on, then work out what changed.
+        #
+        # Deliberately steps rather than prose. A paragraph explaining a pack
+        # is documentation; a numbered list of things to try is the shortest
+        # path to the first moment it does something useful, which is the only
+        # moment that decides whether the switch stays on.
+        self.tutorial = tutorial or []
         self.tools = tools or {}
         # A pack whose skill text depends on its settings passes a callable, so
         # changing the target venue rewrites the instructions rather than
@@ -89,6 +106,7 @@ class Pack:
             "tool_count": len(self.tools),
             "skill_count": len(self.skills),
             "tabs": list(self.tabs),
+            "has_tutorial": bool(self.tutorial),
         }
         if not deep:
             return summary
@@ -105,6 +123,7 @@ class Pack:
                 {"slug": s["slug"], "name": s["name"], "description": s["description"]}
                 for s in self.skills
             ],
+            "tutorial": list(self.tutorial),
             "capabilities": [probe_capability(c) for c in self.capabilities],
             "settings": [
                 {**spec, "value": pack_setting(self.id, spec["key"], spec.get("default"))}
@@ -237,11 +256,39 @@ def set_pack_setting(pack_id: str, key: str, value: Any) -> Dict[str, Any]:
 # ===== Capabilities =====
 
 def probe_capability(capability: Dict[str, Any]) -> Dict[str, Any]:
-    """Look for one external program and report what was found.
+    """Look for one capability and report what was found.
 
     Probing is a ``shutil.which`` by default. A capability may name several
     alternatives — any TeX engine will do — and the first one present wins.
+
+    A capability may instead supply a ``check`` callable, for the ones that are
+    not a program on PATH. Ambient Recall wants a Python import and, on
+    Windows, an OCR engine that lives inside the operating system rather than
+    in a binary anyone could point at — neither of which `which` can answer.
+    The rest of the contract is unchanged, so the UI does not need to know
+    which kind it is looking at.
+
+    A check that raises is treated as absent rather than allowed to propagate.
+    These run to render a settings card, and a probe that throws would take the
+    whole Extensions tab down to report that a library is missing.
     """
+    check = capability.get("check")
+    if callable(check):
+        try:
+            available = bool(check())
+        except Exception:
+            LOG.debug("capability check failed for %s", capability.get("id"), exc_info=True)
+            available = False
+        return {
+            "id": capability["id"],
+            "label": capability.get("label") or capability.get("name", ""),
+            "binaries": [],
+            "available": available,
+            "path": "",
+            "purpose": capability.get("purpose") or capability.get("why", ""),
+            "install_hint": capability.get("install_hint") or capability.get("install", ""),
+        }
+
     binaries = capability.get("binaries") or [capability.get("binary", "")]
     found = next((shutil.which(b) for b in binaries if b and shutil.which(b)), None)
     return {
@@ -355,3 +402,4 @@ def call(
 # Registering the bundled packs at import time keeps discovery in one place.
 from .packs import academia  # noqa: E402,F401  (registers itself)
 from .packs import planner  # noqa: E402,F401  (registers itself)
+from .packs import ambient  # noqa: E402,F401  (registers itself)

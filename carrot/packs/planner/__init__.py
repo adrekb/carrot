@@ -34,6 +34,31 @@ PACK = extensions.Pack(
     # No tools and no skills. This pack exists to gate a surface, which is a
     # thing packs could not do before it; see `Pack.tabs`.
     tabs=["planner"],
+    tutorial=[
+        {"title": "Open the Planner tab",
+         "body": "Switching this pack on adds Planner to the sidebar, under "
+                 "Planning. Nothing else about Carrot changes."},
+        {"title": "Give it your timetable",
+         "body": "A photo or screenshot of your class schedule is enough — it "
+                 "reads the day codes registrars actually use, including R for "
+                 "Thursday and U for Sunday. You can also type the classes in."},
+        {"title": "Answer what it asks",
+         "body": "It will ask where you live, whether you have a meal plan, when "
+                 "you actually sleep, and which campus you are on. These are the "
+                 "things a timetable does not say and a usable week depends on — "
+                 "a plan that puts lunch eleven minutes after a class across "
+                 "campus is not a plan."},
+        {"title": "Add what has to fit around it",
+         "body": "Meals, the gym, work shifts, study blocks. Say how long each "
+                 "needs and roughly when; the scheduler places your fixed "
+                 "commitments first and fits these into what is genuinely left, "
+                 "with walking time between buildings accounted for."},
+        {"title": "Check the week, then adjust",
+         "body": "Everything it placed can be moved, and it will tell you what a "
+                 "change costs — moving the gym into a gap too small to shower in "
+                 "is the sort of thing it will say out loud rather than silently "
+                 "accept."},
+    ],
     default_enabled=False,
 )
 

@@ -1,6 +1,6 @@
 {
   "name": "carrot-desktop",
-  "version": "0.3.1",
+  "version": "0.3.3",
   "description": "Carrot - A local-first AI assistant with speech, hybrid search, notes, and planning",
   "main": "main.js",
   "scripts": {

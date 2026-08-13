@@ -35,7 +35,20 @@ await esbuild.build({
   outfile: path.join(outDir, 'milkdown.js'),
 });
 
-// 3. Monaco editor — exposed as window.monaco (+ monaco.css + fonts)
+// 3. KaTeX — exposed as window.katex (+ katex.css + fonts)
+//
+// Its fonts were already being emitted here as a side effect of the Milkdown
+// bundle, so the app shipped every glyph and could render maths in exactly one
+// place. This makes the library itself reachable, which is what chat, Research
+// and the Code tab needed.
+await esbuild.build({
+  ...common,
+  entryPoints: [path.join(here, 'src', 'katex-entry.js')],
+  outfile: path.join(outDir, 'katex.js'),
+  assetNames: '[name]-[hash]',
+});
+
+// 4. Monaco editor — exposed as window.monaco (+ monaco.css + fonts)
 await esbuild.build({
   ...common,
   entryPoints: [path.join(here, 'src', 'monaco-entry.js')],
@@ -43,7 +56,7 @@ await esbuild.build({
   assetNames: '[name]',
 });
 
-// 4. Monaco web workers (served from /vendor/workers/)
+// 5. Monaco web workers (served from /vendor/workers/)
 const workers = {
   'editor.worker': 'monaco-editor/esm/vs/editor/editor.worker.js',
   'json.worker': 'monaco-editor/esm/vs/language/json/json.worker.js',

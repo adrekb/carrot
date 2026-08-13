@@ -715,7 +715,23 @@ function renderPackDetail(host, pack) {
             <div class="pack-tool-desc">${escHtml(skill.description)}</div>
         </div>`).join('');
 
+    // First, above everything else. The tool list tells you what the pack
+    // *has*; this tells you what to do with it, and knowing where to begin is
+    // a different question from wanting the pack in the first place. Reading
+    // "latex_compile, bib_check, matlab_run" and working out the first move
+    // was left entirely to the user.
+    const tutorial = (pack.tutorial || []).map((step, i) => `
+        <li class="pack-step">
+            <span class="pack-step-n">${i + 1}</span>
+            <div>
+                <div class="pack-step-title">${escHtml(step.title)}</div>
+                <div class="pack-step-body">${escHtml(step.body)}</div>
+            </div>
+        </li>`).join('');
+
     host.innerHTML = `
+        ${tutorial ? `<h4 class="pack-section">Getting started</h4>
+            <ol class="pack-steps">${tutorial}</ol>` : ''}
         ${capabilities ? `<h4 class="pack-section">On this machine</h4>${capabilities}` : ''}
         ${settings ? `<h4 class="pack-section">Settings</h4>
             <p class="muted small">Changing these rewrites the pack's skills, so the
