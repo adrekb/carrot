@@ -55,6 +55,12 @@ MODES = (MODE_PLAN, MODE_ACT)
 WRITE_TOOLS = frozenset({
     "write_file", "edit_file", "run_command", "create_file", "delete_file",
     "move_file", "git_commit", "git_checkout", "restore_checkpoint",
+    # Starting a server is running a command that then keeps running, so if
+    # plan mode refuses one it has to refuse the other — otherwise "read-only"
+    # is a mode in which the agent can execute anything it can phrase as a
+    # server. Stopping is here too: killing the user's dev server is not a
+    # read-only act on a machine they are working on.
+    "start_server", "stop_server",
 })
 
 

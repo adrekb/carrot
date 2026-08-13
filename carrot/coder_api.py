@@ -143,6 +143,40 @@ async def rules():
     return {"rules": text, "files": list(coder_mod.RULE_FILES)}
 
 
+# ===== Servers the agent left running =====
+#
+# The panel needs to be able to answer "what is running right now" without
+# having watched the stream that started it. A server outlives the turn that
+# started it, and frequently the conversation too — reloading the page must
+# not lose the user's only handle on a process holding one of their ports.
+
+@router.get("/servers")
+async def list_servers():
+    from carrot import servers as servers_mod
+
+    return {"servers": servers_mod.list_servers()}
+
+
+@router.get("/servers/{server_id}/logs")
+async def server_logs(server_id: str, lines: int = 200):
+    from carrot import servers as servers_mod
+
+    result = servers_mod.logs(server_id, lines=lines)
+    if result.get("error"):
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
+@router.post("/servers/{server_id}/stop")
+async def stop_server(server_id: str):
+    from carrot import servers as servers_mod
+
+    result = servers_mod.stop(server_id)
+    if result.get("error"):
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
 # ===== Checkpoints =====
 
 @router.get("/checkpoints")

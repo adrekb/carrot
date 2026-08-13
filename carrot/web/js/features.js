@@ -2123,6 +2123,85 @@ function agentTrace(wrap, text, cls) {
     document.getElementById('agent-log').scrollTop = 1e9;
 }
 
+// ===== A server the agent started and left running =====
+//
+// The one thing a coding agent does whose result is not text. Everything else
+// it does can be read in the transcript; "the app is running at
+// localhost:5173" is only useful if you can click it, and only honest if you
+// can also stop it — a process holding one of your ports with no visible way
+// to kill it is worse than no feature.
+//
+// One card per server, replaced in place, so a restart updates the card
+// rather than leaving a trail of dead addresses that all look live.
+
+function agentServerCard(wrap, server) {
+    const host = wrap.querySelector('.agent-body') || wrap;
+    let card = wrap.querySelector(`.server-card[data-server="${server.id}"]`);
+    if (!card) {
+        card = document.createElement('div');
+        card.className = 'server-card';
+        card.dataset.server = server.id;
+        host.appendChild(card);
+    }
+    const running = !!server.running;
+    const url = server.url || '';
+    card.classList.toggle('stopped', !running);
+    card.innerHTML = `
+        <div class="server-head">
+            <span class="server-dot ${running ? 'live' : 'dead'}"></span>
+            <span class="server-label">${escHtml(server.label || server.command || 'server')}</span>
+            <span class="spacer"></span>
+            ${running
+                ? `<button class="btn btn-ghost" onclick="stopAgentServer('${escHtml(server.id)}')">Stop</button>`
+                : `<span class="server-exit">exited ${escHtml(String(server.exit_code ?? '?'))}</span>`}
+        </div>
+        ${url && running
+            // Opened in the real browser rather than embedded. A dev server is
+            // the user's app, and an iframe inside a panel would break exactly
+            // the things they are trying to look at: its own devtools, its own
+            // storage origin, and any header it sets to refuse being framed.
+            ? `<a class="server-url" href="${escHtml(url)}" target="_blank" rel="noopener">${escHtml(url)}</a>`
+            : ''}
+        <div class="server-cmd mono">${escHtml(server.command || '')}</div>
+        <details class="server-logs">
+            <summary>Output</summary>
+            <pre class="server-log" id="server-log-${escHtml(server.id)}">loading…</pre>
+        </details>`;
+    const logs = card.querySelector('.server-logs');
+    logs.addEventListener('toggle', () => { if (logs.open) refreshServerLog(server.id); });
+    document.getElementById('agent-log').scrollTop = 1e9;
+    return card;
+}
+
+async function refreshServerLog(id) {
+    const host = document.getElementById(`server-log-${id}`);
+    if (!host) return;
+    try {
+        const data = await api(`/api/coder/servers/${id}/logs?lines=200`);
+        host.textContent = data.log || '(no output yet)';
+    } catch (err) {
+        host.textContent = 'could not read the log: ' + err;
+    }
+}
+
+async function stopAgentServer(id) {
+    const card = document.querySelector(`.server-card[data-server="${id}"]`);
+    try {
+        const stopped = await api(`/api/coder/servers/${id}/stop`, { method: 'POST' });
+        if (card) agentServerCard(card.parentElement, stopped);
+    } catch (err) {
+        // Said on the card itself. A failed stop is specifically the case
+        // where the user needs to know the process is still up, and a message
+        // anywhere else leaves a card sitting there showing a live dot with
+        // no hint that the button did nothing.
+        if (card) {
+            const head = card.querySelector('.server-head');
+            head.insertAdjacentHTML('beforeend',
+                `<span class="server-exit">could not stop it: ${escHtml(String(err))}</span>`);
+        }
+    }
+}
+
 // What the agent is looking at right now. Sending the open file with the task
 // is the difference between "fix this" working and needing to paste a path.
 function agentContext() {
@@ -2247,6 +2326,11 @@ async function sendAgentTask() {
                 if (payload.questions) {
                     agentQuestions(wrap, payload.questions, payload.blocking);
                 }
+                // A server that is now running. Its own card rather than a
+                // line in the trace: it is the only thing in this panel that
+                // is still true after the turn ends, and the only one with a
+                // control on it.
+                if (payload.server) agentServerCard(wrap, payload.server);
                 // The steps this turn is working to, ticking as the tools
                 // actually touch them. Same component as chat and Research,
                 // from the same event.

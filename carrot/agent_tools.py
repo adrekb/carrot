@@ -595,6 +595,61 @@ def _tool_run_command(command: str, **_) -> str:
     return f"[{status}]\n{result['output'][:8000]}"
 
 
+def _tool_start_server(command: str, label: str = "", emit=None, **_) -> str:
+    """Start a dev server and hand back the address it prints.
+
+    The one thing `run_command` cannot do. `npm run dev` never returns, so
+    through that tool it produced a minute of silence, a timeout, and an agent
+    that concluded the project would not start.
+    """
+    from . import servers as servers_mod
+
+    started = servers_mod.start(command, cwd=workspace_root(), label=label)
+    if started.get("error"):
+        return f"[failed] {started['error']}"
+
+    settled = servers_mod.wait_for_url(started["id"])
+    if emit:
+        # The card in the Code tab is built from this. Sent as its own event
+        # rather than left in the tool's text, because a URL the user is meant
+        # to click should not arrive as a sentence inside a transcript.
+        emit({"server": settled})
+
+    if not settled.get("running"):
+        tail = servers_mod.logs(started["id"], lines=25).get("log", "")
+        return (f"[exited {settled.get('exit_code')}] the server stopped on its own.\n{tail}")
+    if settled.get("url"):
+        return (f"[running] {settled['url']} (server {settled['id']}). "
+                "It keeps running until you stop it with stop_server.")
+    tail = servers_mod.logs(started["id"], lines=15).get("log", "")
+    return (f"[running] server {settled['id']} started but has not printed an address yet.\n{tail}")
+
+
+def _tool_server_logs(server_id: str = "", lines: int = 80, **_) -> str:
+    from . import servers as servers_mod
+
+    if not server_id:
+        running = [s for s in servers_mod.list_servers() if s["running"]]
+        if not running:
+            return "no servers are running"
+        server_id = running[-1]["id"]
+    result = servers_mod.logs(server_id, lines=lines)
+    if result.get("error"):
+        return result["error"]
+    state = "running" if result["running"] else f"exited {result['exit_code']}"
+    return f"[{state}] {result['command']}\n{result.get('log', '') or '(no output yet)'}"
+
+
+def _tool_stop_server(server_id: str = "", **_) -> str:
+    from . import servers as servers_mod
+
+    if not server_id:
+        stopped = servers_mod.stop_all()
+        return f"stopped {stopped} server(s)" if stopped else "no servers were running"
+    result = servers_mod.stop(server_id)
+    return result.get("error") or f"stopped {result['command']}"
+
+
 def _tool_search_memory(query: str, **_) -> str:
     """Search memory, in whatever workspace the user is currently in.
 
@@ -1231,6 +1286,50 @@ TOOLS: Dict[str, Dict[str, Any]] = {
             "required": ["command"],
         },
     },
+    # Same risk and the same approval gate as run_command, because it is
+    # run_command — the only difference is that nobody waits for it.
+    "start_server": {
+        "handler": _tool_start_server,
+        "mutating": True,
+        "risk": "high",
+        "wants_emit": True,
+        "description": ("Start a long-running process in the workspace (a dev server, a watcher) "
+                        "and return the address it prints. Use this instead of run_command for "
+                        "anything that does not exit on its own."),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "description": "e.g. npm run dev"},
+                "label": {"type": "string", "description": "Short name for this server"},
+            },
+            "required": ["command"],
+        },
+    },
+    "server_logs": {
+        "handler": _tool_server_logs,
+        "mutating": False,
+        "risk": "low",
+        "description": "Read the output of a running server. This is where its stack traces are.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "server_id": {"type": "string", "description": "Empty for the most recent server"},
+                "lines": {"type": "integer", "description": "How many lines from the end"},
+            },
+            "required": [],
+        },
+    },
+    "stop_server": {
+        "handler": _tool_stop_server,
+        "mutating": True,
+        "risk": "medium",
+        "description": "Stop a server started with start_server. Empty id stops all of them.",
+        "parameters": {
+            "type": "object",
+            "properties": {"server_id": {"type": "string"}},
+            "required": [],
+        },
+    },
     "search_memory": {
         "handler": _tool_search_memory,
         "mutating": False,
@@ -1726,6 +1825,10 @@ def _summarize_call(name: str, arguments: Dict[str, Any]) -> str:
         return f"Write {len(arguments.get('content', ''))} characters to {arguments.get('path', '?')}"
     if name == "run_command":
         return f"Run: {arguments.get('command', '?')}"
+    if name == "start_server":
+        # Says it keeps running, because that is the part of this the approval
+        # is actually about — the command itself looks like any other.
+        return f"Start and leave running: {arguments.get('command', '?')}"
     if name == "create_reminder":
         return f"Create reminder: {arguments.get('title', '?')}"
     if name == "create_note":
