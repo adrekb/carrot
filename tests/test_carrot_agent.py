@@ -521,3 +521,85 @@ def test_agent_runs_expose_their_audit_trail(client, isolated_db):
 
 def test_stopping_a_run_that_is_not_running_says_so(client):
     assert client.post("/api/agent/runs/nothing-here/stop").json()["stopped"] is False
+
+
+# ===== A plan that changes on what the run sees =====
+#
+# The plan was written from the task and the surface name alone — before a page
+# had loaded, before a form had shown its fields, before anything turned out to
+# be somewhere else — and then never touched again. `decide` reads it as YOUR
+# PLAN on every step, so a plan that has stopped describing the run is not just
+# a stale picture for the user: it is stale instruction to the model.
+
+class TestThePlanGrowsOnWhatTheRunSees:
+    def test_a_step_the_run_turned_out_to_need_is_added(self, isolated_db, monkeypatch):
+        monkeypatch.setattr(agent.router_mod, "complete", lambda *a, **k:
+                            '{"add": ["sign in before opening the export page"]}')
+        added = agent.revise_plan("export my data", "1. open the export page",
+                                  [{"action": "navigate(url=...)", "observation": "Sign in to continue"}])
+        assert added == ["sign in before opening the export page"]
+
+    def test_a_step_already_in_the_plan_is_not_added_again(self, isolated_db, monkeypatch):
+        """Reading the plan back at us would grow the list without changing it."""
+        monkeypatch.setattr(agent.router_mod, "complete", lambda *a, **k:
+                            '{"add": ["Open the export page"]}')
+        added = agent.revise_plan("export my data", "1. open the export page",
+                                  [{"action": "a", "observation": "b"}])
+        assert added == []
+
+    def test_nothing_is_revised_before_anything_has_happened(self, isolated_db, monkeypatch):
+        called = []
+        monkeypatch.setattr(agent.router_mod, "complete", lambda *a, **k: called.append(1) or "{}")
+        assert agent.revise_plan("t", "1. a plan", []) == []
+        assert called == []
+
+    def test_a_model_that_will_not_answer_leaves_the_plan_as_it_was(self, isolated_db, monkeypatch):
+        def boom(*a, **k):
+            raise RuntimeError("provider down")
+        monkeypatch.setattr(agent.router_mod, "complete", boom)
+        assert agent.revise_plan("t", "1. a plan", [{"action": "a", "observation": "b"}]) == []
+
+    def test_the_plan_can_only_grow(self, isolated_db, monkeypatch):
+        """The user approved this plan. A run that quietly deleted half of it
+        would leave them watching something they have no description of."""
+        monkeypatch.setattr(agent.router_mod, "complete", lambda *a, **k:
+                            '{"add": ["a genuinely new step"], "drop": ["1. the original step"]}')
+        added = agent.revise_plan("t", "1. the original step",
+                                  [{"action": "a", "observation": "b"}])
+        assert added == ["a genuinely new step"]
+
+    def test_a_running_agent_revises_its_plan_and_says_so(self, isolated_db, fake_ollama, monkeypatch):
+        """End to end: the new step reaches the stored plan and the stream."""
+        _script(monkeypatch, [
+            {"action": "launch_app", "arguments": {"app": "never-allowed"}, "thought": ""}
+        ] * (agent.REPLAN_AFTER_STEPS + 1))
+        monkeypatch.setattr(agent, "revise_plan",
+                            lambda task, plan, history: ["sign in first"])
+
+        events = list(agent.run_agent_stream(
+            "do a thing", surface=agent.SURFACE_DESKTOP, require_plan_approval=False,
+        ))
+        added = [e["plan_added"] for e in events if "plan_added" in e]
+        assert added == [["sign in first"]]
+        plans = [e["plan"] for e in events if "plan" in e]
+        assert "sign in first" in plans[-1]
+        assert "1. do the thing" in plans[-1], "the approved plan is still there"
+
+        stored = agent.get_run(events[-1]["run_id"])
+        assert "sign in first" in stored["plan"]
+
+    def test_the_plan_cannot_keep_growing_forever(self, isolated_db, fake_ollama, monkeypatch):
+        """A model that answers every revision with another one walks away
+        from the task it was approved to do."""
+        _script(monkeypatch, [
+            {"action": "launch_app", "arguments": {"app": "never-allowed"}, "thought": ""}
+        ] * (agent.REPLAN_AFTER_STEPS * (agent.MAX_PLAN_REVISIONS + 3)))
+        monkeypatch.setattr(agent, "revise_plan",
+                            lambda task, plan, history: ["and one more thing"])
+
+        events = list(agent.run_agent_stream(
+            "do a thing", surface=agent.SURFACE_DESKTOP, require_plan_approval=False,
+            budget_overrides={"max_steps": 60},
+        ))
+        added = [e for e in events if "plan_added" in e]
+        assert len(added) == agent.MAX_PLAN_REVISIONS

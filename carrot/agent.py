@@ -224,6 +224,83 @@ def make_plan(task: str, surface: str) -> str:
         return f"(could not draft a plan: {exc})"
 
 
+# How often the plan is re-examined, and how many times at most. Every check
+# is a model call in the middle of a run, so this is deliberately coarse: a
+# plan re-read after every click would cost more than the work it guides.
+REPLAN_AFTER_STEPS = 5
+MAX_PLAN_REVISIONS = 2
+
+REVISE_PLAN_PROMPT = """You wrote this plan before you had seen any of it. You have now done some of the work and you know things the plan does not.
+
+TASK: {task}
+
+YOUR PLAN:
+{plan}
+
+WHAT YOU HAVE ACTUALLY DONE, AND WHAT CAME BACK:
+{history}
+
+Say what the plan is now missing. Return JSON only:
+{{"add": ["a new step, in the same style as the ones above"]}}
+
+Rules:
+- At most {limit} new steps. Returning {{"add": []}} is the normal answer.
+- Add a step only because of something you actually saw: a form asked for a field nobody mentioned, the page moved what you were looking for, a file was not where it was meant to be, the site made you sign in. Quote nothing you did not see.
+- **If what came back tells you the task is bigger than you thought, say so here rather than by quietly doing more.** A step you take that the plan never mentioned is a step the user never agreed to.
+- Do not restate a step already on the plan, and do not add steps for work you have already finished.
+- Do not remove or replace anything. You cannot drop a step here — being undone is the reason it is still there."""
+
+
+def revise_plan(task: str, plan: str, history: List[Dict[str, str]]) -> List[str]:
+    """Steps the run has turned out to need, as plain lines. ``[]`` is normal.
+
+    Additive only, for two reasons that happen to agree. The first is the one
+    chat already found: a plan the model can shorten is a plan the model will
+    shorten, and "drop the rest" is the shortest path to finishing. The second
+    is specific to this tab — the user approved this plan before anything ran.
+    Growing it is something they can see happen; quietly deleting half of it
+    would leave them watching a run they no longer have a description of.
+    """
+    if not plan or not history:
+        return []
+
+    done = "\n\n".join(
+        f"You did: {entry['action']}\nResult: {entry['observation'][:400]}"
+        for entry in history[-8:]
+    )
+    prompt = REVISE_PLAN_PROMPT.format(
+        task=task[:400], plan=plan[:2000], history=done[:4000], limit=3)
+    try:
+        raw = router_mod.complete(
+            router_mod.route(task=router_mod.TASK_AGENT),
+            [{"role": "system", "content": AGENT_SYSTEM}, {"role": "user", "content": prompt}],
+        )
+    except Exception:
+        # Best-effort in the same way as the opening plan: a revision that
+        # could fail the run would make every long task more fragile in
+        # exchange for a refinement.
+        return []
+
+    parsed = research_mod.extract_json(raw)
+    if not isinstance(parsed, dict):
+        return []
+
+    existing = plan.lower()
+    added: List[str] = []
+    for step in parsed.get("add", []) or []:
+        text = " ".join(str(step or "").split())
+        if not 8 <= len(text) <= 200:
+            continue
+        # A "new" step already in the plan is the model reading the plan back
+        # at us, which would grow the list without changing what it says.
+        if text.lower() in existing:
+            continue
+        added.append(text)
+        if len(added) >= 3:
+            break
+    return added
+
+
 # ===== Deciding =====
 
 def decide(task: str, surface: str, plan: str, history: List[Dict[str, str]]) -> Dict[str, Any]:
@@ -546,8 +623,36 @@ def _drive(task, surface, run_id, context, executor, emit, require_plan_approval
 
     history: List[Dict[str, str]] = []
     ordinal = 0
+    plan_checks = 0
 
     while True:
+        # --- the plan against what the run has actually seen ---
+        #
+        # It was written from the task and the surface name alone: before a
+        # page had loaded, before a form had shown its fields, before anything
+        # turned out to be somewhere else. Left fixed it stops describing the
+        # run within a few steps, and `decide` is reading it as YOUR PLAN the
+        # whole time — so a stale plan is not just a stale picture for the
+        # user, it is stale instruction to the model.
+        #
+        # It grows and never shrinks: the user approved this plan, and a run
+        # that quietly deleted half of it would leave them watching something
+        # they no longer have a description of. Growth needs no re-approval
+        # because the task has not changed and every action the new steps lead
+        # to still goes through the policy gate one at a time, which is where
+        # consent for *doing* things actually lives.
+        if plan_checks < MAX_PLAN_REVISIONS and len(history) >= (plan_checks + 1) * REPLAN_AFTER_STEPS:
+            plan_checks += 1
+            added = revise_plan(task, plan, history)
+            if added:
+                plan += (f"\n\nAdded after {len(history)} steps, from what came back:\n"
+                         + "\n".join(f"- {step}" for step in added))
+                set_plan(run_id, plan)
+                # The whole plan, so the panel re-renders it, plus the new
+                # lines on their own: a plan that grew silently between
+                # glances reads as one that was misread the first time.
+                emit({"plan": plan, "plan_added": added})
+
         try:
             context.check_alive()
         except policy.Cancelled as exc:
