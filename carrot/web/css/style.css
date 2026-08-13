@@ -5002,8 +5002,22 @@ td, th, .si-sub, .small, .editor-status {
   outline: none;
   border-color: var(--accent-line);
 }
-.agent-compose-row { display: flex; align-items: center; gap: 8px; }
+/* Wraps, because this row is inside a panel the user can drag narrow and
+   there is no width at which "silently crush a control" is the right answer.
+   Send on a second line is legible; the model picker squeezed to a 10px
+   sliver is a control you cannot read, cannot hit, and would reasonably
+   conclude was broken. */
+.agent-compose-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .agent-compose-row .spacer { flex: 1; }
+/* The hint gives up its space first: it is the only thing in the row that is
+   commentary rather than a control. */
+#agent-context-hint {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* Narrow windows: the agent goes under the editor rather than squeezing it. */
 @media (max-width: 1200px) {
@@ -5441,7 +5455,13 @@ td, th, .si-sub, .small, .editor-status {
   font-family: var(--mono);
   font-size: var(--text-xs);
   padding: 4px 6px;
+  /* A floor as well as a ceiling. Without the floor this is a flex item with
+     nothing to stop it shrinking, and in a narrowed agent panel it went to a
+     sliver a few pixels wide — still there, still working, and impossible to
+     read or click. */
+  min-width: 110px;
   max-width: 150px;
+  text-overflow: ellipsis;
   cursor: pointer;
 }
 .agent-model-picker:hover { border-color: var(--border-hi); }
@@ -6075,6 +6095,13 @@ body #cmdbar:focus-within {
  * A card, because that is what every other floating surface in the app is —
  * the same radius, the same border, the same shadow as a popover. A menu that
  * agreed with nothing on screen was the whole complaint. */
+/* A floor under every select in the app, whatever panel it is in. A select is
+ * now the button that opens the menu, and a button nobody can hit is worse
+ * than an ugly one — the Code composer's picker had shrunk to a few pixels in
+ * a narrow pane, which read as "the menu does not work" and was indeed
+ * indistinguishable from it. */
+select { min-width: 5ch; }
+
 .dd-menu {
   position: fixed;
   z-index: 4000;
