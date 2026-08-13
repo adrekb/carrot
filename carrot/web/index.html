@@ -42,6 +42,8 @@
   <symbol id="i-doc" viewBox="0 0 24 24"><path d="M13.4 2.8H7a2.6 2.6 0 0 0-2.6 2.6v13.2A2.6 2.6 0 0 0 7 21.2h10a2.6 2.6 0 0 0 2.6-2.6V9z"/><path d="M13.4 2.8V9h6.2"/></symbol>
   <symbol id="i-pulse" viewBox="0 0 24 24"><path d="M2.8 12.4h3.9l2.3-6.2 4.2 12.2 2.4-6h5.6"/></symbol>
   <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.4 12S6.2 5.4 12 5.4 21.6 12 21.6 12 17.8 18.6 12 18.6 2.4 12 2.4 12z"/><circle cx="12" cy="12" r="3.1"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3.2l7 2.6v5.4c0 4.3-2.9 8.2-7 9.6-4.1-1.4-7-5.3-7-9.6V5.8z"/><path d="M9.2 12.2l2 2 3.6-3.8"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.6"/><path d="M12 7.2V12l3.2 1.9"/></symbol>
   <symbol id="i-cap" viewBox="0 0 24 24"><path d="M21 9.2L12 4.8 3 9.2l9 4.4z"/><path d="M6.6 11.4v4.4c0 1.6 2.4 2.9 5.4 2.9s5.4-1.3 5.4-2.9v-4.4"/></symbol>
   <symbol id="i-news" viewBox="0 0 24 24"><rect x="3.2" y="4.6" width="17.6" height="14.8" rx="3"/><path d="M7 9.2h10M7 12.6h10M7 16h6"/></symbol>
   <!-- A rising line with an arrowhead: markets. -->
@@ -374,6 +376,8 @@
     <button class="nav-item sub" data-tab="code" onclick="switchTab('code')"><svg class="ico"><use href="#i-terminal"/></svg><span class="nav-label">Code</span></button>
     <button class="nav-item sub" data-tab="agent" onclick="switchTab('agent')"><svg class="ico"><use href="#i-robot"/></svg><span class="nav-label">Agent</span></button>
     <button class="nav-item sub" data-tab="research" onclick="switchTab('research')"><svg class="ico"><use href="#i-flask"/></svg><span class="nav-label">Research</span></button>
+    <!-- Hidden until the Ambient Recall pack is switched on; see applyExtensionTabs. -->
+    <button class="nav-item sub" data-tab="ambient" onclick="switchTab('ambient')"><svg class="ico"><use href="#i-eye"/></svg><span class="nav-label">Ambient</span></button>
     <div class="nav-group">Planning</div>
     <button class="nav-item sub" data-tab="planner" onclick="switchTab('planner')"><svg class="ico"><use href="#i-cap"/></svg><span class="nav-label">Planner</span></button>
     <button class="nav-item sub" data-tab="goals" onclick="switchTab('goals')"><svg class="ico"><use href="#i-target"/></svg><span class="nav-label">Goals</span></button>
@@ -859,6 +863,94 @@
         <button class="btn btn-primary" onclick="scanAssignments()">Scan files</button>
       </div>
       <div id="assignments-list" class="list"></div>
+    </div>
+  </section>
+
+  <!-- Ambient Recall.
+       Status and the stop button first, exclusions second, recall third. The
+       order is deliberate: the two questions someone has about a feature that
+       watches the screen are "is it on" and "how do I stop it", and both are
+       answerable without scrolling. What it found is below that, because it
+       is the part you go looking for rather than the part you need to see. -->
+  <section id="view-ambient" class="view">
+    <div class="page">
+      <div class="page-head">
+        <h2>Ambient</h2>
+        <div class="row-actions">
+          <button class="btn" id="ambient-capture-now" onclick="ambientCaptureNow()">Capture now</button>
+          <button class="btn btn-primary" id="ambient-toggle" onclick="ambientToggle()">Start</button>
+        </div>
+      </div>
+
+      <div class="settings-card" id="ambient-status-card">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-eye"/></svg>
+          <h3>Status</h3>
+        </div>
+        <div id="ambient-status">Loading…</div>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-shield"/></svg>
+          <h3>What it will not look at</h3>
+        </div>
+        <p class="muted small">
+          These are on by default. A private browsing window is you telling the
+          machine, in the only vocabulary the browser gave you, not to keep
+          this — so nobody should have to remember to add it.
+        </p>
+        <div id="ambient-rules"></div>
+        <div class="ctx-adv-row">
+          <select id="ambient-excl-kind">
+            <option value="app">App name</option>
+            <option value="title">Window title contains</option>
+            <option value="url">Domain</option>
+          </select>
+          <input type="text" id="ambient-excl-value" placeholder="e.g. Signal">
+          <button class="btn btn-sm" onclick="ambientAddExclusion()">Never capture this</button>
+        </div>
+        <div id="ambient-exclusions"></div>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-search"/></svg>
+          <h3>Recall</h3>
+        </div>
+        <div class="ctx-adv-row">
+          <input type="text" id="ambient-query" placeholder="what was I reading about…"
+                 onkeydown="if(event.key==='Enter')ambientRecall()">
+          <button class="btn btn-sm" onclick="ambientRecall()">Search</button>
+        </div>
+        <div id="ambient-results"></div>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-clock"/></svg>
+          <h3>Timeline</h3>
+        </div>
+        <div id="ambient-timeline"></div>
+      </div>
+
+      <!-- As prominent as the start button, on purpose. Something that records
+           and is hard to erase is not a record you control. -->
+      <div class="settings-card">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-trash"/></svg>
+          <h3>Forget</h3>
+        </div>
+        <p class="muted small">
+          Every frame is text on this machine and nothing has been sent
+          anywhere, so deleting it here deletes it.
+        </p>
+        <div class="row-actions">
+          <button class="btn" onclick="ambientForgetHours(1)">Last hour</button>
+          <button class="btn" onclick="ambientForgetHours(24)">Last 24 hours</button>
+          <button class="btn btn-ghost" onclick="ambientForgetAll()">Everything</button>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -1887,5 +1979,6 @@
 <script src="/js/hub.js"></script>
 <script src="/js/studio.js"></script>
 <script src="/js/planner.js"></script>
+<script src="/js/ambient.js"></script>
 </body>
 </html>

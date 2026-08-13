@@ -146,6 +146,7 @@ function switchTab(tab) {
         extensions: loadExtensions,
         hub: loadHub,
         research: () => loadResearch(),
+        ambient: () => loadAmbient(),
         agent: () => loadAgent(),
         workspaces: () => loadWorkspaces(),
         help: () => loadHelp(),

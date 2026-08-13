@@ -475,6 +475,44 @@ CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON document_chunks BEGIN
     INSERT INTO chunks_fts(rowid, chunk_id, content, document_id)
     VALUES (new.id, new.id, new.content, new.document_id);
 END;
+
+-- Ambient screen capture. Text only, never an image: see the note at the top
+-- of carrot/ambient_capture.py for why a rolling video of someone's screen is
+-- a thing this app declines to keep.
+--
+-- `ended_at` and `seen` exist because staying on one document for ten minutes
+-- should be one row that lasted ten minutes, not seventy-five identical ones.
+CREATE TABLE IF NOT EXISTS ambient_frames (
+    id TEXT PRIMARY KEY,
+    captured_at TEXT NOT NULL,
+    ended_at TEXT NOT NULL,
+    app TEXT DEFAULT '',
+    title TEXT DEFAULT '',
+    url TEXT DEFAULT '',
+    text TEXT NOT NULL,
+    engine TEXT DEFAULT '',
+    seen INTEGER DEFAULT 1,
+    workspace_id TEXT DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_ambient_at ON ambient_frames(captured_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ambient_app ON ambient_frames(app, captured_at DESC);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS ambient_fts USING fts5(
+    text,
+    title,
+    app,
+    frame_id UNINDEXED
+);
+
+CREATE TRIGGER IF NOT EXISTS ambient_ai AFTER INSERT ON ambient_frames BEGIN
+    INSERT INTO ambient_fts(frame_id, text, title, app)
+    VALUES (new.id, new.text, new.title, new.app);
+END;
+
+CREATE TRIGGER IF NOT EXISTS ambient_ad AFTER DELETE ON ambient_frames BEGIN
+    DELETE FROM ambient_fts WHERE frame_id = old.id;
+END;
 """
 
 SCHEMA = SCHEMA + FTS_SCHEMA + AUX_FTS_SCHEMA

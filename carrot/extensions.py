@@ -22,12 +22,15 @@ disabling removes them and takes its tools out of the agent's reach.
 
 from __future__ import annotations
 
+import logging
 import shutil
 import subprocess
 from typing import Any, Callable, Dict, List, Optional
 
 from . import agent_tools, skills as skills_mod
 from .config import get_config, set_config
+
+LOG = logging.getLogger(__name__)
 
 # Pack tools are namespaced so the chat loop can route a call by prefix alone,
 # the same way it separates built-ins from MCP.
@@ -253,11 +256,39 @@ def set_pack_setting(pack_id: str, key: str, value: Any) -> Dict[str, Any]:
 # ===== Capabilities =====
 
 def probe_capability(capability: Dict[str, Any]) -> Dict[str, Any]:
-    """Look for one external program and report what was found.
+    """Look for one capability and report what was found.
 
     Probing is a ``shutil.which`` by default. A capability may name several
     alternatives — any TeX engine will do — and the first one present wins.
+
+    A capability may instead supply a ``check`` callable, for the ones that are
+    not a program on PATH. Ambient Recall wants a Python import and, on
+    Windows, an OCR engine that lives inside the operating system rather than
+    in a binary anyone could point at — neither of which `which` can answer.
+    The rest of the contract is unchanged, so the UI does not need to know
+    which kind it is looking at.
+
+    A check that raises is treated as absent rather than allowed to propagate.
+    These run to render a settings card, and a probe that throws would take the
+    whole Extensions tab down to report that a library is missing.
     """
+    check = capability.get("check")
+    if callable(check):
+        try:
+            available = bool(check())
+        except Exception:
+            LOG.debug("capability check failed for %s", capability.get("id"), exc_info=True)
+            available = False
+        return {
+            "id": capability["id"],
+            "label": capability.get("label") or capability.get("name", ""),
+            "binaries": [],
+            "available": available,
+            "path": "",
+            "purpose": capability.get("purpose") or capability.get("why", ""),
+            "install_hint": capability.get("install_hint") or capability.get("install", ""),
+        }
+
     binaries = capability.get("binaries") or [capability.get("binary", "")]
     found = next((shutil.which(b) for b in binaries if b and shutil.which(b)), None)
     return {
@@ -371,3 +402,4 @@ def call(
 # Registering the bundled packs at import time keeps discovery in one place.
 from .packs import academia  # noqa: E402,F401  (registers itself)
 from .packs import planner  # noqa: E402,F401  (registers itself)
+from .packs import ambient  # noqa: E402,F401  (registers itself)

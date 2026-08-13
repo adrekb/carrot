@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "carrot"
-version = "0.3.1"
+version = "0.3.3"
 description = "Carrot - On-device AI assistant with structured memory, local document search, agent tools, and hybrid model routing"
 requires-python = ">=3.10"
 dependencies = [
@@ -41,6 +41,14 @@ cloud = ["anthropic>=0.69.0"]
 # which is fine well past 100k vectors.
 vectors = ["sqlite-vec>=0.1.6"]
 speech = ["kokoro-onnx>=0.4.0", "sounddevice>=0.4.6"]
+# Ambient Recall: reading the screen. `mss` takes the frame; the OCR engine
+# is platform-specific and deliberately not pinned here — on Windows it is
+# already in the operating system and needs only `winsdk`, and elsewhere it is
+# Tesseract, which is a system package rather than a wheel. The pack probes
+# for whichever is present and says what to install when neither is.
+ambient = ["mss>=9.0.0", "pillow>=10.0.0"]
+ambient-windows = ["mss>=9.0.0", "pillow>=10.0.0", "winsdk>=1.0.0b10"]
+ambient-tesseract = ["mss>=9.0.0", "pillow>=10.0.0", "pytesseract>=0.3.10"]
 # Browser control for Carrot Agent. Needs a one-time browser download after
 # install: `python -m playwright install chromium`. Without it the Agent tab
 # says so instead of failing mid-task.
