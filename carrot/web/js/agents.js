@@ -8,9 +8,11 @@
 // agent's gate are the same gate, and it looks the same to the user.
 
 let researchRunId = null;
-// The plan a research run is working to, and which of it has landed.
+// The plan a research run is working to, which of it has landed, and which of
+// it the evidence asked for after the run had started.
 let researchGoals = [];
 let researchDone = [];
+let researchAdded = [];
 let agentRunId = null;
 
 // ---------- Shared stream reader ----------
@@ -125,7 +127,15 @@ async function openResearchRun(runId) {
     })));
     const trace = document.getElementById('research-trace');
     trace.innerHTML = '';
-    (run.plan || []).forEach(p => traceLine('research-trace', 'sub-question: ' + p.question, 'intent'));
+    // A follow-up says what made it necessary. Reopened, the plan is a flat
+    // list and a sub-question the evidence forced looks exactly like one that
+    // was planned from the question — which loses the only part of it that
+    // explains why the report goes where it does.
+    (run.plan || []).forEach(p => traceLine('research-trace',
+        p.added
+            ? `follow-up: ${p.question} — because ${p.prompted_by || 'of what the first wave found'}`
+            : 'sub-question: ' + p.question,
+        'intent'));
     (run.findings || []).forEach(f =>
         traceLine('research-trace', `${f.verdict}: ${f.claim}`, f.verdict === 'supported' ? 'ok' : 'stage'));
 }
@@ -187,6 +197,7 @@ function prepareResearchPanes(heading) {
     // A plan left over from the last run would tick against this one.
     researchGoals = [];
     researchDone = [];
+    researchAdded = [];
     document.getElementById('research-plan-host').innerHTML = '';
     document.getElementById('research-trace').innerHTML = '';
     document.getElementById('research-sources').innerHTML = '';
@@ -210,15 +221,33 @@ function makeResearchHandler() {
         if (event.plan) {
             researchGoals = event.plan.map(item => item.question);
             researchDone = [];
+            researchAdded = [];
             renderPlan(document.getElementById('research-plan-host'),
-                       { goals: researchGoals, done: researchDone });
+                       { goals: researchGoals, done: researchDone,
+                         added: researchAdded });
+        }
+        // Sub-questions the evidence asked for after the run started. Appended
+        // rather than replacing the plan, because by now the list has ticks on
+        // it and re-sending the whole plan would clear them — and marked new,
+        // since a checklist that silently grows between glances reads as one
+        // you miscounted the first time.
+        if (event.plan_added) {
+            for (const item of event.plan_added) {
+                if (researchGoals.includes(item.question)) continue;
+                researchGoals.push(item.question);
+                researchAdded.push(item.question);
+            }
+            renderPlan(document.getElementById('research-plan-host'),
+                       { goals: researchGoals, done: researchDone,
+                         added: researchAdded });
         }
         if (event.plan_progress) {
             if (!researchDone.includes(event.plan_progress.question)) {
                 researchDone.push(event.plan_progress.question);
             }
             renderPlan(document.getElementById('research-plan-host'),
-                       { goals: researchGoals, done: researchDone });
+                       { goals: researchGoals, done: researchDone,
+                         added: researchAdded });
             traceLine('research-trace',
                       `${event.plan_progress.outcome}: ${event.plan_progress.question}`,
                       'stage');
@@ -457,6 +486,16 @@ async function runAgentStream(url, payload) {
                     const plan = document.getElementById('agent-plan');
                     plan.classList.remove('hidden');
                     plan.innerHTML = `<h4>Plan</h4><pre>${escHtml(event.plan)}</pre>`;
+                }
+                // The plan grew mid-run. The `plan` event above has already
+                // redrawn the panel with the new lines in it, but the panel is
+                // above the step list and the user is watching the bottom of
+                // the run — so the growth is also announced where they are
+                // looking. A plan that changes silently is one the user stops
+                // trusting as a description of what is happening.
+                if (event.plan_added) {
+                    event.plan_added.forEach(step =>
+                        agentStep(`<strong>Added to the plan:</strong> ${escHtml(step)}`, 'thought'));
                 }
                 if (event.approval_request) showApprovalPrompt(event.approval_request);
                 if (event.approval_waiting) noteApprovalWaiting(event.approval_waiting);
