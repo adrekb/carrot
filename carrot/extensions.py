@@ -51,6 +51,7 @@ class Pack:
         settings: Optional[List[Dict[str, Any]]] = None,
         default_enabled: bool = False,
         tabs: Optional[List[str]] = None,
+        tutorial: Optional[List[Dict[str, str]]] = None,
     ):
         self.id = pack_id
         self.name = name
@@ -66,6 +67,19 @@ class Pack:
         # installing a local assistant are ever going to open, and it sat in
         # the sidebar between Research and Goals for all of them.
         self.tabs = tabs or []
+        # How to actually use the thing, in steps.
+        #
+        # A pack's card lists its tools and its skills, which tells you what it
+        # *has* and not what to do with it. Reading "latex_compile, bib_check,
+        # matlab_run" and knowing where to begin is a different skill from
+        # wanting the pack in the first place, and the gap was left to the
+        # user: switch it on, then work out what changed.
+        #
+        # Deliberately steps rather than prose. A paragraph explaining a pack
+        # is documentation; a numbered list of things to try is the shortest
+        # path to the first moment it does something useful, which is the only
+        # moment that decides whether the switch stays on.
+        self.tutorial = tutorial or []
         self.tools = tools or {}
         # A pack whose skill text depends on its settings passes a callable, so
         # changing the target venue rewrites the instructions rather than
@@ -89,6 +103,7 @@ class Pack:
             "tool_count": len(self.tools),
             "skill_count": len(self.skills),
             "tabs": list(self.tabs),
+            "has_tutorial": bool(self.tutorial),
         }
         if not deep:
             return summary
@@ -105,6 +120,7 @@ class Pack:
                 {"slug": s["slug"], "name": s["name"], "description": s["description"]}
                 for s in self.skills
             ],
+            "tutorial": list(self.tutorial),
             "capabilities": [probe_capability(c) for c in self.capabilities],
             "settings": [
                 {**spec, "value": pack_setting(self.id, spec["key"], spec.get("default"))}

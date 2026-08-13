@@ -193,6 +193,36 @@ PACK = extensions.Pack(
     skills=_skills,
     capabilities=CAPABILITIES,
     settings=SETTINGS,
+    tutorial=[
+        {"title": "Check what this machine has",
+         "body": "The 'On this machine' list above is probed, not assumed. LaTeX "
+                 "compilation needs a TeX distribution and MATLAB tools need "
+                 "MATLAB or Octave; anything missing is named with how to install "
+                 "it. A tool whose program is absent refuses up front rather than "
+                 "failing halfway through a document."},
+        {"title": "Set your venue and citation style",
+         "body": "In Settings above. This is not cosmetic — changing it rewrites "
+                 "the pack's skills, so the instructions name your actual target "
+                 "rather than a generic one, and the formatting rules the model "
+                 "follows are the ones that venue publishes."},
+        {"title": "Write, then ask it to check",
+         "body": "Paste or open a LaTeX document and ask Carrot to validate it. "
+                 "It reports what will not compile before you run a compile, "
+                 "which is faster than reading a TeX error log."},
+        {"title": "Point it at your bibliography",
+         "body": "Ask it to check your BibTeX: it finds entries cited but not "
+                 "defined, defined but never cited, and fields the venue requires "
+                 "that are missing."},
+        {"title": "Photograph a table or a formula",
+         "body": "Attach a photo of a printed table or equation and ask for it as "
+                 "LaTeX. This is what the image-to-LaTeX transcription is for, and "
+                 "it is faster than retyping a matrix by hand."},
+        {"title": "Use the skills directly",
+         "body": "Enabling the pack writes its skills into your ordinary skills "
+                 "directory, so they appear under / in the command bar like any "
+                 "other. If the house style is not quite right, edit the wording — "
+                 "they are plain instruction files."},
+    ],
     default_enabled=False,
 )
 

@@ -5920,3 +5920,43 @@ body #cmdbar:focus-within {
    look like a delisting. */
 .mkt-row.stale { opacity: 0.55; }
 .mkt-foot { margin-top: 6px; }
+
+/* --- A pack's getting-started steps ---
+   Numbered, because the first useful moment is what decides whether the
+   switch stays on, and a paragraph of documentation does not get anyone
+   there. The number is a filled disc rather than a list marker so the steps
+   stay legible against the tool list underneath, which is also indented. */
+.pack-steps {
+  list-style: none;
+  margin: 0 0 14px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.pack-step { display: flex; gap: 10px; align-items: flex-start; }
+.pack-step-n {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--r-pill);
+  background: var(--accent-fill);
+  color: var(--on-accent);
+  font-size: var(--text-2xs);
+  font-weight: var(--w-semi);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+}
+.pack-step-title {
+  font-size: var(--text-base);
+  font-weight: var(--w-semi);
+  color: var(--text);
+}
+.pack-step-body {
+  font-size: var(--text-sm);
+  color: var(--muted);
+  line-height: 1.5;
+  margin-top: 2px;
+}

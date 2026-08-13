@@ -1869,6 +1869,13 @@
 </div>
 
 <script src="/vendor/marked.js"></script>
+<!-- Maths. The fonts have shipped since the notes editor landed — Milkdown
+     pulls KaTeX in and esbuild emitted them — but the library was reachable
+     only inside that editor, so every other surface printed the dollar signs.
+     Loaded here rather than lazily: a chat reply containing an equation is
+     already streaming by the time anyone could decide to fetch it. -->
+<link rel="stylesheet" href="/vendor/katex.css">
+<script src="/vendor/katex.js"></script>
 <script src="/js/search.js"></script>
 <script src="/js/features.js"></script>
 <script src="/js/dashboard.js"></script>
