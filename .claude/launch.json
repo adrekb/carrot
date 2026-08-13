@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "carrot",
+      "runtimeExecutable": "./.venv/Scripts/python.exe",
+      "runtimeArgs": ["scripts/dev_preview.py", "8199"],
+      "port": 8199
+    }
+  ]
+}

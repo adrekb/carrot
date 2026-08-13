@@ -1980,5 +1980,9 @@
 <script src="/js/studio.js"></script>
 <script src="/js/planner.js"></script>
 <script src="/js/ambient.js"></script>
+<!-- Last, and self-contained: it upgrades every <select> on the page by
+     listening at the document, including the ones the scripts above build
+     later, so nothing here has to load before it. -->
+<script src="/js/dropdown.js"></script>
 </body>
 </html>

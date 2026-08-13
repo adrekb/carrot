@@ -6065,3 +6065,62 @@ body #cmdbar:focus-within {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+
+/* ===== Select menus =====
+ *
+ * The popup the OS would have drawn, redrawn as part of the app. See
+ * js/dropdown.js for why it is a replacement rather than a restyling: an
+ * open native select is not in the document and no rule here can reach it.
+ *
+ * A card, because that is what every other floating surface in the app is —
+ * the same radius, the same border, the same shadow as a popover. A menu that
+ * agreed with nothing on screen was the whole complaint. */
+.dd-menu {
+  position: fixed;
+  z-index: 4000;
+  overflow-y: auto;
+  padding: var(--s-2);
+  background: var(--card);
+  border: 1px solid var(--border-hi);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lg);
+  font-family: var(--sans);
+  font-size: var(--text-sm);
+  color: var(--text);
+}
+.dd-item {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-4);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+/* One highlight, driven by JS. Hover and keyboard both set `.active`, so the
+ * mouse pointer resting somewhere cannot leave two rows looking chosen while
+ * you arrow past it. */
+.dd-item.active { background: var(--card3); }
+.dd-item.on { color: var(--accent); }
+.dd-item.disabled { color: var(--faint); cursor: default; }
+/* Fixed-width, so the labels line up whether or not a row is ticked. */
+.dd-mark {
+  flex: none;
+  width: 14px;
+  color: var(--accent);
+  font-size: var(--text-xs);
+}
+.dd-text { overflow: hidden; text-overflow: ellipsis; }
+.dd-group {
+  padding: var(--s-4) var(--s-4) var(--s-2);
+  font-size: var(--text-2xs);
+  font-weight: var(--w-medium);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.dd-group:first-child { padding-top: var(--s-2); }
+/* The trigger stays lit while its menu is open — without it the control goes
+ * back to looking idle the moment the popup takes over, which reads as the
+ * click having missed. */
+select.dd-open { border-color: var(--accent-line); }
