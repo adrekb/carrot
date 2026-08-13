@@ -61,6 +61,10 @@ WRITE_TOOLS = frozenset({
     # server. Stopping is here too: killing the user's dev server is not a
     # read-only act on a machine they are working on.
     "start_server", "stop_server",
+    # Writing a skill is writing a file, and one whose contents this agent
+    # will obey later. Plan mode proposes; it does not leave standing orders
+    # behind for itself.
+    "save_skill",
 })
 
 
