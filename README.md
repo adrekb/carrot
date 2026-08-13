@@ -124,7 +124,7 @@ Your choice is sent with the turn *and* saved as the default, so turning search 
 - **Its skills become ordinary skills**, written to your skills directory and reachable with `/` in the command bar — so you can edit the wording if the house style isn't quite right.
 
 ### Carrot Research
-- **A real multi-agent pipeline** (`carrot/research.py`): plan → parallel researchers → gap reflection → verification → cited synthesis. Sub-questions are researched by independent agents on their own budgets, so one dead end costs one thread rather than the run.
+- **A real multi-agent pipeline** (`carrot/research.py`): plan → parallel researchers → gap reflection → plan revision → verification → cited synthesis. Sub-questions are researched by independent agents on their own budgets, so one dead end costs one thread rather than the run — and when a wave finds something the plan could not have anticipated, the plan gains a sub-question about it and another wave goes after it.
 - **Reflection is a loop, not a flourish**: after extracting findings a researcher is asked what it still cannot answer, and those gaps become the next round's queries. Depth comes from reading the *right* second page, not from reading more first pages.
 - **Evidence is stored before it is used**: every page read lands in `research_sources` with its full text. Findings cite sources by id, and a claim citing an id that does not exist is dropped rather than repaired.
 - **Every claim is re-checked** against the source text by a separate pass that sees the claim and the evidence and nothing else — no question, no narrative to protect. `unsupported` and `contradicted` claims never reach the writer.

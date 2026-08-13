@@ -131,6 +131,94 @@ def test_query_derivation_uses_gaps_on_later_rounds(isolated_db, monkeypatch):
     assert research.derive_queries("Is X true?", "quick", gaps=["what about Y"]) == ["what about Y"]
 
 
+# ===== A plan that changes on what it finds =====
+#
+# The failure these exist for: asked about an aircraft programme, a run found
+# that one had crashed and reported it in the single sentence its first search
+# results happened to carry — wrong date, and "no reported injuries" when the
+# pilot had been taken to hospital. Nothing in the pipeline was broken. The
+# plan was written before anything had been read, so no sub-question asked
+# what came of the crash, and no amount of reflection inside the sub-questions
+# that did exist could have added one.
+
+def _finding(claim):
+    return {"claim": claim, "source_ids": ["S1"], "subquestion": "q"}
+
+
+class TestThePlanGrowsOnWhatItFinds:
+    def test_a_finding_that_raises_something_new_adds_a_subquestion(self, isolated_db, monkeypatch):
+        monkeypatch.setattr(research, "_ask_json", lambda *a, **k: {"add": [{
+            "question": "What were the injuries and cause of the 31 July crash?",
+            "prompted_by": "An F-35B crashed on 31 July",
+            "sources": ["web"],
+        }]})
+        added = research.revise_plan(
+            "Where does the F-35 programme stand?",
+            [{"question": "What is the current procurement rate?"}],
+            [_finding("An F-35B crashed on 31 July")],
+            "standard", 2, lambda e: None)
+        assert len(added) == 1
+        assert added[0]["added"] is True
+        assert added[0]["prompted_by"] == "An F-35B crashed on 31 July"
+        assert added[0]["sources"] == ["web"]
+
+    def test_a_followup_that_points_at_no_finding_is_refused(self, isolated_db, monkeypatch):
+        """Without the finding that forced it, this is the model changing the subject."""
+        monkeypatch.setattr(research, "_ask_json", lambda *a, **k: {"add": [
+            {"question": "What is the history of naval aviation?", "prompted_by": ""},
+        ]})
+        events = []
+        added = research.revise_plan("q", [{"question": "planned"}],
+                                     [_finding("something")], "standard", 2, events.append)
+        assert added == []
+        assert any("ungrounded" in (e.get("detail") or "") for e in events)
+
+    def test_a_subquestion_already_on_the_plan_is_not_added_again(self, isolated_db, monkeypatch):
+        """Restating the plan back at us would research the same thing twice."""
+        monkeypatch.setattr(research, "_ask_json", lambda *a, **k: {"add": [
+            {"question": "What caused the crash on 31 July?", "prompted_by": "a finding"},
+        ]})
+        added = research.revise_plan("q", [{"question": "What caused the crash on 31 July?"}],
+                                     [_finding("a finding")], "standard", 2, lambda e: None)
+        assert added == []
+
+    def test_the_same_question_with_its_words_moved_is_still_a_duplicate(self, isolated_db, monkeypatch):
+        monkeypatch.setattr(research, "_ask_json", lambda *a, **k: {"add": [
+            {"question": "On 31 July, what caused the crash?", "prompted_by": "a finding"},
+        ]})
+        added = research.revise_plan("q", [{"question": "What caused the crash on 31 July?"}],
+                                     [_finding("a finding")], "standard", 2, lambda e: None)
+        assert added == []
+
+    def test_no_more_followups_than_there_is_room_for(self, isolated_db, monkeypatch):
+        monkeypatch.setattr(research, "_ask_json", lambda *a, **k: {"add": [
+            {"question": f"A distinct follow-up number {n} about the crash", "prompted_by": "f"}
+            for n in range(9)
+        ]})
+        added = research.revise_plan("q", [{"question": "planned"}],
+                                     [_finding("f")], "standard", 2, lambda e: None)
+        assert len(added) == 2
+
+    def test_a_model_that_will_not_answer_leaves_the_plan_as_it_was(self, isolated_db, monkeypatch):
+        """A refinement that could fail the run would be a bad trade at any hit rate."""
+        monkeypatch.setattr(research, "_ask_json", lambda *a, **k: None)
+        assert research.revise_plan("q", [{"question": "planned"}],
+                                    [_finding("f")], "standard", 2, lambda e: None) == []
+
+    def test_nothing_is_added_before_anything_has_been_found(self, isolated_db, monkeypatch):
+        """No evidence means no grounds — and the run is about to fail honestly anyway."""
+        called = []
+        monkeypatch.setattr(research, "_ask_json", lambda *a, **k: called.append(1))
+        assert research.revise_plan("q", [{"question": "planned"}], [],
+                                    "standard", 2, lambda e: None) == []
+        assert called == []
+
+    def test_every_depth_can_follow_something_up(self):
+        """A depth with no follow-up budget is the old fixed plan under a new name."""
+        for name, profile in research.DEPTHS.items():
+            assert profile["followups"] >= 1, name
+
+
 # ===== Verification =====
 
 def test_verification_records_a_verdict_per_claim(isolated_db, monkeypatch):
@@ -269,6 +357,108 @@ def test_full_pipeline_produces_a_cited_report(isolated_db, fake_ollama, monkeyp
     assert stored["status"] == "complete"
     assert stored["findings"][0]["verdict"] == "supported"
     assert stored["sources"][0]["id"] == "S1"
+
+
+def _stub_the_web(monkeypatch):
+    """Two readable results for any query, with address resolution stubbed.
+
+    The .test domains deliberately do not resolve and an unresolvable host is
+    refused by design, so leaving the real check in would test DNS.
+    """
+    monkeypatch.setattr(policy, "_is_public_address", lambda host: (True, ""))
+    monkeypatch.setattr(research.websearch, "search", lambda query, **kw: [
+        {"title": "Result one", "url": "https://a.test/one", "snippet": "about the topic"},
+        {"title": "Result two", "url": "https://b.test/two", "snippet": "more on the topic"},
+    ])
+    monkeypatch.setattr(research.websearch, "fetch", lambda url, **kw: {
+        "url": url, "final_url": url, "title": "A page", "text": "The pilot was hospitalised.",
+        "links": [], "error": "", "screening": {"tainted": False, "signals": [], "origin": url},
+        "tainted": False, "truncated": False,
+    })
+
+
+FOLLOW_UP = "What were the injuries and cause of the 31 July crash?"
+
+
+def test_a_followup_is_researched_with_the_whole_machinery(isolated_db, fake_ollama, monkeypatch):
+    """The point of mutating the plan: the follow-up gets its own searches.
+
+    Answering it from the pages already read would be the same run with a
+    longer prompt — and those pages are the ones that only said a crash had
+    happened, which is how "no reported injuries" got written down.
+    """
+    _stub_the_web(monkeypatch)
+    prompts = []
+
+    def fake_ask(task, prompt, **kwargs):
+        prompts.append(prompt)
+        if "WHAT THE RESEARCHERS ACTUALLY FOUND" in prompt:
+            # Only ever offer the follow-up once; the second call sees it is
+            # already on the plan and would be refused as a duplicate anyway.
+            return {"add": [{"question": FOLLOW_UP,
+                             "prompted_by": "An F-35B crashed on 31 July",
+                             "sources": ["web"]}]}
+        if "Break this research question" in prompt:
+            return {"subquestions": [{"question": "What is the programme status?",
+                                      "rationale": "r", "sources": ["web"]}]}
+        if "search queries" in prompt:
+            return {"queries": ["a query"]}
+        if "pull out every statement" in prompt:
+            claim = ("The pilot was hospitalised with non-life-threatening injuries"
+                     if FOLLOW_UP in prompt else "An F-35B crashed on 31 July")
+            return {"findings": [{"claim": claim, "sources": ["S1"], "confidence": 0.9}]}
+        if "still unanswered" in prompt:
+            return {"gaps": []}
+        if "supports it" in prompt:
+            return {"verdicts": [{"claim": n, "verdict": "supported"} for n in (1, 2)]}
+        return None
+
+    monkeypatch.setattr(research, "_ask_json", fake_ask)
+    events = list(research.run_research_stream("Where does the F-35 stand?", depth="quick"))
+
+    added = [event["plan_added"] for event in events if "plan_added" in event]
+    assert added and added[0][0]["question"] == FOLLOW_UP
+
+    # A researcher really ran it: the follow-up reached an extraction prompt,
+    # which only happens after its own searches have been read.
+    assert any("pull out every statement" in p and FOLLOW_UP in p for p in prompts)
+
+    done = events[-1]
+    assert done.get("done") is True
+    assert "hospitalised" in done["report"] or done["findings"] == 2
+
+    stored = research.get_run(done["run_id"])
+    assert [step["question"] for step in stored["plan"]][-1] == FOLLOW_UP
+    assert stored["plan"][-1]["added"] is True
+    assert stored["plan"][0].get("added") is not True
+
+
+def test_the_plan_cannot_keep_growing_forever(isolated_db, fake_ollama, monkeypatch):
+    """A model that answers every follow-up with another one walks away from the question."""
+    _stub_the_web(monkeypatch)
+    counter = {"n": 0}
+
+    def fake_ask(task, prompt, **kwargs):
+        if "WHAT THE RESEARCHERS ACTUALLY FOUND" in prompt:
+            counter["n"] += 1
+            return {"add": [{"question": f"Follow-up number {counter['n']} about the crash",
+                             "prompted_by": "a finding"}]}
+        if "Break this research question" in prompt:
+            return {"subquestions": [{"question": "What is the programme status?",
+                                      "rationale": "r", "sources": ["web"]}]}
+        if "search queries" in prompt:
+            return {"queries": ["a query"]}
+        if "pull out every statement" in prompt:
+            return {"findings": [{"claim": "A crash happened", "sources": ["S1"], "confidence": 0.9}]}
+        if "still unanswered" in prompt:
+            return {"gaps": []}
+        return None
+
+    monkeypatch.setattr(research, "_ask_json", fake_ask)
+    # deep has room for three follow-ups, so the wave cap is what has to stop it.
+    events = list(research.run_research_stream("Where does the F-35 stand?", depth="deep"))
+    added = [event["plan_added"] for event in events if "plan_added" in event]
+    assert len(added) == research.MAX_PLAN_REVISIONS
 
 
 def test_a_run_with_no_readable_sources_fails_honestly(isolated_db, fake_ollama, monkeypatch):

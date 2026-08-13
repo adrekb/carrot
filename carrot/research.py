@@ -7,9 +7,10 @@ evidence you can put your finger on.** So the pipeline never lets the writing
 model invent its own support.
 
     plan ──▶ researcher × N (parallel) ──▶ verify ──▶ synthesize
-              │                              │
-              └── search → read → extract    └── every claim re-checked
-                  → reflect on gaps → repeat     against the stored source text
+       ▲      │                              │
+       │      └── search → read → extract    └── every claim re-checked
+       │          → reflect on gaps → repeat     against the stored source text
+       └──────── revise the plan on what the wave found
 
 Four properties fall out of that shape:
 
@@ -27,6 +28,14 @@ enough. One agent going down a dead end costs its own budget and nothing else.
 researcher is asked what it still cannot answer, and the gaps become the next
 round's queries. That is where the depth comes from — not from reading more
 pages up front, but from reading the *right* second page.
+
+**The plan itself is revised on what comes back.** Reflection can only chase
+gaps inside a sub-question that was written before anything had been read. When
+a wave surfaces something the plan could not have anticipated — an incident, a
+recall, a figure nobody knew existed — the plan gains a sub-question about it
+and another wave researches it. A run that learned an aircraft had crashed used
+to report the crash in the one sentence its search results happened to contain;
+now it goes back and asks what came of it.
 
 **Local knowledge is a first-class source.** Your indexed documents, past
 conversations and stored memories are searched alongside the web and cited the
@@ -58,17 +67,25 @@ from .database import get_db
 # The knobs a user actually feels. Everything else is derived.
 
 DEPTHS: Dict[str, Dict[str, int]] = {
+    # ``followups`` is how many sub-questions the plan may *gain* over the run,
+    # on top of the ones planned from the question alone. Quick keeps one:
+    # the cheapest depth is the one most likely to surface a bare headline
+    # with nothing behind it, so it is the depth that most needs the ability
+    # to go back and ask what happened.
     "quick": {
         "subquestions": 2, "queries_per_round": 2, "results_per_query": 5,
         "reads_per_round": 2, "rounds": 1, "workers": 2, "chars_per_page": 4000,
+        "followups": 1,
     },
     "standard": {
         "subquestions": 4, "queries_per_round": 2, "results_per_query": 6,
         "reads_per_round": 3, "rounds": 2, "workers": 3, "chars_per_page": 6000,
+        "followups": 2,
     },
     "deep": {
         "subquestions": 6, "queries_per_round": 3, "results_per_query": 8,
         "reads_per_round": 4, "rounds": 3, "workers": 4, "chars_per_page": 8000,
+        "followups": 3,
     },
     # Only offered when research is routed to a hosted model. On-device
     # models are the bottleneck at these volumes — a 1B would spend an hour
@@ -77,6 +94,7 @@ DEPTHS: Dict[str, Dict[str, int]] = {
     "exhaustive": {
         "subquestions": 10, "queries_per_round": 4, "results_per_query": 10,
         "reads_per_round": 7, "rounds": 5, "workers": 8, "chars_per_page": 14000,
+        "followups": 5,
     },
 }
 
@@ -115,6 +133,12 @@ CLOUD_MAX_WORKERS = 3
 
 MAX_CLAIMS_PER_SUBQUESTION = 8
 VERIFY_BATCH = 6
+
+# How many times the plan may be revised, however much follow-up budget is
+# left. Each revision costs a model call and a whole wave of researchers, and
+# a model that answers one follow-up with another follow-up would otherwise
+# walk away from the question it was asked, one reasonable step at a time.
+MAX_PLAN_REVISIONS = 2
 
 
 def _now() -> str:
@@ -354,6 +378,110 @@ def plan_subquestions(question: str, depth: str, emit: Callable) -> List[Dict[st
             "sources": ["web", "local"],
         }]
     return subquestions
+
+
+REVISE_PLAN_PROMPT = """You planned this research before you had read anything. A wave of researchers has now come back, and you know things the plan could not have known.
+
+RESEARCH QUESTION: {question}
+
+THE PLAN SO FAR — every sub-question already being researched:
+{plan}
+
+WHAT THE RESEARCHERS ACTUALLY FOUND:
+{evidence}
+
+Say which sub-questions the plan now needs. Return JSON only:
+{{"add": [{{"question": "a new sub-question, in the same style as the ones above",
+           "prompted_by": "the finding above that makes it necessary",
+           "sources": ["web"|"local"]}}]}}
+
+Rules:
+- At most {limit} new sub-questions. Returning {{"add": []}} is the normal answer and you should return it whenever the findings raise nothing the plan does not already cover.
+- Add a sub-question only because of something specific in the findings above — a named event, an incident, a figure, a date, an entity nobody knew about when the plan was written. Not because a topic feels underexplored, and not because you can imagine a related area. If you cannot point at the finding that forces it, it does not belong.
+- **When a finding says something happened, the plan almost never asks what came of it, and that is the most valuable thing you can add here.** A crash, a recall, a resignation, an outage, a lawsuit, a fire: the search results that surfaced it were written in the first hours and say the least that will ever be said about it. Ask for what only comes out afterwards — who was hurt and how badly, what was destroyed, what caused it, what has happened since, what the official finding was. A report that says an aircraft crashed and there were no reported injuries, when the pilot was hospitalised, is wrong in the way that matters, and it got that way by never asking a second question.
+- Do not restate a sub-question that is already on the list in different words. It would be researched twice and answered the same way.
+- Do not widen the scope. Every sub-question must still serve the research question at the top."""
+
+
+def revise_plan(question: str, planned: List[Dict[str, Any]],
+                findings: List[Dict[str, Any]], depth: str, room: int,
+                emit: Callable) -> List[Dict[str, Any]]:
+    """Sub-questions the evidence has made necessary since the plan was written.
+
+    Only ever additive. Dropping a planned sub-question was considered and
+    refused: a plan the model can shorten is a plan the model will shorten,
+    and the sub-questions here are cheap to leave running — a dead end costs
+    its own budget and nothing else — while a dropped one is invisible.
+
+    Best-effort in the same way as the initial plan. A model that will not
+    produce usable JSON leaves the plan as it was, because a refinement that
+    could fail the run would be a bad trade at any hit rate.
+    """
+    if room <= 0 or not findings or not planned:
+        return []
+
+    existing = [str(item.get("question", "")) for item in planned]
+    # Newest findings first: the thing that will most often demand a follow-up
+    # is what the latest wave turned up, and the evidence block is capped.
+    claims = [f["claim"] for f in reversed(findings)][:40]
+    prompt = REVISE_PLAN_PROMPT.format(
+        question=question[:400],
+        plan="\n".join(f"- {text}" for text in existing),
+        evidence="\n".join(f"- {claim}" for claim in claims)[:6000],
+        limit=room,
+    )
+    parsed = _ask_json(router_mod.TASK_RESEARCH, prompt)
+    if not isinstance(parsed, dict):
+        return []
+
+    seen = {_plan_key(text) for text in existing}
+    added: List[Dict[str, Any]] = []
+    for item in parsed.get("add", []) or []:
+        if not isinstance(item, dict):
+            continue
+        text = " ".join(str(item.get("question", "")).split())
+        # A "sub-question" of four words is a topic, not something a
+        # researcher can search for and answer.
+        if not 12 <= len(text) <= 300:
+            continue
+        key = _plan_key(text)
+        if key in seen:
+            continue
+        prompted_by = " ".join(str(item.get("prompted_by", "")).split())
+        if not prompted_by:
+            # Without the finding that forced it, this is the model widening
+            # the question on its own initiative, which is the failure mode
+            # this step is one model call away from becoming.
+            emit({"stage": "plan",
+                  "detail": f"ignored an ungrounded follow-up: {text[:80]}"})
+            continue
+        sources = item.get("sources") or ["web", "local"]
+        if not isinstance(sources, list):
+            sources = ["web", "local"]
+        seen.add(key)
+        added.append({
+            "question": text,
+            "rationale": prompted_by[:300],
+            "sources": [s for s in sources if s in ("web", "local")] or ["web", "local"],
+            # Marks this as a sub-question the run added rather than one it
+            # was given, so the plan can show it as new and a reopened run
+            # still says which parts of it the evidence asked for.
+            "added": True,
+            "prompted_by": prompted_by[:300],
+        })
+        if len(added) >= room:
+            break
+    return added
+
+
+def _plan_key(text: str) -> str:
+    """Comparison form for "is this sub-question already on the plan".
+
+    Words only, lowercased: a model asked not to repeat itself repeats itself
+    with a comma moved, and a duplicate sub-question costs a full researcher
+    to arrive at the same answer twice.
+    """
+    return " ".join(sorted(re.findall(r"[a-z0-9]+", text.lower())))
 
 
 def derive_queries(subquestion: str, depth: str, gaps: Optional[List[str]] = None) -> List[str]:
@@ -1231,19 +1359,66 @@ def run_research_stream(
         # its full breadth and a tight limit shows up as a slower run.
         workers = DEPTHS[depth]["workers"]
         pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="carrot-research")
-        futures = [pool.submit(work, subquestion) for subquestion in subquestions]
 
-        def watch():
-            for future in futures:
-                findings.extend(future.result())
-            events.put(None)
+        def wave(batch: List[Dict[str, Any]]) -> Generator[Dict[str, Any], None, None]:
+            """One batch of researchers, drained onto the trace as they land."""
+            futures = [pool.submit(work, subquestion) for subquestion in batch]
 
-        threading.Thread(target=watch, daemon=True, name="carrot-research-watch").start()
-        while True:
-            event = events.get()
-            if event is None:
+            def watch():
+                for future in futures:
+                    findings.extend(future.result())
+                events.put(None)
+
+            threading.Thread(target=watch, daemon=True, name="carrot-research-watch").start()
+            while True:
+                event = events.get()
+                if event is None:
+                    break
+                yield event
+
+        yield from wave(subquestions)
+
+        # --- the plan mutates on what the wave found ---
+        #
+        # Until here the plan could only tick. It was written from the question
+        # alone, so it could ask what a thing is and never what came of it —
+        # and the sub-question the evidence makes obvious is exactly the one
+        # nobody could have written in advance. Each revision runs as another
+        # wave through the same pool, so a follow-up is researched with the
+        # full machinery (its own rounds, its own reflection, its own
+        # verification) rather than being answered from what is already read.
+        room = DEPTHS[depth]["followups"]
+        for _ in range(MAX_PLAN_REVISIONS):
+            # No findings at all means the run is about to fail honestly;
+            # there is nothing for a follow-up to be grounded in.
+            if room <= 0 or context.cancelled or not findings:
                 break
-            yield event
+            try:
+                context.check_alive()
+            except (policy.Cancelled, policy.BudgetExceeded):
+                # Out of time is a reason to write up what there is, not to
+                # fail. The findings already gathered are untouched.
+                break
+            yield {"stage": "plan", "detail": "revising the plan against what came back"}
+            extra = revise_plan(question, subquestions, findings, depth, room, emit)
+            while not events.empty():
+                event = events.get_nowait()
+                if event is not None:
+                    yield event
+            if not extra:
+                yield {"stage": "plan", "detail": "the findings raise nothing the plan misses"}
+                break
+            subquestions.extend(extra)
+            room -= len(extra)
+            for item in extra:
+                yield {"stage": "plan",
+                       "detail": f"following up: {item['question']} — because {item['prompted_by']}"}
+            # Sent as its own event rather than a fresh `plan`: the checklist
+            # has ticks on it by now, and re-sending the whole plan would
+            # reset them.
+            yield {"plan_added": extra}
+            yield from wave(extra)
+
         pool.shutdown(wait=True)
 
         if context.cancelled:
