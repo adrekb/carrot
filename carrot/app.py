@@ -3506,6 +3506,21 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
         if questions:
             yield {"questions": questions, "blocking": asked.blocking()}
 
+    # It asked, but not in a shape that makes buttons.
+    #
+    # The prompt says prose questions are ignored and the model will be made
+    # to guess — and it was, silently, which is how a turn ended on "Key
+    # Decisions Needed:" with the panel reporting Done underneath it. The
+    # model is waiting; the only thing missing was anybody saying so.
+    if not (asked and questions):
+        try:
+            in_prose = coder_mod.prose_questions(final_text)
+        except Exception:
+            LOG.debug("could not scan for prose questions", exc_info=True)
+            in_prose = []
+        if in_prose:
+            yield {"questions_in_prose": in_prose}
+
     yield {"_final_text": final_text}
 
 

@@ -285,6 +285,51 @@ def parse_questions(text: str) -> List[Dict[str, Any]]:
     return questions
 
 
+# A line that is a question the model is putting to the user, rather than one
+# it is about to answer itself. Numbered, bulleted or bold — the three shapes
+# "Key Decisions Needed:" is followed by in practice.
+_PROSE_QUESTION = re.compile(
+    r"^\s*(?:[-*•]|\d+[.)]|\*\*\d+[.)]?\*\*)?\s*(.{8,200}\?)\s*$", re.M)
+
+# Headings that introduce a list of things the model wants decided. Their
+# presence is not required — a bare question still counts — but they raise the
+# confidence enough to report a single question, which on its own is often
+# rhetorical.
+_ASKING_HEADING = re.compile(
+    r"^\s*#*\s*\**\s*(key\s+)?(decisions?|questions?|clarifications?|choices?)"
+    r"\b.{0,40}(needed|required|for you|to make|before)?\s*:?\s*\**\s*$", re.I | re.M)
+
+
+def prose_questions(text: str) -> List[str]:
+    """Questions the model asked in prose when it should have sent a block.
+
+    The reason this exists is a turn that ended "Key Decisions Needed:" and
+    then stopped. The plan prompt says plainly that prose questions produce no
+    buttons and will be ignored — so the model was ignored, silently, and the
+    panel said Done over the top of a model waiting for an answer.
+
+    Deliberately a detector and not a repair. The obvious alternative is a
+    second call asking the model to reformat, but the models that miss this
+    format are small local ones, and asking the same model to get the same
+    format right on a second attempt fails in the same place it just failed.
+    A detector cannot make the turn worse, costs nothing, and restores the
+    part that was actually lost: knowing it is waiting.
+    """
+    text = text or ""
+    if QUESTIONS_MARKER.search(text):
+        return []
+    found = [_one_line(m.group(1)) for m in _PROSE_QUESTION.finditer(text)]
+    # Its own rhetorical questions are not questions for the user. "What could
+    # go wrong?" as a heading over the answer is the common one.
+    found = [q for q in found if not q.lower().startswith(("what could go wrong",
+                                                           "what next", "why"))]
+    if not found:
+        return []
+    if len(found) == 1 and not _ASKING_HEADING.search(text):
+        return []
+    return found[:MAX_QUESTIONS]
+
+
 def strip_questions(text: str) -> str:
     """The plan without the machine-readable block, for display.
 

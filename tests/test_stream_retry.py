@@ -154,5 +154,8 @@ def test_the_code_tab_shows_a_provider_failure_at_all():
     features = (Path(__file__).resolve().parents[1] / "carrot" / "web" / "js"
                 / "features.js").read_text(encoding="utf-8")
     assert "payload.provider_error" in features
-    # And the footer must not claim the turn finished.
-    assert "'Stopped' : 'Done'" in features
+    # And the footer must not claim the turn finished. Asserted on the word
+    # rather than on the whole expression: it has since grown a third case,
+    # for a turn that stopped to ask something, and "Done" is equally wrong
+    # over that one.
+    assert "failure ? 'Stopped'" in features
