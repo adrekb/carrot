@@ -6501,3 +6501,20 @@ select.dd-open { border-color: var(--accent-line); }
 }
 .sched-toggle.on { background: var(--accent-soft); border-color: var(--accent-line); }
 .sched-toggle.on::after { transform: translateX(13px); background: var(--accent); }
+
+/* Which checkout the agent is working in. Sits with the branch chip because
+   they answer the same question — where am I — and the mistake this exists
+   to prevent is committing an experiment to main, which is made by not
+   knowing the answer. */
+.worktree-picker {
+  background: var(--card2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: var(--text-2xs);
+  padding: 3px 6px;
+  max-width: 180px;
+  cursor: pointer;
+}
+.worktree-picker:hover { border-color: var(--border-hi); }

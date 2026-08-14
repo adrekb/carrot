@@ -143,6 +143,58 @@ async def rules():
     return {"rules": text, "files": list(coder_mod.RULE_FILES)}
 
 
+# ===== Worktrees =====
+#
+# "Try this refactor" and "keep working" are the same directory otherwise, so
+# the agent's edits land on top of whatever you had open and undoing them
+# means undoing yours too.
+
+class WorktreeRequest(BaseModel):
+    branch: str
+    path: str = ""
+    # Switching is the point — a worktree you have to go and open by hand is a
+    # directory, not a feature — but it is still a separate decision from
+    # making one, and a caller scripting this may not want it.
+    switch: bool = True
+
+
+@router.get("/worktrees")
+async def list_worktrees():
+    from carrot import gitops
+
+    root = workspace_root()
+    if not gitops.is_repo(root):
+        return {"worktrees": [], "repo": False, "current": root}
+    try:
+        return {"worktrees": gitops.worktrees(root), "repo": True, "current": root}
+    except gitops.GitError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/worktrees")
+async def create_worktree(req: WorktreeRequest):
+    from carrot import gitops
+    from carrot.files_api import set_files_root, RootRequest
+
+    try:
+        made = gitops.add_worktree(workspace_root(), req.branch, req.path)
+    except gitops.GitError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if req.switch:
+        await set_files_root(RootRequest(root=made["path"]))
+    return {**made, "switched": req.switch}
+
+
+@router.delete("/worktrees")
+async def drop_worktree(path: str):
+    from carrot import gitops
+
+    try:
+        return gitops.remove_worktree(workspace_root(), path)
+    except gitops.GitError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 # ===== Tasks that run on a schedule =====
 #
 # In the coder API because the work they do is coding work — "what changed in

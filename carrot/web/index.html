@@ -611,6 +611,11 @@
           <span class="spacer"></span>
           <span class="git-chip hidden" id="git-chip" onclick="showCodePanel('git')"
                 title="Repository status"></span>
+          <!-- Which checkout the agent is working in. Hidden outside a git
+               repository, where the idea does not apply. -->
+          <select id="worktree-picker" class="worktree-picker hidden"
+                  title="Which checkout of this repository you are working in"
+                  onchange="pickWorktree(this.value)"></select>
           <span class="rules-chip hidden" id="rules-chip" title="Project rules are in effect">rules</span>
           <button class="btn btn-ghost" onclick="takeCheckpoint()"
                   title="Snapshot the workspace so everything after this can be undone in one step">Checkpoint</button>

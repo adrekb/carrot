@@ -1540,6 +1540,10 @@ async function loadCoderState() {
     // startup panel, since redrawing it over a conversation in progress would
     // delete the conversation.
     if (document.querySelector('#agent-log .agent-hello')) renderAgentHello();
+    // Which checkout this is. Refreshed with the rest of the coder state
+    // rather than once at load, because switching workspace folder changes
+    // the answer and so does creating a worktree from anywhere else.
+    loadWorktrees();
     const chip = document.getElementById('git-chip');
     if (chip) {
         const git = state.git || {};
@@ -2102,6 +2106,81 @@ async function renderAgentHello() {
                   ).join('');
         }
     } catch (_) {}
+}
+
+// ===== Which checkout the agent is working in =====
+//
+// "Try this refactor" and "keep working" are the same directory otherwise:
+// the agent's edits land on top of whatever you had open, and undoing them
+// means undoing yours too. A worktree gives it a whole checkout on its own
+// branch, sharing the object database, for the price of a directory.
+//
+// A picker rather than a command, because the thing you need to know is which
+// one you are in *now* — the mistake this prevents is committing an
+// experiment to main, and that mistake is made by not knowing where you are.
+
+const NEW_WORKTREE = '__new__';
+
+async function loadWorktrees() {
+    const picker = document.getElementById('worktree-picker');
+    if (!picker) return;
+    let data;
+    try {
+        data = await api('/api/coder/worktrees');
+    } catch (_) {
+        picker.classList.add('hidden');
+        return;
+    }
+    if (!data.repo) { picker.classList.add('hidden'); return; }
+    picker.classList.remove('hidden');
+
+    const here = (data.current || '').replace(/[\\/]+$/, '').toLowerCase();
+    picker.innerHTML = (data.worktrees || []).map((w, index) => {
+        const label = index === 0
+            // The first one git lists is the repository proper. Calling it by
+            // its branch would make it look like one experiment among
+            // several, when it is the thing the others are branches of.
+            ? `Main · ${w.branch || 'detached'}`
+            : (w.branch || w.path.split(/[\\/]/).pop());
+        const selected = w.path.replace(/[\\/]+$/, '').toLowerCase() === here ? ' selected' : '';
+        return `<option value="${escHtml(w.path)}"${selected}>${escHtml(label)}</option>`;
+    }).join('') + `<option value="${NEW_WORKTREE}">New worktree…</option>`;
+}
+
+async function pickWorktree(value) {
+    if (value === NEW_WORKTREE) {
+        const branch = await inlineTextPrompt(
+            'Branch name for the new worktree', 'try/refactor');
+        // Cancelled: put the picker back on where we actually are, or it
+        // sits there naming a worktree that was never made.
+        if (!branch) { loadWorktrees(); return; }
+        try {
+            const made = await api('/api/coder/worktrees', {
+                method: 'POST', body: JSON.stringify({ branch, switch: true }),
+            });
+            setCodeStatus(`working in ${made.path}`);
+        } catch (err) {
+            setCodeStatus('could not make that worktree: ' + err);
+            loadWorktrees();
+            return;
+        }
+    } else {
+        try {
+            await api('/api/files/root', {
+                method: 'POST', body: JSON.stringify({ root: value }),
+            });
+        } catch (err) {
+            setCodeStatus('could not switch: ' + err);
+            return;
+        }
+    }
+    // Everything that reads the root has to be told. The file tree and the
+    // agent's own idea of where it is were the two that mattered: a tree
+    // still showing the old checkout is a tree you open files from and then
+    // edit in the other one.
+    await loadCodeTab();
+    await loadCoderState();
+    await loadWorktrees();
 }
 
 // ===== Standing appointments =====
