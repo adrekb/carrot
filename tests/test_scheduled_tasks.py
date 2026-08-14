@@ -37,10 +37,19 @@ class TestWhenItIsDue:
     def test_not_sixty_times_in_the_hour_it_is_due(self, task):
         """The tick asks every minute. What stops sixty runs is that the slot
         is written down, not that the work finishes before the next tick."""
-        scheduled.run_task(task, runner=lambda t: "done")
+        scheduled.run_task(task, runner=lambda t: "done", now=datetime(2026, 8, 13, 9, 0))
         after = scheduled.get(task["id"])
         for minute in range(0, 60, 7):
-            assert scheduled.is_due(after, datetime.now().replace(hour=9, minute=minute)) is False
+            assert scheduled.is_due(after, datetime(2026, 8, 13, 9, minute)) is False
+
+    def test_running_it_by_hand_early_does_not_eat_the_appointment(self, task):
+        """Trying a task at midnight to see what it does is not the same as it
+        having run for the morning, and silently swallowing the 09:00 run
+        would be a trap."""
+        scheduled.run_task(task, runner=lambda t: "just checking",
+                           now=datetime(2026, 8, 13, 0, 30))
+        assert scheduled.is_due(scheduled.get(task["id"]),
+                                datetime(2026, 8, 13, 9, 0)) is True
 
     def test_tomorrow_is_a_new_slot(self, isolated_db):
         daily = scheduled.create("a daily thing", schedule="daily", at="09:00")
