@@ -2471,6 +2471,16 @@ def search_directive(mode: str) -> str:
     }[mode]
 
 
+# What Ollama said a model can hold, kept between turns.
+#
+# `OllamaClient` caches this per instance, and a new instance was being built
+# for every turn — so the cache was always empty and every local turn paid an
+# HTTP round trip to /api/show before it could send its first token. A model's
+# ceiling does not change while it is installed; the setting layered on top of
+# it does, and that is read fresh below.
+_PROBED_WINDOWS: Dict[str, int] = {}
+
+
 def _window_tokens(resolved) -> int:
     """How much this route can hold, or 0 when nobody knows.
 
@@ -2481,12 +2491,16 @@ def _window_tokens(resolved) -> int:
     try:
         probed = 0
         if getattr(resolved, "local", False):
-            try:
-                from .ollama_client import OllamaClient
+            if resolved.model in _PROBED_WINDOWS:
+                probed = _PROBED_WINDOWS[resolved.model]
+            else:
+                try:
+                    from .ollama_client import OllamaClient
 
-                probed = int(OllamaClient().context_limit(resolved.model) or 0)
-            except Exception:
-                probed = 0
+                    probed = int(OllamaClient().context_limit(resolved.model) or 0)
+                except Exception:
+                    probed = 0
+                _PROBED_WINDOWS[resolved.model] = probed
         found = ctxwin_mod.window_for(
             getattr(resolved, "provider", "") or "ollama", resolved.model, probed=probed)
         return int(found.get("tokens") or 0)
