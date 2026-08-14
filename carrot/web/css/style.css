@@ -6251,3 +6251,80 @@ select.dd-open { border-color: var(--accent-line); }
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* ===== The Code tab's startup panel =====
+ *
+ * It used to be a greeting. This is the screen you look at most often in this
+ * tab, and a greeting is the least useful thing that can occupy it — the
+ * questions you actually have when you sit down are where am I, what is still
+ * running from last time, and what does this thing already know how to do. */
+.hello-where {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding-bottom: var(--s-4);
+  border-bottom: 1px solid var(--border);
+}
+.hello-where .ico { flex: none; color: var(--faint); }
+.hello-root {
+  font-size: var(--text-xs);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;      /* a long path truncates at the front, not the end */
+  text-align: left;
+}
+.hello-branch {
+  flex: none;
+  font-size: var(--text-2xs);
+  color: var(--accent);
+  background: var(--accent-soft);
+  padding: 2px var(--s-3);
+  border-radius: var(--r-pill);
+}
+.hello-block { margin-top: var(--s-5); }
+.hello-title {
+  font-size: var(--text-2xs);
+  font-weight: var(--w-medium);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-bottom: var(--s-3);
+}
+.hello-server {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-2) 0;
+  font-size: var(--text-sm);
+}
+.hello-server .spacer { flex: 1; }
+.hello-server a { color: var(--accent); font-family: var(--mono); word-break: break-all; }
+.hello-skill {
+  display: inline-block;
+  margin: 0 var(--s-2) var(--s-2) 0;
+  padding: var(--s-2) var(--s-3);
+  background: var(--card2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  color: var(--text);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+.hello-skill:hover { border-color: var(--accent-line); color: var(--accent); }
+.hello-modes { margin-top: var(--s-5); }
+/* The armed skill, in the composer row next to the model picker — the row
+   where everything else that changes what the next message does already
+   lives. A skill armed and not visible is the same bug as a model set and
+   not visible, which this panel has already had once. */
+.agent-skill-chip {
+  flex: none;
+  padding: 3px var(--s-3);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-pill);
+  color: var(--accent);
+  font-size: var(--text-2xs);
+  cursor: pointer;
+}

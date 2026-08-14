@@ -1535,6 +1535,11 @@ async function loadCoderState() {
 
     const rootHint = document.getElementById('agent-root-hint');
     if (rootHint && state.root) rootHint.textContent = state.root;
+    // The startup panel is built from this state, so it is drawn when the
+    // state arrives rather than on a timer — and only while it is still the
+    // startup panel, since redrawing it over a conversation in progress would
+    // delete the conversation.
+    if (document.querySelector('#agent-log .agent-hello')) renderAgentHello();
     const chip = document.getElementById('git-chip');
     if (chip) {
         const git = state.git || {};
@@ -1968,6 +1973,10 @@ function warnMissingToolchain(tc) {
 // approval prompts inline so you can watch what it is doing to your files.
 
 let agentConversationId = null;
+// A skill armed for the next task in this panel, and the catalogue the
+// startup list was built from.
+let agentSkill = null;
+let agentSkillCatalog = [];
 let agentAbort = null;
 let agentAttachments = [];
 
@@ -1983,9 +1992,123 @@ function newAgentTask() {
     agentConversationId = null;
     agentAttachments = [];
     renderAgentTray();
-    const log = document.getElementById('agent-log');
-    log.innerHTML = '<div class="agent-hello"><p>New task. What should I do?</p></div>';
+    renderAgentHello();
     document.getElementById('agent-input')?.focus();
+}
+
+// ===== What the panel says before you have asked it anything =====
+//
+// It said "Tell me what to build, fix or explain" and named the folder. That
+// is a greeting, and a greeting is the least useful thing that can occupy the
+// screen you look at most often — every other coding tool uses this space to
+// answer the questions you actually have when you sit down: where am I, what
+// is still running from last time, and what does this thing know how to do.
+//
+// Three sections, all of them facts rather than encouragement, and each one
+// absent when it has nothing to say. An empty state that invents content to
+// fill itself is how a startup screen becomes something people click past.
+
+async function renderAgentHello() {
+    const log = document.getElementById('agent-log');
+    if (!log) return;
+    // The real path, not the hint element's placeholder — that element still
+    // says "your workspace" until the coder state has come back, and the
+    // panel renders before it.
+    const root = (typeof codeRoot !== 'undefined' && codeRoot)
+        || document.getElementById('agent-root-hint')?.textContent
+        || 'your workspace';
+    const branch = document.getElementById('git-chip')?.textContent || '';
+
+    log.innerHTML = `
+      <div class="agent-hello">
+        <div class="hello-where">
+          <svg class="ico"><use href="#i-folder"/></svg>
+          <span class="hello-root mono" title="${escHtml(root)}">${escHtml(root)}</span>
+          ${branch ? `<span class="hello-branch mono">${escHtml(branch)}</span>` : ''}
+        </div>
+        <div id="hello-servers" class="hello-block hidden"></div>
+        <div id="hello-skills" class="hello-block hidden"></div>
+        <p class="hello-modes muted small">In <strong>Plan</strong> I only read and propose.
+           In <strong>Act</strong> I can edit files, run commands and start servers.</p>
+      </div>`;
+
+    // Servers first: it is the only thing here that is still true from a
+    // previous session, and the only one with a cost attached — a dev server
+    // the user has forgotten is holding one of their ports right now.
+    try {
+        const { servers } = await api('/api/coder/servers');
+        const live = (servers || []).filter(s => s.running);
+        if (live.length) {
+            const host = document.getElementById('hello-servers');
+            host.classList.remove('hidden');
+            host.innerHTML = '<div class="hello-title">Still running</div>'
+                + live.map(s => `
+                    <div class="hello-server">
+                        <span class="server-dot live"></span>
+                        ${s.url
+                            ? `<a href="${escHtml(s.url)}" target="_blank" rel="noopener">${escHtml(s.url)}</a>`
+                            : `<span class="mono">${escHtml(s.label || s.command)}</span>`}
+                        <span class="spacer"></span>
+                        <button class="btn btn-ghost" onclick="stopHelloServer('${escHtml(s.id)}')">Stop</button>
+                    </div>`).join('');
+        }
+    } catch (_) {}
+
+    // Then what it has been taught. A skill nobody remembers exists is a
+    // skill nobody invokes, and they are listed here because this is the
+    // moment you are deciding what to ask for.
+    try {
+        const skills = await api('/api/skills');
+        agentSkillCatalog = skills || [];
+        if ((skills || []).length) {
+            const host = document.getElementById('hello-skills');
+            host.classList.remove('hidden');
+            host.innerHTML = '<div class="hello-title">It knows how you work</div>'
+                + skills.slice(0, 6).map(s => `
+                    <button class="hello-skill" title="${escHtml(s.description || '')}"
+                            onclick="useSkillInAgent('${escHtml(s.slug)}')">${escHtml(s.name)}</button>`
+                  ).join('');
+        }
+    } catch (_) {}
+}
+
+async function stopHelloServer(id) {
+    try { await api(`/api/coder/servers/${id}/stop`, { method: 'POST' }); } catch (_) {}
+    renderAgentHello();
+}
+
+// Arms the skill for the next task rather than firing one off. Clicking a
+// chip that immediately starts work is a chip people stop touching, and the
+// user still has to say what they want done — the skill is how, not what.
+function useSkillInAgent(slug) {
+    const chosen = (agentSkillCatalog || []).find(s => s.slug === slug);
+    agentSkill = chosen ? { slug: chosen.slug, name: chosen.name } : { slug, name: slug };
+    renderAgentSkillChip();
+    document.getElementById('agent-input')?.focus();
+}
+
+function clearAgentSkill() {
+    agentSkill = null;
+    renderAgentSkillChip();
+}
+
+// Shown in the composer, next to the model picker, because that row is where
+// everything else that changes what the next message does already lives. A
+// skill armed and not visible is the same bug as a model set and not visible,
+// which is the one this panel already fixed once.
+function renderAgentSkillChip() {
+    const row = document.querySelector('.agent-compose-row');
+    if (!row) return;
+    let chip = row.querySelector('.agent-skill-chip');
+    if (!agentSkill) { chip?.remove(); return; }
+    if (!chip) {
+        chip = document.createElement('button');
+        chip.className = 'agent-skill-chip';
+        chip.onclick = clearAgentSkill;
+        row.insertBefore(chip, row.querySelector('.spacer'));
+    }
+    chip.title = 'Using this skill for the next task — click to clear';
+    chip.textContent = `/${agentSkill.name} ✕`;
 }
 
 // ---------- Attachments ----------
@@ -2224,8 +2347,13 @@ async function sendAgentTask() {
     input.value = '';
     agentAttachments = [];
     renderAgentTray();
-    agentBubble('you', task + (attachments.length
+    agentBubble('you', (agentSkill ? `/${agentSkill.name} ` : '') + task + (attachments.length
         ? `\n[${attachments.map(a => a.name).join(', ')}]` : ''));
+    // Armed for one task, like chat. A skill that stayed on would quietly
+    // shape every later message in the panel with nothing on screen still
+    // saying so by the time it mattered.
+    const sentSkill = agentSkill;
+    clearAgentSkill();
 
     const { wrap, body } = agentBubble('agent', '');
     body.innerHTML = '<span class="caret">&nbsp;</span>';
@@ -2264,6 +2392,11 @@ async function sendAgentTask() {
                 // for. Single rather than multi: it may check a fact, not go
                 // researching instead of working.
                 search_mode: 'single',
+                // A skill armed from the startup panel. Chat has had this
+                // since skills existed; the Code tab had no way to invoke one,
+                // so a skill about how this project wants tests written could
+                // only be used by going to the chat tab to ask about code.
+                skill: sentSkill ? sentSkill.slug : null,
                 // This is the coding panel, so this turn gets the plan/act
                 // preamble and the workspace rules. Ordinary chat does not:
                 // one global coder_mode was being applied to every message in
