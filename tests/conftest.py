@@ -19,24 +19,37 @@ import pytest  # noqa: E402
 from carrot import database, config  # noqa: E402
 
 
-@pytest.fixture
-def isolated_db(tmp_path, monkeypatch):
-    """Point the database and config modules at a temporary SQLite file.
+@pytest.fixture(autouse=True)
+def temp_data_dir(tmp_path_factory, monkeypatch):
+    """Every test gets its own data directory, whether it asks for one or not.
 
-    In its own subdirectory, not `tmp_path` itself. The checkpoint tests do
-    `git init` in `tmp_path`, so with the database sitting beside them the
-    repo under test contained the harness's own SQLite file — `git add -A`
-    captured `carrot.db` into every checkpoint, and restoring one ran
-    `checkout-index -f` over a database the suite still had open. On Windows
-    that cannot unlink, so the restore raised `unable to unlink old
-    'carrot.db'` and the test failed. Whether it failed depended on whether a
-    connection happened to be open at that moment, which is what made it look
-    like flakiness rather than a fixture putting two things in one place.
+    Autouse because opting in was the wrong default. A test that never
+    requested `isolated_db` did not run without a database — it ran against
+    the developer's real one, at `carrot/data/carrot.db`, and so did every
+    other test that had not opted in. That is one mutable file shared by a few
+    hundred tests: rows from one land in another's queries, and whether that
+    matters depends on what ran first and on what the previous run left
+    behind. It is the shape of a suite that passes four times and then fails
+    on a different unrelated file, each of those files passing alone.
+
+    Its own directory from `tmp_path_factory`, deliberately *not* under the
+    test's `tmp_path`. Several tests — the git and checkpoint ones — run
+    `git init` in `tmp_path` and then `git add -A`. Anything the harness leaves
+    in there becomes a tracked file of the repository under test: the database
+    got committed into checkpoints, and restoring one ran `checkout-index -f`
+    over a SQLite file the suite still had open, which on Windows cannot be
+    unlinked. It failed only when a connection happened to be open at that
+    moment, which is what made it look like flakiness rather than like two
+    things sharing a directory. A sibling directory cannot be reached by
+    `git add -A` at all, which is the version of this fix that does not depend
+    on remembering the hazard.
+
+    The schema is not created here. `get_db()` builds it on first connect, so
+    a test that never touches the database pays nothing for this.
     """
     from carrot import security
 
-    data = tmp_path / "_carrot"
-    data.mkdir(exist_ok=True)
+    data = tmp_path_factory.mktemp("carrot-data")
     db_path = str(data / "carrot.db")
     monkeypatch.setattr(database, "DB_PATH", db_path)
     monkeypatch.setattr(database, "DBCORE_DIR", str(data))
@@ -48,8 +61,18 @@ def isolated_db(tmp_path, monkeypatch):
     monkeypatch.setattr(security, "TOKEN_PATH", str(data / "config" / "session.json"))
     monkeypatch.setattr(security, "LEGACY_TOKEN_PATH", str(data / "config" / "legacy.json"))
     monkeypatch.setattr(security, "_token", None)
-    database.init_db()
     return db_path
+
+
+@pytest.fixture
+def isolated_db(temp_data_dir):
+    """The temporary database, with the schema already created.
+
+    The redirection itself is now autouse; this is the opt-in for tests that
+    want the tables to exist before they run their first query.
+    """
+    database.init_db()
+    return temp_data_dir
 
 
 class FakeOllamaClient:
