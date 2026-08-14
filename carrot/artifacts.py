@@ -36,9 +36,14 @@ KIND_SVG = "svg"            # vector image; sanitised, no script
 KIND_MARKDOWN = "markdown"  # rendered by the existing markdown pipeline
 KIND_MERMAID = "mermaid"    # diagram source
 KIND_IMAGE = "image"        # a raster the model produced or generated
+# A rendered animation. Its own kind rather than an image because the whole
+# point of one is that it moves: a manim proof shown as its final frame is a
+# diagram of the answer with the argument removed.
+KIND_VIDEO = "video"
 KIND_CODE = "code"          # a file worth showing whole, syntax highlighted
 
-KINDS = {KIND_HTML, KIND_SVG, KIND_MARKDOWN, KIND_MERMAID, KIND_IMAGE, KIND_CODE}
+KINDS = {KIND_HTML, KIND_SVG, KIND_MARKDOWN, KIND_MERMAID, KIND_IMAGE,
+         KIND_CODE, KIND_VIDEO}
 
 # Big enough for a real chart or a page with inline data, small enough that a
 # runaway generation cannot fill the database.
@@ -47,6 +52,15 @@ MAX_ARTIFACTS_PER_CONVERSATION = 50
 
 # Only raster formats a browser renders natively.
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp"}
+# What a browser will actually play without a plugin. Manim writes mp4 by
+# default and webm on request; anything else would be a file the panel shows
+# a broken control for.
+VIDEO_EXTENSIONS = {".mp4", ".webm"}
+# Video is bigger than everything else here by an order of magnitude, and it
+# is embedded as a data URI like the rest — a thirty-second animation at
+# manim's default quality lands well inside this, and something that does not
+# is a file to open rather than a thing to inline in a conversation.
+MAX_VIDEO_BYTES = 24 * 1024 * 1024
 
 # Stripped from SVG before it is shown. SVG is not a passive image format —
 # it can carry <script>, event handlers and external references — and unlike
@@ -104,6 +118,36 @@ def _read_workspace_image(path: str) -> Dict[str, Any]:
     return {"content": f"data:{mime};base64,{encoded}", "kind": KIND_IMAGE}
 
 
+def _read_workspace_video(path: str) -> str:
+    """A workspace-relative video file as a data URI.
+
+    Through the same sandbox as the image path, for the same reason: an
+    artifact must not be able to name a file outside the workspace and have
+    the UI hand it back.
+    """
+    import base64
+    import mimetypes
+
+    from .files_api import resolve
+
+    full = resolve(path, must_exist=True)
+    ext = os.path.splitext(full)[1].lower()
+    if ext not in VIDEO_EXTENSIONS:
+        raise ArtifactError(
+            f"{ext or 'that file'} is not a video format a browser will play — "
+            "render to .mp4 or .webm")
+    size = os.path.getsize(full)
+    if size > MAX_VIDEO_BYTES:
+        raise ArtifactError(
+            f"that video is {size // (1024 * 1024)}MB, over the "
+            f"{MAX_VIDEO_BYTES // (1024 * 1024)}MB limit for something shown inline. "
+            "Render it at a lower quality, or make it shorter.")
+    with open(full, "rb") as handle:
+        raw = handle.read()
+    mime = mimetypes.guess_type(full)[0] or "video/mp4"
+    return f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}"
+
+
 def create(kind: str, content: str, *, title: str = "", conversation_id: str = "",
            message_id: str = "", meta: Optional[Dict[str, Any]] = None,
            path: str = "") -> Dict[str, Any]:
@@ -118,6 +162,18 @@ def create(kind: str, content: str, *, title: str = "", conversation_id: str = "
         loaded = _read_workspace_image(path)
         content = loaded["content"]
         kind = loaded["kind"]
+    elif kind == KIND_VIDEO:
+        if path:
+            content = _read_workspace_video(path)
+        elif not str(content).startswith("data:video/"):
+            # A video arrives as a rendered file or as a data URI, and nothing
+            # else. Without this, `kind=video` with any string at all produced
+            # an artifact that rendered a video element pointed at nonsense —
+            # a broken control where a proof should be, with no error anywhere
+            # to say why.
+            raise ArtifactError(
+                "a video artifact needs `path` set to a rendered .mp4 or .webm in the "
+                "workspace, or `content` set to a data:video/… URI")
     elif kind == KIND_SVG:
         content = sanitize_svg(content)
 
@@ -211,6 +267,10 @@ _CSP = (
     "script-src 'unsafe-inline' 'unsafe-eval' blob:; "
     "style-src 'unsafe-inline'; "
     "img-src data: blob:; "
+    # Same shape as img-src: the video is a data URI in the document, so this
+    # opens nothing to the network. Without it the element is present and
+    # silently plays nothing, which reads as the render having failed.
+    "media-src data: blob:; "
     "font-src data:; "
     "connect-src 'none'; "
     "form-action 'none'; "
@@ -225,6 +285,12 @@ def html_document(artifact: Dict[str, Any]) -> str:
         body = f'<div class="svg-wrap">{body}</div>'
     elif artifact["kind"] == KIND_IMAGE:
         body = f'<img src="{artifact["content"]}" alt="{artifact.get("title") or "artifact"}">'
+    elif artifact["kind"] == KIND_VIDEO:
+        # Controls, and no autoplay. An animation that starts the moment it
+        # appears is one you have already missed the beginning of, and a
+        # proof is watched deliberately.
+        body = (f'<video src="{artifact["content"]}" controls playsinline '
+                f'preload="metadata"></video>')
     theme = (artifact.get("meta") or {}).get("theme", "dark")
     ink, ground = ("#1e1b14", "#faf6ed") if theme == "light" else ("#f2ece0", "#1b1a13")
     return f"""<!doctype html>

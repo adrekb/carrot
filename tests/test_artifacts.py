@@ -223,7 +223,7 @@ class TestTheTool:
         from carrot import agent_tools
 
         result = agent_tools.TOOLS["show_artifact"]["handler"](
-            kind="video", content="x", conversation_id="c1")
+            kind="hologram", content="x", conversation_id="c1")
         assert result.startswith("error:")
 
     def test_a_bad_image_path_returns_an_error_not_an_exception(self, client, workspace, isolated_db):

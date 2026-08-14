@@ -1412,7 +1412,10 @@ function artifactFrame(artifact) {
     frame.srcdoc = artifact.document;
     // Images and charts vary wildly in height; grow to fit rather than
     // scrolling a 200px window. Cross-origin means asking, not measuring.
-    frame.style.height = artifact.kind === 'image' ? '320px' : '380px';
+    // Video gets more room than a chart: it is 16:9 and it has a control bar
+    // under it, so at 380px the picture is letterboxed into about 300.
+    frame.style.height = artifact.kind === 'image' ? '320px'
+        : (artifact.kind === 'video' ? '460px' : '380px');
     return frame;
 }
 
