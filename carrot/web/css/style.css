@@ -6452,3 +6452,52 @@ select.dd-open { border-color: var(--accent-line); }
    genuinely in flight at once and the question is which of them is still
    going, which a skeleton cannot answer. */
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ===== Standing appointments =====
+ *
+ * Listed on the screen you pass anyway. Work that happens without being asked
+ * has to be visible somewhere, or the first you hear of it is a notification
+ * about a task you had forgotten making. */
+.sched-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-2) 0;
+}
+.sched-row.off { opacity: 0.55; }
+.sched-row.running { opacity: 0.7; }
+.sched-body { flex: 1; min-width: 0; }
+.sched-prompt {
+  font-size: var(--text-sm);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sched-when { font-size: var(--text-2xs); color: var(--faint); }
+/* A switch, not a checkbox: this is the control that decides whether
+   something runs while you are asleep, and it should look like one. */
+.sched-toggle {
+  flex: none;
+  width: 30px;
+  height: 17px;
+  padding: 0;
+  border: 1px solid var(--border-hi);
+  border-radius: var(--r-pill);
+  background: var(--card3);
+  cursor: pointer;
+  position: relative;
+}
+.sched-toggle::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--faint);
+  transition: transform 0.15s var(--ease), background 0.15s var(--ease);
+}
+.sched-toggle.on { background: var(--accent-soft); border-color: var(--accent-line); }
+.sched-toggle.on::after { transform: translateX(13px); background: var(--accent); }

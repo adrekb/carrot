@@ -143,6 +143,80 @@ async def rules():
     return {"rules": text, "files": list(coder_mod.RULE_FILES)}
 
 
+# ===== Tasks that run on a schedule =====
+#
+# In the coder API because the work they do is coding work — "what changed in
+# the repo yesterday" is a question about a workspace — and because the Code
+# tab is where they are listed and switched off.
+
+class ScheduledTaskRequest(BaseModel):
+    prompt: str
+    schedule: str = "daily"
+    at: str = "09:00"
+    weekday: str = "monday"
+
+
+class ScheduledTaskPatch(BaseModel):
+    prompt: Optional[str] = None
+    schedule: Optional[str] = None
+    at: Optional[str] = None
+    weekday: Optional[str] = None
+    enabled: Optional[bool] = None
+
+
+@router.get("/scheduled")
+async def list_scheduled():
+    from carrot import scheduled as scheduled_mod
+
+    return {"tasks": scheduled_mod.list_tasks()}
+
+
+@router.post("/scheduled")
+async def create_scheduled(req: ScheduledTaskRequest):
+    from carrot import scheduled as scheduled_mod
+
+    try:
+        return scheduled_mod.create(req.prompt, req.schedule, req.at, req.weekday)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.patch("/scheduled/{task_id}")
+async def patch_scheduled(task_id: str, req: ScheduledTaskPatch):
+    from carrot import scheduled as scheduled_mod
+
+    fields = {k: v for k, v in req.model_dump().items() if v is not None}
+    task = scheduled_mod.update(task_id, **fields)
+    if not task:
+        raise HTTPException(status_code=404, detail="no such scheduled task")
+    return task
+
+
+@router.delete("/scheduled/{task_id}")
+async def delete_scheduled(task_id: str):
+    from carrot import scheduled as scheduled_mod
+
+    if not scheduled_mod.delete(task_id):
+        raise HTTPException(status_code=404, detail="no such scheduled task")
+    return {"deleted": task_id}
+
+
+@router.post("/scheduled/{task_id}/run")
+async def run_scheduled_now(task_id: str):
+    """Run it this second, without waiting for its slot.
+
+    The only way to find out whether a task you have written does what you
+    meant is to run it, and waiting until 09:00 tomorrow to discover it was
+    phrased badly is not a feedback loop anyone will use.
+    """
+    from carrot import scheduled as scheduled_mod
+
+    task = scheduled_mod.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="no such scheduled task")
+    return scheduled_mod.run_task(task)
+
+
 # ===== Servers the agent left running =====
 #
 # The panel needs to be able to answer "what is running right now" without

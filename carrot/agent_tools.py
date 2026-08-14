@@ -621,26 +621,7 @@ def _tool_explore_in_parallel(investigations: Any = None, emit=None, **_) -> str
     if not jobs:
         return "error: give at least one investigation, each with its own question"
 
-    tools = ollama_tools(enabled=list(subagents_mod.SUBAGENT_TOOLS))
-
-    def run_child(name: str, arguments: Dict[str, Any]) -> str:
-        # Whitelisted again here, not only in the schema handed to the model.
-        # A tool list is a suggestion — a model will call a name it saw in
-        # training and was never offered, and the one place that must not be
-        # true is the one where four agents are running unattended.
-        bare = str(name).split("__").pop()
-        if bare not in subagents_mod.SUBAGENT_TOOLS:
-            return (f"error: {bare} is not available to an investigation. "
-                    "You can read and search; you cannot change anything.")
-        spec = TOOLS.get(bare)
-        if not spec:
-            return f"error: no tool called {bare}"
-        try:
-            return str(spec["handler"](**(arguments or {})))
-        except TypeError:
-            return _bad_call_message(bare, spec, [])
-        except Exception as exc:
-            return f"error: {bare} failed: {exc}"
+    run_child, tools = subagents_mod.read_only_runner()
 
     return subagents_mod.explore(jobs, run_child, tools, emit or (lambda e: None),
                                  context_note=f"The workspace is {workspace_root()}.")

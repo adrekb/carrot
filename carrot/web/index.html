@@ -712,6 +712,14 @@
                     onclick="document.getElementById('agent-file-input').click()">
               <svg class="ico"><use href="#i-file-plus"/></svg>
             </button>
+            <!-- Scheduling lives next to the box you type in, because the
+                 moment you notice you have asked the same thing three
+                 mornings running is the moment to say "every morning". A form
+                 on a settings screen is a form nobody fills in. -->
+            <button class="icon-btn" title="Run this on a schedule instead"
+                    onclick="scheduleCurrentTask()">
+              <svg class="ico"><use href="#i-clock"/></svg>
+            </button>
             <!-- The agent used to silently borrow whatever the chat composer
                  was set to, with nothing on screen saying so. A coding agent
                  is exactly where the model matters most, and it was the one

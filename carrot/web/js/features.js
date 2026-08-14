@@ -2027,6 +2027,7 @@ async function renderAgentHello() {
           ${branch ? `<span class="hello-branch mono">${escHtml(branch)}</span>` : ''}
         </div>
         <div id="hello-servers" class="hello-block hidden"></div>
+        <div id="hello-scheduled" class="hello-block hidden"></div>
         <div id="hello-skills" class="hello-block hidden"></div>
         <p class="hello-modes muted small">In <strong>Plan</strong> I only read and propose.
            In <strong>Act</strong> I can edit files, run commands and start servers.</p>
@@ -2054,6 +2055,37 @@ async function renderAgentHello() {
         }
     } catch (_) {}
 
+    // Then the standing appointments. They run whether or not this screen is
+    // open, which is exactly why they belong on it: work that happens without
+    // being asked has to be visible somewhere the user passes anyway, or the
+    // first they hear of it is a notification about a task they had forgotten
+    // making.
+    try {
+        const { tasks } = await api('/api/coder/scheduled');
+        if ((tasks || []).length) {
+            const host = document.getElementById('hello-scheduled');
+            host.classList.remove('hidden');
+            host.innerHTML = '<div class="hello-title">On a schedule</div>'
+                + tasks.map(t => `
+                    <div class="sched-row${t.enabled ? '' : ' off'}">
+                        <button class="sched-toggle${t.enabled ? ' on' : ''}"
+                                title="${t.enabled ? 'Pause this' : 'Switch this back on'}"
+                                onclick="toggleScheduledTask('${escHtml(t.id)}', ${!t.enabled})"></button>
+                        <div class="sched-body">
+                            <div class="sched-prompt">${escHtml(t.prompt)}</div>
+                            <div class="sched-when">${escHtml(describeSchedule(t))}${
+                                t.last_status ? ' · last run ' + escHtml(t.last_status) : ''}</div>
+                        </div>
+                        <button class="icon-btn" title="Run it now, without waiting for its slot"
+                                onclick="runScheduledTaskNow('${escHtml(t.id)}')"
+                            ><svg class="ico"><use href="#i-pulse"/></svg></button>
+                        <button class="icon-btn" title="Delete this scheduled task"
+                                onclick="deleteScheduledTask('${escHtml(t.id)}')"
+                            ><svg class="ico"><use href="#i-trash"/></svg></button>
+                    </div>`).join('');
+        }
+    } catch (_) {}
+
     // Then what it has been taught. A skill nobody remembers exists is a
     // skill nobody invokes, and they are listed here because this is the
     // moment you are deciding what to ask for.
@@ -2070,6 +2102,85 @@ async function renderAgentHello() {
                   ).join('');
         }
     } catch (_) {}
+}
+
+// ===== Standing appointments =====
+
+function describeSchedule(task) {
+    if (task.schedule === 'hourly') return 'Every hour';
+    if (task.schedule === 'weekly') {
+        const day = (task.weekday || 'monday');
+        return `Weekly on ${day.charAt(0).toUpperCase()}${day.slice(1)} around ${task.at}`;
+    }
+    return `Daily around ${task.at}`;
+}
+
+async function toggleScheduledTask(id, enabled) {
+    try {
+        await api(`/api/coder/scheduled/${id}`, {
+            method: 'PATCH', body: JSON.stringify({ enabled }),
+        });
+    } catch (_) {}
+    renderAgentHello();
+}
+
+async function deleteScheduledTask(id) {
+    if (!confirm('Delete this scheduled task?')) return;
+    try { await api(`/api/coder/scheduled/${id}`, { method: 'DELETE' }); } catch (_) {}
+    renderAgentHello();
+}
+
+// Runs it this second rather than at its slot. The only way to find out
+// whether a task you have written does what you meant is to run it, and
+// waiting until 09:00 tomorrow to discover it was phrased badly is not a
+// feedback loop anybody uses.
+async function runScheduledTaskNow(id) {
+    const row = document.querySelector(`.sched-row button[onclick*="${id}"]`)?.closest('.sched-row');
+    if (row) row.classList.add('running');
+    try {
+        const result = await api(`/api/coder/scheduled/${id}/run`, { method: 'POST' });
+        agentBubble('agent', result.output || '(the run produced no output)');
+    } catch (err) {
+        agentBubble('agent', 'The scheduled task failed: ' + err);
+    }
+    if (row) row.classList.remove('running');
+}
+
+// Turns what is in the composer into a standing appointment. Written here
+// rather than in a settings page because this is where the sentence already
+// is — the moment you notice you have typed the same thing three mornings
+// running is the moment to say "every morning", and a form on another screen
+// is a form you fill in never.
+async function scheduleCurrentTask() {
+    const input = document.getElementById('agent-input');
+    const prompt = (input?.value || '').trim();
+    if (!prompt) {
+        agentBubble('agent', 'Type what you want done first, then schedule it.');
+        return;
+    }
+    const when = await inlineTextPrompt(
+        'When should this run? "hourly", "daily 09:00", or "weekly monday 09:00"',
+        'daily 09:00');
+    if (when === null) return;
+
+    const parts = String(when).trim().toLowerCase().split(/\s+/);
+    const body = { prompt, schedule: 'daily', at: '09:00', weekday: 'monday' };
+    if (parts[0] === 'hourly') body.schedule = 'hourly';
+    else if (parts[0] === 'weekly') {
+        body.schedule = 'weekly';
+        body.weekday = parts[1] || 'monday';
+        body.at = parts[2] || '09:00';
+    } else {
+        body.at = parts[1] || parts[0] || '09:00';
+    }
+
+    try {
+        await api('/api/coder/scheduled', { method: 'POST', body: JSON.stringify(body) });
+        input.value = '';
+        renderAgentHello();
+    } catch (err) {
+        agentBubble('agent', 'Could not schedule that: ' + err);
+    }
 }
 
 async function stopHelloServer(id) {

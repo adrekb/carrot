@@ -70,8 +70,42 @@ def _digest(name: str, task: str, report: str, error: str = "") -> str:
     return head + (report.strip()[:MAX_REPORT_CHARS] or "(found nothing)") + "\n"
 
 
+def read_only_runner():
+    """``(run_tool, tools)`` for an agent that may look but not touch.
+
+    Shared with the scheduler, which needs exactly the same thing for exactly
+    the same reason: an agent running with nobody watching it. Kept here
+    because the whitelist and the enforcement belong together — a caller that
+    took the tool list and wrote its own dispatcher would be one refactor
+    away from losing the second check.
+    """
+    from . import agent_tools
+
+    tools = agent_tools.ollama_tools(enabled=list(SUBAGENT_TOOLS))
+
+    def run_tool(name: str, arguments: Dict[str, Any]) -> str:
+        # Checked here as well as in the schema. A tool list is a suggestion:
+        # a model will call a name it saw in training and was never offered,
+        # and the one place that must not work is where nobody is watching.
+        bare = str(name).split("__").pop()
+        if bare not in SUBAGENT_TOOLS:
+            return (f"error: {bare} is not available here. "
+                    "You can read and search; you cannot change anything.")
+        spec = agent_tools.TOOLS.get(bare)
+        if not spec:
+            return f"error: no tool called {bare}"
+        try:
+            return str(spec["handler"](**(arguments or {})))
+        except TypeError:
+            return agent_tools._bad_call_message(bare, spec, [])
+        except Exception as exc:
+            return f"error: {bare} failed: {exc}"
+
+    return run_tool, tools
+
+
 def run_one(name: str, task: str, run_tool: Callable, tools: List[Dict[str, Any]],
-            emit: Callable, context_note: str = "") -> str:
+            emit: Callable, context_note: str = "", rounds: int = MAX_ROUNDS) -> str:
     """One subagent, to its own budget. Returns its written answer."""
     resolved = router_mod.route(task=router_mod.TASK_CODE)
     messages: List[Dict[str, Any]] = [
@@ -81,7 +115,7 @@ def run_one(name: str, task: str, run_tool: Callable, tools: List[Dict[str, Any]
     ]
 
     answer_parts: List[str] = []
-    for _ in range(MAX_ROUNDS):
+    for _ in range(rounds):
         calls: List[Dict[str, Any]] = []
         text: List[str] = []
         try:
