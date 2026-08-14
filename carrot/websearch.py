@@ -268,6 +268,12 @@ REPUTABLE_DOMAINS = {
 REPUTABLE_SUFFIXES = (".gov", ".edu", ".mil", ".int", ".ac.uk", ".gov.uk", ".edu.au")
 
 # Shapes that correlate with scraped filler rather than reporting.
+# `news.<company>.com`, `press.<company>.com`, `media.<company>.com`. The
+# convention is near-universal for corporate communications and is not a name
+# a content farm bothers with — a farm wants to look like a magazine, not like
+# an investor-relations page.
+_NEWSROOM_HOST = re.compile(r"^(news|press|newsroom|media|investors?)\.[a-z0-9-]+\.[a-z.]{2,}$", re.I)
+
 _FARM_HINTS = re.compile(
     r"(^|\.)(blogspot|wordpress|weebly|wixsite|medium)\.com$|"
     r"(movie|film|stream|watch|download|casino|bet|slot|crypto|forex)",
@@ -434,6 +440,23 @@ def authority(url: str, subject: str = "") -> dict:
 
     if host in REPUTABLE_DOMAINS or any(host.endswith(d) for d in REPUTABLE_DOMAINS):
         return result(TIER_REPUTABLE, "known outlet")
+
+    # An organisation's own newsroom, when the question named the product
+    # rather than the company. `news.lockheedmartin.com` is the horse's mouth
+    # for an F-35 delivery figure, but "F-35 status" contains no string that
+    # first-party matching can attach to a manufacturer — so it came back
+    # `unknown`, indistinguishable from a blog, and the ranking put a 2014
+    # car-site story above the press release the answer was quoting.
+    #
+    # Reputable rather than first-party, deliberately: the check below is on
+    # the shape of the host, and a shape is evidence that somebody is
+    # publishing under their own name, not proof of who they are relative to
+    # the question. A press release is attributable and editorially
+    # accountable; whether it is disinterested is a different axis, and the
+    # writer's prompt already says a first-party figure is evidence of the
+    # figure, not of it being any good.
+    if _NEWSROOM_HOST.match(host) and not _FARM_HINTS.search(host):
+        return result(TIER_REPUTABLE, "an organisation's own newsroom")
     if host.endswith(REPUTABLE_SUFFIXES):
         return result(TIER_OFFICIAL, "institutional domain")
     if _FARM_HINTS.search(host):

@@ -6523,3 +6523,58 @@ select.dd-open { border-color: var(--accent-line); }
    was never written, wondering what they did wrong. */
 .agent-done.failed { color: var(--red); }
 .agent-done.failed .ico { color: var(--red); }
+
+/* Who is speaking, on the card above a chat answer. Research has shown this
+   since it existed; chat ranked its sources by which search ran first, so a
+   2014 blog post sat above the manufacturer's own newsroom that the answer
+   was actually quoting. Ranking them is only half the fix — "reputable" and
+   "someone's blog" look identical as a hostname, so the tier is said. */
+.source-tier {
+  flex: none;
+  font-size: var(--text-2xs);
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+  padding: 1px 5px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--border);
+  color: var(--faint);
+}
+.source-tier.tier-first-party { color: var(--green); border-color: rgba(87, 209, 160, 0.35); }
+.source-tier.tier-official { color: var(--green); border-color: rgba(87, 209, 160, 0.35); }
+.source-tier.tier-reputable { color: var(--muted); border-color: var(--border-hi); }
+/* The one worth a colour that means "look at this": a content-farm shape
+   under an answer is the case where the reader most needs to know. */
+.source-tier.tier-low { color: var(--yellow); border-color: rgba(240, 194, 104, 0.35); }
+
+/* ===== How much room is left in the window =====
+ *
+ * The turn runs until the context fills rather than to a round count, which
+ * is the right unit and an invisible one. A bar makes it the same kind of
+ * fact as a battery: you do not read it, you notice it. */
+.ctx-meter {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-2) var(--s-4);
+  border-top: 1px solid var(--border);
+}
+.ctx-bar {
+  flex: 1;
+  height: 3px;
+  border-radius: var(--r-pill);
+  background: var(--card3);
+  overflow: hidden;
+}
+.ctx-bar > span {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width 0.3s var(--ease);
+}
+.ctx-text { flex: none; font-size: var(--text-2xs); color: var(--faint); font-family: var(--mono); }
+/* Amber, then red. The colour is the only part of this anybody reads at a
+   glance, and "you are about to run out of room" is worth one. */
+.ctx-meter.tight .ctx-bar > span { background: var(--yellow); }
+.ctx-meter.full .ctx-bar > span { background: var(--red); }
+.ctx-meter.full .ctx-text { color: var(--red); }

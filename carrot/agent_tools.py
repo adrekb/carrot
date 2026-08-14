@@ -798,6 +798,22 @@ def _tool_search_conversations(query: str, **_) -> str:
     )
 
 
+def _tier_of(url: str, subject: str) -> Dict[str, str]:
+    """Who is speaking on this page, for the card above the answer.
+
+    Contained rather than allowed to raise: a classifier that throws on one
+    odd URL must not take down the whole source list, which is the part of
+    the answer that says where it came from.
+    """
+    from . import websearch
+
+    try:
+        verdict = websearch.authority(url, subject)
+        return {"tier": verdict["tier"], "tier_reason": verdict["reason"]}
+    except Exception:
+        return {"tier": websearch.TIER_UNKNOWN, "tier_reason": ""}
+
+
 def _tool_web_search(query: str, emit=None, **_) -> str:
     from . import websearch
 
@@ -811,9 +827,23 @@ def _tool_web_search(query: str, emit=None, **_) -> str:
     # never say where an answer came from.
     if emit:
         try:
+            # With the tier, which chat had never carried. Research has ranked
+            # sources by who is speaking since it existed; the cards above a
+            # chat answer were ordered by which search happened to run first,
+            # so a question about the F-35 showed Slashgear, the Tehran Times
+            # and a 2014 Jalopnik piece while every figure in the answer came
+            # from Lockheed Martin's own newsroom. The classifier was right
+            # there and nothing was calling it.
+            #
+            # Judged against the query, because first-party is a relationship
+            # rather than a property: lockheedmartin.com is the horse's mouth
+            # for an F-35 delivery count and is not first-party for anything
+            # else.
             emit({"sources": [
-                {"title": r["title"], "url": r["url"], "site": r.get("site", ""),
-                 "date": r.get("date", ""), "kind": r.get("kind", "")}
+                {"title": r["title"], "url": r["url"],
+                 "site": r.get("site", "") or websearch.site_name(r["url"]),
+                 "date": r.get("date", ""), "kind": r.get("kind", ""),
+                 **_tier_of(r["url"], query)}
                 for r in results
             ]})
         except Exception:
