@@ -307,6 +307,10 @@ def test_a_chat_turn_reports_the_mode_it_ran_in(client, isolated_db, fake_ollama
 # could turn it on. These pin the contract the UI now depends on.
 
 def test_packs_are_listed_with_their_counts(client):
+    # /api/extensions is what has been *added* now, not what exists — the
+    # shelf is /api/extensions/catalog. This test is about the counts on a
+    # card, so it adds the pack whose card it wants to read.
+    client.post("/api/extensions/academia/install")
     packs = client.get("/api/extensions").json()["extensions"]
     academia = next(p for p in packs if p["id"] == "academia")
     assert academia["enabled"] is False
@@ -323,6 +327,7 @@ def test_pack_detail_reports_capabilities_settings_and_tools(client):
 
 def test_enabling_a_pack_installs_its_skills(client):
     """Enabling is the whole point: the skills have to actually show up."""
+    client.post("/api/extensions/academia/install")
     assert client.put("/api/extensions/academia/enabled", json={"enabled": True}).status_code == 200
 
     slugs = {s["slug"] for s in client.get("/api/skills").json()}
@@ -334,6 +339,7 @@ def test_enabling_a_pack_installs_its_skills(client):
 
 def test_a_pack_setting_rewrites_the_skill_that_uses_it(client):
     """Change the venue and the instructions must name the new one."""
+    client.post("/api/extensions/academia/install")
     client.put("/api/extensions/academia/enabled", json={"enabled": True})
     client.put("/api/extensions/academia/settings/venue", json="ICML 2026")
 
@@ -353,6 +359,7 @@ def test_a_pack_tool_refuses_when_its_program_is_missing(client, isolated_db):
     """A missing engine is reported up front, not discovered halfway through."""
     from carrot import extensions
 
+    client.post("/api/extensions/academia/install")
     client.put("/api/extensions/academia/enabled", json={"enabled": True})
     result = extensions.call("ext__academia__latex_compile", {"path": "paper.tex"})
     assert result.startswith("error:")

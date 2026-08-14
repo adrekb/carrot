@@ -6595,3 +6595,100 @@ select.dd-open { border-color: var(--accent-line); }
 .pq-list li { font-size: var(--text-sm); color: var(--text); margin-bottom: var(--s-2); }
 .agent-done.waiting { color: var(--accent); }
 .agent-done.waiting .ico { color: var(--accent); }
+
+/* ===== LaTeX Notes =====
+ *
+ * Source and result at once, because checking a formula against what it
+ * renders to is the whole loop of writing one, and doing that by saving and
+ * switching views is how people stop writing mathematics in a notes app. */
+.latex-panes { flex: 1; display: flex; min-height: 0; }
+.latex-source {
+  flex: 1;
+  min-width: 0;
+  padding: var(--s-5);
+  border: none;
+  border-right: 1px solid var(--border);
+  background: var(--bg2);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: var(--text-sm);
+  line-height: 1.7;
+  resize: none;
+  outline: none;
+}
+.latex-preview {
+  flex: 1;
+  min-width: 0;
+  padding: var(--s-6) var(--s-7);
+  overflow-y: auto;
+  font-size: var(--text-md);
+}
+/* Reading mode hides the source rather than unmounting it: the caret, the
+   scroll position and the undo history all live in that element, and
+   rebuilding it would throw away all three every time the mode changed. */
+.latex-panes.lite .latex-source { display: none; }
+.latex-panes.lite .latex-preview { max-width: 46rem; margin: 0 auto; }
+.latex-outline-side { width: 240px; }
+.latex-heading { font-size: var(--text-sm); }
+.latex-heading.depth-2 { padding-left: var(--s-5); color: var(--muted); }
+.latex-heading.depth-3 { padding-left: var(--s-6); color: var(--muted); font-size: var(--text-xs); }
+.latex-heading.depth-4 { padding-left: var(--s-7); color: var(--faint); font-size: var(--text-xs); }
+.latex-stats {
+  padding: var(--s-3) var(--s-4);
+  border-top: 1px solid var(--border);
+  font-size: var(--text-2xs);
+  color: var(--faint);
+  font-family: var(--mono);
+}
+/* The proposed rewrite, before it is applied. A change that lands the moment
+   it arrives is one you have to undo in order to read, and undo inside a
+   textarea is a coin toss. */
+.latex-ai-bar {
+  border-top: 1px solid var(--border);
+  padding: var(--s-4);
+  background: var(--card);
+  max-height: 40vh;
+  overflow-y: auto;
+}
+.ai-bar-head { font-size: var(--text-sm); font-weight: var(--w-semi); margin-bottom: var(--s-3); }
+.ai-bar-note { font-size: var(--text-sm); color: var(--muted); }
+.ai-bar-diff {
+  margin: 0 0 var(--s-2);
+  padding: var(--s-3);
+  border-radius: var(--r-sm);
+  background: var(--card2);
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ai-bar-diff del { color: var(--red); text-decoration: none; }
+.ai-bar-diff ins { color: var(--green); text-decoration: none; }
+.ai-bar-row { display: flex; gap: var(--s-3); margin-top: var(--s-3); }
+
+/* ===== The shelf =====
+ *
+ * What is available and what is in your app are different questions, and they
+ * were one list. Everything bundled showed as a card with a switch whether or
+ * not it had anything to do with you, which reads as a settings panel rather
+ * than as somewhere you go to get something. */
+.ext-shelf { margin-top: var(--s-6); }
+.shelf-card {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  padding: var(--s-4);
+  margin-bottom: var(--s-3);
+  background: var(--card2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+}
+.shelf-main { flex: 1; min-width: 0; }
+.shelf-name { font-size: var(--text-base); font-weight: var(--w-semi); }
+.shelf-desc { font-size: var(--text-sm); color: var(--muted); margin-top: 2px; }
+.shelf-meta { font-size: var(--text-2xs); color: var(--faint); margin-top: var(--s-2); }
+/* A figure dropped into the source. The highlight is the only thing that says
+   the textarea will take it — a drop target that looks identical to ordinary
+   text is one people do not try twice. */
+.latex-source.dropping { background: var(--accent-soft); }
+.latex-preview img { max-width: 100%; height: auto; border-radius: var(--r-sm); }

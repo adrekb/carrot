@@ -41,6 +41,7 @@ class TestTabGating:
         assert "planner" not in tabs["enabled"]
 
     def test_enabling_the_pack_enables_its_tab(self, isolated_db):
+        extensions.install("planner")
         extensions.set_enabled("planner", True)
         try:
             assert "planner" in extensions.pack_tabs()["enabled"]
@@ -48,6 +49,7 @@ class TestTabGating:
             extensions.set_enabled("planner", False)
 
     def test_disabling_it_again_takes_the_tab_away(self, isolated_db):
+        extensions.install("planner")
         extensions.set_enabled("planner", True)
         extensions.set_enabled("planner", False)
         assert "planner" not in extensions.pack_tabs()["enabled"]
@@ -78,6 +80,12 @@ class TestTheApi:
         assert "managed" in body and "enabled" in body
 
     def test_packs_report_their_tabs(self, client):
+        # /api/extensions is now what has been *added*, so the fixture has to
+        # add the ones it asks about.
+        from carrot import extensions
+
+        for pack_id in ("academia", "planner", "ambient", "latexnote"):
+            extensions.install(pack_id)
         packs = {p["id"]: p for p in client.get("/api/extensions").json()["extensions"]}
         assert packs["planner"]["tabs"] == ["planner"]
 
@@ -134,6 +142,9 @@ class TestEveryPackExplainsItself:
         assert body["tutorial"][0]["title"]
 
     def test_the_summary_says_whether_there_is_one(self, client):
+        from carrot import extensions
+
+        extensions.install("academia")
         packs = {p["id"]: p for p in client.get("/api/extensions").json()["extensions"]}
         assert packs["academia"]["has_tutorial"] is True
 

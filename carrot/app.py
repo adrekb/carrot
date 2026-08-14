@@ -5343,6 +5343,35 @@ async def list_extensions():
     return {"extensions": extensions_mod.list_packs()}
 
 
+@app.get("/api/extensions/catalog")
+async def extension_catalog():
+    """Everything on the shelf, with whether it has been added.
+
+    Separate from /api/extensions, which answers "what is in my app". The two
+    questions are different and were the same list, so the page read as a
+    settings panel with a switch per pack rather than a shelf you take things
+    off.
+    """
+    return {"extensions": extensions_mod.catalog()}
+
+
+@app.post("/api/extensions/{pack_id}/install")
+async def install_extension(pack_id: str):
+    """Add a pack to this installation. It arrives switched off."""
+    try:
+        return extensions_mod.install(pack_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.delete("/api/extensions/{pack_id}/install")
+async def uninstall_extension(pack_id: str):
+    try:
+        return extensions_mod.uninstall(pack_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
 @app.get("/api/extensions/tabs")
 async def extension_tabs():
     """Which nav tabs belong to a pack, and which of those are switched on.
@@ -5367,10 +5396,15 @@ async def get_extension(pack_id: str):
 @app.put("/api/extensions/{pack_id}/enabled")
 async def set_extension_enabled(pack_id: str, req: ProviderEnabledRequest):
     """Turn a pack on or off. Enabling installs its skills; disabling removes them."""
+    # 404 means there is no such pack. A pack that exists and has not been
+    # added is a different answer and needs a different code, or the client
+    # cannot tell "you have a typo" from "press Add first".
+    if extensions_mod.get_pack(pack_id) is None:
+        raise HTTPException(status_code=404, detail=f"unknown extension: {pack_id}")
     try:
         return extensions_mod.set_enabled(pack_id, req.enabled)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=409, detail=str(exc))
 
 
 @app.put("/api/extensions/{pack_id}/settings/{key}")

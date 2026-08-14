@@ -139,6 +139,7 @@ function switchTab(tab) {
         chats: loadConversations,
         notes: loadNotes,
         code: loadCodeTab,
+        latex: () => loadLatexTab(),
         planner: loadPlanner,
         goals: loadGoals,
         reminders: loadReminders,
