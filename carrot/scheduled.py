@@ -226,18 +226,28 @@ def _slot_for(task: Dict[str, Any], now: datetime) -> Optional[str]:
 
 # ===== Running one =====
 
-def run_task(task: Dict[str, Any], runner=None) -> Dict[str, Any]:
-    """Run one task now and record what happened.
+def run_task(task: Dict[str, Any], runner=None,
+             now: Optional[datetime] = None) -> Dict[str, Any]:
+    """Run one task and record what happened.
 
     The slot is written down *before* the work starts. The tick asks "is it
     09:00 yet" sixty times an hour, and what stops sixty runs is that the
     first one has already claimed the slot — not that the work finishes fast
     enough to beat the next tick, which is not something a model call can
     promise.
+
+    Pressing "run it now" outside the slot records the time and claims
+    nothing, so the 09:00 run still happens: trying a task at midnight to see
+    what it does is not the same as it having run for the morning, and having
+    it silently eat the appointment would be a trap.
+
+    ``now`` is injectable because the alternative is a test whose result
+    depends on what time it is when you run it — which is how this arrived,
+    passing all evening and failing at two in the morning.
     """
     from . import proactive
 
-    now = _now()
+    now = now or _now()
     slot = _slot_for(task, now) or _iso(now)
     _claim(task["id"], slot)
 
@@ -313,7 +323,7 @@ def check_due(now: Optional[datetime] = None, runner=None) -> List[str]:
     for task in list_tasks():
         try:
             if is_due(task, now):
-                run_task(task, runner=runner)
+                run_task(task, runner=runner, now=now)
                 ran.append(task["id"])
         except Exception:
             # One task failing is not the scheduler failing. Its own row

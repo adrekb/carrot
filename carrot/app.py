@@ -1284,6 +1284,33 @@ MAX_TOOL_ROUNDS = 8
 # Eight rounds is one pass; a real follow-up loop runs out halfway through.
 MAX_TOOL_ROUNDS_MULTI = 16
 
+# ===== How long a turn may go on =====
+#
+# A round count was the wrong unit and it was the visible one. A turn that had
+# read six pages and was two calls from the answer stopped at eight and wrote
+# up whatever it had, which is how "F-35 status" came back as four bullets
+# after fourteen tool calls — the ceiling was reached, not the answer.
+#
+# Rounds are not what runs out. What runs out is the context window, and that
+# is measurable: the transcript, the tool schemas and the directive are all
+# strings we are about to send. So the loop continues while the next request
+# still fits, and the ceilings above become a backstop for the pathological
+# case rather than the thing that normally stops a turn.
+#
+# The backstop stays because a full window is not the only way a loop is
+# wrong: a model calling list_dir on the same directory returns almost nothing
+# each time, so it could spin for hundreds of rounds without the window
+# noticing. That is a bug, not deep work, and it should not cost a hosted
+# provider fifty calls before anybody sees it.
+MAX_TOOL_ROUNDS_CEILING = 60
+
+# Stop before the window is actually full. The estimate is four-characters-
+# per-token, the provider counts differently, and a turn that discovers it has
+# overrun gets a hard error from the provider instead of a written answer —
+# the one outcome worse than stopping early. The headroom is what the answer
+# itself is written into.
+CONTEXT_STOP_FRACTION = 0.85
+
 # What "multi-turn" has to have actually done before an answer is accepted.
 # The directive alone does not achieve this: a small on-device model reads
 # "do not stop at the first set of results", searches once, and answers from
@@ -2444,6 +2471,29 @@ def search_directive(mode: str) -> str:
     }[mode]
 
 
+def _window_tokens(resolved) -> int:
+    """How much this route can hold, or 0 when nobody knows.
+
+    Zero is not a failure to handle — it is the honest answer for a custom
+    endpoint nobody has told us about, and it turns the context check off
+    rather than inventing a ceiling and stopping turns at it.
+    """
+    try:
+        probed = 0
+        if getattr(resolved, "local", False):
+            try:
+                from .ollama_client import OllamaClient
+
+                probed = int(OllamaClient().context_limit(resolved.model) or 0)
+            except Exception:
+                probed = 0
+        found = ctxwin_mod.window_for(
+            getattr(resolved, "provider", "") or "ollama", resolved.model, probed=probed)
+        return int(found.get("tokens") or 0)
+    except Exception:
+        return 0
+
+
 def _available_tools(mode: str = SEARCH_SINGLE):
     """Built-in tools, enabled extension packs, and every enabled MCP server.
 
@@ -2760,7 +2810,12 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
     yield {"search_mode": mode}
 
     tools = _available_tools(mode)
+    # The old ceiling, kept only as the shape of "how much work is normal" for
+    # the nudges that tell the model how many rounds it has left. What
+    # actually stops the loop is the window filling up.
     rounds = MAX_TOOL_ROUNDS_MULTI if mode == SEARCH_MULTI else MAX_TOOL_ROUNDS
+    window = _window_tokens(resolved)
+    tools_tokens = ctxwin_mod.estimate_tokens(json.dumps(tools)) if tools else 0
     working = list(history)
     question = next((m["content"] for m in reversed(history) if m.get("role") == "user"), "")
 
@@ -2895,7 +2950,33 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
     # the user and never reaches the transcript. See coder.QuestionGate.
     asked: Optional[coder_mod.QuestionGate] = None
 
-    for round_index in range(rounds):
+    for round_index in range(MAX_TOOL_ROUNDS_CEILING):
+        # What the next request will cost, before sending it. Emitted every
+        # round whether or not it is near the limit, because the meter this
+        # feeds is most useful while there is still room to act on it — a bar
+        # that only appears once the turn is doomed is an epitaph.
+        used = tools_tokens + ctxwin_mod.estimate_tokens(
+            json.dumps(working, default=str))
+        if window:
+            yield {"context": {"used": used, "window": window,
+                               "fraction": round(used / window, 3),
+                               "round": round_index + 1}}
+            if used > window * CONTEXT_STOP_FRACTION and round_index:
+                # Said plainly rather than by quietly writing up whatever is
+                # to hand. "It ran out of room" and "it decided it was done"
+                # produce the same short answer and call for opposite things
+                # from the user — a bigger window versus a better question.
+                yield {"stage": "context",
+                       "detail": f"the context window is {int(used / window * 100)}% full — "
+                                 "answering now with what has been gathered"}
+                working.append({
+                    "role": "user",
+                    "content": ("You are nearly out of context. Do not call any more "
+                                "tools. Write the best answer you can from what you "
+                                "already have, and say plainly what you could not "
+                                "get to."),
+                })
+                tools = []
         content_parts = []
         tool_calls = []
         gate = coder_mod.QuestionGate()

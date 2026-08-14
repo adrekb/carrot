@@ -2392,7 +2392,7 @@ const WRITE_TOOLS = new Set([
 // had finished from one still thinking. And the answer describes intentions —
 // the files are what actually happened, which is the thing ACT mode exists to
 // make true.
-function agentFinished(wrap, touched, commandsRun, elapsedMs) {
+function agentFinished(wrap, touched, commandsRun, elapsedMs, failure) {
     if (!wrap || wrap.querySelector('.agent-done')) return;
     const parts = [];
     if (touched.size) {
@@ -2406,9 +2406,15 @@ function agentFinished(wrap, touched, commandsRun, elapsedMs) {
     if (!parts.length) parts.push('nothing changed on disk');
 
     const row = document.createElement('div');
-    row.className = 'agent-done';
-    row.innerHTML = `<svg class="ico"><use href="#i-check"/></svg>`
-        + `<span>Done — ${escHtml(parts.join(', '))}`
+    // A turn the provider stopped is not a turn that finished, and saying
+    // "Done" over the top of a rate limit is how you end up staring at a
+    // file that was never written wondering what you did wrong. The counts
+    // stay: what it managed before it stopped is exactly what you need to
+    // know to decide whether to run it again.
+    row.className = 'agent-done' + (failure ? ' failed' : '');
+    row.innerHTML = `<svg class="ico"><use href="#i-${failure ? 'stop' : 'check'}"/></svg>`
+        + `<span>${failure ? 'Stopped' : 'Done'} — ${escHtml(parts.join(', '))}`
+        + (failure ? ` · ${escHtml(String(failure).slice(0, 160))}` : '')
         + `<span class="agent-done-time"> · ${Math.round(elapsedMs / 1000)}s</span></span>`;
     if (touched.size) {
         const list = document.createElement('div');
@@ -2434,6 +2440,46 @@ function agentTrace(wrap, text, cls) {
     trace.appendChild(line);
     trace.scrollTop = trace.scrollHeight;
     document.getElementById('agent-log').scrollTop = 1e9;
+}
+
+// ===== How much room is left =====
+//
+// The turn runs until the context window fills rather than to a round count,
+// which is the right unit and an invisible one. A bar makes it the same kind
+// of fact as a battery: you do not read it, you notice it.
+//
+// One per turn, updated in place, and it does not appear at all until the
+// window is worth thinking about — a meter at 3% is decoration, and a panel
+// that decorates every turn is one people stop reading.
+
+const CONTEXT_METER_FROM = 0.25;
+
+function agentContextMeter(wrap, context) {
+    const fraction = Math.max(0, Math.min(1, context.fraction || 0));
+    // Looked up where it actually lives. Searching `wrap` for it never found
+    // the one already on screen — it is a sibling of the composer, not of the
+    // message — so every round built another, and the panel filled with
+    // stacked bars each frozen at the reading it was born with.
+    let meter = document.getElementById('agent-ctx-meter');
+    if (!meter) {
+        if (fraction < CONTEXT_METER_FROM) return;
+        meter = document.createElement('div');
+        meter.className = 'ctx-meter';
+        meter.id = 'agent-ctx-meter';
+        meter.innerHTML = '<div class="ctx-bar"><span></span></div><span class="ctx-text"></span>';
+        // Above the composer rather than in the transcript: it describes the
+        // turn as a whole, and a bar that scrolled away with the round it was
+        // emitted in would be a history of how full the window used to be.
+        const compose = document.querySelector('.agent-compose');
+        compose?.parentElement.insertBefore(meter, compose);
+    }
+    const percent = Math.round(fraction * 100);
+    meter.querySelector('.ctx-bar > span').style.width = percent + '%';
+    meter.classList.toggle('tight', fraction > 0.7);
+    meter.classList.toggle('full', fraction > 0.85);
+    const thousands = n => n >= 1000 ? `${Math.round(n / 1000)}k` : String(n);
+    meter.querySelector('.ctx-text').textContent =
+        `${thousands(context.used)} / ${thousands(context.window)} context · ${percent}%`;
 }
 
 // ===== What the agent did, as cards rather than as a log =====
@@ -2740,6 +2786,9 @@ async function sendAgentTask() {
     // The card waiting for its result. One tool runs at a time, so this is
     // always the last card made — no ids needed, and none are sent.
     let pendingCard = null;
+    // Why the turn stopped, if the provider stopped it. The footer reads this
+    // rather than announcing "Done" over the top of a rate limit.
+    let turnFailed = '';
     const send = document.getElementById('agent-send');
     const stop = document.getElementById('agent-stop');
     send.disabled = true;
@@ -2858,6 +2907,24 @@ async function sendAgentTask() {
                 // line in the trace: it is the only thing in this panel that
                 // is still true after the turn ends, and the only one with a
                 // control on it.
+                // The provider stopped the turn. Rendered here because it was
+                // not: chat has shown this since the event existed and this
+                // panel ignored it, so a rate limit or a timeout on a coding
+                // turn ended with "Done", no error, and no hint that the
+                // reason the file was not written was the model never
+                // answering. Marked as failed so the footer cannot claim the
+                // turn finished.
+                if (payload.provider_error) {
+                    turnFailed = payload.provider_error.message || 'the provider stopped the turn';
+                    agentTrace(wrap, 'provider: ' + turnFailed, 'err');
+                }
+                // How full the window is, every round. The turn now runs until
+                // the context fills rather than to a round count, so this is
+                // the only thing on screen that says how much room is left —
+                // and it is most useful while there is still enough of it to
+                // act on, which is why it is drawn from the first round and
+                // not once the turn is already doomed.
+                if (payload.context) agentContextMeter(wrap, payload.context);
                 if (payload.server) agentServerCard(wrap, payload.server);
                 // Four agents working is four cards ticking, not one long
                 // pause and then a wall of text.
@@ -2908,8 +2975,14 @@ async function sendAgentTask() {
         agentAbort = null;
         send.disabled = false;
         stop.hidden = true;
-        if (!answer.trim() && body.querySelector('.caret')) body.textContent = '(done)';
-        agentFinished(wrap, touched, commandsRun, Date.now() - startedAt);
+        // "(done)" over an empty answer is the panel agreeing with a turn
+        // that never happened. If the provider stopped it, say that instead.
+        if (!answer.trim() && body.querySelector('.caret')) {
+            body.textContent = turnFailed
+                ? 'The model stopped before answering: ' + turnFailed
+                : '(done)';
+        }
+        agentFinished(wrap, touched, commandsRun, Date.now() - startedAt, turnFailed);
         // A coding turn is the kind of work people start and then go and do
         // something else during. Finishing unread costs the same time as being
         // blocked unread does.

@@ -1015,11 +1015,20 @@ function showSources(assistantEl, contentEl, sources) {
     // pushed the answer far enough down that it looked like there wasn't one.
     // The rest are not lost — everything the answer used is cited inline.
     const MAX_CARDS = 3;
+    // Ranked by who is speaking, then by whether it is an article or an index,
+    // and only then by the order the searches happened to run in.
+    //
+    // Order was the whole ranking before, and it argued on behalf of whichever
+    // query went first. A question about the F-35 put Slashgear, the Tehran
+    // Times and a 2014 Jalopnik story above the answer while every figure in
+    // that answer came from Lockheed Martin's own newsroom — which had been
+    // read, and was sitting fourth in the list.
+    const TIER_RANK = { 'first-party': 0, official: 1, reputable: 2, unknown: 3, low: 4 };
     const best = rail._seen
-        .map((s, i) => [s.kind === 'front' ? 1 : 0, i, s])
-        .sort((a, b) => a[0] - b[0] || a[1] - b[1])
+        .map((s, i) => [TIER_RANK[s.tier] ?? 3, s.kind === 'front' ? 1 : 0, i, s])
+        .sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2])
         .slice(0, MAX_CARDS)
-        .map(triple => triple[2]);
+        .map(row => row[3]);
 
     rail.textContent = '';
     for (const source of best) {
@@ -1034,8 +1043,15 @@ function showSources(assistantEl, contentEl, sources) {
             try { return new URL(source.url).hostname.replace(/^www\./, ''); }
             catch (_) { return source.url; }
         })();
+        // The tier is on the card, not just behind the ordering. "Reputable"
+        // and "someone's blog" look identical as a hostname, and the whole
+        // point of ranking them is lost if the reader cannot see which one
+        // they are being shown.
+        const tier = source.tier && source.tier !== 'unknown' ? source.tier : '';
         card.innerHTML =
             `<div class="source-site"><span class="source-name">${escHtml(site)}</span>`
+            + (tier ? `<span class="source-tier tier-${escHtml(tier)}"`
+                    + ` title="${escHtml(source.tier_reason || '')}">${escHtml(tier)}</span>` : '')
             + (source.kind === 'front' ? '<span class="source-index">index</span>' : '')
             + `</div>`
             + `<div class="source-title">${escHtml(source.title || source.url)}</div>`

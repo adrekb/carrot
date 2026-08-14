@@ -84,3 +84,43 @@ def test_no_call_site_had_to_change():
     assert INDEX.count("<select") >= 20
     # Upgraded by listening at the document, not by wrapping each element.
     assert "document.addEventListener('mousedown'" in DROPDOWN
+
+
+class TestReachingTheOptionYouWant:
+    """The menu closed on the way to whatever you were reaching for.
+
+    Reported as "I can't change the model — as soon as I go up the menu to
+    click gemma4:e4b it closes". Two lines conspired: hovering a row that was
+    only partly in view called scrollIntoView, and the scroll listener that
+    closes the menu when the page moves under it is capturing, so the menu's
+    own scrolling reached it. A hundred-model list was unusable.
+    """
+
+    def test_the_pointer_never_scrolls_the_list(self):
+        """A row the pointer is on is by definition already visible, so
+        scrolling to it can only do harm."""
+        hover = DROPDOWN[DROPDOWN.index("menu.addEventListener('mouseover'"):]
+        hover = hover[:hover.index("menu.addEventListener('click'")]
+        assert "highlight(row)" in hover
+        assert "true" not in hover.replace("dd-item", "")
+
+    def test_the_keyboard_still_does(self):
+        """Arrowing past the fold has to follow, or the highlight walks off
+        the visible list."""
+        keys = DROPDOWN[DROPDOWN.index("event.key === 'ArrowDown' || event.key === 'ArrowUp'"):]
+        assert "highlight(rows[Math.min" in keys and ", true)" in keys
+
+    def test_the_menus_own_scrolling_does_not_close_it(self):
+        listener = DROPDOWN[DROPDOWN.index("window.addEventListener('scroll'"):]
+        listener = listener[:listener.index("}, true);")]
+        assert "open.menu.contains(target)" in listener
+        assert "return" in listener
+
+    def test_a_page_scroll_still_does(self):
+        """A fixed menu left hanging beside the control it belongs to is
+        worse than one that closed. A document-level scroll reports the
+        document as its target, which is not an element."""
+        listener = DROPDOWN[DROPDOWN.index("window.addEventListener('scroll'"):]
+        listener = listener[:listener.index("}, true);")]
+        assert "nodeType === 1" in listener
+        assert "closeMenu()" in listener

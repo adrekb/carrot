@@ -223,9 +223,25 @@ class TestBudgetExhaustion:
         assert any("suggest_research" in e for e in events)
 
     def test_the_budget_is_actually_bounded(self):
+        """Still bounded, at a much higher number than it used to be.
+
+        A round count was the wrong unit and it was the one doing the
+        stopping: a turn two calls from the answer hit eight and wrote up
+        whatever it had. What runs out is the context window, which is
+        measurable, so that is what stops the loop now — and this ceiling is
+        the backstop for the case the window cannot catch, a model calling
+        list_dir on the same directory forever and adding nothing each time.
+        """
         result = drive([("", tool_call("web_search", query="F-15EX x"))]
-                       * (A.MAX_TOOL_ROUNDS_MULTI + 5), A.SEARCH_MULTI)
-        assert len(result["ran"]) == A.MAX_TOOL_ROUNDS_MULTI
+                       * (A.MAX_TOOL_ROUNDS_CEILING + 5), A.SEARCH_MULTI)
+        assert len(result["ran"]) == A.MAX_TOOL_ROUNDS_CEILING
+
+    def test_a_turn_may_now_run_past_the_old_ceiling(self):
+        """The complaint this came from: fourteen tool calls into a question
+        that needed them, the turn stopped and answered in four bullets."""
+        result = drive([("", tool_call("web_search", query="F-15EX x"))]
+                       * (A.MAX_TOOL_ROUNDS_MULTI + 4), A.SEARCH_MULTI)
+        assert len(result["ran"]) > A.MAX_TOOL_ROUNDS_MULTI
 
     def test_multi_turn_has_the_larger_budget(self):
         assert A.MAX_TOOL_ROUNDS_MULTI > A.MAX_TOOL_ROUNDS
