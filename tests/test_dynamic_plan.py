@@ -207,8 +207,13 @@ class TestItWorksInCodeMode:
         return Path(__file__).resolve().parents[1].joinpath(*parts).read_text(encoding="utf-8")
 
     def test_the_revision_is_not_gated_on_search_mode(self):
+        # Anchored on the assignment rather than on its right-hand side: the
+        # count of rounds left is now estimated from how much of the context
+        # window is gone, since the loop stopped running to a fixed ceiling.
+        # What this test is about — that a coding turn revises its plan too —
+        # is unaffected by where the number comes from.
         app = self.read("carrot", "app.py")
-        block = app[app.index("rounds_left_now = rounds - round_index - 1"):]
+        block = app[app.index("rounds_left_now = "):]
         block = block[:block.index("revision = _replan")]
         assert "gated" not in block, "the revision only runs for search turns"
 

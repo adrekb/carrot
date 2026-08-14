@@ -2816,6 +2816,10 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
     rounds = MAX_TOOL_ROUNDS_MULTI if mode == SEARCH_MULTI else MAX_TOOL_ROUNDS
     window = _window_tokens(resolved)
     tools_tokens = ctxwin_mod.estimate_tokens(json.dumps(tools)) if tools else 0
+    # What the turn cost before it had done anything, so later rounds can be
+    # compared against it to estimate how many more will fit.
+    first_used = 0
+    rounds_left = rounds
     working = list(history)
     question = next((m["content"] for m in reversed(history) if m.get("role") == "user"), "")
 
@@ -2957,6 +2961,23 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
         # that only appears once the turn is doomed is an epitaph.
         used = tools_tokens + ctxwin_mod.estimate_tokens(
             json.dumps(working, default=str))
+        # How many more rounds there is room for, which is what the nudges and
+        # the replanner mean when they say "rounds left".
+        #
+        # This has to be derived from the window now. It used to be
+        # `rounds - round_index - 1` against a fixed ceiling of eight, and
+        # when the loop stopped stopping at eight that arithmetic went
+        # negative — so every `rounds_left > 1` guard turned false and the
+        # machinery that keeps a long turn honest (the coverage nudge, the
+        # unmet-goal nudge, the replanner) switched itself off at exactly the
+        # point where turns got long enough to need it.
+        if window and round_index:
+            grown = max(1, (used - first_used) // max(1, round_index))
+            rounds_left = max(0, int((window * CONTEXT_STOP_FRACTION - used) // grown))
+        else:
+            rounds_left = rounds
+        if not round_index:
+            first_used = used
         if window:
             yield {"context": {"used": used, "window": window,
                                "fraction": round(used / window, 3),
@@ -3106,7 +3127,6 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
             # stronger signal than an untouched goal — it is the model telling
             # us, in its own words, that it stopped short.
             if gated and not stalled:
-                rounds_left = rounds - round_index - 1
                 if (rounds_left > 1 and coverage_nudges < MAX_GOAL_NUDGES
                         and _reads_like_a_coverage_report(content_str)):
                     coverage_nudges += 1
@@ -3131,7 +3151,6 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
             # exists because a model will happily describe four changes and
             # make one, and prose is where that lie lives.
             if planning_work and goals and not stalled:
-                rounds_left = rounds - round_index - 1
                 unmet = _unmet_goals(goals, question, " ".join(work))
                 if unmet and rounds_left > 1 and goal_nudges < MAX_GOAL_NUDGES:
                     goal_nudges += 1
@@ -3155,7 +3174,10 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
             # easily. Single-pass promises one round of *searching*, not that
             # it will hand over a fact it can see is wrong.
             if not stalled and evidence and support_nudges < MAX_SUPPORT_NUDGES:
-                rounds_left = rounds - round_index - 1
+                # The window-based estimate, like the others. Against the old
+                # fixed ceiling this went negative once the loop outgrew it,
+                # and the check that catches a claim no source supports would
+                # have stopped running at round eight.
                 unsupported = (_unsupported_claims(resolved, answer, evidence)
                                if rounds_left >= 1 else [])
                 if unsupported:
@@ -3355,7 +3377,11 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
         # Only while there is still something open and a round left to do it
         # in. Revising a plan that is finished, or one there is no budget to
         # act on, changes nothing except the picture the user is looking at.
-        rounds_left_now = rounds - round_index - 1
+        # The same estimate the nudges use. Against the old fixed ceiling this
+        # went negative once the loop outgrew it, which silently retired the
+        # replanner — the plan stopped being revised at round eight of a turn
+        # that now runs until the window fills.
+        rounds_left_now = rounds_left
         # Open goals mean the plan can still be corrected. A *complete* plan is
         # the other case worth revising, and the more valuable one: the opening
         # plan was written before anything was known about the subject, so it

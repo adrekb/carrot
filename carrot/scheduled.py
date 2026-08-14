@@ -32,7 +32,7 @@ from __future__ import annotations
 import threading
 import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from .database import get_db
@@ -302,6 +302,10 @@ def _run_through_the_agent(task: Dict[str, Any]) -> str:
     return subagents.run_one(
         name="scheduled", task=task["prompt"], run_tool=run_tool, tools=tools,
         emit=lambda event: None, rounds=SCHEDULED_ROUNDS,
+        # The limit this module has always claimed and briefly stopped
+        # enforcing: swapping the runner took the deadline out with it, and
+        # left the constant sitting here describing a guarantee nothing kept.
+        deadline=time.monotonic() + MAX_RUN_SECONDS,
         context_note="You are running on a schedule. Nobody is at the keyboard, "
                      "so report what you find rather than asking a question.",
     )
