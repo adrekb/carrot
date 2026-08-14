@@ -6518,3 +6518,8 @@ select.dd-open { border-color: var(--accent-line); }
   cursor: pointer;
 }
 .worktree-picker:hover { border-color: var(--border-hi); }
+/* A turn the provider stopped is not a turn that finished. Saying "Done"
+   over the top of a rate limit is how somebody ends up staring at a file that
+   was never written, wondering what they did wrong. */
+.agent-done.failed { color: var(--red); }
+.agent-done.failed .ico { color: var(--red); }

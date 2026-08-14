@@ -2392,7 +2392,7 @@ const WRITE_TOOLS = new Set([
 // had finished from one still thinking. And the answer describes intentions —
 // the files are what actually happened, which is the thing ACT mode exists to
 // make true.
-function agentFinished(wrap, touched, commandsRun, elapsedMs) {
+function agentFinished(wrap, touched, commandsRun, elapsedMs, failure) {
     if (!wrap || wrap.querySelector('.agent-done')) return;
     const parts = [];
     if (touched.size) {
@@ -2406,9 +2406,15 @@ function agentFinished(wrap, touched, commandsRun, elapsedMs) {
     if (!parts.length) parts.push('nothing changed on disk');
 
     const row = document.createElement('div');
-    row.className = 'agent-done';
-    row.innerHTML = `<svg class="ico"><use href="#i-check"/></svg>`
-        + `<span>Done — ${escHtml(parts.join(', '))}`
+    // A turn the provider stopped is not a turn that finished, and saying
+    // "Done" over the top of a rate limit is how you end up staring at a
+    // file that was never written wondering what you did wrong. The counts
+    // stay: what it managed before it stopped is exactly what you need to
+    // know to decide whether to run it again.
+    row.className = 'agent-done' + (failure ? ' failed' : '');
+    row.innerHTML = `<svg class="ico"><use href="#i-${failure ? 'stop' : 'check'}"/></svg>`
+        + `<span>${failure ? 'Stopped' : 'Done'} — ${escHtml(parts.join(', '))}`
+        + (failure ? ` · ${escHtml(String(failure).slice(0, 160))}` : '')
         + `<span class="agent-done-time"> · ${Math.round(elapsedMs / 1000)}s</span></span>`;
     if (touched.size) {
         const list = document.createElement('div');
@@ -2740,6 +2746,9 @@ async function sendAgentTask() {
     // The card waiting for its result. One tool runs at a time, so this is
     // always the last card made — no ids needed, and none are sent.
     let pendingCard = null;
+    // Why the turn stopped, if the provider stopped it. The footer reads this
+    // rather than announcing "Done" over the top of a rate limit.
+    let turnFailed = '';
     const send = document.getElementById('agent-send');
     const stop = document.getElementById('agent-stop');
     send.disabled = true;
@@ -2858,6 +2867,17 @@ async function sendAgentTask() {
                 // line in the trace: it is the only thing in this panel that
                 // is still true after the turn ends, and the only one with a
                 // control on it.
+                // The provider stopped the turn. Rendered here because it was
+                // not: chat has shown this since the event existed and this
+                // panel ignored it, so a rate limit or a timeout on a coding
+                // turn ended with "Done", no error, and no hint that the
+                // reason the file was not written was the model never
+                // answering. Marked as failed so the footer cannot claim the
+                // turn finished.
+                if (payload.provider_error) {
+                    turnFailed = payload.provider_error.message || 'the provider stopped the turn';
+                    agentTrace(wrap, 'provider: ' + turnFailed, 'err');
+                }
                 if (payload.server) agentServerCard(wrap, payload.server);
                 // Four agents working is four cards ticking, not one long
                 // pause and then a wall of text.
@@ -2908,8 +2928,14 @@ async function sendAgentTask() {
         agentAbort = null;
         send.disabled = false;
         stop.hidden = true;
-        if (!answer.trim() && body.querySelector('.caret')) body.textContent = '(done)';
-        agentFinished(wrap, touched, commandsRun, Date.now() - startedAt);
+        // "(done)" over an empty answer is the panel agreeing with a turn
+        // that never happened. If the provider stopped it, say that instead.
+        if (!answer.trim() && body.querySelector('.caret')) {
+            body.textContent = turnFailed
+                ? 'The model stopped before answering: ' + turnFailed
+                : '(done)';
+        }
+        agentFinished(wrap, touched, commandsRun, Date.now() - startedAt, turnFailed);
         // A coding turn is the kind of work people start and then go and do
         // something else during. Finishing unread costs the same time as being
         // blocked unread does.

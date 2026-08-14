@@ -773,8 +773,67 @@ def stream_events(
     resolved: Route,
     messages: List[Dict[str, Any]],
     tools: Optional[List[Dict[str, Any]]] = None,
+    on_wait=None,
 ) -> Generator[Dict[str, Any], None, None]:
-    """Stream one turn from whichever provider the route names.
+    """Stream one turn, retrying a failure that happened before it started.
+
+    ``with_rate_limit_retry`` covered the non-streaming calls only, which left
+    the two paths people actually use — chat and the Code tab — with no retry
+    at all. A rate limit or a dropped connection ended the turn, and on a
+    coding turn that had already read four files and run a command, it ended
+    it with the work done and nothing written.
+
+    **Only before the first event.** Once tokens are out they are on the
+    user's screen and in ``content_parts``; running the request again would
+    replay the answer from the top and append it to the half already shown.
+    So a failure mid-stream is still a failure — it is reported, not retried
+    — and this only covers the case where the provider refused to start,
+    which is what a 429 and a connection timeout both are.
+
+    The pacer is told about a rate limit as well as this call sleeping on it,
+    because four subagents streaming at once will otherwise each discover the
+    limit by walking into it.
+    """
+    import random
+    import time as _time
+
+    from . import pacing
+
+    provider = getattr(resolved, "provider", "") or ""
+    for attempt in range(RATE_LIMIT_RETRIES + 1):
+        started = False
+        try:
+            for event in _stream_once(resolved, messages, tools):
+                started = True
+                yield event
+            return
+        except Exception as exc:
+            limited = _is_rate_limited(exc)
+            if started or attempt >= RATE_LIMIT_RETRIES or not (limited or _is_transient(exc)):
+                raise
+            delay = _retry_after_seconds(exc)
+            if limited and provider:
+                try:
+                    pacing.for_provider(provider).on_rate_limited(delay)
+                except Exception:
+                    pass
+            if delay is None:
+                delay = min(RATE_LIMIT_BASE_DELAY * (2 ** attempt), RATE_LIMIT_MAX_DELAY)
+                delay += random.uniform(0, delay * 0.25)
+            reason = "rate limited" if limited else "provider busy"
+            if on_wait:
+                on_wait(attempt + 1, delay, reason)
+            LOG.info("%s before the stream began; retrying in %.1fs (attempt %d/%d)",
+                     reason, delay, attempt + 1, RATE_LIMIT_RETRIES)
+            _time.sleep(delay)
+
+
+def _stream_once(
+    resolved: Route,
+    messages: List[Dict[str, Any]],
+    tools: Optional[List[Dict[str, Any]]] = None,
+) -> Generator[Dict[str, Any], None, None]:
+    """One attempt at the stream, in whichever provider's shape.
 
     Yields the same typed events as ``OllamaClient.chat_stream_events`` so the
     agentic loop does not need to know which provider ran.
