@@ -2246,6 +2246,135 @@ function agentTrace(wrap, text, cls) {
     document.getElementById('agent-log').scrollTop = 1e9;
 }
 
+// ===== What the agent did, as cards rather than as a log =====
+//
+// Every tool call rendered as two lines of trace: `→ edit_file(path=…,
+// edits=<<<<<<< SEARCH…)` and `← ok`. That is a transcript of the machinery,
+// and it has the two properties you least want in the thing you read while
+// deciding whether to trust a change: the file that was edited is buried in
+// the middle of a line, and the edit itself is truncated at sixty characters.
+// Six edits in a row were six identical-looking lines.
+//
+// The tools worth a card are the ones whose result you would want to check —
+// a file changed, a command run. Everything else stays a trace line, because
+// a panel where everything is a card is a panel where nothing stands out.
+//
+// Pairing a card with its result is by order, not by id: the backend runs one
+// tool at a time and emits `tool` then `tool_result` around it, so the card
+// waiting for a result is always the last one made.
+
+const CARD_TOOLS = new Set([
+    'run_command', 'start_server', 'write_file', 'create_file',
+    'edit_file', 'delete_file', 'move_file',
+]);
+
+// A SEARCH/REPLACE block, as +/- lines. The block format is already a diff —
+// this only turns its markers into the colours anyone reading a diff expects.
+function parseEditBlocks(text) {
+    const lines = String(text || '').split('\n');
+    const out = [];
+    let side = null;   // 'old' while inside SEARCH, 'new' after the divider
+    for (const line of lines) {
+        if (/^(<{5,9}|-{5,9}) SEARCH\s*$/.test(line)) { side = 'old'; continue; }
+        if (/^={5,9}\s*$/.test(line) && side === 'old') { side = 'new'; continue; }
+        if (/^(>{5,9}|\+{5,9}) REPLACE\s*$/.test(line)) { side = null; continue; }
+        if (side === 'old') out.push({ kind: 'del', text: line });
+        else if (side === 'new') out.push({ kind: 'add', text: line });
+        else if (line.trim()) out.push({ kind: 'ctx', text: line });
+    }
+    return out;
+}
+
+function diffLinesFor(tool, args) {
+    if (tool === 'edit_file') {
+        return parseEditBlocks(args.edits != null ? args.edits : args.diff);
+    }
+    if (tool === 'write_file' || tool === 'create_file') {
+        // A new file is all additions. An overwrite is too, as far as this
+        // panel can tell — the old content is not in the event, and inventing
+        // a diff against a file nobody sent would be a guess wearing the
+        // clothes of a fact.
+        return String(args.content || '').split('\n').map(text => ({ kind: 'add', text }));
+    }
+    if (tool === 'delete_file') return [{ kind: 'del', text: args.path || '' }];
+    if (tool === 'move_file') {
+        return [{ kind: 'del', text: args.path || '' }, { kind: 'add', text: args.to || '' }];
+    }
+    return [];
+}
+
+const CARD_MAX_DIFF_LINES = 120;
+
+function agentToolCard(wrap, tool) {
+    const bare = String(tool.name || '').split('__').pop();
+    const args = tool.args || {};
+    // A sibling of the answer, never a child of it. `.agent-body` has its
+    // innerHTML replaced on every streamed chunk, so a card put inside it
+    // survives exactly until the next token arrives — the edits would have
+    // vanished one at a time as the model wrote its summary of them.
+    const card = document.createElement('div');
+    card.className = 'tool-card' + (tool.rejected ? ' rejected' : '');
+
+    if (bare === 'run_command' || bare === 'start_server') {
+        card.classList.add('is-command');
+        card.innerHTML = `
+            <div class="tool-head">
+                <span class="tool-sigil mono">$</span>
+                <span class="tool-title mono">${escHtml(args.command || '')}</span>
+                <span class="spacer"></span>
+                <span class="tool-state">running…</span>
+            </div>
+            <pre class="tool-output hidden"></pre>`;
+    } else {
+        const lines = diffLinesFor(bare, args);
+        const added = lines.filter(l => l.kind === 'add').length;
+        const removed = lines.filter(l => l.kind === 'del').length;
+        const shown = lines.slice(0, CARD_MAX_DIFF_LINES);
+        card.classList.add('is-diff');
+        card.innerHTML = `
+            <div class="tool-head">
+                <span class="tool-verb">${escHtml(bare.replace('_file', ''))}</span>
+                <span class="tool-title mono" title="${escHtml(args.path || '')}">${escHtml(args.path || '')}</span>
+                ${added ? `<span class="tool-plus">+${added}</span>` : ''}
+                ${removed ? `<span class="tool-minus">−${removed}</span>` : ''}
+                <span class="spacer"></span>
+                <span class="tool-state">${tool.rejected ? 'refused' : 'pending'}</span>
+            </div>
+            ${shown.length ? `<div class="tool-diff">${shown.map(l =>
+                `<div class="dl ${l.kind}">${escHtml(l.text) || '&nbsp;'}</div>`).join('')}${
+                lines.length > shown.length
+                    ? `<div class="dl more">… ${lines.length - shown.length} more lines</div>` : ''
+            }</div>` : ''}`;
+    }
+    wrap.appendChild(card);
+    document.getElementById('agent-log').scrollTop = 1e9;
+    return card;
+}
+
+// The result, on the card that asked for it. `run_command` answers `[ok]` or
+// `[exit N]`; a write answers with prose, so anything that does not start
+// with `error:` counts as done.
+function agentToolCardResult(card, result) {
+    if (!card) return;
+    const text = String(result || '');
+    const state = card.querySelector('.tool-state');
+    const failed = /^\[exit |^error:/.test(text) || text.startsWith('[failed]');
+    if (state) {
+        state.textContent = failed
+            ? (text.match(/^\[exit \d+\]/) || ['Failed'])[0]
+            : (card.classList.contains('is-command') ? 'Success' : 'Applied');
+        state.classList.add(failed ? 'bad' : 'good');
+    }
+    const out = card.querySelector('.tool-output');
+    if (out) {
+        // The status marker is already on the card; repeating it as the first
+        // line of the output is noise.
+        const body = text.replace(/^\[(ok|exit \d+|running|failed)\]\n?/, '').trim();
+        out.textContent = body || '(no output)';
+        out.classList.toggle('hidden', !body);
+    }
+}
+
 // ===== A server the agent started and left running =====
 //
 // The one thing a coding agent does whose result is not text. Everything else
@@ -2258,13 +2387,15 @@ function agentTrace(wrap, text, cls) {
 // rather than leaving a trail of dead addresses that all look live.
 
 function agentServerCard(wrap, server) {
-    const host = wrap.querySelector('.agent-body') || wrap;
     let card = wrap.querySelector(`.server-card[data-server="${server.id}"]`);
     if (!card) {
         card = document.createElement('div');
         card.className = 'server-card';
         card.dataset.server = server.id;
-        host.appendChild(card);
+        // Appended to the message, not to its body: the body's innerHTML is
+        // rewritten on every streamed chunk, so a card inside it lives until
+        // the next token.
+        wrap.appendChild(card);
     }
     const running = !!server.running;
     const url = server.url || '';
@@ -2360,6 +2491,9 @@ async function sendAgentTask() {
     // What this turn actually did, so it can say so when it stops.
     const touched = new Set();
     let commandsRun = 0;
+    // The card waiting for its result. One tool runs at a time, so this is
+    // always the last card made — no ids needed, and none are sent.
+    let pendingCard = null;
     const send = document.getElementById('agent-send');
     const stop = document.getElementById('agent-stop');
     send.disabled = true;
@@ -2424,10 +2558,20 @@ async function sendAgentTask() {
 
                 if (payload.conversation_id) agentConversationId = payload.conversation_id;
                 if (payload.tool) {
-                    agentTrace(wrap, `→ ${payload.tool.name}(${
-                        Object.entries(payload.tool.args || {})
-                            .map(([k, v]) => `${k}=${String(v).slice(0, 60)}`).join(', ')})`,
-                        payload.tool.rejected ? 'rejected' : '');
+                    // A card for the ones whose result you would want to check,
+                    // a trace line for the rest. The tool name and its
+                    // arguments squeezed onto one truncated line is a fine
+                    // record of a search and a useless record of an edit.
+                    const bareName = String(payload.tool.name).split('__').pop();
+                    if (CARD_TOOLS.has(bareName)) {
+                        pendingCard = agentToolCard(wrap, payload.tool);
+                    } else {
+                        pendingCard = null;
+                        agentTrace(wrap, `→ ${payload.tool.name}(${
+                            Object.entries(payload.tool.args || {})
+                                .map(([k, v]) => `${k}=${String(v).slice(0, 60)}`).join(', ')})`,
+                            payload.tool.rejected ? 'rejected' : '');
+                    }
                     // What the turn changed, for the summary at the end. A
                     // rejected call did not happen and must not be counted.
                     if (!payload.tool.rejected) {
@@ -2438,7 +2582,12 @@ async function sendAgentTask() {
                     }
                 }
                 if (payload.tool_result) {
-                    agentTrace(wrap, `← ${String(payload.tool_result.result).slice(0, 300)}`, 'result');
+                    if (pendingCard) {
+                        agentToolCardResult(pendingCard, payload.tool_result.result);
+                        pendingCard = null;
+                    } else {
+                        agentTrace(wrap, `← ${String(payload.tool_result.result).slice(0, 300)}`, 'result');
+                    }
                 }
                 // An approval prompt has to be answerable from here, or the
                 // agent silently blocks until it times out.

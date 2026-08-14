@@ -6328,3 +6328,72 @@ select.dd-open { border-color: var(--accent-line); }
   font-size: var(--text-2xs);
   cursor: pointer;
 }
+
+/* ===== What the agent did, as cards =====
+ *
+ * Every tool call used to be two lines of trace — `→ edit_file(path=…,
+ * edits=<<<<<<< SEARCH…)` and `← ok` — which is a transcript of the machinery
+ * and has the two properties you least want in the thing you read while
+ * deciding whether to trust a change: the filename buried mid-line, and the
+ * edit itself truncated at sixty characters. Six edits in a row were six
+ * identical-looking lines.
+ *
+ * Only the tools whose result you would want to check get a card. A panel
+ * where everything is a card is a panel where nothing stands out. */
+.tool-card {
+  margin: var(--s-4) 0;
+  background: var(--card2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+}
+.tool-card.rejected { opacity: 0.6; }
+.tool-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-4);
+  font-size: var(--text-xs);
+}
+.tool-head .spacer { flex: 1; }
+.tool-sigil { color: var(--accent); flex: none; }
+.tool-verb {
+  flex: none;
+  color: var(--faint);
+  text-transform: uppercase;
+  font-size: var(--text-2xs);
+  letter-spacing: 0.04em;
+}
+.tool-title {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+/* The two numbers you look for first in any diff, so they sit next to the
+   filename rather than being counted off the lines below. */
+.tool-plus { flex: none; color: var(--green); font-family: var(--mono); }
+.tool-minus { flex: none; color: var(--red); font-family: var(--mono); }
+.tool-state { flex: none; color: var(--faint); font-size: var(--text-2xs); }
+.tool-state.good { color: var(--green); }
+.tool-state.bad { color: var(--red); }
+.tool-diff, .tool-output {
+  max-height: 260px;
+  overflow: auto;
+  margin: 0;
+  padding: var(--s-3) 0;
+  border-top: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: var(--text-2xs);
+  line-height: 1.5;
+}
+.tool-output { padding: var(--s-3) var(--s-4); color: var(--muted); white-space: pre-wrap; }
+/* Tinted rows rather than +/- characters at the start of the line: the
+   characters are indistinguishable from the code when the code is a diff of
+   a diff, which is exactly what an edit to this file looks like. */
+.dl { padding: 0 var(--s-4); white-space: pre-wrap; word-break: break-word; }
+.dl.add { background: rgba(87, 209, 160, 0.10); color: var(--text); }
+.dl.del { background: rgba(242, 115, 107, 0.10); color: var(--muted); }
+.dl.ctx { color: var(--faint); }
+.dl.more { color: var(--faint); font-style: italic; padding-top: var(--s-2); }

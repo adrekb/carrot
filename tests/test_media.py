@@ -311,7 +311,12 @@ class TestSettingsWiring:
 
     def read(self, *parts):
         from pathlib import Path
-        return Path(__file__).resolve().parents[1].joinpath("carrot", "web", *parts).read_text()
+
+        # Explicit encoding. Without it this reads a UTF-8 file as cp1252 on
+        # Windows, so the test's subject — whether a token is defined —
+        # stopped mattering the day somebody wrote an arrow in a comment.
+        return Path(__file__).resolve().parents[1].joinpath(
+            "carrot", "web", *parts).read_text(encoding="utf-8")
 
     def test_both_panels_are_in_the_markup(self):
         html = self.read("index.html")
@@ -347,7 +352,11 @@ class TestSettingsWiring:
 class TestElectronBridge:
     def read(self, name):
         from pathlib import Path
-        return (Path(__file__).resolve().parents[1] / "gui" / name).read_text()
+        # Explicit encoding: without it this reads a UTF-8 asset as cp1252 on
+        # Windows, and the first arrow or en dash in preload.js raises a
+        # UnicodeDecodeError before the bridge is ever checked.
+        return (Path(__file__).resolve().parents[1] / "gui" / name).read_text(
+            encoding="utf-8")
 
     def test_open_external_is_exposed(self):
         assert "openExternal" in self.read("preload.js")
