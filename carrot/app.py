@@ -58,6 +58,7 @@ from carrot import (
     router as router_mod,
     providers as providers_mod,
     context_windows as ctxwin_mod,
+    pruning as pruning_mod,
     interests as interests_mod,
     sysmon as sysmon_mod,
     markets as markets_mod,
@@ -1310,6 +1311,21 @@ MAX_TOOL_ROUNDS_CEILING = 60
 # the one outcome worse than stopping early. The headroom is what the answer
 # itself is written into.
 CONTEXT_STOP_FRACTION = 0.85
+
+# Where a pruned turn aims to land. Far enough below the ceiling to buy several
+# more rounds — trimming back to 0.84 would hit the same wall on the next tool
+# result and trim again, which is a turn spending its remaining rounds on
+# bookkeeping.
+CONTEXT_RESUME_FRACTION = 0.6
+
+# Below this much of the window recoverable, pruning is not worth doing and the
+# turn should say it is out of room instead.
+#
+# A transcript that is 95% the user's own long prompt has nothing to give, and
+# a turn told "I made room" that got a rounding error back buys one more round
+# and hits the same wall — with the difference that it has now also deleted
+# what it had. Giving up honestly is better than that.
+MIN_WORTHWHILE_PRUNE = 0.1
 
 # What "multi-turn" has to have actually done before an answer is accepted.
 # The directive alone does not achieve this: a small on-device model reads
@@ -2997,10 +3013,40 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
                                "fraction": round(used / window, 3),
                                "round": round_index + 1}}
             if used > window * CONTEXT_STOP_FRACTION and round_index:
-                # Said plainly rather than by quietly writing up whatever is
-                # to hand. "It ran out of room" and "it decided it was done"
-                # produce the same short answer and call for opposite things
-                # from the user — a bigger window versus a better question.
+                # Make room before giving up the tools.
+                #
+                # Ending the turn here is right for a question and wrong for
+                # work: a coding turn that has read six files, run the tests
+                # and found the failure hits this line holding everything it
+                # needs, and is told to stop and write up what it could not
+                # get to. But a transcript at the ceiling is mostly tool
+                # output, and tool output is the one part that can be thrown
+                # away safely — the file is still on disk, and re-reading it
+                # costs one round. See carrot/pruning.py for why the budgets
+                # are separate and why nothing here calls a model.
+                before = used
+                want = int(used - window * CONTEXT_RESUME_FRACTION)
+                if pruning_mod.prunable_tokens(working) >= min(
+                        want, int(window * MIN_WORTHWHILE_PRUNE)):
+                    working, pruned = pruning_mod.prune(working, want)
+                    used = tools_tokens + ctxwin_mod.estimate_tokens(
+                        json.dumps(working, default=str))
+                    trimmed = pruned["tool_results"] + pruned["replies"]
+                    yield {"stage": "context",
+                           "detail": f"context was {int(before / window * 100)}% full — "
+                                     f"trimmed {trimmed} earlier "
+                                     f"{'result' if trimmed == 1 else 'results'} "
+                                     f"to keep working, now "
+                                     f"{int(used / window * 100)}%"}
+                    yield {"context": {"used": used, "window": window,
+                                       "fraction": round(used / window, 3),
+                                       "round": round_index + 1, "pruned": pruned}}
+            if window and used > window * CONTEXT_STOP_FRACTION and round_index:
+                # Nothing left worth trimming. Said plainly rather than by
+                # quietly writing up whatever is to hand: "it ran out of room"
+                # and "it decided it was done" produce the same short answer
+                # and call for opposite things from the user — a bigger window
+                # versus a better question.
                 yield {"stage": "context",
                        "detail": f"the context window is {int(used / window * 100)}% full — "
                                  "answering now with what has been gathered"}

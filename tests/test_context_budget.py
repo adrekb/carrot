@@ -58,10 +58,13 @@ class TestTheLoopRunsOnRoom:
     def test_it_stops_when_the_window_is_nearly_full(self):
         """Before it is actually full: the estimate is four-characters-per-
         token, the provider counts differently, and a turn that overruns gets
-        a hard error instead of a written answer."""
+        a hard error instead of a written answer.
+
+        Once there is nothing left worth trimming — pruning buys the turn more
+        rounds, it does not buy it unlimited ones. See test_pruning.py."""
         events = _drive(50, window=4000, transcript_per_round="x" * 4000)
-        stopped = [e for e in events
-                   if e.get("stage") == "context" and "full" in (e.get("detail") or "")]
+        stopped = [e for e in events if e.get("stage") == "context"
+                   and "answering now" in (e.get("detail") or "")]
         assert stopped, "the turn never noticed it was out of room"
 
     def test_running_out_of_room_is_said_rather_than_implied(self):
@@ -69,7 +72,8 @@ class TestTheLoopRunsOnRoom:
         short answer and call for opposite things from the user — a bigger
         window versus a better question."""
         events = _drive(50, window=4000, transcript_per_round="x" * 4000)
-        detail = next(e["detail"] for e in events if e.get("stage") == "context")
+        detail = next(e["detail"] for e in events if e.get("stage") == "context"
+                      and "answering now" in (e.get("detail") or ""))
         assert "%" in detail and "context window" in detail
 
     def test_the_ceiling_is_still_there_for_a_loop_that_gathers_nothing(self):

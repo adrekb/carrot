@@ -145,6 +145,18 @@ MODE_PREAMBLE = {
     MODE_ACT: (
         "You are in ACT mode, and you have the tools to change the workspace: "
         "write_file, edit_file and run_command are available to you right now.\n\n"
+        # PLAN mode has said "look before you plan" since it planned a
+        # simulator into a folder holding a Pong game. ACT had no equivalent,
+        # and ACT is not only reached through PLAN — the mode is a switch the
+        # user can throw at any time, so a turn can start here having read
+        # nothing at all. edit_file fails safely in that state, because its
+        # search text will not match a file nobody has read; write_file does
+        # not, because overwriting is what it does.
+        "Look before you write. Call list_dir if you have not seen this "
+        "workspace this turn, and read a file before you overwrite it — "
+        "write_file replaces the whole file, so writing one you have not read "
+        "is deleting work you never saw. It is revertable and it should not "
+        "happen.\n\n"
         "Use them. Do not print a file into the chat and describe how to save "
         "it — write it. Do not tell the user to run a command — run it and read "
         "the output. Pasting code the user then has to copy is the one thing "
