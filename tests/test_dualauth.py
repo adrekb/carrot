@@ -295,7 +295,11 @@ class TestNoCookieScraping:
     def test_subscription_mode_is_oauth_and_nothing_else(self):
         from pathlib import Path
 
-        source = (Path(__file__).resolve().parents[1] / "carrot" / "dualauth.py").read_text()
+        # Explicit encoding: without it this reads a UTF-8 source file as cp1252
+        # on Windows, and the first arrow or en dash in dualauth.py fails the
+        # test with a UnicodeDecodeError instead of a cookie-scraping finding.
+        source = (Path(__file__).resolve().parents[1] / "carrot" / "dualauth.py").read_text(
+            encoding="utf-8")
         lowered = source.lower()
         # No browser cookie jars, no session-key replay, no headless driving.
         for forbidden in ("browser_cookie", "cookiejar", "sessionkey", "session_key",
