@@ -317,3 +317,90 @@ def tree_files(root: str, tree: str) -> List[str]:
     _require_repo(root)
     raw = _run(["ls-tree", "-r", "--name-only", tree], cwd=root)
     return [line for line in raw.splitlines() if line]
+
+
+# ===== Worktrees =====
+#
+# A second checkout of the same repository, on its own branch, in its own
+# directory. The reason it belongs in a coding assistant: "try this refactor"
+# and "keep working" are the same directory otherwise, so the agent's edits
+# land on top of whatever you had open, and undoing them means undoing yours
+# too. In a worktree the agent has a whole checkout to itself, shares the
+# object database, and costs a directory rather than a clone.
+
+def worktrees(root: str) -> List[Dict[str, str]]:
+    """Every checkout of this repository, main one first.
+
+    Parsed from the porcelain form because the human-readable one puts the
+    path, the commit and the branch on one line with no delimiter, and paths
+    on Windows contain spaces.
+    """
+    _require_repo(root)
+    found: List[Dict[str, str]] = []
+    current: Dict[str, str] = {}
+    for line in _run(["worktree", "list", "--porcelain"], cwd=root).splitlines():
+        if not line.strip():
+            if current:
+                found.append(current)
+                current = {}
+            continue
+        key, _, value = line.partition(" ")
+        if key == "worktree":
+            current = {"path": os.path.abspath(value), "branch": "", "detached": False}
+        elif key == "branch":
+            current["branch"] = value.replace("refs/heads/", "")
+        elif key == "detached":
+            current["detached"] = True
+    if current:
+        found.append(current)
+    return found
+
+
+def add_worktree(root: str, branch: str, path: str = "") -> Dict[str, str]:
+    """A new checkout on a new branch, beside the repository by default.
+
+    Beside rather than inside: a worktree in a subdirectory of its own
+    repository is a directory git ignores but every other tool walks, so the
+    indexer, the file tree and any test runner would all see two copies of
+    the project and report every result twice.
+    """
+    _require_repo(root)
+    branch = (branch or "").strip()
+    if not branch:
+        raise GitError("a worktree needs a branch name")
+    # Git refuses these anyway, but its message is about ref formats and this
+    # one is about what the user typed.
+    if any(ch in branch for ch in " ~^:?*[\\") or branch.startswith("-"):
+        raise GitError(r"a branch name cannot contain spaces or ~^:?*[\ or start with -")
+
+    parent = os.path.dirname(os.path.abspath(root))
+    folder = os.path.basename(os.path.abspath(root))
+    target = os.path.abspath(path or os.path.join(
+        parent, f"{folder}-{branch.replace('/', '-')}"))
+    if os.path.exists(target):
+        raise GitError(f"{target} already exists")
+
+    _run(["worktree", "add", "-b", branch, target], cwd=root)
+    return {"path": target, "branch": branch, "detached": False}
+
+
+def remove_worktree(root: str, path: str) -> Dict[str, Any]:
+    """Drop a worktree, refusing while it still holds uncommitted work.
+
+    `--force` is not offered here. The whole point of working in one is that
+    the work in it is real, and a one-click button that discards it is a
+    button somebody presses on the wrong row.
+    """
+    _require_repo(root)
+    target = os.path.abspath(path)
+    if os.path.abspath(root) == target:
+        raise GitError("that is the checkout you are working in")
+    try:
+        _run(["worktree", "remove", target], cwd=root)
+    except GitError as exc:
+        if "contains modified or untracked files" in str(exc):
+            raise GitError(
+                "that worktree still has uncommitted changes. Commit them, or "
+                "delete the folder yourself if you meant to throw them away.")
+        raise
+    return {"removed": target}

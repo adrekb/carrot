@@ -345,9 +345,18 @@ model is the bottleneck at that volume, not the evidence)
 parallel, and every claim is verified against the source it came from before the
 report is written. Sources are numbered; the report cites them inline.
 
+**The plan is revised on what comes back.** When a wave of researchers surfaces
+something the plan could not have anticipated — an incident, a recall, a figure
+nobody knew existed — the plan gains a sub-question about it and another wave
+researches it, with its own searches and its own verification. It only ever
+adds: a plan the model can shorten is a plan the model will shorten. A run that
+learned an aircraft had crashed used to report it in whatever single sentence
+the first search results carried; now it goes back and asks what came of it.
+
 **What you see live:** sub-questions as they are planned, each source as it is
-read, each finding, each verdict (supported / unsupported / contradicted), and
-the report as it is written.
+read, each finding, each verdict (supported / unsupported / contradicted), any
+sub-question the evidence adds (marked new, with the finding that prompted it),
+and the report as it is written.
 
 Sources flagged as prompt-injection attempts are marked in the source list.
 Research runs are stored, browsable and deletable. Budgets and a kill switch

@@ -1535,6 +1535,15 @@ async function loadCoderState() {
 
     const rootHint = document.getElementById('agent-root-hint');
     if (rootHint && state.root) rootHint.textContent = state.root;
+    // The startup panel is built from this state, so it is drawn when the
+    // state arrives rather than on a timer — and only while it is still the
+    // startup panel, since redrawing it over a conversation in progress would
+    // delete the conversation.
+    if (document.querySelector('#agent-log .agent-hello')) renderAgentHello();
+    // Which checkout this is. Refreshed with the rest of the coder state
+    // rather than once at load, because switching workspace folder changes
+    // the answer and so does creating a worktree from anywhere else.
+    loadWorktrees();
     const chip = document.getElementById('git-chip');
     if (chip) {
         const git = state.git || {};
@@ -1968,6 +1977,10 @@ function warnMissingToolchain(tc) {
 // approval prompts inline so you can watch what it is doing to your files.
 
 let agentConversationId = null;
+// A skill armed for the next task in this panel, and the catalogue the
+// startup list was built from.
+let agentSkill = null;
+let agentSkillCatalog = [];
 let agentAbort = null;
 let agentAttachments = [];
 
@@ -1983,9 +1996,309 @@ function newAgentTask() {
     agentConversationId = null;
     agentAttachments = [];
     renderAgentTray();
-    const log = document.getElementById('agent-log');
-    log.innerHTML = '<div class="agent-hello"><p>New task. What should I do?</p></div>';
+    renderAgentHello();
     document.getElementById('agent-input')?.focus();
+}
+
+// ===== What the panel says before you have asked it anything =====
+//
+// It said "Tell me what to build, fix or explain" and named the folder. That
+// is a greeting, and a greeting is the least useful thing that can occupy the
+// screen you look at most often — every other coding tool uses this space to
+// answer the questions you actually have when you sit down: where am I, what
+// is still running from last time, and what does this thing know how to do.
+//
+// Three sections, all of them facts rather than encouragement, and each one
+// absent when it has nothing to say. An empty state that invents content to
+// fill itself is how a startup screen becomes something people click past.
+
+async function renderAgentHello() {
+    const log = document.getElementById('agent-log');
+    if (!log) return;
+    // The real path, not the hint element's placeholder — that element still
+    // says "your workspace" until the coder state has come back, and the
+    // panel renders before it.
+    const root = (typeof codeRoot !== 'undefined' && codeRoot)
+        || document.getElementById('agent-root-hint')?.textContent
+        || 'your workspace';
+    const branch = document.getElementById('git-chip')?.textContent || '';
+
+    log.innerHTML = `
+      <div class="agent-hello">
+        <div class="hello-where">
+          <svg class="ico"><use href="#i-folder"/></svg>
+          <span class="hello-root mono" title="${escHtml(root)}">${escHtml(root)}</span>
+          ${branch ? `<span class="hello-branch mono">${escHtml(branch)}</span>` : ''}
+        </div>
+        <div id="hello-servers" class="hello-block hidden"></div>
+        <div id="hello-scheduled" class="hello-block hidden"></div>
+        <div id="hello-skills" class="hello-block hidden"></div>
+        <p class="hello-modes muted small">In <strong>Plan</strong> I only read and propose.
+           In <strong>Act</strong> I can edit files, run commands and start servers.</p>
+      </div>`;
+
+    // Servers first: it is the only thing here that is still true from a
+    // previous session, and the only one with a cost attached — a dev server
+    // the user has forgotten is holding one of their ports right now.
+    try {
+        const { servers } = await api('/api/coder/servers');
+        const live = (servers || []).filter(s => s.running);
+        if (live.length) {
+            const host = document.getElementById('hello-servers');
+            host.classList.remove('hidden');
+            host.innerHTML = '<div class="hello-title">Still running</div>'
+                + live.map(s => `
+                    <div class="hello-server">
+                        <span class="server-dot live"></span>
+                        ${s.url
+                            ? `<a href="${escHtml(s.url)}" target="_blank" rel="noopener">${escHtml(s.url)}</a>`
+                            : `<span class="mono">${escHtml(s.label || s.command)}</span>`}
+                        <span class="spacer"></span>
+                        <button class="btn btn-ghost" onclick="stopHelloServer('${escHtml(s.id)}')">Stop</button>
+                    </div>`).join('');
+        }
+    } catch (_) {}
+
+    // Then the standing appointments. They run whether or not this screen is
+    // open, which is exactly why they belong on it: work that happens without
+    // being asked has to be visible somewhere the user passes anyway, or the
+    // first they hear of it is a notification about a task they had forgotten
+    // making.
+    try {
+        const { tasks } = await api('/api/coder/scheduled');
+        if ((tasks || []).length) {
+            const host = document.getElementById('hello-scheduled');
+            host.classList.remove('hidden');
+            host.innerHTML = '<div class="hello-title">On a schedule</div>'
+                + tasks.map(t => `
+                    <div class="sched-row${t.enabled ? '' : ' off'}">
+                        <button class="sched-toggle${t.enabled ? ' on' : ''}"
+                                title="${t.enabled ? 'Pause this' : 'Switch this back on'}"
+                                onclick="toggleScheduledTask('${escHtml(t.id)}', ${!t.enabled})"></button>
+                        <div class="sched-body">
+                            <div class="sched-prompt">${escHtml(t.prompt)}</div>
+                            <div class="sched-when">${escHtml(describeSchedule(t))}${
+                                t.last_status ? ' · last run ' + escHtml(t.last_status) : ''}</div>
+                        </div>
+                        <button class="icon-btn" title="Run it now, without waiting for its slot"
+                                onclick="runScheduledTaskNow('${escHtml(t.id)}')"
+                            ><svg class="ico"><use href="#i-pulse"/></svg></button>
+                        <button class="icon-btn" title="Delete this scheduled task"
+                                onclick="deleteScheduledTask('${escHtml(t.id)}')"
+                            ><svg class="ico"><use href="#i-trash"/></svg></button>
+                    </div>`).join('');
+        }
+    } catch (_) {}
+
+    // Then what it has been taught. A skill nobody remembers exists is a
+    // skill nobody invokes, and they are listed here because this is the
+    // moment you are deciding what to ask for.
+    try {
+        const skills = await api('/api/skills');
+        agentSkillCatalog = skills || [];
+        if ((skills || []).length) {
+            const host = document.getElementById('hello-skills');
+            host.classList.remove('hidden');
+            host.innerHTML = '<div class="hello-title">It knows how you work</div>'
+                + skills.slice(0, 6).map(s => `
+                    <button class="hello-skill" title="${escHtml(s.description || '')}"
+                            onclick="useSkillInAgent('${escHtml(s.slug)}')">${escHtml(s.name)}</button>`
+                  ).join('');
+        }
+    } catch (_) {}
+}
+
+// ===== Which checkout the agent is working in =====
+//
+// "Try this refactor" and "keep working" are the same directory otherwise:
+// the agent's edits land on top of whatever you had open, and undoing them
+// means undoing yours too. A worktree gives it a whole checkout on its own
+// branch, sharing the object database, for the price of a directory.
+//
+// A picker rather than a command, because the thing you need to know is which
+// one you are in *now* — the mistake this prevents is committing an
+// experiment to main, and that mistake is made by not knowing where you are.
+
+const NEW_WORKTREE = '__new__';
+
+async function loadWorktrees() {
+    const picker = document.getElementById('worktree-picker');
+    if (!picker) return;
+    let data;
+    try {
+        data = await api('/api/coder/worktrees');
+    } catch (_) {
+        picker.classList.add('hidden');
+        return;
+    }
+    if (!data.repo) { picker.classList.add('hidden'); return; }
+    picker.classList.remove('hidden');
+
+    const here = (data.current || '').replace(/[\\/]+$/, '').toLowerCase();
+    picker.innerHTML = (data.worktrees || []).map((w, index) => {
+        const label = index === 0
+            // The first one git lists is the repository proper. Calling it by
+            // its branch would make it look like one experiment among
+            // several, when it is the thing the others are branches of.
+            ? `Main · ${w.branch || 'detached'}`
+            : (w.branch || w.path.split(/[\\/]/).pop());
+        const selected = w.path.replace(/[\\/]+$/, '').toLowerCase() === here ? ' selected' : '';
+        return `<option value="${escHtml(w.path)}"${selected}>${escHtml(label)}</option>`;
+    }).join('') + `<option value="${NEW_WORKTREE}">New worktree…</option>`;
+}
+
+async function pickWorktree(value) {
+    if (value === NEW_WORKTREE) {
+        const branch = await inlineTextPrompt(
+            'Branch name for the new worktree', 'try/refactor');
+        // Cancelled: put the picker back on where we actually are, or it
+        // sits there naming a worktree that was never made.
+        if (!branch) { loadWorktrees(); return; }
+        try {
+            const made = await api('/api/coder/worktrees', {
+                method: 'POST', body: JSON.stringify({ branch, switch: true }),
+            });
+            setCodeStatus(`working in ${made.path}`);
+        } catch (err) {
+            setCodeStatus('could not make that worktree: ' + err);
+            loadWorktrees();
+            return;
+        }
+    } else {
+        try {
+            await api('/api/files/root', {
+                method: 'POST', body: JSON.stringify({ root: value }),
+            });
+        } catch (err) {
+            setCodeStatus('could not switch: ' + err);
+            return;
+        }
+    }
+    // Everything that reads the root has to be told. The file tree and the
+    // agent's own idea of where it is were the two that mattered: a tree
+    // still showing the old checkout is a tree you open files from and then
+    // edit in the other one.
+    await loadCodeTab();
+    await loadCoderState();
+    await loadWorktrees();
+}
+
+// ===== Standing appointments =====
+
+function describeSchedule(task) {
+    if (task.schedule === 'hourly') return 'Every hour';
+    if (task.schedule === 'weekly') {
+        const day = (task.weekday || 'monday');
+        return `Weekly on ${day.charAt(0).toUpperCase()}${day.slice(1)} around ${task.at}`;
+    }
+    return `Daily around ${task.at}`;
+}
+
+async function toggleScheduledTask(id, enabled) {
+    try {
+        await api(`/api/coder/scheduled/${id}`, {
+            method: 'PATCH', body: JSON.stringify({ enabled }),
+        });
+    } catch (_) {}
+    renderAgentHello();
+}
+
+async function deleteScheduledTask(id) {
+    if (!confirm('Delete this scheduled task?')) return;
+    try { await api(`/api/coder/scheduled/${id}`, { method: 'DELETE' }); } catch (_) {}
+    renderAgentHello();
+}
+
+// Runs it this second rather than at its slot. The only way to find out
+// whether a task you have written does what you meant is to run it, and
+// waiting until 09:00 tomorrow to discover it was phrased badly is not a
+// feedback loop anybody uses.
+async function runScheduledTaskNow(id) {
+    const row = document.querySelector(`.sched-row button[onclick*="${id}"]`)?.closest('.sched-row');
+    if (row) row.classList.add('running');
+    try {
+        const result = await api(`/api/coder/scheduled/${id}/run`, { method: 'POST' });
+        agentBubble('agent', result.output || '(the run produced no output)');
+    } catch (err) {
+        agentBubble('agent', 'The scheduled task failed: ' + err);
+    }
+    if (row) row.classList.remove('running');
+}
+
+// Turns what is in the composer into a standing appointment. Written here
+// rather than in a settings page because this is where the sentence already
+// is — the moment you notice you have typed the same thing three mornings
+// running is the moment to say "every morning", and a form on another screen
+// is a form you fill in never.
+async function scheduleCurrentTask() {
+    const input = document.getElementById('agent-input');
+    const prompt = (input?.value || '').trim();
+    if (!prompt) {
+        agentBubble('agent', 'Type what you want done first, then schedule it.');
+        return;
+    }
+    const when = await inlineTextPrompt(
+        'When should this run? "hourly", "daily 09:00", or "weekly monday 09:00"',
+        'daily 09:00');
+    if (when === null) return;
+
+    const parts = String(when).trim().toLowerCase().split(/\s+/);
+    const body = { prompt, schedule: 'daily', at: '09:00', weekday: 'monday' };
+    if (parts[0] === 'hourly') body.schedule = 'hourly';
+    else if (parts[0] === 'weekly') {
+        body.schedule = 'weekly';
+        body.weekday = parts[1] || 'monday';
+        body.at = parts[2] || '09:00';
+    } else {
+        body.at = parts[1] || parts[0] || '09:00';
+    }
+
+    try {
+        await api('/api/coder/scheduled', { method: 'POST', body: JSON.stringify(body) });
+        input.value = '';
+        renderAgentHello();
+    } catch (err) {
+        agentBubble('agent', 'Could not schedule that: ' + err);
+    }
+}
+
+async function stopHelloServer(id) {
+    try { await api(`/api/coder/servers/${id}/stop`, { method: 'POST' }); } catch (_) {}
+    renderAgentHello();
+}
+
+// Arms the skill for the next task rather than firing one off. Clicking a
+// chip that immediately starts work is a chip people stop touching, and the
+// user still has to say what they want done — the skill is how, not what.
+function useSkillInAgent(slug) {
+    const chosen = (agentSkillCatalog || []).find(s => s.slug === slug);
+    agentSkill = chosen ? { slug: chosen.slug, name: chosen.name } : { slug, name: slug };
+    renderAgentSkillChip();
+    document.getElementById('agent-input')?.focus();
+}
+
+function clearAgentSkill() {
+    agentSkill = null;
+    renderAgentSkillChip();
+}
+
+// Shown in the composer, next to the model picker, because that row is where
+// everything else that changes what the next message does already lives. A
+// skill armed and not visible is the same bug as a model set and not visible,
+// which is the one this panel already fixed once.
+function renderAgentSkillChip() {
+    const row = document.querySelector('.agent-compose-row');
+    if (!row) return;
+    let chip = row.querySelector('.agent-skill-chip');
+    if (!agentSkill) { chip?.remove(); return; }
+    if (!chip) {
+        chip = document.createElement('button');
+        chip.className = 'agent-skill-chip';
+        chip.onclick = clearAgentSkill;
+        row.insertBefore(chip, row.querySelector('.spacer'));
+    }
+    chip.title = 'Using this skill for the next task — click to clear';
+    chip.textContent = `/${agentSkill.name} ✕`;
 }
 
 // ---------- Attachments ----------
@@ -2123,6 +2436,272 @@ function agentTrace(wrap, text, cls) {
     document.getElementById('agent-log').scrollTop = 1e9;
 }
 
+// ===== What the agent did, as cards rather than as a log =====
+//
+// Every tool call rendered as two lines of trace: `→ edit_file(path=…,
+// edits=<<<<<<< SEARCH…)` and `← ok`. That is a transcript of the machinery,
+// and it has the two properties you least want in the thing you read while
+// deciding whether to trust a change: the file that was edited is buried in
+// the middle of a line, and the edit itself is truncated at sixty characters.
+// Six edits in a row were six identical-looking lines.
+//
+// The tools worth a card are the ones whose result you would want to check —
+// a file changed, a command run. Everything else stays a trace line, because
+// a panel where everything is a card is a panel where nothing stands out.
+//
+// Pairing a card with its result is by order, not by id: the backend runs one
+// tool at a time and emits `tool` then `tool_result` around it, so the card
+// waiting for a result is always the last one made.
+
+const CARD_TOOLS = new Set([
+    'run_command', 'start_server', 'write_file', 'create_file',
+    'edit_file', 'delete_file', 'move_file',
+]);
+
+// A SEARCH/REPLACE block, as +/- lines. The block format is already a diff —
+// this only turns its markers into the colours anyone reading a diff expects.
+function parseEditBlocks(text) {
+    const lines = String(text || '').split('\n');
+    const out = [];
+    let side = null;   // 'old' while inside SEARCH, 'new' after the divider
+    for (const line of lines) {
+        if (/^(<{5,9}|-{5,9}) SEARCH\s*$/.test(line)) { side = 'old'; continue; }
+        if (/^={5,9}\s*$/.test(line) && side === 'old') { side = 'new'; continue; }
+        if (/^(>{5,9}|\+{5,9}) REPLACE\s*$/.test(line)) { side = null; continue; }
+        if (side === 'old') out.push({ kind: 'del', text: line });
+        else if (side === 'new') out.push({ kind: 'add', text: line });
+        else if (line.trim()) out.push({ kind: 'ctx', text: line });
+    }
+    return out;
+}
+
+function diffLinesFor(tool, args) {
+    if (tool === 'edit_file') {
+        return parseEditBlocks(args.edits != null ? args.edits : args.diff);
+    }
+    if (tool === 'write_file' || tool === 'create_file') {
+        // A new file is all additions. An overwrite is too, as far as this
+        // panel can tell — the old content is not in the event, and inventing
+        // a diff against a file nobody sent would be a guess wearing the
+        // clothes of a fact.
+        return String(args.content || '').split('\n').map(text => ({ kind: 'add', text }));
+    }
+    if (tool === 'delete_file') return [{ kind: 'del', text: args.path || '' }];
+    if (tool === 'move_file') {
+        return [{ kind: 'del', text: args.path || '' }, { kind: 'add', text: args.to || '' }];
+    }
+    return [];
+}
+
+const CARD_MAX_DIFF_LINES = 120;
+
+function agentToolCard(wrap, tool) {
+    const bare = String(tool.name || '').split('__').pop();
+    const args = tool.args || {};
+    // A sibling of the answer, never a child of it. `.agent-body` has its
+    // innerHTML replaced on every streamed chunk, so a card put inside it
+    // survives exactly until the next token arrives — the edits would have
+    // vanished one at a time as the model wrote its summary of them.
+    const card = document.createElement('div');
+    card.className = 'tool-card' + (tool.rejected ? ' rejected' : '');
+
+    if (bare === 'run_command' || bare === 'start_server') {
+        card.classList.add('is-command');
+        card.innerHTML = `
+            <div class="tool-head">
+                <span class="tool-sigil mono">$</span>
+                <span class="tool-title mono">${escHtml(args.command || '')}</span>
+                <span class="spacer"></span>
+                <span class="tool-state">running…</span>
+            </div>
+            <pre class="tool-output hidden"></pre>`;
+    } else {
+        const lines = diffLinesFor(bare, args);
+        const added = lines.filter(l => l.kind === 'add').length;
+        const removed = lines.filter(l => l.kind === 'del').length;
+        const shown = lines.slice(0, CARD_MAX_DIFF_LINES);
+        card.classList.add('is-diff');
+        card.innerHTML = `
+            <div class="tool-head">
+                <span class="tool-verb">${escHtml(bare.replace('_file', ''))}</span>
+                <span class="tool-title mono" title="${escHtml(args.path || '')}">${escHtml(args.path || '')}</span>
+                ${added ? `<span class="tool-plus">+${added}</span>` : ''}
+                ${removed ? `<span class="tool-minus">−${removed}</span>` : ''}
+                <span class="spacer"></span>
+                <span class="tool-state">${tool.rejected ? 'refused' : 'pending'}</span>
+            </div>
+            ${shown.length ? `<div class="tool-diff">${shown.map(l =>
+                `<div class="dl ${l.kind}">${escHtml(l.text) || '&nbsp;'}</div>`).join('')}${
+                lines.length > shown.length
+                    ? `<div class="dl more">… ${lines.length - shown.length} more lines</div>` : ''
+            }</div>` : ''}`;
+    }
+    wrap.appendChild(card);
+    document.getElementById('agent-log').scrollTop = 1e9;
+    return card;
+}
+
+// The result, on the card that asked for it. `run_command` answers `[ok]` or
+// `[exit N]`; a write answers with prose, so anything that does not start
+// with `error:` counts as done.
+function agentToolCardResult(card, result) {
+    if (!card) return;
+    const text = String(result || '');
+    const state = card.querySelector('.tool-state');
+    const failed = /^\[exit |^error:/.test(text) || text.startsWith('[failed]');
+    if (state) {
+        state.textContent = failed
+            ? (text.match(/^\[exit \d+\]/) || ['Failed'])[0]
+            : (card.classList.contains('is-command') ? 'Success' : 'Applied');
+        state.classList.add(failed ? 'bad' : 'good');
+    }
+    const out = card.querySelector('.tool-output');
+    if (out) {
+        // The status marker is already on the card; repeating it as the first
+        // line of the output is noise.
+        const body = text.replace(/^\[(ok|exit \d+|running|failed)\]\n?/, '').trim();
+        out.textContent = body || '(no output)';
+        out.classList.toggle('hidden', !body);
+    }
+}
+
+// ===== Several investigations running at once =====
+//
+// One card per named investigation, spun up together and ticking off
+// independently. Without them a parallel explore is the worst-looking thing
+// in the panel: nothing at all for thirty seconds, then four paragraphs
+// arriving as one block, which reads as a hang followed by a wall.
+//
+// Keyed by name because that is what the events carry and what the user
+// sees. Two investigations sharing a name would share a card, which is the
+// right failure — they are the same question asked twice.
+
+function agentSubagentCard(wrap, info) {
+    let host = wrap.querySelector('.subagent-set');
+    if (!host) {
+        host = document.createElement('div');
+        host.className = 'subagent-set';
+        wrap.appendChild(host);
+    }
+    const key = info.name || 'investigation';
+    let card = host.querySelector(`.subagent-card[data-name="${CSS.escape(key)}"]`);
+    if (!card) {
+        card = document.createElement('div');
+        card.className = 'subagent-card';
+        card.dataset.name = key;
+        card.innerHTML = `
+            <div class="subagent-head">
+                <span class="subagent-spin"></span>
+                <span class="subagent-name">${escHtml(key)}</span>
+                <span class="spacer"></span>
+                <span class="subagent-state"></span>
+            </div>
+            <div class="subagent-task">${escHtml(info.task || '')}</div>
+            <div class="subagent-step mono"></div>`;
+        host.appendChild(card);
+    }
+    if (info.state) {
+        card.classList.toggle('done', info.state === 'done');
+        card.classList.toggle('failed', info.state === 'failed');
+        card.querySelector('.subagent-state').textContent =
+            info.state === 'running' ? '' : (info.state === 'done' ? '✓' : 'failed');
+        // The last thing it was doing is worth nothing once it has finished,
+        // and leaving it there makes a done card look like a stalled one.
+        if (info.state !== 'running') card.querySelector('.subagent-step').textContent = '';
+    }
+    document.getElementById('agent-log').scrollTop = 1e9;
+    return card;
+}
+
+function agentSubagentStep(wrap, step) {
+    const card = wrap.querySelector(`.subagent-card[data-name="${CSS.escape(step.name || '')}"]`);
+    if (!card) return;
+    const bare = String(step.tool || '').split('__').pop();
+    card.querySelector('.subagent-step').textContent =
+        `${bare}${step.detail ? ' ' + step.detail : ''}`;
+}
+
+// ===== A server the agent started and left running =====
+//
+// The one thing a coding agent does whose result is not text. Everything else
+// it does can be read in the transcript; "the app is running at
+// localhost:5173" is only useful if you can click it, and only honest if you
+// can also stop it — a process holding one of your ports with no visible way
+// to kill it is worse than no feature.
+//
+// One card per server, replaced in place, so a restart updates the card
+// rather than leaving a trail of dead addresses that all look live.
+
+function agentServerCard(wrap, server) {
+    let card = wrap.querySelector(`.server-card[data-server="${server.id}"]`);
+    if (!card) {
+        card = document.createElement('div');
+        card.className = 'server-card';
+        card.dataset.server = server.id;
+        // Appended to the message, not to its body: the body's innerHTML is
+        // rewritten on every streamed chunk, so a card inside it lives until
+        // the next token.
+        wrap.appendChild(card);
+    }
+    const running = !!server.running;
+    const url = server.url || '';
+    card.classList.toggle('stopped', !running);
+    card.innerHTML = `
+        <div class="server-head">
+            <span class="server-dot ${running ? 'live' : 'dead'}"></span>
+            <span class="server-label">${escHtml(server.label || server.command || 'server')}</span>
+            <span class="spacer"></span>
+            ${running
+                ? `<button class="btn btn-ghost" onclick="stopAgentServer('${escHtml(server.id)}')">Stop</button>`
+                : `<span class="server-exit">exited ${escHtml(String(server.exit_code ?? '?'))}</span>`}
+        </div>
+        ${url && running
+            // Opened in the real browser rather than embedded. A dev server is
+            // the user's app, and an iframe inside a panel would break exactly
+            // the things they are trying to look at: its own devtools, its own
+            // storage origin, and any header it sets to refuse being framed.
+            ? `<a class="server-url" href="${escHtml(url)}" target="_blank" rel="noopener">${escHtml(url)}</a>`
+            : ''}
+        <div class="server-cmd mono">${escHtml(server.command || '')}</div>
+        <details class="server-logs">
+            <summary>Output</summary>
+            <pre class="server-log" id="server-log-${escHtml(server.id)}">loading…</pre>
+        </details>`;
+    const logs = card.querySelector('.server-logs');
+    logs.addEventListener('toggle', () => { if (logs.open) refreshServerLog(server.id); });
+    document.getElementById('agent-log').scrollTop = 1e9;
+    return card;
+}
+
+async function refreshServerLog(id) {
+    const host = document.getElementById(`server-log-${id}`);
+    if (!host) return;
+    try {
+        const data = await api(`/api/coder/servers/${id}/logs?lines=200`);
+        host.textContent = data.log || '(no output yet)';
+    } catch (err) {
+        host.textContent = 'could not read the log: ' + err;
+    }
+}
+
+async function stopAgentServer(id) {
+    const card = document.querySelector(`.server-card[data-server="${id}"]`);
+    try {
+        const stopped = await api(`/api/coder/servers/${id}/stop`, { method: 'POST' });
+        if (card) agentServerCard(card.parentElement, stopped);
+    } catch (err) {
+        // Said on the card itself. A failed stop is specifically the case
+        // where the user needs to know the process is still up, and a message
+        // anywhere else leaves a card sitting there showing a live dot with
+        // no hint that the button did nothing.
+        if (card) {
+            const head = card.querySelector('.server-head');
+            head.insertAdjacentHTML('beforeend',
+                `<span class="server-exit">could not stop it: ${escHtml(String(err))}</span>`);
+        }
+    }
+}
+
 // What the agent is looking at right now. Sending the open file with the task
 // is the difference between "fix this" working and needing to paste a path.
 function agentContext() {
@@ -2145,14 +2724,22 @@ async function sendAgentTask() {
     input.value = '';
     agentAttachments = [];
     renderAgentTray();
-    agentBubble('you', task + (attachments.length
+    agentBubble('you', (agentSkill ? `/${agentSkill.name} ` : '') + task + (attachments.length
         ? `\n[${attachments.map(a => a.name).join(', ')}]` : ''));
+    // Armed for one task, like chat. A skill that stayed on would quietly
+    // shape every later message in the panel with nothing on screen still
+    // saying so by the time it mattered.
+    const sentSkill = agentSkill;
+    clearAgentSkill();
 
     const { wrap, body } = agentBubble('agent', '');
     body.innerHTML = '<span class="caret">&nbsp;</span>';
     // What this turn actually did, so it can say so when it stops.
     const touched = new Set();
     let commandsRun = 0;
+    // The card waiting for its result. One tool runs at a time, so this is
+    // always the last card made — no ids needed, and none are sent.
+    let pendingCard = null;
     const send = document.getElementById('agent-send');
     const stop = document.getElementById('agent-stop');
     send.disabled = true;
@@ -2185,6 +2772,11 @@ async function sendAgentTask() {
                 // for. Single rather than multi: it may check a fact, not go
                 // researching instead of working.
                 search_mode: 'single',
+                // A skill armed from the startup panel. Chat has had this
+                // since skills existed; the Code tab had no way to invoke one,
+                // so a skill about how this project wants tests written could
+                // only be used by going to the chat tab to ask about code.
+                skill: sentSkill ? sentSkill.slug : null,
                 // This is the coding panel, so this turn gets the plan/act
                 // preamble and the workspace rules. Ordinary chat does not:
                 // one global coder_mode was being applied to every message in
@@ -2212,10 +2804,20 @@ async function sendAgentTask() {
 
                 if (payload.conversation_id) agentConversationId = payload.conversation_id;
                 if (payload.tool) {
-                    agentTrace(wrap, `→ ${payload.tool.name}(${
-                        Object.entries(payload.tool.args || {})
-                            .map(([k, v]) => `${k}=${String(v).slice(0, 60)}`).join(', ')})`,
-                        payload.tool.rejected ? 'rejected' : '');
+                    // A card for the ones whose result you would want to check,
+                    // a trace line for the rest. The tool name and its
+                    // arguments squeezed onto one truncated line is a fine
+                    // record of a search and a useless record of an edit.
+                    const bareName = String(payload.tool.name).split('__').pop();
+                    if (CARD_TOOLS.has(bareName)) {
+                        pendingCard = agentToolCard(wrap, payload.tool);
+                    } else {
+                        pendingCard = null;
+                        agentTrace(wrap, `→ ${payload.tool.name}(${
+                            Object.entries(payload.tool.args || {})
+                                .map(([k, v]) => `${k}=${String(v).slice(0, 60)}`).join(', ')})`,
+                            payload.tool.rejected ? 'rejected' : '');
+                    }
                     // What the turn changed, for the summary at the end. A
                     // rejected call did not happen and must not be counted.
                     if (!payload.tool.rejected) {
@@ -2226,7 +2828,12 @@ async function sendAgentTask() {
                     }
                 }
                 if (payload.tool_result) {
-                    agentTrace(wrap, `← ${String(payload.tool_result.result).slice(0, 300)}`, 'result');
+                    if (pendingCard) {
+                        agentToolCardResult(pendingCard, payload.tool_result.result);
+                        pendingCard = null;
+                    } else {
+                        agentTrace(wrap, `← ${String(payload.tool_result.result).slice(0, 300)}`, 'result');
+                    }
                 }
                 // An approval prompt has to be answerable from here, or the
                 // agent silently blocks until it times out.
@@ -2247,6 +2854,15 @@ async function sendAgentTask() {
                 if (payload.questions) {
                     agentQuestions(wrap, payload.questions, payload.blocking);
                 }
+                // A server that is now running. Its own card rather than a
+                // line in the trace: it is the only thing in this panel that
+                // is still true after the turn ends, and the only one with a
+                // control on it.
+                if (payload.server) agentServerCard(wrap, payload.server);
+                // Four agents working is four cards ticking, not one long
+                // pause and then a wall of text.
+                if (payload.subagent) agentSubagentCard(wrap, payload.subagent);
+                if (payload.subagent_step) agentSubagentStep(wrap, payload.subagent_step);
                 // The steps this turn is working to, ticking as the tools
                 // actually touch them. Same component as chat and Research,
                 // from the same event.

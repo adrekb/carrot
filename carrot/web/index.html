@@ -611,6 +611,11 @@
           <span class="spacer"></span>
           <span class="git-chip hidden" id="git-chip" onclick="showCodePanel('git')"
                 title="Repository status"></span>
+          <!-- Which checkout the agent is working in. Hidden outside a git
+               repository, where the idea does not apply. -->
+          <select id="worktree-picker" class="worktree-picker hidden"
+                  title="Which checkout of this repository you are working in"
+                  onchange="pickWorktree(this.value)"></select>
           <span class="rules-chip hidden" id="rules-chip" title="Project rules are in effect">rules</span>
           <button class="btn btn-ghost" onclick="takeCheckpoint()"
                   title="Snapshot the workspace so everything after this can be undone in one step">Checkpoint</button>
@@ -711,6 +716,14 @@
             <button class="icon-btn" title="Attach a file or image"
                     onclick="document.getElementById('agent-file-input').click()">
               <svg class="ico"><use href="#i-file-plus"/></svg>
+            </button>
+            <!-- Scheduling lives next to the box you type in, because the
+                 moment you notice you have asked the same thing three
+                 mornings running is the moment to say "every morning". A form
+                 on a settings screen is a form nobody fills in. -->
+            <button class="icon-btn" title="Run this on a schedule instead"
+                    onclick="scheduleCurrentTask()">
+              <svg class="ico"><use href="#i-clock"/></svg>
             </button>
             <!-- The agent used to silently borrow whatever the chat composer
                  was set to, with nothing on screen saying so. A coding agent
@@ -1980,5 +1993,9 @@
 <script src="/js/studio.js"></script>
 <script src="/js/planner.js"></script>
 <script src="/js/ambient.js"></script>
+<!-- Last, and self-contained: it upgrades every <select> on the page by
+     listening at the document, including the ones the scripts above build
+     later, so nothing here has to load before it. -->
+<script src="/js/dropdown.js"></script>
 </body>
 </html>

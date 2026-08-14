@@ -493,10 +493,27 @@ def redact_arguments(arguments: Dict[str, Any]) -> Dict[str, Any]:
 INJECTION_SIGNALS = [
     (r"ignore\s+(all\s+)?(the\s+)?(previous|prior|above|earlier)\s+(instructions|prompts?|rules)",
      "tells the reader to ignore previous instructions"),
-    (r"disregard\s+(your|all|the)\s+(instructions|rules|system|guidelines)",
+    # One optional adjective, because "disregard your earlier rules" and
+    # "disregard all previous guidelines" are the ordinary phrasings and both
+    # walked straight through a pattern that demanded the noun come next.
+    (r"disregard\s+(your|all|the)\s+(\w+\s+)?(instructions|rules|system|guidelines)",
      "tells the reader to disregard its instructions"),
     (r"(you\s+are\s+now|from\s+now\s+on\s+you|act\s+as)\s+(a|an|the)\s",
      "tries to reassign the assistant's role"),
+    # Named jailbreak modes only. "You are now in edit mode" appears in real
+    # documentation, and flagging that would taint runs for reading a manual;
+    # "developer mode" and its siblings appear in exactly one kind of text.
+    (r"you\s+are\s+now\s+(in\s+)?(developer|dev|god|admin|debug|jailbreak|"
+     r"unrestricted|uncensored|dan)\s*mode",
+     "tries to put the reader into a 'mode' with no rules"),
+    # Aimed at this app's actual security control. Every other signal here is
+    # about the model's instructions; this one is about the approval gate,
+    # which is the thing standing between a hostile page and the user's disk.
+    (r"(approve|allow|permit|confirm|accept)\s+(every|all|any)\s+"
+     r"(action|request|tool|command|prompt)",
+     "asks for every action to be approved without review"),
+    (r"without\s+(asking|confirming|prompting)\s+(the\s+)?user",
+     "asks the reader to act without asking the user"),
     (r"(new|updated|revised)\s+(system\s+)?(instructions|prompt|directive)",
      "claims to carry new system instructions"),
     (r"(do\s+not|don'?t|never)\s+(tell|inform|mention\s+to|show)\s+(the\s+)?user",

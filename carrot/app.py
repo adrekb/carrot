@@ -63,6 +63,7 @@ from carrot import (
     markets as markets_mod,
     security as security_mod,
     proactive as proactive_mod,
+    scheduled as scheduled_mod,
     backup as backup_mod,
     policy as policy_mod,
     research as research_mod,
@@ -486,6 +487,7 @@ def _startup():
         pass
     vectors_mod.migrate_legacy_embeddings()
     dr_mod.start_scheduler()
+    scheduled_mod.start_scheduler()
     proactive_mod.start_watcher()
     if config.get_config().get("index_on_startup", False) and indexer_mod.index_dirs():
         indexer_mod.start_scan_async()

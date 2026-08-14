@@ -72,7 +72,11 @@ class TestAuthentication:
 
         # `==` on a secret returns early on the first wrong character, which is
         # measurable over enough requests.
-        source = (Path(__file__).resolve().parents[1] / "carrot" / "webhooks.py").read_text()
+        # Explicit encoding: without it this reads a UTF-8 source file as cp1252
+        # on Windows, and the first arrow or en dash in webhooks.py turns a
+        # constant-time assertion into a UnicodeDecodeError.
+        source = (Path(__file__).resolve().parents[1] / "carrot" / "webhooks.py").read_text(
+            encoding="utf-8")
         assert "hmac.compare_digest" in source
 
     def test_rotating_a_token_invalidates_the_old_one(self, hook):
@@ -357,7 +361,12 @@ class TestFiringOverHttp:
 class TestSettingsPanel:
     def read(self, *parts):
         from pathlib import Path
-        return Path(__file__).resolve().parents[1].joinpath("carrot", "web", *parts).read_text()
+
+        # Explicit encoding. Without it this reads a UTF-8 file as cp1252 on
+        # Windows, so the test's subject — whether a token is defined —
+        # stopped mattering the day somebody wrote an arrow in a comment.
+        return Path(__file__).resolve().parents[1].joinpath(
+            "carrot", "web", *parts).read_text(encoding="utf-8")
 
     def test_the_panel_exists(self):
         assert 'id="hooks-panel"' in self.read("index.html")

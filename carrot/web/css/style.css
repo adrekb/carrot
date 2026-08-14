@@ -1522,9 +1522,13 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 .si-sub { font-size: var(--text-sm); color: var(--muted); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .split-main { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
 
+/* Wraps rather than overflowing. Narrow, the open-file tabs and the four
+   buttons could not fit on one line and simply overlapped each other and the
+   text underneath — Run sitting on top of the empty-state sentence. */
 .editor-toolbar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
   padding: 10px 14px;
   border-bottom: 1px solid var(--border);
@@ -1543,9 +1547,13 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 .title-input:focus { outline: none; }
 .editor-status { font-size: var(--text-sm); color: var(--muted); white-space: nowrap; }
 .editor-words { font-size: var(--text-sm); color: var(--faint); white-space: nowrap; font-family: var(--mono); }
+/* In the flow, filling what is left, rather than absolutely positioned 52px
+   from the top of the pane. That 52px was the toolbar's height written down
+   as a number, and the moment the toolbar wrapped to two rows the empty-state
+   text was underneath it. */
 .editor-empty {
-  position: absolute;
-  inset: 52px 0 0 0;
+  flex: 1;
+  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -5002,16 +5010,57 @@ td, th, .si-sub, .small, .editor-status {
   outline: none;
   border-color: var(--accent-line);
 }
-.agent-compose-row { display: flex; align-items: center; gap: 8px; }
+/* Wraps, because this row is inside a panel the user can drag narrow and
+   there is no width at which "silently crush a control" is the right answer.
+   Send on a second line is legible; the model picker squeezed to a 10px
+   sliver is a control you cannot read, cannot hit, and would reasonably
+   conclude was broken. */
+.agent-compose-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .agent-compose-row .spacer { flex: 1; }
+/* The hint gives up its space first: it is the only thing in the row that is
+   commentary rather than a control. */
+#agent-context-hint {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* Narrow windows: the agent goes under the editor rather than squeezing it. */
 @media (max-width: 1200px) {
   .agent-side { width: 320px; }
 }
+/* Before the 900px block, not after it. Both match at 700px and both are one
+   id and one class, so source order decides — written the other way round,
+   the narrow rule below was silently overridden by this one and the tree
+   stayed a 200px column in a 400px window. */
+@media (max-width: 1200px) {
+  #view-code .split-side { width: 200px; }
+}
 @media (max-width: 900px) {
   #view-code .split { flex-wrap: wrap; }
   .agent-side { width: 100%; border-left: none; border-top: 1px solid var(--border); }
+  /* The file tree stops being a column. At this width it was taking 260 of
+     the 400 pixels the window had left after the nav, so the editor — the
+     thing the tab is for — got a strip too narrow to show a line of code,
+     and the toolbar buttons piled up on each other inside it. A short
+     scrolling strip above the editor costs a fifth of the height and gives
+     the whole width back. */
+  #view-code .split-side {
+    width: 100%;
+    max-height: 30vh;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+  /* `flex: 1` means a basis of 0, and a zero-width item still "fits" on a
+     line that is already completely full — so the editor stayed on the tree's
+     row at zero pixels wide and overflowed off the right edge instead of
+     wrapping under it. A basis of 100% is what actually forces the new line. */
+  #view-code .split-main { flex: 1 0 100%; width: 100%; min-width: 0; min-height: 55vh; }
+  /* Both panes are full width now, so the split has to scroll as one column
+     rather than clipping whatever did not fit. */
+  #view-code .split { overflow-y: auto; }
 }
 
 /* The agent's tray sits inline above its box rather than floating over the
@@ -5441,7 +5490,13 @@ td, th, .si-sub, .small, .editor-status {
   font-family: var(--mono);
   font-size: var(--text-xs);
   padding: 4px 6px;
+  /* A floor as well as a ceiling. Without the floor this is a flex item with
+     nothing to stop it shrinking, and in a narrowed agent panel it went to a
+     sliver a few pixels wide — still there, still working, and impossible to
+     read or click. */
+  min-width: 110px;
   max-width: 150px;
+  text-overflow: ellipsis;
   cursor: pointer;
 }
 .agent-model-picker:hover { border-color: var(--border-hi); }
@@ -6065,3 +6120,401 @@ body #cmdbar:focus-within {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+
+/* ===== Select menus =====
+ *
+ * The popup the OS would have drawn, redrawn as part of the app. See
+ * js/dropdown.js for why it is a replacement rather than a restyling: an
+ * open native select is not in the document and no rule here can reach it.
+ *
+ * A card, because that is what every other floating surface in the app is —
+ * the same radius, the same border, the same shadow as a popover. A menu that
+ * agreed with nothing on screen was the whole complaint. */
+/* A floor under every select in the app, whatever panel it is in. A select is
+ * now the button that opens the menu, and a button nobody can hit is worse
+ * than an ugly one — the Code composer's picker had shrunk to a few pixels in
+ * a narrow pane, which read as "the menu does not work" and was indeed
+ * indistinguishable from it. */
+select { min-width: 5ch; }
+
+.dd-menu {
+  position: fixed;
+  z-index: 4000;
+  overflow-y: auto;
+  padding: var(--s-2);
+  background: var(--card);
+  border: 1px solid var(--border-hi);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lg);
+  font-family: var(--sans);
+  font-size: var(--text-sm);
+  color: var(--text);
+}
+.dd-item {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-4);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+/* One highlight, driven by JS. Hover and keyboard both set `.active`, so the
+ * mouse pointer resting somewhere cannot leave two rows looking chosen while
+ * you arrow past it. */
+.dd-item.active { background: var(--card3); }
+.dd-item.on { color: var(--accent); }
+.dd-item.disabled { color: var(--faint); cursor: default; }
+/* Fixed-width, so the labels line up whether or not a row is ticked. */
+.dd-mark {
+  flex: none;
+  width: 14px;
+  color: var(--accent);
+  font-size: var(--text-xs);
+}
+.dd-text { overflow: hidden; text-overflow: ellipsis; }
+.dd-group {
+  padding: var(--s-4) var(--s-4) var(--s-2);
+  font-size: var(--text-2xs);
+  font-weight: var(--w-medium);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.dd-group:first-child { padding-top: var(--s-2); }
+/* The trigger stays lit while its menu is open — without it the control goes
+ * back to looking idle the moment the popup takes over, which reads as the
+ * click having missed. */
+select.dd-open { border-color: var(--accent-line); }
+
+/* ===== A server the agent left running =====
+ *
+ * The only thing in the agent panel that is still true after the turn ends,
+ * and the only one with a control on it — so it is a card with a live dot and
+ * a Stop button, not a line of trace that scrolls away above the next task. */
+.server-card {
+  margin: var(--s-4) 0;
+  padding: var(--s-4);
+  background: var(--card2);
+  border: 1px solid var(--border-hi);
+  border-radius: var(--r-lg);
+}
+.server-card.stopped { opacity: 0.7; }
+.server-head { display: flex; align-items: center; gap: var(--s-3); }
+.server-head .spacer { flex: 1; }
+.server-label {
+  font-weight: var(--w-semi);
+  font-size: var(--text-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Green while it is serving, muted once it is not. The dot is the only thing
+ * on the card that answers the question you actually have when you glance at
+ * it, which is whether the thing is still up. */
+.server-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
+.server-dot.live { background: var(--green); }
+.server-dot.dead { background: var(--faint); }
+.server-exit { font-size: var(--text-xs); color: var(--faint); font-family: var(--mono); }
+.server-url {
+  display: inline-block;
+  margin-top: var(--s-3);
+  font-family: var(--mono);
+  font-size: var(--text-sm);
+  color: var(--accent);
+  word-break: break-all;
+}
+.server-url:hover { text-decoration: underline; }
+.server-cmd {
+  margin-top: var(--s-2);
+  font-size: var(--text-2xs);
+  color: var(--faint);
+  word-break: break-all;
+}
+.server-logs { margin-top: var(--s-3); }
+.server-logs > summary {
+  cursor: pointer;
+  font-size: var(--text-xs);
+  color: var(--muted);
+  list-style: none;
+}
+.server-logs > summary:hover { color: var(--accent); }
+/* Capped and scrolling: a watch-mode bundler's output is not a thing that
+   should push the composer off the bottom of the panel. */
+.server-log {
+  margin-top: var(--s-2);
+  max-height: 220px;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: var(--text-2xs);
+  color: var(--muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ===== The Code tab's startup panel =====
+ *
+ * It used to be a greeting. This is the screen you look at most often in this
+ * tab, and a greeting is the least useful thing that can occupy it — the
+ * questions you actually have when you sit down are where am I, what is still
+ * running from last time, and what does this thing already know how to do. */
+.hello-where {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding-bottom: var(--s-4);
+  border-bottom: 1px solid var(--border);
+}
+.hello-where .ico { flex: none; color: var(--faint); }
+.hello-root {
+  font-size: var(--text-xs);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;      /* a long path truncates at the front, not the end */
+  text-align: left;
+}
+.hello-branch {
+  flex: none;
+  font-size: var(--text-2xs);
+  color: var(--accent);
+  background: var(--accent-soft);
+  padding: 2px var(--s-3);
+  border-radius: var(--r-pill);
+}
+.hello-block { margin-top: var(--s-5); }
+.hello-title {
+  font-size: var(--text-2xs);
+  font-weight: var(--w-medium);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-bottom: var(--s-3);
+}
+.hello-server {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-2) 0;
+  font-size: var(--text-sm);
+}
+.hello-server .spacer { flex: 1; }
+.hello-server a { color: var(--accent); font-family: var(--mono); word-break: break-all; }
+.hello-skill {
+  display: inline-block;
+  margin: 0 var(--s-2) var(--s-2) 0;
+  padding: var(--s-2) var(--s-3);
+  background: var(--card2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  color: var(--text);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+.hello-skill:hover { border-color: var(--accent-line); color: var(--accent); }
+.hello-modes { margin-top: var(--s-5); }
+/* The armed skill, in the composer row next to the model picker — the row
+   where everything else that changes what the next message does already
+   lives. A skill armed and not visible is the same bug as a model set and
+   not visible, which this panel has already had once. */
+.agent-skill-chip {
+  flex: none;
+  padding: 3px var(--s-3);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-pill);
+  color: var(--accent);
+  font-size: var(--text-2xs);
+  cursor: pointer;
+}
+
+/* ===== What the agent did, as cards =====
+ *
+ * Every tool call used to be two lines of trace — `→ edit_file(path=…,
+ * edits=<<<<<<< SEARCH…)` and `← ok` — which is a transcript of the machinery
+ * and has the two properties you least want in the thing you read while
+ * deciding whether to trust a change: the filename buried mid-line, and the
+ * edit itself truncated at sixty characters. Six edits in a row were six
+ * identical-looking lines.
+ *
+ * Only the tools whose result you would want to check get a card. A panel
+ * where everything is a card is a panel where nothing stands out. */
+.tool-card {
+  margin: var(--s-4) 0;
+  background: var(--card2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+}
+.tool-card.rejected { opacity: 0.6; }
+.tool-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-4);
+  font-size: var(--text-xs);
+}
+.tool-head .spacer { flex: 1; }
+.tool-sigil { color: var(--accent); flex: none; }
+.tool-verb {
+  flex: none;
+  color: var(--faint);
+  text-transform: uppercase;
+  font-size: var(--text-2xs);
+  letter-spacing: 0.04em;
+}
+.tool-title {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+/* The two numbers you look for first in any diff, so they sit next to the
+   filename rather than being counted off the lines below. */
+.tool-plus { flex: none; color: var(--green); font-family: var(--mono); }
+.tool-minus { flex: none; color: var(--red); font-family: var(--mono); }
+.tool-state { flex: none; color: var(--faint); font-size: var(--text-2xs); }
+.tool-state.good { color: var(--green); }
+.tool-state.bad { color: var(--red); }
+.tool-diff, .tool-output {
+  max-height: 260px;
+  overflow: auto;
+  margin: 0;
+  padding: var(--s-3) 0;
+  border-top: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: var(--text-2xs);
+  line-height: 1.5;
+}
+.tool-output { padding: var(--s-3) var(--s-4); color: var(--muted); white-space: pre-wrap; }
+/* Tinted rows rather than +/- characters at the start of the line: the
+   characters are indistinguishable from the code when the code is a diff of
+   a diff, which is exactly what an edit to this file looks like. */
+.dl { padding: 0 var(--s-4); white-space: pre-wrap; word-break: break-word; }
+.dl.add { background: rgba(87, 209, 160, 0.10); color: var(--text); }
+.dl.del { background: rgba(242, 115, 107, 0.10); color: var(--muted); }
+.dl.ctx { color: var(--faint); }
+.dl.more { color: var(--faint); font-style: italic; padding-top: var(--s-2); }
+
+/* ===== Investigations running side by side =====
+ *
+ * Without cards a parallel explore is the worst-looking thing in the panel:
+ * nothing for thirty seconds, then four paragraphs at once, which reads as a
+ * hang followed by a wall. */
+.subagent-set { margin: var(--s-4) 0; display: grid; gap: var(--s-3); }
+.subagent-card {
+  padding: var(--s-3) var(--s-4);
+  background: var(--card2);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--accent-line);
+  border-radius: var(--r-sm);
+}
+.subagent-card.done { border-left-color: var(--green); }
+.subagent-card.failed { border-left-color: var(--red); }
+.subagent-head { display: flex; align-items: center; gap: var(--s-3); }
+.subagent-head .spacer { flex: 1; }
+.subagent-name { font-size: var(--text-sm); font-weight: var(--w-semi); }
+.subagent-task { font-size: var(--text-xs); color: var(--muted); margin-top: 2px; }
+/* What it is doing right now, in the space the finished card gives back.
+   A card that says only "working" for thirty seconds is indistinguishable
+   from one that has hung. */
+.subagent-step {
+  font-size: var(--text-2xs);
+  color: var(--faint);
+  margin-top: var(--s-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-height: 1em;
+}
+.subagent-state { flex: none; color: var(--green); font-size: var(--text-xs); }
+.subagent-card.failed .subagent-state { color: var(--red); }
+.subagent-spin {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1.5px solid var(--accent);
+  border-top-color: transparent;
+  animation: spin 0.9s linear infinite;
+}
+/* Stops when it is finished. A spinner on a completed card is the single
+   most common way a UI lies about what it is doing. */
+.subagent-card.done .subagent-spin,
+.subagent-card.failed .subagent-spin {
+  animation: none;
+  border-color: var(--border-hi);
+}
+/* No spinner existed in this stylesheet — every other wait in the app is a
+   skeleton or a caret. This is the one place where several things are
+   genuinely in flight at once and the question is which of them is still
+   going, which a skeleton cannot answer. */
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ===== Standing appointments =====
+ *
+ * Listed on the screen you pass anyway. Work that happens without being asked
+ * has to be visible somewhere, or the first you hear of it is a notification
+ * about a task you had forgotten making. */
+.sched-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-2) 0;
+}
+.sched-row.off { opacity: 0.55; }
+.sched-row.running { opacity: 0.7; }
+.sched-body { flex: 1; min-width: 0; }
+.sched-prompt {
+  font-size: var(--text-sm);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sched-when { font-size: var(--text-2xs); color: var(--faint); }
+/* A switch, not a checkbox: this is the control that decides whether
+   something runs while you are asleep, and it should look like one. */
+.sched-toggle {
+  flex: none;
+  width: 30px;
+  height: 17px;
+  padding: 0;
+  border: 1px solid var(--border-hi);
+  border-radius: var(--r-pill);
+  background: var(--card3);
+  cursor: pointer;
+  position: relative;
+}
+.sched-toggle::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--faint);
+  transition: transform 0.15s var(--ease), background 0.15s var(--ease);
+}
+.sched-toggle.on { background: var(--accent-soft); border-color: var(--accent-line); }
+.sched-toggle.on::after { transform: translateX(13px); background: var(--accent); }
+
+/* Which checkout the agent is working in. Sits with the branch chip because
+   they answer the same question — where am I — and the mistake this exists
+   to prevent is committing an experiment to main, which is made by not
+   knowing the answer. */
+.worktree-picker {
+  background: var(--card2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: var(--text-2xs);
+  padding: 3px 6px;
+  max-width: 180px;
+  cursor: pointer;
+}
+.worktree-picker:hover { border-color: var(--border-hi); }

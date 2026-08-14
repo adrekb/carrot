@@ -595,6 +595,162 @@ def _tool_run_command(command: str, **_) -> str:
     return f"[{status}]\n{result['output'][:8000]}"
 
 
+def _tool_explore_in_parallel(investigations: Any = None, emit=None, **_) -> str:
+    """Several read-only investigations of the workspace, at the same time.
+
+    Understanding an unfamiliar project is mostly breadth, and breadth done in
+    one conversation is done in sequence — each question's file dumps pushed
+    into the same context window until the first answer has been compacted
+    into a sentence. Split up, each part keeps its own context and returns a
+    paragraph instead of the forty files it read.
+    """
+    from . import subagents as subagents_mod
+
+    if not subagents_mod.enabled():
+        return ("error: parallel investigation is switched off for this model "
+                "(it is off by default for on-device models, where four "
+                "conversations share one GPU and simply queue). Investigate "
+                "the parts yourself, one at a time.")
+
+    jobs: List[Dict[str, str]] = []
+    for item in (investigations or []):
+        if isinstance(item, dict) and str(item.get("task", "")).strip():
+            jobs.append({"name": str(item.get("name", "")), "task": str(item["task"])})
+        elif isinstance(item, str) and item.strip():
+            jobs.append({"name": "", "task": item})
+    if not jobs:
+        return "error: give at least one investigation, each with its own question"
+
+    run_child, tools = subagents_mod.read_only_runner()
+
+    return subagents_mod.explore(jobs, run_child, tools, emit or (lambda e: None),
+                                 context_note=f"The workspace is {workspace_root()}.")
+
+
+def _tool_list_skills(**_) -> str:
+    from . import skills as skills_mod
+
+    found = skills_mod.list_skills()
+    if not found:
+        return "no skills yet"
+    return "\n".join(f"- {s['slug']}: {s['name']} — {s['description']}" for s in found)
+
+
+def _tool_read_skill(slug: str, **_) -> str:
+    from . import skills as skills_mod
+
+    skill = skills_mod.get_skill(slug)
+    if not skill:
+        return f"no skill called {slug}"
+    return (f"name: {skill['name']}\ndescription: {skill['description']}\n\n"
+            f"{skill['instructions']}")
+
+
+def _tool_save_skill(name: str, description: str, instructions: str,
+                     slug: str = "", **_) -> str:
+    """Write or rewrite a skill — instructions this agent will later follow.
+
+    This is the one tool whose output is future input, and that is what makes
+    it different from writing any other file. A skill is injected into the
+    model when it is invoked, so text that lands here is text the agent obeys
+    in some later conversation, long after whatever suggested it has scrolled
+    away. A page that talks the agent into saving a "skill" has not won an
+    argument once — it has written itself into the assistant.
+
+    So it goes through the approval gate like every other mutating tool, the
+    prompt says plainly that it is editing its own instructions, and the
+    content is screened on the way in exactly like a fetched page: an
+    instruction the agent picked up from a source rather than from the user
+    is the specific thing being guarded against.
+    """
+    from . import policy, skills as skills_mod
+
+    name = (name or "").strip()
+    instructions = (instructions or "").strip()
+    if not name or not instructions:
+        return "error: a skill needs a name and instructions"
+    if len(instructions) > 20000:
+        return "error: that is too long for a skill — keep it to the instructions themselves"
+
+    existing = skills_mod.get_skill(slug) if slug else None
+    screening = policy.screen_untrusted(instructions, origin="a skill being written")
+    if screening.get("tainted"):
+        # Refused rather than saved-with-a-warning. A warning on a skill is
+        # seen once, at write time; the instructions are read every time it
+        # runs, by which point nobody remembers there was a warning.
+        #
+        # The user is not blocked by this — they can write anything they like
+        # in the skills editor. What is blocked is the agent writing it after
+        # reading a page, which is the case this cannot tell apart from the
+        # legitimate one and therefore has to refuse.
+        signals = "; ".join(s["signal"] for s in screening.get("signals", []))
+        return (f"error: refused to save this skill — the instructions read as an attempt "
+                f"to give instructions ({signals or 'prompt-injection patterns'}). A skill "
+                "is followed later without being reviewed again. If this is genuinely what "
+                "the user wants, they can write it themselves in Settings → Skills.")
+
+    saved = skills_mod.save_skill(name, (description or "").strip(), instructions,
+                                  slug=slug or None)
+    verb = "updated" if existing else "created"
+    return (f"{verb} skill '{saved['name']}' ({saved['slug']}). "
+            "It is available the next time it is invoked.")
+
+
+def _tool_start_server(command: str, label: str = "", emit=None, **_) -> str:
+    """Start a dev server and hand back the address it prints.
+
+    The one thing `run_command` cannot do. `npm run dev` never returns, so
+    through that tool it produced a minute of silence, a timeout, and an agent
+    that concluded the project would not start.
+    """
+    from . import servers as servers_mod
+
+    started = servers_mod.start(command, cwd=workspace_root(), label=label)
+    if started.get("error"):
+        return f"[failed] {started['error']}"
+
+    settled = servers_mod.wait_for_url(started["id"])
+    if emit:
+        # The card in the Code tab is built from this. Sent as its own event
+        # rather than left in the tool's text, because a URL the user is meant
+        # to click should not arrive as a sentence inside a transcript.
+        emit({"server": settled})
+
+    if not settled.get("running"):
+        tail = servers_mod.logs(started["id"], lines=25).get("log", "")
+        return (f"[exited {settled.get('exit_code')}] the server stopped on its own.\n{tail}")
+    if settled.get("url"):
+        return (f"[running] {settled['url']} (server {settled['id']}). "
+                "It keeps running until you stop it with stop_server.")
+    tail = servers_mod.logs(started["id"], lines=15).get("log", "")
+    return (f"[running] server {settled['id']} started but has not printed an address yet.\n{tail}")
+
+
+def _tool_server_logs(server_id: str = "", lines: int = 80, **_) -> str:
+    from . import servers as servers_mod
+
+    if not server_id:
+        running = [s for s in servers_mod.list_servers() if s["running"]]
+        if not running:
+            return "no servers are running"
+        server_id = running[-1]["id"]
+    result = servers_mod.logs(server_id, lines=lines)
+    if result.get("error"):
+        return result["error"]
+    state = "running" if result["running"] else f"exited {result['exit_code']}"
+    return f"[{state}] {result['command']}\n{result.get('log', '') or '(no output yet)'}"
+
+
+def _tool_stop_server(server_id: str = "", **_) -> str:
+    from . import servers as servers_mod
+
+    if not server_id:
+        stopped = servers_mod.stop_all()
+        return f"stopped {stopped} server(s)" if stopped else "no servers were running"
+    result = servers_mod.stop(server_id)
+    return result.get("error") or f"stopped {result['command']}"
+
+
 def _tool_search_memory(query: str, **_) -> str:
     """Search memory, in whatever workspace the user is currently in.
 
@@ -1231,6 +1387,123 @@ TOOLS: Dict[str, Dict[str, Any]] = {
             "required": ["command"],
         },
     },
+    # Not mutating: everything underneath it is a read. It is still the most
+    # expensive tool here — four conversations from one call — which is why
+    # the description says when it is worth it and the handler refuses when
+    # parallelism would only queue.
+    "explore_in_parallel": {
+        "handler": _tool_explore_in_parallel,
+        "mutating": False,
+        "risk": "low",
+        "wants_emit": True,
+        "description": ("Investigate several independent parts of the codebase at once, each "
+                        "by its own read-only agent, and get back one written answer per part. "
+                        "Use it to understand an unfamiliar project or to answer a question "
+                        "that spans areas that have nothing to say to each other. Do not use "
+                        "it for one question, or for anything that changes files."),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "investigations": {
+                    "type": "array",
+                    "description": "Two to four independent questions, each with a short name",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string", "description": "e.g. Database and Config"},
+                            "task": {"type": "string", "description": "The question this agent answers"},
+                        },
+                        "required": ["task"],
+                    },
+                },
+            },
+            "required": ["investigations"],
+        },
+    },
+    "list_skills": {
+        "handler": _tool_list_skills,
+        "mutating": False,
+        "risk": "low",
+        "description": "List the skills available — reusable instruction packs the user has saved.",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+    },
+    "read_skill": {
+        "handler": _tool_read_skill,
+        "mutating": False,
+        "risk": "low",
+        "description": "Read a skill's full instructions, by slug. Do this before editing one.",
+        "parameters": {
+            "type": "object",
+            "properties": {"slug": {"type": "string"}},
+            "required": ["slug"],
+        },
+    },
+    # The only tool whose output is future input, which is why it is "high"
+    # rather than the "medium" that writing one small file would suggest.
+    # Everything else the agent writes is read by a person; this is read by
+    # the agent, later, as instructions.
+    "save_skill": {
+        "handler": _tool_save_skill,
+        "mutating": True,
+        "risk": "high",
+        "description": ("Create or update a skill: instructions you will follow later when it "
+                        "is invoked. Use it when the user teaches you a way of working they "
+                        "will want again. Pass an existing slug to edit rather than duplicate."),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "description": {"type": "string", "description": "One line: when to use this"},
+                "instructions": {"type": "string", "description": "The instructions themselves"},
+                "slug": {"type": "string", "description": "Existing slug to overwrite, empty to create"},
+            },
+            "required": ["name", "instructions"],
+        },
+    },
+    # Same risk and the same approval gate as run_command, because it is
+    # run_command — the only difference is that nobody waits for it.
+    "start_server": {
+        "handler": _tool_start_server,
+        "mutating": True,
+        "risk": "high",
+        "wants_emit": True,
+        "description": ("Start a long-running process in the workspace (a dev server, a watcher) "
+                        "and return the address it prints. Use this instead of run_command for "
+                        "anything that does not exit on its own."),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "description": "e.g. npm run dev"},
+                "label": {"type": "string", "description": "Short name for this server"},
+            },
+            "required": ["command"],
+        },
+    },
+    "server_logs": {
+        "handler": _tool_server_logs,
+        "mutating": False,
+        "risk": "low",
+        "description": "Read the output of a running server. This is where its stack traces are.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "server_id": {"type": "string", "description": "Empty for the most recent server"},
+                "lines": {"type": "integer", "description": "How many lines from the end"},
+            },
+            "required": [],
+        },
+    },
+    "stop_server": {
+        "handler": _tool_stop_server,
+        "mutating": True,
+        "risk": "medium",
+        "description": "Stop a server started with start_server. Empty id stops all of them.",
+        "parameters": {
+            "type": "object",
+            "properties": {"server_id": {"type": "string"}},
+            "required": [],
+        },
+    },
     "search_memory": {
         "handler": _tool_search_memory,
         "mutating": False,
@@ -1726,6 +1999,16 @@ def _summarize_call(name: str, arguments: Dict[str, Any]) -> str:
         return f"Write {len(arguments.get('content', ''))} characters to {arguments.get('path', '?')}"
     if name == "run_command":
         return f"Run: {arguments.get('command', '?')}"
+    if name == "start_server":
+        # Says it keeps running, because that is the part of this the approval
+        # is actually about — the command itself looks like any other.
+        return f"Start and leave running: {arguments.get('command', '?')}"
+    if name == "save_skill":
+        # Names what it really is. "Save skill: Code Review" sounds like
+        # filing a note; the thing being approved is a standing instruction
+        # this agent will follow in conversations that have not happened yet.
+        return (f"Write its own standing instructions — skill "
+                f"'{arguments.get('name', '?')}' ({len(arguments.get('instructions', ''))} chars)")
     if name == "create_reminder":
         return f"Create reminder: {arguments.get('title', '?')}"
     if name == "create_note":

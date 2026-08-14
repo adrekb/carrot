@@ -143,6 +143,166 @@ async def rules():
     return {"rules": text, "files": list(coder_mod.RULE_FILES)}
 
 
+# ===== Worktrees =====
+#
+# "Try this refactor" and "keep working" are the same directory otherwise, so
+# the agent's edits land on top of whatever you had open and undoing them
+# means undoing yours too.
+
+class WorktreeRequest(BaseModel):
+    branch: str
+    path: str = ""
+    # Switching is the point — a worktree you have to go and open by hand is a
+    # directory, not a feature — but it is still a separate decision from
+    # making one, and a caller scripting this may not want it.
+    switch: bool = True
+
+
+@router.get("/worktrees")
+async def list_worktrees():
+    from carrot import gitops
+
+    root = workspace_root()
+    if not gitops.is_repo(root):
+        return {"worktrees": [], "repo": False, "current": root}
+    try:
+        return {"worktrees": gitops.worktrees(root), "repo": True, "current": root}
+    except gitops.GitError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/worktrees")
+async def create_worktree(req: WorktreeRequest):
+    from carrot import gitops
+    from carrot.files_api import set_files_root, RootRequest
+
+    try:
+        made = gitops.add_worktree(workspace_root(), req.branch, req.path)
+    except gitops.GitError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if req.switch:
+        await set_files_root(RootRequest(root=made["path"]))
+    return {**made, "switched": req.switch}
+
+
+@router.delete("/worktrees")
+async def drop_worktree(path: str):
+    from carrot import gitops
+
+    try:
+        return gitops.remove_worktree(workspace_root(), path)
+    except gitops.GitError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+# ===== Tasks that run on a schedule =====
+#
+# In the coder API because the work they do is coding work — "what changed in
+# the repo yesterday" is a question about a workspace — and because the Code
+# tab is where they are listed and switched off.
+
+class ScheduledTaskRequest(BaseModel):
+    prompt: str
+    schedule: str = "daily"
+    at: str = "09:00"
+    weekday: str = "monday"
+
+
+class ScheduledTaskPatch(BaseModel):
+    prompt: Optional[str] = None
+    schedule: Optional[str] = None
+    at: Optional[str] = None
+    weekday: Optional[str] = None
+    enabled: Optional[bool] = None
+
+
+@router.get("/scheduled")
+async def list_scheduled():
+    from carrot import scheduled as scheduled_mod
+
+    return {"tasks": scheduled_mod.list_tasks()}
+
+
+@router.post("/scheduled")
+async def create_scheduled(req: ScheduledTaskRequest):
+    from carrot import scheduled as scheduled_mod
+
+    try:
+        return scheduled_mod.create(req.prompt, req.schedule, req.at, req.weekday)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.patch("/scheduled/{task_id}")
+async def patch_scheduled(task_id: str, req: ScheduledTaskPatch):
+    from carrot import scheduled as scheduled_mod
+
+    fields = {k: v for k, v in req.model_dump().items() if v is not None}
+    task = scheduled_mod.update(task_id, **fields)
+    if not task:
+        raise HTTPException(status_code=404, detail="no such scheduled task")
+    return task
+
+
+@router.delete("/scheduled/{task_id}")
+async def delete_scheduled(task_id: str):
+    from carrot import scheduled as scheduled_mod
+
+    if not scheduled_mod.delete(task_id):
+        raise HTTPException(status_code=404, detail="no such scheduled task")
+    return {"deleted": task_id}
+
+
+@router.post("/scheduled/{task_id}/run")
+async def run_scheduled_now(task_id: str):
+    """Run it this second, without waiting for its slot.
+
+    The only way to find out whether a task you have written does what you
+    meant is to run it, and waiting until 09:00 tomorrow to discover it was
+    phrased badly is not a feedback loop anyone will use.
+    """
+    from carrot import scheduled as scheduled_mod
+
+    task = scheduled_mod.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="no such scheduled task")
+    return scheduled_mod.run_task(task)
+
+
+# ===== Servers the agent left running =====
+#
+# The panel needs to be able to answer "what is running right now" without
+# having watched the stream that started it. A server outlives the turn that
+# started it, and frequently the conversation too — reloading the page must
+# not lose the user's only handle on a process holding one of their ports.
+
+@router.get("/servers")
+async def list_servers():
+    from carrot import servers as servers_mod
+
+    return {"servers": servers_mod.list_servers()}
+
+
+@router.get("/servers/{server_id}/logs")
+async def server_logs(server_id: str, lines: int = 200):
+    from carrot import servers as servers_mod
+
+    result = servers_mod.logs(server_id, lines=lines)
+    if result.get("error"):
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
+@router.post("/servers/{server_id}/stop")
+async def stop_server(server_id: str):
+    from carrot import servers as servers_mod
+
+    result = servers_mod.stop(server_id)
+    if result.get("error"):
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
 # ===== Checkpoints =====
 
 @router.get("/checkpoints")
