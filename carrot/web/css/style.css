@@ -6397,3 +6397,58 @@ select.dd-open { border-color: var(--accent-line); }
 .dl.del { background: rgba(242, 115, 107, 0.10); color: var(--muted); }
 .dl.ctx { color: var(--faint); }
 .dl.more { color: var(--faint); font-style: italic; padding-top: var(--s-2); }
+
+/* ===== Investigations running side by side =====
+ *
+ * Without cards a parallel explore is the worst-looking thing in the panel:
+ * nothing for thirty seconds, then four paragraphs at once, which reads as a
+ * hang followed by a wall. */
+.subagent-set { margin: var(--s-4) 0; display: grid; gap: var(--s-3); }
+.subagent-card {
+  padding: var(--s-3) var(--s-4);
+  background: var(--card2);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--accent-line);
+  border-radius: var(--r-sm);
+}
+.subagent-card.done { border-left-color: var(--green); }
+.subagent-card.failed { border-left-color: var(--red); }
+.subagent-head { display: flex; align-items: center; gap: var(--s-3); }
+.subagent-head .spacer { flex: 1; }
+.subagent-name { font-size: var(--text-sm); font-weight: var(--w-semi); }
+.subagent-task { font-size: var(--text-xs); color: var(--muted); margin-top: 2px; }
+/* What it is doing right now, in the space the finished card gives back.
+   A card that says only "working" for thirty seconds is indistinguishable
+   from one that has hung. */
+.subagent-step {
+  font-size: var(--text-2xs);
+  color: var(--faint);
+  margin-top: var(--s-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-height: 1em;
+}
+.subagent-state { flex: none; color: var(--green); font-size: var(--text-xs); }
+.subagent-card.failed .subagent-state { color: var(--red); }
+.subagent-spin {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1.5px solid var(--accent);
+  border-top-color: transparent;
+  animation: spin 0.9s linear infinite;
+}
+/* Stops when it is finished. A spinner on a completed card is the single
+   most common way a UI lies about what it is doing. */
+.subagent-card.done .subagent-spin,
+.subagent-card.failed .subagent-spin {
+  animation: none;
+  border-color: var(--border-hi);
+}
+/* No spinner existed in this stylesheet — every other wait in the app is a
+   skeleton or a caret. This is the one place where several things are
+   genuinely in flight at once and the question is which of them is still
+   going, which a skeleton cannot answer. */
+@keyframes spin { to { transform: rotate(360deg); } }

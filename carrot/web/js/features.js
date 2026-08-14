@@ -2375,6 +2375,62 @@ function agentToolCardResult(card, result) {
     }
 }
 
+// ===== Several investigations running at once =====
+//
+// One card per named investigation, spun up together and ticking off
+// independently. Without them a parallel explore is the worst-looking thing
+// in the panel: nothing at all for thirty seconds, then four paragraphs
+// arriving as one block, which reads as a hang followed by a wall.
+//
+// Keyed by name because that is what the events carry and what the user
+// sees. Two investigations sharing a name would share a card, which is the
+// right failure — they are the same question asked twice.
+
+function agentSubagentCard(wrap, info) {
+    let host = wrap.querySelector('.subagent-set');
+    if (!host) {
+        host = document.createElement('div');
+        host.className = 'subagent-set';
+        wrap.appendChild(host);
+    }
+    const key = info.name || 'investigation';
+    let card = host.querySelector(`.subagent-card[data-name="${CSS.escape(key)}"]`);
+    if (!card) {
+        card = document.createElement('div');
+        card.className = 'subagent-card';
+        card.dataset.name = key;
+        card.innerHTML = `
+            <div class="subagent-head">
+                <span class="subagent-spin"></span>
+                <span class="subagent-name">${escHtml(key)}</span>
+                <span class="spacer"></span>
+                <span class="subagent-state"></span>
+            </div>
+            <div class="subagent-task">${escHtml(info.task || '')}</div>
+            <div class="subagent-step mono"></div>`;
+        host.appendChild(card);
+    }
+    if (info.state) {
+        card.classList.toggle('done', info.state === 'done');
+        card.classList.toggle('failed', info.state === 'failed');
+        card.querySelector('.subagent-state').textContent =
+            info.state === 'running' ? '' : (info.state === 'done' ? '✓' : 'failed');
+        // The last thing it was doing is worth nothing once it has finished,
+        // and leaving it there makes a done card look like a stalled one.
+        if (info.state !== 'running') card.querySelector('.subagent-step').textContent = '';
+    }
+    document.getElementById('agent-log').scrollTop = 1e9;
+    return card;
+}
+
+function agentSubagentStep(wrap, step) {
+    const card = wrap.querySelector(`.subagent-card[data-name="${CSS.escape(step.name || '')}"]`);
+    if (!card) return;
+    const bare = String(step.tool || '').split('__').pop();
+    card.querySelector('.subagent-step').textContent =
+        `${bare}${step.detail ? ' ' + step.detail : ''}`;
+}
+
 // ===== A server the agent started and left running =====
 //
 // The one thing a coding agent does whose result is not text. Everything else
@@ -2613,6 +2669,10 @@ async function sendAgentTask() {
                 // is still true after the turn ends, and the only one with a
                 // control on it.
                 if (payload.server) agentServerCard(wrap, payload.server);
+                // Four agents working is four cards ticking, not one long
+                // pause and then a wall of text.
+                if (payload.subagent) agentSubagentCard(wrap, payload.subagent);
+                if (payload.subagent_step) agentSubagentStep(wrap, payload.subagent_step);
                 // The steps this turn is working to, ticking as the tools
                 // actually touch them. Same component as chat and Research,
                 // from the same event.

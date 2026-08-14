@@ -595,6 +595,57 @@ def _tool_run_command(command: str, **_) -> str:
     return f"[{status}]\n{result['output'][:8000]}"
 
 
+def _tool_explore_in_parallel(investigations: Any = None, emit=None, **_) -> str:
+    """Several read-only investigations of the workspace, at the same time.
+
+    Understanding an unfamiliar project is mostly breadth, and breadth done in
+    one conversation is done in sequence — each question's file dumps pushed
+    into the same context window until the first answer has been compacted
+    into a sentence. Split up, each part keeps its own context and returns a
+    paragraph instead of the forty files it read.
+    """
+    from . import subagents as subagents_mod
+
+    if not subagents_mod.enabled():
+        return ("error: parallel investigation is switched off for this model "
+                "(it is off by default for on-device models, where four "
+                "conversations share one GPU and simply queue). Investigate "
+                "the parts yourself, one at a time.")
+
+    jobs: List[Dict[str, str]] = []
+    for item in (investigations or []):
+        if isinstance(item, dict) and str(item.get("task", "")).strip():
+            jobs.append({"name": str(item.get("name", "")), "task": str(item["task"])})
+        elif isinstance(item, str) and item.strip():
+            jobs.append({"name": "", "task": item})
+    if not jobs:
+        return "error: give at least one investigation, each with its own question"
+
+    tools = ollama_tools(enabled=list(subagents_mod.SUBAGENT_TOOLS))
+
+    def run_child(name: str, arguments: Dict[str, Any]) -> str:
+        # Whitelisted again here, not only in the schema handed to the model.
+        # A tool list is a suggestion — a model will call a name it saw in
+        # training and was never offered, and the one place that must not be
+        # true is the one where four agents are running unattended.
+        bare = str(name).split("__").pop()
+        if bare not in subagents_mod.SUBAGENT_TOOLS:
+            return (f"error: {bare} is not available to an investigation. "
+                    "You can read and search; you cannot change anything.")
+        spec = TOOLS.get(bare)
+        if not spec:
+            return f"error: no tool called {bare}"
+        try:
+            return str(spec["handler"](**(arguments or {})))
+        except TypeError:
+            return _bad_call_message(bare, spec, [])
+        except Exception as exc:
+            return f"error: {bare} failed: {exc}"
+
+    return subagents_mod.explore(jobs, run_child, tools, emit or (lambda e: None),
+                                 context_note=f"The workspace is {workspace_root()}.")
+
+
 def _tool_list_skills(**_) -> str:
     from . import skills as skills_mod
 
@@ -1353,6 +1404,39 @@ TOOLS: Dict[str, Dict[str, Any]] = {
             "type": "object",
             "properties": {"command": {"type": "string", "description": "Shell command to run"}},
             "required": ["command"],
+        },
+    },
+    # Not mutating: everything underneath it is a read. It is still the most
+    # expensive tool here — four conversations from one call — which is why
+    # the description says when it is worth it and the handler refuses when
+    # parallelism would only queue.
+    "explore_in_parallel": {
+        "handler": _tool_explore_in_parallel,
+        "mutating": False,
+        "risk": "low",
+        "wants_emit": True,
+        "description": ("Investigate several independent parts of the codebase at once, each "
+                        "by its own read-only agent, and get back one written answer per part. "
+                        "Use it to understand an unfamiliar project or to answer a question "
+                        "that spans areas that have nothing to say to each other. Do not use "
+                        "it for one question, or for anything that changes files."),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "investigations": {
+                    "type": "array",
+                    "description": "Two to four independent questions, each with a short name",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string", "description": "e.g. Database and Config"},
+                            "task": {"type": "string", "description": "The question this agent answers"},
+                        },
+                        "required": ["task"],
+                    },
+                },
+            },
+            "required": ["investigations"],
         },
     },
     "list_skills": {
