@@ -103,7 +103,7 @@ class TestFindingTheEngine:
         """Rather than failing four minutes into a render."""
         monkeypatch.setattr(animation, "_manim_command", lambda: [])
         out = animation._tool_render_animation(source="class X(Scene): pass")
-        assert "not installed" in out and "pip install manim" in out
+        assert "not installed" in out and "pip install carrot[animation]" in out
 
 
 class TestTheScene:
@@ -206,7 +206,7 @@ class TestItReachesTheChat:
         names = [t["function"]["name"] for t in extensions.ollama_tools()]
         assert any("render_animation" in name for name in names)
 
-    def test_and_not_before(self):
+    def test_and_not_before(self, isolated_db):
         """The shelf means what it says: nothing is offered until it is added."""
         from carrot import config
 

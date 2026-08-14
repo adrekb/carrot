@@ -95,7 +95,8 @@ def _tool_render_animation(source: str = "", title: str = "",
     command = _manim_command()
     if not command:
         return ("error: manim is not installed on this machine. "
-                "`pip install manim` (it needs ffmpeg as well), then try again. "
+                "`pip install carrot[animation]` — that brings the ffmpeg it "
+                "encodes through as well — then try again. "
                 "Everything else in this pack works without it.")
 
     scene = scene_name(source)
@@ -310,8 +311,12 @@ PACK = extensions.register(extensions.Pack(
             # the card would tell the user to install what they already have.
             "check": lambda: bool(_manim_command()),
             "purpose": "Rendering animations. Nothing else in this pack needs it.",
-            "install_hint": ("pip install manim — it needs ffmpeg too, and is a few "
-                             "hundred megabytes with its dependencies."),
+            # The extra rather than `pip install manim`, because manim alone
+            # leaves it looking for an ffmpeg on PATH that a Windows machine
+            # does not have; the extra brings the bundled binary with it.
+            "install_hint": ("pip install carrot[animation] — manim plus the ffmpeg "
+                             "it encodes through. A few hundred megabytes with its "
+                             "dependencies."),
         },
     ],
     tutorial=[
