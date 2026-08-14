@@ -2442,6 +2442,46 @@ function agentTrace(wrap, text, cls) {
     document.getElementById('agent-log').scrollTop = 1e9;
 }
 
+// ===== How much room is left =====
+//
+// The turn runs until the context window fills rather than to a round count,
+// which is the right unit and an invisible one. A bar makes it the same kind
+// of fact as a battery: you do not read it, you notice it.
+//
+// One per turn, updated in place, and it does not appear at all until the
+// window is worth thinking about — a meter at 3% is decoration, and a panel
+// that decorates every turn is one people stop reading.
+
+const CONTEXT_METER_FROM = 0.25;
+
+function agentContextMeter(wrap, context) {
+    const fraction = Math.max(0, Math.min(1, context.fraction || 0));
+    // Looked up where it actually lives. Searching `wrap` for it never found
+    // the one already on screen — it is a sibling of the composer, not of the
+    // message — so every round built another, and the panel filled with
+    // stacked bars each frozen at the reading it was born with.
+    let meter = document.getElementById('agent-ctx-meter');
+    if (!meter) {
+        if (fraction < CONTEXT_METER_FROM) return;
+        meter = document.createElement('div');
+        meter.className = 'ctx-meter';
+        meter.id = 'agent-ctx-meter';
+        meter.innerHTML = '<div class="ctx-bar"><span></span></div><span class="ctx-text"></span>';
+        // Above the composer rather than in the transcript: it describes the
+        // turn as a whole, and a bar that scrolled away with the round it was
+        // emitted in would be a history of how full the window used to be.
+        const compose = document.querySelector('.agent-compose');
+        compose?.parentElement.insertBefore(meter, compose);
+    }
+    const percent = Math.round(fraction * 100);
+    meter.querySelector('.ctx-bar > span').style.width = percent + '%';
+    meter.classList.toggle('tight', fraction > 0.7);
+    meter.classList.toggle('full', fraction > 0.85);
+    const thousands = n => n >= 1000 ? `${Math.round(n / 1000)}k` : String(n);
+    meter.querySelector('.ctx-text').textContent =
+        `${thousands(context.used)} / ${thousands(context.window)} context · ${percent}%`;
+}
+
 // ===== What the agent did, as cards rather than as a log =====
 //
 // Every tool call rendered as two lines of trace: `→ edit_file(path=…,
@@ -2878,6 +2918,13 @@ async function sendAgentTask() {
                     turnFailed = payload.provider_error.message || 'the provider stopped the turn';
                     agentTrace(wrap, 'provider: ' + turnFailed, 'err');
                 }
+                // How full the window is, every round. The turn now runs until
+                // the context fills rather than to a round count, so this is
+                // the only thing on screen that says how much room is left —
+                // and it is most useful while there is still enough of it to
+                // act on, which is why it is drawn from the first round and
+                // not once the turn is already doomed.
+                if (payload.context) agentContextMeter(wrap, payload.context);
                 if (payload.server) agentServerCard(wrap, payload.server);
                 // Four agents working is four cards ticking, not one long
                 // pause and then a wall of text.
