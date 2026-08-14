@@ -117,7 +117,13 @@
 
     // --- opening, choosing, closing ---
 
-    function highlight(row) {
+    // `scroll` is opt-in, and the mouse never asks for it. A row the pointer
+    // is on is by definition already visible, so scrolling to it does nothing
+    // useful — and it did something actively harmful: a row only partly in
+    // view got scrolled into place, which fired a scroll event, which closed
+    // the menu. Moving the pointer up a long list shut it every time, which
+    // reads exactly like the menu refusing to be clicked.
+    function highlight(row, scroll) {
         if (!open) return;
         if (open.active) open.active.classList.remove('active');
         open.active = row || null;
@@ -125,7 +131,7 @@
             row.classList.add('active');
             // `nearest`, so arrowing through a long list scrolls one row at a
             // time instead of jumping the selected item to the middle.
-            row.scrollIntoView({ block: 'nearest' });
+            if (scroll) row.scrollIntoView({ block: 'nearest' });
         }
     }
 
@@ -223,10 +229,10 @@
         } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
             event.preventDefault();
             const step = event.key === 'ArrowDown' ? 1 : -1;
-            highlight(rows[Math.min(rows.length - 1, Math.max(0, index + step))]);
+            highlight(rows[Math.min(rows.length - 1, Math.max(0, index + step))], true);
         } else if (event.key === 'Home' || event.key === 'End') {
             event.preventDefault();
-            highlight(event.key === 'Home' ? rows[0] : rows[rows.length - 1]);
+            highlight(event.key === 'Home' ? rows[0] : rows[rows.length - 1], true);
         } else if (event.key.length === 1 && !event.ctrlKey && !event.metaKey) {
             // Type-ahead. Native popups have it, and the list this exists for
             // is a hundred model ids — losing it would make the replacement
@@ -235,14 +241,29 @@
             open.typed = (now - open.typedAt < 900 ? open.typed : '') + event.key.toLowerCase();
             open.typedAt = now;
             const hit = rows.find(row => row.textContent.trim().toLowerCase().startsWith(open.typed));
-            if (hit) highlight(hit);
+            if (hit) highlight(hit, true);
             event.preventDefault();
         }
     }, true);
 
     // A fixed menu does not travel with a scrolling panel, and one left
     // hanging beside the control it belongs to is worse than one that closed.
-    window.addEventListener('scroll', () => closeMenu(), true);
+    //
+    // Somebody else's scroll, though. The menu scrolls itself — on open, to
+    // bring the current selection into view, and on every arrow key — and
+    // this listener is capturing, so its own scrolling was reaching it and
+    // closing it. A hundred-model list was unusable: it shut on the way to
+    // whichever option you were reaching for.
+    window.addEventListener('scroll', event => {
+        const target = event.target;
+        // Element check first. A document-level scroll reports the document
+        // as its target, and `menu.contains(document)` is false — but the
+        // shorter version of this test that passed the menu itself as a
+        // fallback returned true for exactly that case, and would have left
+        // the menu hanging over a scrolled page.
+        if (open && target && target.nodeType === 1 && open.menu.contains(target)) return;
+        closeMenu();
+    }, true);
     window.addEventListener('resize', () => closeMenu());
     window.addEventListener('blur', () => closeMenu());
 })();
