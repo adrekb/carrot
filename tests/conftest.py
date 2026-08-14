@@ -5,9 +5,18 @@ FastAPI ``TestClient`` with a mocked Ollama client so tests never require a
 running Ollama server.
 """
 import os
-import pytest
 
-from carrot import database, config
+# Before carrot is imported, because the daemons read this when they are
+# asked to start and a fixture only covers the tests that request it. Every
+# background poller in the app refuses under this flag: they tick against
+# whatever database path is current, and in a suite that gives each test its
+# own database, that means writing into directories other tests have already
+# torn down.
+os.environ.setdefault("CARROT_NO_BACKGROUND", "1")
+
+import pytest  # noqa: E402
+
+from carrot import database, config  # noqa: E402
 
 
 @pytest.fixture
@@ -111,11 +120,23 @@ def no_background_workers(monkeypatch):
 
     No test starts either worker or asserts on one, so nothing is lost by not
     running them here. A test that wants one can call it directly.
-    """
-    from carrot import proactive, deep_research
 
+    Named daemons are no longer the mechanism, only the belt to the braces:
+    each starter refuses under CARROT_NO_BACKGROUND, set below for the whole
+    session. A fixture has to list every daemon, and the one it does not list
+    is the one that breaks things — the scheduled-tasks thread was added,
+    never listed here, and spent every full run writing to databases other
+    tests had already torn down. It surfaced as a sqlite error in a different
+    file each time, which reads as flakiness and was one unguarded thread.
+    """
+    import os
+
+    from carrot import proactive, deep_research, scheduled
+
+    monkeypatch.setenv("CARROT_NO_BACKGROUND", "1")
     monkeypatch.setattr(proactive, "start_watcher", lambda *a, **k: None)
     monkeypatch.setattr(deep_research, "start_scheduler", lambda *a, **k: None)
+    monkeypatch.setattr(scheduled, "start_scheduler", lambda *a, **k: None)
 
 
 @pytest.fixture
