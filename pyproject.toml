@@ -56,6 +56,22 @@ browser = ["playwright>=1.49.0"]
 # Direct mouse and keyboard control. Off by default even once installed — it
 # has to be switched on in Settings before the policy kernel will allow it.
 desktop = ["pyautogui>=0.9.54"]
+# The Animation pack's renderer. Large — manim pulls in a full OpenGL and
+# typesetting stack, and the install is a few hundred megabytes — which is why
+# the pack ships switched off and everything else in Carrot works without it.
+# `imageio-ffmpeg` is not optional alongside it: manim encodes through ffmpeg
+# and looks for it on PATH, which on Windows it will not be. The bundled binary
+# means a pip install of this extra is the whole setup. LaTeX stays out on
+# purpose — it is a system package, and scenes written with Text() never
+# need it.
+animation = ["manim>=0.18.0", "imageio-ffmpeg>=0.5.0"]
+# Charts. Not a Carrot dependency in the ordinary sense — the plotting script
+# runs in the user's own Python through run_command, not inside the app — but
+# it is the library the model is told to reach for, so a machine without it
+# fails at the advertised path. Settings → Add-ons installs it into the
+# interpreter that will actually do the importing; this extra is for people
+# who would rather do it at install time.
+charts = ["matplotlib>=3.8.0"]
 
 [tool.setuptools.packages.find]
 include = ["carrot*"]

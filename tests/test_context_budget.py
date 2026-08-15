@@ -58,10 +58,13 @@ class TestTheLoopRunsOnRoom:
     def test_it_stops_when_the_window_is_nearly_full(self):
         """Before it is actually full: the estimate is four-characters-per-
         token, the provider counts differently, and a turn that overruns gets
-        a hard error instead of a written answer."""
+        a hard error instead of a written answer.
+
+        Once there is nothing left worth trimming — pruning buys the turn more
+        rounds, it does not buy it unlimited ones. See test_pruning.py."""
         events = _drive(50, window=4000, transcript_per_round="x" * 4000)
-        stopped = [e for e in events
-                   if e.get("stage") == "context" and "full" in (e.get("detail") or "")]
+        stopped = [e for e in events if e.get("stage") == "context"
+                   and "answering now" in (e.get("detail") or "")]
         assert stopped, "the turn never noticed it was out of room"
 
     def test_running_out_of_room_is_said_rather_than_implied(self):
@@ -69,7 +72,8 @@ class TestTheLoopRunsOnRoom:
         short answer and call for opposite things from the user — a bigger
         window versus a better question."""
         events = _drive(50, window=4000, transcript_per_round="x" * 4000)
-        detail = next(e["detail"] for e in events if e.get("stage") == "context")
+        detail = next(e["detail"] for e in events if e.get("stage") == "context"
+                      and "answering now" in (e.get("detail") or ""))
         assert "%" in detail and "context window" in detail
 
     def test_the_ceiling_is_still_there_for_a_loop_that_gathers_nothing(self):
@@ -128,3 +132,79 @@ class TestTheMeter:
         features = (Path(__file__).resolve().parents[1] / "carrot" / "web" / "js"
                     / "features.js").read_text(encoding="utf-8")
         assert "CONTEXT_METER_FROM" in features
+
+
+class TestTheNudgesSurvivedTheChange:
+    """What the ceiling change nearly broke on its way past.
+
+    "Rounds left" was `rounds - round_index - 1` against a fixed ceiling of
+    eight. When the loop stopped stopping at eight, that arithmetic went
+    negative — and every `rounds_left > 1` guard silently turned false. The
+    coverage nudge, the unmet-goal nudge and the replanner would have retired
+    themselves at round eight of a turn that now runs until the window fills,
+    which is exactly where a long turn most needs them.
+    """
+
+    def test_rounds_left_is_estimated_from_the_window_not_the_old_ceiling(self):
+        source = (__import__("pathlib").Path(A.__file__)).read_text(encoding="utf-8")
+        assert "rounds_left = rounds - round_index - 1" not in source
+        assert "rounds_left_now = rounds - round_index - 1" not in source
+        assert "CONTEXT_STOP_FRACTION - used) // grown" in source
+
+    def test_it_never_goes_negative(self):
+        """A nudge reading "you have about -12 rounds left" is worse than no
+        nudge, and a guard comparing it to 1 disables itself."""
+        source = (__import__("pathlib").Path(A.__file__)).read_text(encoding="utf-8")
+        block = source[source.index("rounds_left = max("):]
+        assert block.startswith("rounds_left = max(0,")
+
+    def test_the_estimate_shrinks_as_the_window_fills(self):
+        """Not a property of the source — of the arithmetic. Half the window
+        gone at the same growth rate means half as many rounds left."""
+        window, stop = 100_000, A.CONTEXT_STOP_FRACTION
+
+        def estimate(used, grown):
+            return max(0, int((window * stop - used) // grown))
+
+        assert estimate(10_000, 5_000) > estimate(50_000, 5_000)
+        assert estimate(90_000, 5_000) == 0
+
+
+class TestAnUnattendedRunIsStillBounded:
+    def test_a_scheduled_run_has_a_deadline_again(self):
+        """The constant said "must not still be stuck at 4pm" and nothing
+        enforced it: swapping the runner took the deadline out with it and
+        left the promise behind in a comment."""
+        import inspect
+
+        from carrot import scheduled
+
+        source = inspect.getsource(scheduled._run_through_the_agent)
+        assert "MAX_RUN_SECONDS" in source and "deadline=" in source
+
+    def test_the_deadline_stops_it_between_rounds(self):
+        import time
+
+        from carrot import subagents
+
+        rounds_run = []
+
+        def never_finishes(resolved, messages, tools=None):
+            rounds_run.append(1)
+            yield {"type": "tool_calls", "calls": [
+                {"id": "1", "function": {"name": "carrot__read_file",
+                                         "arguments": {"path": "x"}}}]}
+
+        import pytest as _pytest
+
+        with _pytest.MonkeyPatch.context() as patch:
+            patch.setattr(subagents.router_mod, "stream_events", never_finishes)
+            patch.setattr(subagents.router_mod, "route",
+                          lambda *a, **k: type("R", (), {"provider": "p", "model": "m",
+                                                         "local": False})())
+            out = subagents.run_one(
+                "x", "a task", run_tool=lambda n, a: "result", tools=[],
+                emit=lambda e: None, rounds=50,
+                deadline=time.monotonic() - 1)
+        assert rounds_run == [], "a run past its deadline still called the model"
+        assert "time limit" in out

@@ -139,6 +139,7 @@ function switchTab(tab) {
         chats: loadConversations,
         notes: loadNotes,
         code: loadCodeTab,
+        latex: () => loadLatexTab(),
         planner: loadPlanner,
         goals: loadGoals,
         reminders: loadReminders,
@@ -533,9 +534,11 @@ async function setRecapTime(value) {
 }
 
 // ===== Model picker =====
-async function loadModels() {
+async function loadModels(opts) {
     try {
-        const data = await api('/api/models');
+        // `live` only on request: the popup draws the models you already have
+        // without waiting on Hugging Face, and "Find current" is what asks.
+        const data = await api('/api/models' + ((opts || {}).live ? '?live=true' : ''));
         // The label has to show what chat *actually* runs on. `active_model` is
         // only the Ollama default, so reading it here made a pinned cloud model
         // silently revert to the local one in the picker on every refresh.
@@ -784,22 +787,54 @@ function renderModelPop(data) {
         }
     }
 
-    const notInstalled = data.suggested.filter(m => !m.installed);
+    // "Find more" — the catalog, sized to this machine. Rows arrive already
+    // ordered: what runs well first, what won't run at all last, each of
+    // those carrying the reason. The server drops anything already installed,
+    // since it is one section above in the same popup.
+    const notInstalled = (data.suggested || []).filter(m => !m.installed);
     if (!notInstalled.length) {
-        suggestedEl.innerHTML = '<div class="empty" style="padding:4px 9px">All suggestions installed.</div>';
+        suggestedEl.innerHTML = '<div class="empty" style="padding:4px 9px">Nothing left to add.</div>';
     }
+    // Where these rows came from, said before they are read. The list built
+    // into a download is a snapshot of the day the build was cut; presenting
+    // it as what is good now is the claim worth avoiding, not the age itself.
+    if (notInstalled.length && notInstalled[0].source === 'bundled') {
+        const bar = document.createElement('div');
+        bar.className = 'model-source-note';
+        bar.innerHTML = '<span>Built into this download — may be out of date.</span>';
+        const go = document.createElement('button');
+        go.className = 'm-install';
+        go.textContent = 'Find current';
+        go.onclick = (e) => { e.stopPropagation(); loadModels({ live: true }); };
+        bar.appendChild(go);
+        suggestedEl.appendChild(bar);
+    }
+    const FIT_LABEL = { great: 'Runs great', good: 'Runs well', tight: 'Slow here', too_big: "Won't run" };
     for (const m of notInstalled) {
         const row = document.createElement('div');
-        row.className = 'model-row';
+        row.className = 'model-row' + (m.runs_here === false ? ' model-row-unfit' : '');
         row.style.cursor = 'default';
+        // The reason a row is greyed out is the most useful sentence on this
+        // screen, so it goes on the row rather than into a tooltip.
+        const meta = m.runs_here === false
+            ? escHtml(m.why_not || '')
+            : `${escHtml(m.size_hint || '')}${m.est_tps ? ` · ~${m.est_tps} tok/s` : ''}`;
         row.innerHTML = `
-            <span class="m-name" title="${escHtml(m.blurb)}">${escHtml(m.name)}</span>
-            <span class="m-meta">${escHtml(m.size_hint)}</span>`;
-        const btn = document.createElement('button');
-        btn.className = 'm-install';
-        btn.innerHTML = '<svg class="ico"><use href="#i-download"/></svg>Install';
-        btn.onclick = (e) => { e.stopPropagation(); pullModel(m.name); };
-        row.appendChild(btn);
+            <span class="m-name" title="${escHtml(m.blurb || '')}">${escHtml(m.name)}</span>
+            <span class="m-meta">${meta}</span>`;
+        if (m.fit && FIT_LABEL[m.fit]) {
+            const badge = document.createElement('span');
+            badge.className = 'm-fit m-fit-' + m.fit;
+            badge.textContent = FIT_LABEL[m.fit];
+            row.querySelector('.m-name').after(badge);
+        }
+        if (m.runs_here !== false) {
+            const btn = document.createElement('button');
+            btn.className = 'm-install';
+            btn.innerHTML = '<svg class="ico"><use href="#i-download"/></svg>Install';
+            btn.onclick = (e) => { e.stopPropagation(); pullModel(m.name); };
+            row.appendChild(btn);
+        }
         suggestedEl.appendChild(row);
     }
 }
@@ -2990,13 +3025,45 @@ function renderSplashPicks(hub) {
     specsEl.classList.remove('hidden');
     link.classList.remove('hidden');
 
-    const recs = hub.recommendations || {};
-    if (!recs.best) return;
-    const picks = [{ role: 'Recommended', m: recs.best }];
-    if (recs.light && recs.light.id !== recs.best.id) picks.push({ role: 'Light & fast', m: recs.light });
-    const coding = (recs.by_use_case || {}).coding;
-    if (coding && !picks.some(p => p.m.id === coding.id)) picks.push({ role: 'For coding', m: coding });
+    // What this machine cannot do on-device, said before the user tries it.
+    // The limit is real either way; the only question is whether they learn
+    // it here or after twenty minutes of the Code tab going nowhere.
+    const feas = hub.feasibility || {};
+    const warnEl = document.getElementById('splash-feasibility');
+    if (warnEl) {
+        if (feas.warning) {
+            const rough = (feas.tasks || []).filter(t => t.verdict !== 'on_device');
+            warnEl.innerHTML = `<strong>Worth knowing about this machine.</strong> `
+                + escHtml(feas.warning)
+                + (rough.length ? `<ul class="splash-feasibility-list">` + rough.map(t =>
+                    `<li>${escHtml(t.label)} — ${escHtml(t.detail)}</li>`).join('') + `</ul>` : '');
+            warnEl.classList.remove('hidden');
+        } else {
+            warnEl.classList.add('hidden');
+        }
+    }
 
+    // No suggestions here. The bundled catalog is a snapshot of whatever was
+    // good on the day this build was cut, and by the time somebody downloads
+    // and runs it that is a recommendation for last quarter's models made
+    // with total confidence. Naming a model on this screen is a promise about
+    // the present that a shipped binary cannot keep.
+    //
+    // So the screen offers to go and look instead, and the answer comes from
+    // Hugging Face. The bundle stays in the build for one job — being the
+    // fallback when there is no network — and when it is used it says so.
+    const find = document.getElementById('splash-find');
+    find.textContent = 'Find models for my machine →';
+    find.onclick = splashFindForMachine;
+    find.disabled = false;
+    find.classList.remove('hidden');
+}
+
+// Both the bundled recommendations and the live Hugging Face results draw the
+// same card, because they are the same decision — the only difference is where
+// the row came from.
+function renderSplashCards(picks) {
+    const picksEl = document.getElementById('splash-picks');
     picksEl.innerHTML = '';
     picksEl.classList.remove('hidden');
     for (const p of picks) {
@@ -3015,9 +3082,75 @@ function renderSplashPicks(hub) {
         };
         picksEl.appendChild(card);
     }
-    // Preselect the recommendation so plain "Set up now" does the right thing.
-    splashModel = recs.best.id;
-    picksEl.querySelector('.splash-pick').classList.add('selected');
+    // Preselect the first so plain "Set up now" does the right thing.
+    if (picks.length) {
+        splashModel = picks[0].m.id;
+        picksEl.querySelector('.splash-pick').classList.add('selected');
+    }
+}
+
+// "Find models for my machine" — the only way a model gets named on this
+// screen. It asks Hugging Face what exists right now; the sizing stays local
+// (specs → quant plan → fit), so what comes back is current *and* runnable,
+// rather than a trending list that ignores the machine or a bundled list that
+// ignores the date.
+async function splashFindForMachine() {
+    const btn = document.getElementById('splash-find');
+    const note = document.getElementById('splash-find-note');
+    btn.disabled = true;
+    btn.textContent = 'Asking Hugging Face…';
+    let live = [];
+    let offline = '';
+    try {
+        // `workload=assistant` rather than an unfiltered trending list: with
+        // no stated use case the ranking is fit plus popularity, and the most
+        // downloaded thing that fits any machine is a 0.6B speech model. This
+        // screen is choosing the thing that answers questions.
+        const data = await api('/api/hub/search?workload=assistant&sort=trending&limit=6');
+        live = (data.results || []).filter(m => m.fit !== 'too_big');
+        if (!live.length) offline = data.detail || '';
+    } catch (e) {
+        offline = 'Could not reach Hugging Face.';
+    }
+
+    if (live.length) {
+        renderSplashCards(live.map((m, i) => ({
+            role: i === 0 ? 'Best match for this machine' : 'Also fits',
+            m,
+        })));
+        note.textContent = `Live from Hugging Face · ${live.length} that run on this machine`;
+        note.classList.remove('hidden');
+        btn.classList.add('hidden');
+        return;
+    }
+
+    // No network. This is the one job the bundled catalog still has, and it
+    // is labelled as what it is — an old list — because a stale
+    // recommendation presented as a current one is the thing worth avoiding,
+    // not the staleness itself.
+    const bundled = splashBundledPicks();
+    if (bundled.length) {
+        renderSplashCards(bundled);
+        note.textContent = (offline ? offline + ' ' : '')
+            + 'Showing the list built into this download, which may be out of date.';
+    } else {
+        note.textContent = (offline || 'Nothing found.')
+            + ' You can set up Ollama now and pick a model later.';
+    }
+    note.classList.remove('hidden');
+    btn.textContent = 'Try again';
+    btn.disabled = false;
+}
+
+// The offline fallback, from the payload the splash already has.
+function splashBundledPicks() {
+    const recs = (splashHub || {}).recommendations || {};
+    if (!recs.best) return [];
+    const picks = [{ role: 'Fits this machine', m: recs.best }];
+    if (recs.light && recs.light.id !== recs.best.id) {
+        picks.push({ role: 'Light & fast', m: recs.light });
+    }
+    return picks;
 }
 
 function hideSplash() { document.getElementById('splash').classList.add('hidden'); }
@@ -3071,7 +3204,11 @@ function pickSplashModel(id) {
 }
 
 function skipModelChoice() {
-    // Experienced users: no picker, stock default, straight to setup.
+    // Skipping the picker is not skipping the sizing. `splashModel = null`
+    // sends the server to `get_target_model()`, which asks the Hub what fits
+    // this machine — it used to reach a constant, so the one path taken by
+    // users who did not want to think about it was the one that ignored
+    // their hardware entirely.
     splashModel = null;
     runBootstrap();
 }

@@ -214,7 +214,10 @@ def run_deep_research_stream(model: str = None, include_web_search: bool = True)
     if not client.is_available():
         yield {"error": "Ollama not available"}
         return
-    model = model or config.get("ollama_model_recap") or config.get("ollama_model")
+    from carrot import hub as hub_mod
+
+    model = (model or config.get("ollama_model_recap")
+             or hub_mod.configured_or_default_model())
 
     # --- 1. analyze ---
     yield {"stage": "analyze", "detail": "reading your recent conversations, goals, and reminders"}
@@ -351,6 +354,13 @@ def _scheduler_loop():
 
 def start_scheduler():
     """Start the overnight-recap daemon thread (idempotent)."""
+
+    # Not under CARROT_NO_BACKGROUND: a poller on its own thread, against
+    # a database the suite replaces between tests, is an error in whichever
+    # file happened to be running when it ticked.
+    import os as _os
+    if _os.environ.get("CARROT_NO_BACKGROUND"):
+        return
     global _scheduler_started
     if _scheduler_started:
         return

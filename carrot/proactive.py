@@ -394,6 +394,13 @@ def start_watcher():
     watcher at all, from a call whose whole job was to guarantee one. Clearing
     first means a pending stop is cancelled either way.
     """
+
+    # Not under CARROT_NO_BACKGROUND: a poller on its own thread, against
+    # a database the suite replaces between tests, is an error in whichever
+    # file happened to be running when it ticked.
+    import os as _os
+    if _os.environ.get("CARROT_NO_BACKGROUND"):
+        return
     global _watcher
     _stop.clear()
     if _watcher is not None and _watcher.is_alive():

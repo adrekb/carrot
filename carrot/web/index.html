@@ -294,13 +294,27 @@
     <p class="splash-sub">Setting up your local assistant</p>
     <div id="splash-status" class="splash-status">Checking Ollama…</div>
     <div id="splash-specs" class="splash-specs hidden"></div>
+    <!-- What this machine will not do well, before the user tries it. A
+         limit discovered after twenty minutes of a 3B failing to edit a file
+         reads as the app being broken. -->
+    <div id="splash-feasibility" class="splash-feasibility hidden"></div>
     <div id="splash-picks" class="splash-picks hidden"></div>
+    <!-- The bundled catalog is a snapshot taken whenever this build was cut,
+         so on release day it is already recommending last quarter's models.
+         This asks Hugging Face what exists now and sizes the answer to this
+         machine. A button rather than automatic: the first screen should not
+         depend on the network, and a local-first app should not reach out
+         before it is asked. -->
+    <button id="splash-find" class="btn btn-ghost splash-find hidden" onclick="splashFindForMachine()">
+      Find models for my machine →
+    </button>
+    <div id="splash-find-note" class="splash-find-note hidden"></div>
     <div id="splash-catalog" class="splash-catalog hidden"></div>
     <div class="splash-progress"><div id="splash-bar" class="splash-bar"></div></div>
     <div id="splash-detail" class="splash-detail"></div>
     <div class="splash-actions">
       <button id="splash-btn" class="btn btn-primary hidden" onclick="runBootstrap()">Set up now</button>
-      <button id="splash-skip" class="btn btn-ghost hidden" onclick="skipModelChoice()" title="For experienced users — keep the stock default and move on">Skip — use default</button>
+      <button id="splash-skip" class="btn btn-ghost hidden" onclick="skipModelChoice()" title="Skip the picker — Carrot installs the model it sized to this machine">Skip — use the one that fits</button>
     </div>
     <a id="splash-hub-link" class="splash-hub-link hidden" href="#" onclick="toggleSplashCatalog();return false">See every model and why some won't run here →</a>
   </div>
@@ -378,6 +392,7 @@
     <button class="nav-item sub" data-tab="research" onclick="switchTab('research')"><svg class="ico"><use href="#i-flask"/></svg><span class="nav-label">Research</span></button>
     <!-- Hidden until the Ambient Recall pack is switched on; see applyExtensionTabs. -->
     <button class="nav-item sub" data-tab="ambient" onclick="switchTab('ambient')"><svg class="ico"><use href="#i-eye"/></svg><span class="nav-label">Ambient</span></button>
+    <button class="nav-item sub" data-tab="latex" onclick="switchTab('latex')"><svg class="ico"><use href="#i-doc"/></svg><span class="nav-label">LaTeX</span></button>
     <div class="nav-group">Planning</div>
     <button class="nav-item sub" data-tab="planner" onclick="switchTab('planner')"><svg class="ico"><use href="#i-cap"/></svg><span class="nav-label">Planner</span></button>
     <button class="nav-item sub" data-tab="goals" onclick="switchTab('goals')"><svg class="ico"><use href="#i-target"/></svg><span class="nav-label">Goals</span></button>
@@ -743,6 +758,54 @@
   </section>
 
   <!-- Planner -->
+  <!-- LaTeX Notes, from the pack of the same name. Source and result at once,
+       because checking a formula against what it renders to is the whole loop
+       of writing one, and an outline because a paper is navigated by section
+       rather than by scrollbar. -->
+  <section id="view-latex" class="view">
+    <div class="split">
+      <aside class="split-side latex-outline-side">
+        <div class="split-side-head">
+          <span class="side-label">Outline</span>
+          <button class="icon-btn" title="New document" onclick="newLatexDoc()">
+            <svg class="ico"><use href="#i-plus"/></svg></button>
+        </div>
+        <div id="latex-outline" class="side-list"></div>
+        <div id="latex-stats" class="latex-stats"></div>
+      </aside>
+      <div class="split-main">
+        <div class="editor-toolbar">
+          <input type="text" id="latex-title" class="title-input" placeholder="Untitled document"
+                 spellcheck="false">
+          <div class="mode-switch" role="group" aria-label="Editing mode">
+            <button class="mode-opt" id="latex-mode-split" onclick="setLatexMode('split')"
+                    title="Source and rendered output side by side">Split</button>
+            <button class="mode-opt" id="latex-mode-lite" onclick="setLatexMode('lite')"
+                    title="Just the rendered document">Reading</button>
+          </div>
+          <span class="spacer"></span>
+          <input type="file" id="latex-image-input" accept="image/*" hidden
+                 onchange="insertLatexImage(this.files[0]); this.value=''">
+          <button class="btn btn-ghost" onclick="pickLatexImage()"
+                  title="Insert a figure — or just paste or drop one into the text">Image</button>
+          <button class="btn btn-ghost" id="latex-ai-btn" onclick="editSelectionWithAI()"
+                  title="Rewrite exactly what you have selected">Edit with AI</button>
+          <button class="btn btn-ghost" onclick="exportLatex('md')">.md</button>
+          <button class="btn btn-ghost" onclick="exportLatex('html')">.html</button>
+          <button class="btn btn-ghost" onclick="exportLatex('txt')">.txt</button>
+          <button class="btn btn-primary" onclick="saveLatexDoc()">Save</button>
+        </div>
+        <div class="latex-panes" id="latex-panes">
+          <textarea id="latex-source" class="latex-source" spellcheck="false"
+                    placeholder="Write. $e^{i\pi} + 1 = 0$ inline, or $$…$$ on its own line."
+                    oninput="latexChanged()" onselect="latexSelectionChanged()"></textarea>
+          <div id="latex-preview" class="latex-preview md"></div>
+        </div>
+        <div id="latex-ai-bar" class="latex-ai-bar hidden"></div>
+      </div>
+    </div>
+  </section>
+
   <section id="view-planner" class="view">
     <div class="page">
       <div class="page-head">
@@ -1229,6 +1292,16 @@
           machine rather than failing halfway through a task.
         </p>
         <div id="packs-list" class="list"></div>
+        <!-- Available, but not part of this installation until it is added.
+             The code ships in the build — a local-first app should not be
+             fetching executable code at runtime — but nothing an extension
+             contributes exists until you press Add. -->
+        <div class="ext-shelf">
+          <h4>Available</h4>
+          <p class="muted small">Not part of your app yet. Adding one puts it in the list
+             above, switched off, with nothing enabled until you turn it on.</p>
+          <div id="packs-shelf" class="list"></div>
+        </div>
       </div>
 
       <div class="ext-section">
@@ -1387,6 +1460,22 @@
   <section id="view-settings" class="view">
     <div class="page">
       <div class="page-head"><h2>Settings</h2></div>
+
+      <!-- The optional parts, installable without a terminal. Carrot is
+           already running in the interpreter that needs them, so it can put
+           them there — telling somebody to open a shell and work out which
+           Python to point at is the end of the road for most people. -->
+      <div class="settings-card">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-download"/></svg>
+          <h3>Add-ons</h3>
+        </div>
+        <p class="muted small">
+          Things Carrot can do once the pieces are here. Each is a one-click install into
+          the same Python that Carrot runs on — no terminal, and nothing installs itself.
+        </p>
+        <div id="components-list" class="components-list"></div>
+      </div>
 
       <div class="settings-card">
         <div class="settings-head">
@@ -1993,6 +2082,7 @@
 <script src="/js/studio.js"></script>
 <script src="/js/planner.js"></script>
 <script src="/js/ambient.js"></script>
+<script src="/js/latexnote.js"></script>
 <!-- Last, and self-contained: it upgrades every <select> on the page by
      listening at the document, including the ones the scripts above build
      later, so nothing here has to load before it. -->

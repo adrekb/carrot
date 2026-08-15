@@ -58,6 +58,8 @@ from carrot import (
     router as router_mod,
     providers as providers_mod,
     context_windows as ctxwin_mod,
+    pruning as pruning_mod,
+    components as components_mod,
     interests as interests_mod,
     sysmon as sysmon_mod,
     markets as markets_mod,
@@ -485,6 +487,15 @@ def _startup():
         conv_mod.purge_temporary()
     except Exception:
         pass
+    # Every install made before the default learned to read hardware has
+    # `gemma4:e4b` sitting in its config, put there by bootstrap rather than
+    # chosen. Fixing new installs and leaving those on the wrong model would
+    # fix nothing for anyone who already has Carrot. Runs once — see
+    # hub.resize_stale_default.
+    try:
+        hub_mod.resize_stale_default()
+    except Exception:
+        pass
     vectors_mod.migrate_legacy_embeddings()
     dr_mod.start_scheduler()
     scheduled_mod.start_scheduler()
@@ -646,7 +657,7 @@ async def api_status():
     rem_count = conn.execute("SELECT COUNT(*) as c FROM reminders").fetchone()["c"]
     conn.close()
 
-    default_model = config.get_config().get("ollama_model", bootstrap_mod.DEFAULT_MODEL)
+    default_model = hub_mod.configured_or_default_model()
     model_loaded = False
     if available:
         model_loaded = bootstrap_mod.is_model_available(default_model)
@@ -769,16 +780,18 @@ async def hub_choose(req: ModelSelectRequest):
 
 
 # ===== Models =====
-
-# Curated catalog shown in the model picker for one-click install.
-SUGGESTED_MODELS = [
-    {"name": "gemma4:e4b", "label": "Gemma 4 E4B", "size_hint": "~4 GB", "blurb": "Default all-rounder"},
-    {"name": "llama3.2:3b", "label": "Llama 3.2 3B", "size_hint": "~2 GB", "blurb": "Fast, light"},
-    {"name": "qwen2.5-coder:7b", "label": "Qwen 2.5 Coder 7B", "size_hint": "~4.7 GB", "blurb": "Code-focused"},
-    {"name": "mistral:7b", "label": "Mistral 7B", "size_hint": "~4.1 GB", "blurb": "General purpose"},
-    {"name": "phi4:14b", "label": "Phi 4 14B", "size_hint": "~9.1 GB", "blurb": "Strong reasoning"},
-    {"name": "deepseek-r1:8b", "label": "DeepSeek R1 8B", "size_hint": "~4.9 GB", "blurb": "Reasoning"},
-]
+#
+# There used to be a `SUGGESTED_MODELS` list here: six tags with hand-written
+# size hints, the same six for a Raspberry Pi and a threadripper, `gemma4:e4b`
+# at the top labelled "Default all-rounder". It was the last place in the app
+# that recommended hardware-blind, and it was the place users actually looked —
+# the picker is the screen you open to decide what answers the next question.
+#
+# What replaces it is the Hub's own catalog, annotated against this machine:
+# `hub.find_more()`. Suggestions are things that fit, best first; things that
+# do not fit are still listed, last, saying what they would need. That is the
+# Hub's whole job, and it belongs here rather than behind a tab, because
+# nobody opens a catalog to browse — they open the picker and want more.
 
 
 def prompt_overhead() -> Dict[str, Any]:
@@ -881,16 +894,20 @@ async def set_model_context_window(req: ContextWindowRequest):
 
 
 @app.get("/api/models")
-async def list_models():
+async def list_models(live: bool = False):
+    """`live=true` asks Hugging Face for the "find more" section instead of
+    reading the list compiled into this build. Off by default because the
+    picker popup should not wait on a network round-trip to draw the models
+    you already have."""
     client = ollama_mod.OllamaClient()
     installed = client.list_models() if client.is_available() else []
     installed_names = {m["name"] for m in installed}
     cfg = config.get_config()
-    active = cfg.get("ollama_model", bootstrap_mod.DEFAULT_MODEL)
-    suggested = [
-        {**m, "installed": m["name"] in installed_names}
-        for m in SUGGESTED_MODELS
-    ]
+    active = hub_mod.configured_or_default_model()
+    # Already-installed tags are dropped by `find_more` rather than marked,
+    # because "Find more" is a list of what you could add — a row you already
+    # have is noise on it, and it is one line above in the same popup.
+    suggested = hub_mod.find_more(installed=installed_names, live=live)
 
     # Models from configured cloud providers belong in the picker too —
     # a key you already pasted is useless if the UI only offers Ollama.
@@ -976,7 +993,7 @@ async def list_models():
         # way to be told one. See carrot/context_windows.py.
         "windows": _model_windows(installed, context_info, remote),
         "overhead": prompt_overhead(),
-        "default_model": bootstrap_mod.DEFAULT_MODEL,
+        "default_model": hub_mod.configured_or_default_model(),
         "suggested": suggested,
         "remote": remote,
         "chat_provider": chat_provider,
@@ -1310,6 +1327,21 @@ MAX_TOOL_ROUNDS_CEILING = 60
 # the one outcome worse than stopping early. The headroom is what the answer
 # itself is written into.
 CONTEXT_STOP_FRACTION = 0.85
+
+# Where a pruned turn aims to land. Far enough below the ceiling to buy several
+# more rounds — trimming back to 0.84 would hit the same wall on the next tool
+# result and trim again, which is a turn spending its remaining rounds on
+# bookkeeping.
+CONTEXT_RESUME_FRACTION = 0.6
+
+# Below this much of the window recoverable, pruning is not worth doing and the
+# turn should say it is out of room instead.
+#
+# A transcript that is 95% the user's own long prompt has nothing to give, and
+# a turn told "I made room" that got a rounding error back buys one more round
+# and hits the same wall — with the difference that it has now also deleted
+# what it had. Giving up honestly is better than that.
+MIN_WORTHWHILE_PRUNE = 0.1
 
 # What "multi-turn" has to have actually done before an answer is accepted.
 # The directive alone does not achieve this: a small on-device model reads
@@ -2471,6 +2503,16 @@ def search_directive(mode: str) -> str:
     }[mode]
 
 
+# What Ollama said a model can hold, kept between turns.
+#
+# `OllamaClient` caches this per instance, and a new instance was being built
+# for every turn — so the cache was always empty and every local turn paid an
+# HTTP round trip to /api/show before it could send its first token. A model's
+# ceiling does not change while it is installed; the setting layered on top of
+# it does, and that is read fresh below.
+_PROBED_WINDOWS: Dict[str, int] = {}
+
+
 def _window_tokens(resolved) -> int:
     """How much this route can hold, or 0 when nobody knows.
 
@@ -2481,12 +2523,16 @@ def _window_tokens(resolved) -> int:
     try:
         probed = 0
         if getattr(resolved, "local", False):
-            try:
-                from .ollama_client import OllamaClient
+            if resolved.model in _PROBED_WINDOWS:
+                probed = _PROBED_WINDOWS[resolved.model]
+            else:
+                try:
+                    from .ollama_client import OllamaClient
 
-                probed = int(OllamaClient().context_limit(resolved.model) or 0)
-            except Exception:
-                probed = 0
+                    probed = int(OllamaClient().context_limit(resolved.model) or 0)
+                except Exception:
+                    probed = 0
+                _PROBED_WINDOWS[resolved.model] = probed
         found = ctxwin_mod.window_for(
             getattr(resolved, "provider", "") or "ollama", resolved.model, probed=probed)
         return int(found.get("tokens") or 0)
@@ -2816,6 +2862,10 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
     rounds = MAX_TOOL_ROUNDS_MULTI if mode == SEARCH_MULTI else MAX_TOOL_ROUNDS
     window = _window_tokens(resolved)
     tools_tokens = ctxwin_mod.estimate_tokens(json.dumps(tools)) if tools else 0
+    # What the turn cost before it had done anything, so later rounds can be
+    # compared against it to estimate how many more will fit.
+    first_used = 0
+    rounds_left = rounds
     working = list(history)
     question = next((m["content"] for m in reversed(history) if m.get("role") == "user"), "")
 
@@ -2957,15 +3007,62 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
         # that only appears once the turn is doomed is an epitaph.
         used = tools_tokens + ctxwin_mod.estimate_tokens(
             json.dumps(working, default=str))
+        # How many more rounds there is room for, which is what the nudges and
+        # the replanner mean when they say "rounds left".
+        #
+        # This has to be derived from the window now. It used to be
+        # `rounds - round_index - 1` against a fixed ceiling of eight, and
+        # when the loop stopped stopping at eight that arithmetic went
+        # negative — so every `rounds_left > 1` guard turned false and the
+        # machinery that keeps a long turn honest (the coverage nudge, the
+        # unmet-goal nudge, the replanner) switched itself off at exactly the
+        # point where turns got long enough to need it.
+        if window and round_index:
+            grown = max(1, (used - first_used) // max(1, round_index))
+            rounds_left = max(0, int((window * CONTEXT_STOP_FRACTION - used) // grown))
+        else:
+            rounds_left = rounds
+        if not round_index:
+            first_used = used
         if window:
             yield {"context": {"used": used, "window": window,
                                "fraction": round(used / window, 3),
                                "round": round_index + 1}}
             if used > window * CONTEXT_STOP_FRACTION and round_index:
-                # Said plainly rather than by quietly writing up whatever is
-                # to hand. "It ran out of room" and "it decided it was done"
-                # produce the same short answer and call for opposite things
-                # from the user — a bigger window versus a better question.
+                # Make room before giving up the tools.
+                #
+                # Ending the turn here is right for a question and wrong for
+                # work: a coding turn that has read six files, run the tests
+                # and found the failure hits this line holding everything it
+                # needs, and is told to stop and write up what it could not
+                # get to. But a transcript at the ceiling is mostly tool
+                # output, and tool output is the one part that can be thrown
+                # away safely — the file is still on disk, and re-reading it
+                # costs one round. See carrot/pruning.py for why the budgets
+                # are separate and why nothing here calls a model.
+                before = used
+                want = int(used - window * CONTEXT_RESUME_FRACTION)
+                if pruning_mod.prunable_tokens(working) >= min(
+                        want, int(window * MIN_WORTHWHILE_PRUNE)):
+                    working, pruned = pruning_mod.prune(working, want)
+                    used = tools_tokens + ctxwin_mod.estimate_tokens(
+                        json.dumps(working, default=str))
+                    trimmed = pruned["tool_results"] + pruned["replies"]
+                    yield {"stage": "context",
+                           "detail": f"context was {int(before / window * 100)}% full — "
+                                     f"trimmed {trimmed} earlier "
+                                     f"{'result' if trimmed == 1 else 'results'} "
+                                     f"to keep working, now "
+                                     f"{int(used / window * 100)}%"}
+                    yield {"context": {"used": used, "window": window,
+                                       "fraction": round(used / window, 3),
+                                       "round": round_index + 1, "pruned": pruned}}
+            if window and used > window * CONTEXT_STOP_FRACTION and round_index:
+                # Nothing left worth trimming. Said plainly rather than by
+                # quietly writing up whatever is to hand: "it ran out of room"
+                # and "it decided it was done" produce the same short answer
+                # and call for opposite things from the user — a bigger window
+                # versus a better question.
                 yield {"stage": "context",
                        "detail": f"the context window is {int(used / window * 100)}% full — "
                                  "answering now with what has been gathered"}
@@ -3106,7 +3203,6 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
             # stronger signal than an untouched goal — it is the model telling
             # us, in its own words, that it stopped short.
             if gated and not stalled:
-                rounds_left = rounds - round_index - 1
                 if (rounds_left > 1 and coverage_nudges < MAX_GOAL_NUDGES
                         and _reads_like_a_coverage_report(content_str)):
                     coverage_nudges += 1
@@ -3131,7 +3227,6 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
             # exists because a model will happily describe four changes and
             # make one, and prose is where that lie lives.
             if planning_work and goals and not stalled:
-                rounds_left = rounds - round_index - 1
                 unmet = _unmet_goals(goals, question, " ".join(work))
                 if unmet and rounds_left > 1 and goal_nudges < MAX_GOAL_NUDGES:
                     goal_nudges += 1
@@ -3155,7 +3250,10 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
             # easily. Single-pass promises one round of *searching*, not that
             # it will hand over a fact it can see is wrong.
             if not stalled and evidence and support_nudges < MAX_SUPPORT_NUDGES:
-                rounds_left = rounds - round_index - 1
+                # The window-based estimate, like the others. Against the old
+                # fixed ceiling this went negative once the loop outgrew it,
+                # and the check that catches a claim no source supports would
+                # have stopped running at round eight.
                 unsupported = (_unsupported_claims(resolved, answer, evidence)
                                if rounds_left >= 1 else [])
                 if unsupported:
@@ -3355,7 +3453,11 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
         # Only while there is still something open and a round left to do it
         # in. Revising a plan that is finished, or one there is no budget to
         # act on, changes nothing except the picture the user is looking at.
-        rounds_left_now = rounds - round_index - 1
+        # The same estimate the nudges use. Against the old fixed ceiling this
+        # went negative once the loop outgrew it, which silently retired the
+        # replanner — the plan stopped being revised at round eight of a turn
+        # that now runs until the window fills.
+        rounds_left_now = rounds_left
         # Open goals mean the plan can still be corrected. A *complete* plan is
         # the other case worth revising, and the more valuable one: the opening
         # plan was written before anything was known about the subject, so it
@@ -3479,6 +3581,21 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
             questions = []
         if questions:
             yield {"questions": questions, "blocking": asked.blocking()}
+
+    # It asked, but not in a shape that makes buttons.
+    #
+    # The prompt says prose questions are ignored and the model will be made
+    # to guess — and it was, silently, which is how a turn ended on "Key
+    # Decisions Needed:" with the panel reporting Done underneath it. The
+    # model is waiting; the only thing missing was anybody saying so.
+    if not (asked and questions):
+        try:
+            in_prose = coder_mod.prose_questions(final_text)
+        except Exception:
+            LOG.debug("could not scan for prose questions", exc_info=True)
+            in_prose = []
+        if in_prose:
+            yield {"questions_in_prose": in_prose}
 
     yield {"_final_text": final_text}
 
@@ -5281,11 +5398,67 @@ async def router_recommendation():
     return router_mod.recommend_local_model()
 
 
+# ===== Optional components =====
+#
+# The parts of Carrot that arrive as an optional package. The app is already
+# running in the interpreter that needs them, so it can put them there — which
+# is the whole point: `pip install carrot[browser]` followed by
+# `python -m playwright install chromium` is a fine instruction for somebody
+# with a terminal open and the end of the road for everybody else.
+
+@app.get("/api/components")
+async def list_components():
+    return {"components": components_mod.status()}
+
+
+@app.post("/api/components/{component_id}/install")
+async def install_component(component_id: str):
+    """Start an install and return at once; the row polls for progress.
+
+    Not synchronous — a few hundred megabytes is minutes, and a request held
+    open that long is one a browser or proxy abandons, leaving the install
+    running and the screen convinced it failed.
+    """
+    result = components_mod.install(component_id)
+    if not result.get("ok"):
+        raise HTTPException(status_code=404, detail=result.get("error", "unknown component"))
+    return result
+
+
 # ===== Extension packs =====
 
 @app.get("/api/extensions")
 async def list_extensions():
     return {"extensions": extensions_mod.list_packs()}
+
+
+@app.get("/api/extensions/catalog")
+async def extension_catalog():
+    """Everything on the shelf, with whether it has been added.
+
+    Separate from /api/extensions, which answers "what is in my app". The two
+    questions are different and were the same list, so the page read as a
+    settings panel with a switch per pack rather than a shelf you take things
+    off.
+    """
+    return {"extensions": extensions_mod.catalog()}
+
+
+@app.post("/api/extensions/{pack_id}/install")
+async def install_extension(pack_id: str):
+    """Add a pack to this installation. It arrives switched off."""
+    try:
+        return extensions_mod.install(pack_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.delete("/api/extensions/{pack_id}/install")
+async def uninstall_extension(pack_id: str):
+    try:
+        return extensions_mod.uninstall(pack_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
 
 @app.get("/api/extensions/tabs")
@@ -5312,10 +5485,15 @@ async def get_extension(pack_id: str):
 @app.put("/api/extensions/{pack_id}/enabled")
 async def set_extension_enabled(pack_id: str, req: ProviderEnabledRequest):
     """Turn a pack on or off. Enabling installs its skills; disabling removes them."""
+    # 404 means there is no such pack. A pack that exists and has not been
+    # added is a different answer and needs a different code, or the client
+    # cannot tell "you have a typo" from "press Add first".
+    if extensions_mod.get_pack(pack_id) is None:
+        raise HTTPException(status_code=404, detail=f"unknown extension: {pack_id}")
     try:
         return extensions_mod.set_enabled(pack_id, req.enabled)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=409, detail=str(exc))
 
 
 @app.put("/api/extensions/{pack_id}/settings/{key}")

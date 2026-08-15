@@ -105,8 +105,18 @@ def read_only_runner():
 
 
 def run_one(name: str, task: str, run_tool: Callable, tools: List[Dict[str, Any]],
-            emit: Callable, context_note: str = "", rounds: int = MAX_ROUNDS) -> str:
-    """One subagent, to its own budget. Returns its written answer."""
+            emit: Callable, context_note: str = "", rounds: int = MAX_ROUNDS,
+            deadline: Optional[float] = None) -> str:
+    """One subagent, to its own budget. Returns its written answer.
+
+    ``deadline`` is a ``time.monotonic()`` stamp, checked between rounds. A
+    round already in flight is not interrupted — there is no safe way to kill
+    a provider call mid-stream — so this bounds how long the agent keeps
+    *starting* work, which is what an unattended run needs: something stuck at
+    4am must not still be stuck at 4pm.
+    """
+    import time
+
     resolved = router_mod.route(task=router_mod.TASK_CODE)
     messages: List[Dict[str, Any]] = [
         {"role": "system", "content": SUBAGENT_SYSTEM},
@@ -116,6 +126,10 @@ def run_one(name: str, task: str, run_tool: Callable, tools: List[Dict[str, Any]
 
     answer_parts: List[str] = []
     for _ in range(rounds):
+        if deadline is not None and time.monotonic() > deadline:
+            answer_parts.append(
+                "(stopped: this run hit its time limit before finishing)")
+            break
         calls: List[Dict[str, Any]] = []
         text: List[str] = []
         try:

@@ -358,7 +358,9 @@ def local_model(task: str) -> str:
     pinned = assignment(task)
     if pinned and pinned["provider"] == PROVIDER_LOCAL:
         return pinned["model"]
-    return config.get("ollama_model", "gemma4:e4b")
+    from . import hub as hub_mod
+
+    return config.get("ollama_model") or hub_mod.configured_or_default_model()
 
 
 # ===== Hardware-aware auto-pick =====
@@ -667,6 +669,62 @@ def _split_system(messages: List[Dict[str, Any]]):
     return "\n\n".join(system_parts), rest
 
 
+# ===== Paying once for the part that never changes =====
+#
+# Every round of an agentic turn re-sends the same prefix: the directive and
+# the whole tool schema, which `prompt_overhead()` measures at a third of an
+# 8k window on its own. That was being billed and re-processed on every call,
+# and a turn now runs until the context fills rather than for eight rounds, so
+# the same bytes were going over the wire dozens of times.
+#
+# Anthropic caches a prefix when it is marked, and reads it back at a fraction
+# of the input price with a shorter time to first token. What is marked is the
+# system prompt and the tools — the stable part. The conversation is
+# deliberately not marked: it grows every round, so a marker on it would write
+# a new cache entry each time and pay the write premium for a prefix nothing
+# reuses.
+#
+# There is a floor because a cache *write* costs more than an ordinary call.
+# Below roughly a thousand tokens there is nothing to amortise, and marking a
+# two-line prompt makes it more expensive rather than less.
+CACHE_MIN_TOKENS = 1024
+
+
+def _worth_caching(system: str, tools: List[Dict[str, Any]]) -> bool:
+    from . import context_windows as ctxwin
+
+    try:
+        import json as _json
+
+        size = ctxwin.estimate_tokens(system or "")
+        if tools:
+            size += ctxwin.estimate_tokens(_json.dumps(tools))
+        return size >= CACHE_MIN_TOKENS
+    except Exception:
+        return False
+
+
+def _cached_system(system: str):
+    """The system prompt as a cacheable block."""
+    return [{"type": "text", "text": system,
+             "cache_control": {"type": "ephemeral"}}]
+
+
+def _cached_tools(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Tools with the breakpoint on the last one.
+
+    One marker, not one per tool: the cache is a prefix, so marking the final
+    definition caches every definition before it. Four markers is the limit
+    per request and spending them on individual tools would cache the same
+    bytes four times.
+    """
+    if not tools:
+        return tools
+    marked = list(tools)
+    marked[-1] = {**marked[-1], "cache_control": {"type": "ephemeral"}}
+    return marked
+
+
 def _to_anthropic_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Convert Ollama-shaped history into Anthropic content blocks.
 
@@ -863,11 +921,14 @@ def _stream_once(
         "betas": CLOUD_BETAS,
         "fallbacks": "default",
     }
-    if system:
-        request["system"] = system
     anthropic_tools = _to_anthropic_tools(tools)
+    # Marked together or not at all: the cache is a prefix, and a marker on
+    # the system prompt only helps if the tools before it are stable too.
+    cacheable = _worth_caching(system, anthropic_tools)
+    if system:
+        request["system"] = _cached_system(system) if cacheable else system
     if anthropic_tools:
-        request["tools"] = anthropic_tools
+        request["tools"] = _cached_tools(anthropic_tools) if cacheable else anthropic_tools
 
     with client.beta.messages.stream(**request) as stream:
         for event in stream:
@@ -1015,7 +1076,8 @@ def complete(resolved: Route, messages: List[Dict[str, Any]]) -> str:
         "fallbacks": "default",
     }
     if system:
-        request["system"] = system
+        request["system"] = (_cached_system(system)
+                             if _worth_caching(system, []) else system)
 
     response = with_rate_limit_retry(lambda: client.beta.messages.create(**request),
                                      provider=resolved.provider or "anthropic")

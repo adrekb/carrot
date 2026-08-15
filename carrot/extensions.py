@@ -137,8 +137,72 @@ def register(pack: Pack) -> Pack:
     return pack
 
 
+# ===== Added, or merely available =====
+#
+# An extension is not part of the app until it is added. That is a change of
+# posture rather than of plumbing: the code still ships in the build, because
+# fetching executable code from the internet at runtime is the one thing a
+# local-first assistant should not do — it would put an arbitrary-code channel
+# into the app whose entire promise is that nothing leaves the machine unless
+# you say so. What "download" means here is that nothing appears in Extensions,
+# offers a tool, writes a skill or adds a tab until you press Add.
+#
+# The reason to have it at all is the list. Every bundled pack was a card on
+# one screen whether or not it had anything to do with you, so the page read
+# as a settings panel with eight switches instead of a shelf you take things
+# off. What is on the shelf and what is in your app are different questions.
+
+
+def installed_ids() -> List[str]:
+    configured = get_config().get("installed_extensions")
+    if configured is None:
+        # First run after this existed: anything already switched on is
+        # obviously installed. Migrating it to "not installed" would take a
+        # working pack away from someone who had turned it on deliberately,
+        # which is a worse first impression than the shelf being empty.
+        return [pid for pid in enabled_ids() if pid in _PACKS]
+    return [pid for pid in configured if pid in _PACKS]
+
+
+def is_installed(pack_id: str) -> bool:
+    return pack_id in installed_ids()
+
+
+def install(pack_id: str) -> Dict[str, Any]:
+    """Add a pack to this installation. It arrives switched off."""
+    pack = require_pack(pack_id)
+    current = set(installed_ids())
+    current.add(pack_id)
+    set_config("installed_extensions", sorted(current))
+    return pack.as_dict(deep=True)
+
+
+def uninstall(pack_id: str) -> Dict[str, Any]:
+    """Remove it, and switch it off on the way out.
+
+    Leaving a removed pack enabled would keep its skills on disk and its tools
+    in the agent's list — an extension that is not installed and still working
+    is the worst of both readings.
+    """
+    pack = require_pack(pack_id)
+    if is_enabled(pack_id):
+        set_enabled(pack_id, False)
+    current = set(installed_ids())
+    current.discard(pack_id)
+    set_config("installed_extensions", sorted(current))
+    return pack.as_dict(deep=True)
+
+
+def catalog(deep: bool = False) -> List[Dict[str, Any]]:
+    """Everything on the shelf, installed or not."""
+    return [{**pack.as_dict(deep=deep), "installed": is_installed(pack.id)}
+            for pack in _PACKS.values()]
+
+
 def list_packs(deep: bool = False) -> List[Dict[str, Any]]:
-    return [pack.as_dict(deep=deep) for pack in _PACKS.values()]
+    """Only what has been added — this is what Extensions shows as yours."""
+    return [{**pack.as_dict(deep=deep), "installed": True}
+            for pack in _PACKS.values() if is_installed(pack.id)]
 
 
 def get_pack(pack_id: str) -> Optional[Pack]:
@@ -162,7 +226,10 @@ def enabled_ids() -> List[str]:
 
 
 def is_enabled(pack_id: str) -> bool:
-    return pack_id in enabled_ids()
+    # Installation first. A pack removed from this installation must stop
+    # offering tools even if its id is still sitting in the enabled list,
+    # which it will be for anyone who had it on before removing it.
+    return pack_id in enabled_ids() and pack_id in installed_ids()
 
 
 def pack_tabs() -> Dict[str, Any]:
@@ -188,6 +255,8 @@ def pack_tabs() -> Dict[str, Any]:
 def set_enabled(pack_id: str, enabled: bool) -> Dict[str, Any]:
     """Turn a pack on or off, installing or removing its skills to match."""
     pack = require_pack(pack_id)
+    if enabled and not is_installed(pack_id):
+        raise ValueError(f"{pack_id} has not been added to this installation")
     current = set(enabled_ids())
     if enabled:
         current.add(pack_id)
@@ -403,3 +472,5 @@ def call(
 from .packs import academia  # noqa: E402,F401  (registers itself)
 from .packs import planner  # noqa: E402,F401  (registers itself)
 from .packs import ambient  # noqa: E402,F401  (registers itself)
+from .packs import latexnote  # noqa: E402,F401  (registers itself)
+from .packs import animation  # noqa: E402,F401  (registers itself)

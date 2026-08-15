@@ -27,7 +27,12 @@ import requests
 
 from carrot.config import CARROT_DIR, get_config, set_config
 
-DEFAULT_MODEL = "gemma4:e4b"
+# The floor, not the default. There is no longer one model that is right for
+# every machine — `hub.default_model()` picks that from the memory the machine
+# actually has — and this is only what is left when hardware detection itself
+# fails. Small on purpose: too small is slow-witted, too big does not run at
+# all, and only one of those gets the user to the screen where they can choose.
+DEFAULT_MODEL = "llama3.2:3b"
 OLLAMA_PORT = 11434
 OLLAMA_DOWNLOAD_URL = "https://ollama.com/download/OllamaSetup.exe"
 OLLAMA_RELEASE_BASE = "https://github.com/ollama/ollama/releases/latest/download"
@@ -328,7 +333,9 @@ def get_target_model() -> str:
     so a missing/uninitialized config means the stock default.
     """
     try:
-        return get_config().get("ollama_model") or DEFAULT_MODEL
+        from carrot import hub as hub_mod
+
+        return hub_mod.configured_or_default_model()
     except Exception:
         return DEFAULT_MODEL
 

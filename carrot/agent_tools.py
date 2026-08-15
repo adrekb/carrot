@@ -592,7 +592,40 @@ def _tool_run_command(command: str, **_) -> str:
 
     result = terminal_mod.execute_command(command, cwd=workspace_root(), timeout=60)
     status = "ok" if result["success"] else f"exit {result['returncode']}"
-    return f"[{status}]\n{result['output'][:8000]}"
+    output = result["output"][:8000]
+    if not result["success"]:
+        output += _missing_component_hint(result["output"])
+    return f"[{status}]\n{output}"
+
+
+def _missing_component_hint(output: str) -> str:
+    """Turn a missing import into the sentence that fixes it.
+
+    The advertised way to draw a chart is "write a script, run it" — and on a
+    machine without matplotlib that is a `ModuleNotFoundError` and nothing
+    else. The model then tells the user to run a pip command, which is the
+    thing Settings exists to avoid, or gives up and describes the chart.
+
+    Carrot is not going to install it unasked; it is going to say where the
+    button is. Named after the component rather than the package, because
+    "Charts and plots" is what the row is called and the package name is not
+    on that screen.
+    """
+    from . import components as components_mod
+
+    match = re.search(r"No module named ['\"]([A-Za-z0-9_.]+)['\"]", output or "")
+    if not match:
+        return ""
+    wanted = match.group(1).split(".")[0].lower()
+    for component in components_mod.COMPONENTS:
+        names = {p.lower().replace("-", "_") for p in component["pip"]}
+        if wanted in names or wanted in {n.replace("_", "") for n in names}:
+            return (f"\n\nCarrot note: `{match.group(1)}` is part of "
+                    f"\"{component['label']}\", which is not installed on this "
+                    f"machine. Tell the user to open Settings → Add-ons and press "
+                    f"Install on that row — one click, no terminal. Do not ask "
+                    f"them to run a pip command.")
+    return ""
 
 
 def _tool_explore_in_parallel(investigations: Any = None, emit=None, **_) -> str:
@@ -1001,17 +1034,27 @@ def _tool_current_datetime(**_) -> str:
 
 
 def _tool_show_artifact(kind: str, content: str = "", title: str = "",
-                        path: str = "", conversation_id: str = "", **_) -> str:
+                        path: str = "", code: str = "", code_language: str = "",
+                        conversation_id: str = "", **_) -> str:
     """Put something visual in the conversation.
 
     The conversation_id is injected by the caller, not supplied by the model —
     an artifact must land in the chat it was made for.
+
+    `code` is the script that produced the thing, kept beside it rather than
+    printed above it. The figure is the answer and the source is the working:
+    the card shows one and offers the other behind "Show code".
     """
     from . import artifacts
 
+    meta = {}
+    if (code or "").strip():
+        meta["code"] = code
+        meta["code_language"] = (code_language or "python").strip()[:24]
     try:
         artifact = artifacts.create(
-            kind, content, title=title, path=path, conversation_id=conversation_id or "")
+            kind, content, title=title, path=path, meta=meta or None,
+            conversation_id=conversation_id or "")
     except artifacts.ArtifactError as exc:
         return f"error: {exc}"
     except Exception as exc:                     # a bad path, an unreadable file
@@ -1655,7 +1698,12 @@ TOOLS: Dict[str, Dict[str, Any]] = {
             "kind=markdown for a rich table, kind=code to display a file. "
             "For a matplotlib or similar plot: write a script that saves a PNG into "
             "the workspace, run it with run_command, then call this with "
-            "kind=image and path set to the file you wrote."
+            "kind=image and path set to the file you wrote. "
+            "When a computed answer came from code, pass that code as `code`. It "
+            "is kept with the figure and shown behind a \"Show code\" toggle, so "
+            "the reader sees the result first and the working when they want it. "
+            "Do NOT also paste the script into your reply — that prints it twice "
+            "and buries the picture under it. Say what the figure shows instead."
         ),
         "parameters": {
             "type": "object",
@@ -1668,6 +1716,11 @@ TOOLS: Dict[str, Dict[str, Any]] = {
                 "path": {"type": "string",
                          "description": "For kind=image: a workspace-relative image file"},
                 "title": {"type": "string", "description": "A short caption"},
+                "code": {"type": "string",
+                         "description": "The script that produced this, shown behind "
+                                        "a Show code toggle. Do not repeat it in your reply."},
+                "code_language": {"type": "string",
+                                  "description": "Language of `code` (default python)"},
             },
             "required": ["kind"],
         },

@@ -29,10 +29,11 @@ work starts.
 """
 from __future__ import annotations
 
+import os
 import threading
 import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from .database import get_db
@@ -302,6 +303,10 @@ def _run_through_the_agent(task: Dict[str, Any]) -> str:
     return subagents.run_one(
         name="scheduled", task=task["prompt"], run_tool=run_tool, tools=tools,
         emit=lambda event: None, rounds=SCHEDULED_ROUNDS,
+        # The limit this module has always claimed and briefly stopped
+        # enforcing: swapping the runner took the deadline out with it, and
+        # left the constant sitting here describing a guarantee nothing kept.
+        deadline=time.monotonic() + MAX_RUN_SECONDS,
         context_note="You are running on a schedule. Nobody is at the keyboard, "
                      "so report what you find rather than asking a question.",
     )
@@ -342,9 +347,19 @@ def _loop():
 
 
 def start_scheduler():
-    """Idempotent, like the overnight recap's — the app can call it twice."""
+    """Idempotent, like the overnight recap's — the app can call it twice.
+
+    Refuses to start under CARROT_NO_BACKGROUND, which the test suite sets.
+    The guard lives here rather than in a fixture because a fixture has to
+    name every daemon, and the one it does not name is the one that breaks
+    things: this thread ticks against whatever database path is current, so
+    inside a suite that gives each test its own database it was writing to
+    directories other tests had already torn down. That surfaced as a sqlite
+    error in a different file on every run, which reads exactly like flakiness
+    and was in fact one unguarded thread.
+    """
     global _started
-    if _started:
+    if _started or os.environ.get("CARROT_NO_BACKGROUND"):
         return
     _started = True
     threading.Thread(target=_loop, daemon=True, name="carrot-scheduled-tasks").start()

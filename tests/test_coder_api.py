@@ -502,9 +502,18 @@ class TestAgentPanel:
         assert 'id="mode-plan"' in head and 'id="mode-act"' in head
 
     def test_there_is_only_one_mode_switch(self):
+        """One Plan/Act control, in the agent's own header.
+
+        Counted inside the Code view rather than across the page: the same
+        two-button component is used elsewhere now — the LaTeX tab switches
+        between split and reading with it — and a page-wide count would make
+        this fail for a control that has nothing to do with what the agent is
+        allowed to do to your files.
+        """
         html = self.read("index.html")
         assert html.count('id="mode-plan"') == 1
-        assert html.count('class="mode-switch"') == 1
+        code_view = html[html.index('id="view-code"'):html.index('id="view-latex"')]
+        assert code_view.count('class="mode-switch"') == 1
 
     def test_the_status_line_says_what_the_agent_may_do(self):
         # "act" told the user nothing about whether their files were at risk.

@@ -145,6 +145,18 @@ MODE_PREAMBLE = {
     MODE_ACT: (
         "You are in ACT mode, and you have the tools to change the workspace: "
         "write_file, edit_file and run_command are available to you right now.\n\n"
+        # PLAN mode has said "look before you plan" since it planned a
+        # simulator into a folder holding a Pong game. ACT had no equivalent,
+        # and ACT is not only reached through PLAN — the mode is a switch the
+        # user can throw at any time, so a turn can start here having read
+        # nothing at all. edit_file fails safely in that state, because its
+        # search text will not match a file nobody has read; write_file does
+        # not, because overwriting is what it does.
+        "Look before you write. Call list_dir if you have not seen this "
+        "workspace this turn, and read a file before you overwrite it — "
+        "write_file replaces the whole file, so writing one you have not read "
+        "is deleting work you never saw. It is revertable and it should not "
+        "happen.\n\n"
         "Use them. Do not print a file into the chat and describe how to save "
         "it — write it. Do not tell the user to run a command — run it and read "
         "the output. Pasting code the user then has to copy is the one thing "
@@ -283,6 +295,51 @@ def parse_questions(text: str) -> List[Dict[str, Any]]:
             continue
         questions.append({"question": prompt, "options": options[:MAX_OPTIONS]})
     return questions
+
+
+# A line that is a question the model is putting to the user, rather than one
+# it is about to answer itself. Numbered, bulleted or bold — the three shapes
+# "Key Decisions Needed:" is followed by in practice.
+_PROSE_QUESTION = re.compile(
+    r"^\s*(?:[-*•]|\d+[.)]|\*\*\d+[.)]?\*\*)?\s*(.{8,200}\?)\s*$", re.M)
+
+# Headings that introduce a list of things the model wants decided. Their
+# presence is not required — a bare question still counts — but they raise the
+# confidence enough to report a single question, which on its own is often
+# rhetorical.
+_ASKING_HEADING = re.compile(
+    r"^\s*#*\s*\**\s*(key\s+)?(decisions?|questions?|clarifications?|choices?)"
+    r"\b.{0,40}(needed|required|for you|to make|before)?\s*:?\s*\**\s*$", re.I | re.M)
+
+
+def prose_questions(text: str) -> List[str]:
+    """Questions the model asked in prose when it should have sent a block.
+
+    The reason this exists is a turn that ended "Key Decisions Needed:" and
+    then stopped. The plan prompt says plainly that prose questions produce no
+    buttons and will be ignored — so the model was ignored, silently, and the
+    panel said Done over the top of a model waiting for an answer.
+
+    Deliberately a detector and not a repair. The obvious alternative is a
+    second call asking the model to reformat, but the models that miss this
+    format are small local ones, and asking the same model to get the same
+    format right on a second attempt fails in the same place it just failed.
+    A detector cannot make the turn worse, costs nothing, and restores the
+    part that was actually lost: knowing it is waiting.
+    """
+    text = text or ""
+    if QUESTIONS_MARKER.search(text):
+        return []
+    found = [_one_line(m.group(1)) for m in _PROSE_QUESTION.finditer(text)]
+    # Its own rhetorical questions are not questions for the user. "What could
+    # go wrong?" as a heading over the answer is the common one.
+    found = [q for q in found if not q.lower().startswith(("what could go wrong",
+                                                           "what next", "why"))]
+    if not found:
+        return []
+    if len(found) == 1 and not _ASKING_HEADING.search(text):
+        return []
+    return found[:MAX_QUESTIONS]
 
 
 def strip_questions(text: str) -> str:

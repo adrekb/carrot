@@ -31,9 +31,17 @@ CARROT_DIR = _default_data_dir()
 CONFIG_DB_KEY = "config"
 DEFAULTS = {
     "ollama_host": "http://localhost:11434",
-    "ollama_model": "gemma4:e4b",
-    "ollama_model_recap": "gemma4:e4b",
-    "ollama_model_search": "gemma4:e4b",
+    # Empty means "nobody has chosen yet", and that is a different thing from
+    # any particular model. It used to be `gemma4:e4b` for every machine ever
+    # to run Carrot — 6 GB, which thrashes on an 8 GB laptop where a 3B would
+    # have been quick, and is a toy on a workstation with a 24 GB card. The
+    # Hub has always known how to size a model to a machine; the default never
+    # asked it. `hub.configured_or_default_model()` is where the question gets
+    # asked now, and it is asked lazily, because a default that ran nvidia-smi
+    # from an import would run it in every process that touches config.
+    "ollama_model": "",
+    "ollama_model_recap": "",
+    "ollama_model_search": "",
     "data_dir": CARROT_DIR,
     "conversations_dir": os.path.join(CARROT_DIR, "conversations"),
     "notes_dir": os.path.join(CARROT_DIR, "notes"),
@@ -193,9 +201,21 @@ def redact(settings):
     return redacted
 
 
+# These two go through `database.get_db()` rather than opening the file
+# themselves. Imported inside the functions because database imports config for
+# the data directory, and at module scope that is a cycle.
+#
+# What the raw connection was missing: the schema. `get_db()` creates it on
+# first connect, and these were the two places that read and wrote a table
+# without ever guaranteeing it existed — so config on a database no one had
+# called `init_db()` against raised `no such table: config` rather than
+# returning the defaults. They also inherit WAL and the 30-second busy
+# timeout, which matters for a write that can land while the indexer holds
+# the database.
 def get_config():
-    conn = sqlite3.connect(os.path.join(CARROT_DIR, "carrot.db"))
-    conn.row_factory = sqlite3.Row
+    from carrot import database
+
+    conn = database.get_db()
     rows = conn.execute("SELECT key, value FROM config").fetchall()
     conn.close()
     config = dict(DEFAULTS)
@@ -208,7 +228,9 @@ def get_config():
 
 
 def set_config(key, value):
-    conn = sqlite3.connect(os.path.join(CARROT_DIR, "carrot.db"))
+    from carrot import database
+
+    conn = database.get_db()
     conn.execute(
         "INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)",
         (key, json.dumps(value)),

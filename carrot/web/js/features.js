@@ -1398,7 +1398,49 @@ async function renderArtifact(id, host) {
     } else {
         card.appendChild(artifactFrame(artifact));
     }
+    const source = artifactCode(artifact);
+    if (source) card.appendChild(source);
     host.appendChild(card);
+}
+
+// The working, under the answer.
+//
+// A computed figure and the script that produced it are one answer, and the
+// old shape put the script first — a screenful of matplotlib with the picture
+// somewhere below it, so the thing the reader asked for arrived last. This
+// inverts it: the figure is what you see, the source is one click away and
+// stays with the figure when the conversation is reopened.
+function artifactCode(artifact) {
+    const code = ((artifact.meta || {}).code || '').trim();
+    if (!code) return null;
+    const wrap = document.createElement('details');
+    wrap.className = 'artifact-code';
+    const summary = document.createElement('summary');
+    summary.innerHTML = `<span>Show code</span>`
+        + `<span class="artifact-code-lang">${escHtml((artifact.meta || {}).code_language || 'python')}</span>`;
+    wrap.appendChild(summary);
+
+    const pre = document.createElement('pre');
+    const el = document.createElement('code');
+    // textContent, never innerHTML: this is source the model wrote, and the
+    // whole point of the artifact sandbox is that such text never becomes
+    // markup in the app document.
+    el.textContent = code;
+    pre.appendChild(el);
+    wrap.appendChild(pre);
+
+    const copy = document.createElement('button');
+    copy.className = 'artifact-btn artifact-code-copy';
+    copy.textContent = 'Copy';
+    copy.onclick = (e) => {
+        e.preventDefault();
+        navigator.clipboard.writeText(code).then(() => {
+            copy.textContent = 'Copied';
+            setTimeout(() => { copy.textContent = 'Copy'; }, 1200);
+        }, () => { copy.textContent = 'Copy failed'; });
+    };
+    wrap.appendChild(copy);
+    return wrap;
 }
 
 function artifactFrame(artifact) {
@@ -1412,7 +1454,10 @@ function artifactFrame(artifact) {
     frame.srcdoc = artifact.document;
     // Images and charts vary wildly in height; grow to fit rather than
     // scrolling a 200px window. Cross-origin means asking, not measuring.
-    frame.style.height = artifact.kind === 'image' ? '320px' : '380px';
+    // Video gets more room than a chart: it is 16:9 and it has a control bar
+    // under it, so at 380px the picture is letterboxed into about 300.
+    frame.style.height = artifact.kind === 'image' ? '320px'
+        : (artifact.kind === 'video' ? '460px' : '380px');
     return frame;
 }
 
@@ -1437,6 +1482,10 @@ function openArtifactFull(artifact) {
         frame.style.height = '70vh';
         card.appendChild(frame);
     }
+    // The source travels with the figure here too — "Open" is where somebody
+    // goes to read it properly, which is exactly when they want the working.
+    const source = artifactCode(artifact);
+    if (source) card.appendChild(source);
     const close = () => host.remove();
     host.querySelector('[data-close]').onclick = close;
     host.onclick = (e) => { if (e.target === host) close(); };
@@ -2392,7 +2441,7 @@ const WRITE_TOOLS = new Set([
 // had finished from one still thinking. And the answer describes intentions —
 // the files are what actually happened, which is the thing ACT mode exists to
 // make true.
-function agentFinished(wrap, touched, commandsRun, elapsedMs, failure) {
+function agentFinished(wrap, touched, commandsRun, elapsedMs, failure, waiting) {
     if (!wrap || wrap.querySelector('.agent-done')) return;
     const parts = [];
     if (touched.size) {
@@ -2411,9 +2460,11 @@ function agentFinished(wrap, touched, commandsRun, elapsedMs, failure) {
     // file that was never written wondering what you did wrong. The counts
     // stay: what it managed before it stopped is exactly what you need to
     // know to decide whether to run it again.
-    row.className = 'agent-done' + (failure ? ' failed' : '');
-    row.innerHTML = `<svg class="ico"><use href="#i-${failure ? 'stop' : 'check'}"/></svg>`
-        + `<span>${failure ? 'Stopped' : 'Done'} — ${escHtml(parts.join(', '))}`
+    row.className = 'agent-done' + (failure ? ' failed' : (waiting ? ' waiting' : ''));
+    const verb = failure ? 'Stopped' : (waiting ? 'Waiting on you' : 'Done');
+    row.innerHTML = `<svg class="ico"><use href="#i-${
+        failure ? 'stop' : (waiting ? 'clock' : 'check')}"/></svg>`
+        + `<span>${verb} — ${escHtml(parts.join(', '))}`
         + (failure ? ` · ${escHtml(String(failure).slice(0, 160))}` : '')
         + `<span class="agent-done-time"> · ${Math.round(elapsedMs / 1000)}s</span></span>`;
     if (touched.size) {
@@ -2439,6 +2490,27 @@ function agentTrace(wrap, text, cls) {
     line.textContent = text;
     trace.appendChild(line);
     trace.scrollTop = trace.scrollHeight;
+    document.getElementById('agent-log').scrollTop = 1e9;
+}
+
+// ===== It asked, but not in a shape that makes buttons =====
+//
+// A card rather than a trace line, because the point is that the turn is not
+// over: it stopped to ask something, and the previous behaviour — footer
+// saying Done under a model waiting for an answer — is the one this exists to
+// end. The questions are repeated verbatim so they can be answered by typing,
+// which is the one thing that always works.
+
+function agentProseQuestions(wrap, questions) {
+    const box = document.createElement('div');
+    box.className = 'prose-questions';
+    box.innerHTML = '<div class="pq-head">It is waiting on you</div>'
+        + '<div class="pq-note">It asked these as prose rather than as buttons, '
+        + 'so there is nothing to click. Answer in the box below and it will carry on.</div>'
+        + '<ul class="pq-list">'
+        + questions.map(q => `<li>${escHtml(q)}</li>`).join('')
+        + '</ul>';
+    wrap.appendChild(box);
     document.getElementById('agent-log').scrollTop = 1e9;
 }
 
@@ -2789,6 +2861,9 @@ async function sendAgentTask() {
     // Why the turn stopped, if the provider stopped it. The footer reads this
     // rather than announcing "Done" over the top of a rate limit.
     let turnFailed = '';
+    // Whether the turn stopped to ask something. "Done" over a model waiting
+    // for an answer is the same lie as "Done" over a rate limit.
+    let turnAwaitingAnswer = false;
     const send = document.getElementById('agent-send');
     const stop = document.getElementById('agent-stop');
     send.disabled = true;
@@ -2903,6 +2978,15 @@ async function sendAgentTask() {
                 if (payload.questions) {
                     agentQuestions(wrap, payload.questions, payload.blocking);
                 }
+                // It asked, but as prose, so there are no buttons to press.
+                // Said out loud because the alternative is what happened
+                // before: the turn ended on "Key Decisions Needed:" and the
+                // footer said Done, and nothing on screen suggested anyone
+                // was waiting for anything.
+                if (payload.questions_in_prose) {
+                    turnAwaitingAnswer = true;
+                    agentProseQuestions(wrap, payload.questions_in_prose);
+                }
                 // A server that is now running. Its own card rather than a
                 // line in the trace: it is the only thing in this panel that
                 // is still true after the turn ends, and the only one with a
@@ -2982,7 +3066,8 @@ async function sendAgentTask() {
                 ? 'The model stopped before answering: ' + turnFailed
                 : '(done)';
         }
-        agentFinished(wrap, touched, commandsRun, Date.now() - startedAt, turnFailed);
+        agentFinished(wrap, touched, commandsRun, Date.now() - startedAt,
+                      turnFailed, turnAwaitingAnswer);
         // A coding turn is the kind of work people start and then go and do
         // something else during. Finishing unread costs the same time as being
         // blocked unread does.

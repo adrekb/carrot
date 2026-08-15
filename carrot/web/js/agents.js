@@ -641,13 +641,70 @@ async function loadPacks() {
     } catch (e) {
         console.warn('packs failed', e);
     }
+    // The shelf: everything that exists, minus what has already been added.
+    try {
+        const all = (await api('/api/extensions/catalog')).extensions || [];
+        renderShelf(all.filter(pack => !pack.installed));
+    } catch (e) {
+        console.warn('catalog failed', e);
+    }
+}
+
+function renderShelf(available) {
+    const host = document.getElementById('packs-shelf');
+    if (!host) return;
+    if (!available.length) {
+        host.innerHTML = '<div class="empty">You have added everything there is.</div>';
+        return;
+    }
+    host.innerHTML = available.map(pack => `
+        <div class="shelf-card">
+            <div class="shelf-main">
+                <div class="shelf-name">${escHtml(pack.name)}</div>
+                <div class="shelf-desc">${escHtml(pack.description)}</div>
+                <div class="shelf-meta">
+                    v${escHtml(pack.version)} ·
+                    ${pack.tool_count} tool${pack.tool_count === 1 ? '' : 's'} ·
+                    ${pack.skill_count} skill${pack.skill_count === 1 ? '' : 's'}${
+                        pack.tabs.length ? ' · adds a tab' : ''}
+                </div>
+            </div>
+            <button class="btn btn-primary"
+                    onclick="addExtension('${escHtml(pack.id)}')">Add</button>
+        </div>`).join('');
+}
+
+async function addExtension(packId) {
+    try {
+        await api(`/api/extensions/${packId}/install`, { method: 'POST' });
+    } catch (e) {
+        console.warn('install failed', e);
+    }
+    // Both lists, because the pack has moved from one to the other, and the
+    // nav as well: a pack that adds a tab has just changed what is in the
+    // sidebar, and a tab that appears on the next reload rather than now
+    // reads as the Add having done nothing.
+    loadPacks();
+    if (typeof applyExtensionTabs === 'function') applyExtensionTabs();
+}
+
+async function removeExtension(packId) {
+    if (!confirm('Remove this extension? It will be switched off and its skills deleted.')) return;
+    try {
+        await api(`/api/extensions/${packId}/install`, { method: 'DELETE' });
+    } catch (e) {
+        console.warn('uninstall failed', e);
+    }
+    loadPacks();
+    if (typeof applyExtensionTabs === 'function') applyExtensionTabs();
 }
 
 function renderPacks(packs) {
     const host = document.getElementById('packs-list');
     if (!host) return;
     if (!packs.length) {
-        host.innerHTML = '<div class="empty">No packs are bundled with this build.</div>';
+        host.innerHTML = '<div class="empty">No extensions added yet — '
+            + 'there are some below.</div>';
         return;
     }
     host.innerHTML = packs.map(pack => `
@@ -669,6 +726,9 @@ function renderPacks(packs) {
                            onchange="setPackEnabled('${escHtml(pack.id)}', this.checked)">
                     <span>${pack.enabled ? 'On' : 'Off'}</span>
                 </label>
+                <button class="icon-btn" title="Remove this extension"
+                        onclick="removeExtension('${escHtml(pack.id)}')"
+                    ><svg class="ico"><use href="#i-trash"/></svg></button>
             </div>
             <div id="pack-detail-${escHtml(pack.id)}" class="pack-detail hidden"></div>
         </div>`).join('');

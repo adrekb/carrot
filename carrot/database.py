@@ -540,9 +540,20 @@ def get_db():
     # the marker from the file that used to be there would prevent it.
     if not os.path.exists(DB_PATH):
         _schema_ready.discard(DB_PATH)
-    conn = sqlite3.connect(DB_PATH)
+    # Wait for a lock rather than failing at the default five seconds. WAL
+    # lets readers and writers coexist, but two writers still serialise, and
+    # this app now has several: a chat turn saving messages, a scheduled task
+    # writing its output, the indexer, the ambient capture. Five seconds is
+    # long for a mouse click and short for a sqlite checkpoint on a spinning
+    # disk, and "database is locked" surfaces as a lost message rather than
+    # as a wait.
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    # Wait for readers to finish a checkpoint instead of erroring, same
+    # reasoning. Cheap on a database this size and worth it on a laptop that
+    # is also compiling something.
+    conn.execute("PRAGMA busy_timeout=30000")
     conn.row_factory = sqlite3.Row
     if DB_PATH not in _schema_ready:
         conn.executescript(SCHEMA)
