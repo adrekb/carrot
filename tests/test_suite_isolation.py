@@ -138,3 +138,23 @@ class TestTheOneStatementThatCouldNotWait:
                 return Row()
 
         database._ensure_wal(Stubborn())      # must not raise
+
+
+def test_notes_are_not_the_developers_own(tmp_path):
+    """They are files, and they bind their directory at import time, so
+    patching `config.CARROT_DIR` does not move them. A listing test passes
+    either way — it just happens to be listing somebody's real writing."""
+    from carrot import notes
+
+    assert not os.path.normcase(os.path.abspath(notes.NOTES_DIR)).startswith(
+        _real_data_dir()
+    ), f"the suite is reading real notes at {notes.NOTES_DIR}"
+
+
+def test_a_note_written_by_a_test_lands_in_the_temporary_directory(isolated_db):
+    from carrot import notes
+
+    made = notes.create_note("probe", "hello")
+    assert [n["title"] for n in notes.list_notes()] == ["probe"]
+    assert os.path.abspath(notes.get_note_path(made["id"])).startswith(
+        os.path.abspath(notes.NOTES_DIR))

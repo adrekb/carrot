@@ -4,7 +4,19 @@ import uuid
 from datetime import datetime, timezone
 
 
-NOTES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "notes")
+# Where notes live, from the same resolver as everything else rather than from
+# this file's own location.
+#
+# It was `__file__/data/notes`, which for a checkout is the same path — so
+# nothing moves for anyone who has notes today. It was wrong in the two cases
+# that are not a checkout. An installed build puts the code in a read-only
+# directory, so notes had nowhere to be written; and `CARROT_DATA_DIR`, which
+# every other part of Carrot honours, was ignored here — which is why the dev
+# preview, whose whole promise is that it touches nothing real, opened with a
+# hundred and sixty of the developer's own notes in the sidebar.
+from carrot.config import CARROT_DIR
+
+NOTES_DIR = os.path.join(CARROT_DIR, "notes")
 
 
 def now_iso():
