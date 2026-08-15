@@ -186,3 +186,102 @@ class TestTheSplashShowsIt:
         # Plain centring pushes the top of an oversized flex item above the
         # scroll origin, which cuts off the heading instead of the footer.
         assert "safe center" in block
+
+
+class TestThePickerIsWhereYouFindMore:
+    """The Hub is not a place you go. It is a section of the thing you already
+    open to pick a model."""
+
+    def test_the_hardcoded_six_are_gone(self):
+        """`SUGGESTED_MODELS` was the last hardware-blind recommendation in
+        the app, and it was on the screen users actually look at."""
+        from carrot import app
+        assert not hasattr(app, "SUGGESTED_MODELS")
+
+    def test_what_fits_comes_first(self):
+        with machine(6.0):
+            rows = hub.find_more()
+        fits = [r for r in rows if r["runs_here"]]
+        assert rows[:len(fits)] == fits
+
+    def test_a_model_that_will_not_run_is_kept_and_says_why(self):
+        """A short list with no explanation reads as Carrot having few
+        models. "needs 24 GB, this machine has 6" reads as a machine having
+        limits, which is the true one."""
+        with machine(6.0):
+            rows = hub.find_more()
+        unfit = [r for r in rows if not r["runs_here"]]
+        assert unfit
+        assert all("GB" in r["why_not"] for r in unfit)
+
+    def test_the_least_attainable_is_not_the_headline_of_wont_run(self):
+        """Sorted by how close it is, so the first row someone reads there is
+        the one an upgrade would actually buy them."""
+        with machine(6.0):
+            unfit = [r for r in hub.find_more() if not r["runs_here"]]
+        assert unfit[0]["min_mem_gb"] == min(r["min_mem_gb"] for r in unfit)
+
+    def test_what_you_already_have_is_not_offered_again(self):
+        with machine(6.0):
+            rows = hub.find_more(installed={"gemma4:e4b"})
+        assert not any(r["name"] == "gemma4:e4b" for r in rows)
+
+    def test_a_bigger_machine_is_offered_bigger_models(self):
+        with machine(6.0):
+            small = {r["name"] for r in hub.find_more() if r["runs_here"]}
+        with machine(48.0, "cuda"):
+            large = {r["name"] for r in hub.find_more() if r["runs_here"]}
+        assert small < large
+
+    def test_the_picker_draws_the_fit(self):
+        from pathlib import Path
+        js = (Path(__file__).resolve().parents[1] / "carrot" / "web" / "js"
+              / "app.js").read_text(encoding="utf-8")
+        assert "m-fit-" in js and "why_not" in js
+
+
+class TestAnInstallThatAlreadyHasTheOldDefault:
+    def test_a_model_bootstrap_wrote_is_resized(self, isolated_db):
+        """Fixing the default for new installs and leaving every existing one
+        on the wrong model would fix nothing for anybody who has Carrot."""
+        config.set_config("ollama_model", hub.RETIRED_DEFAULT)
+        with machine(48.0, "cuda"):
+            changed = hub.resize_stale_default()
+        assert changed and changed != hub.RETIRED_DEFAULT
+        assert config.get_config()["ollama_model"] == changed
+
+    def test_it_runs_at_most_once(self, isolated_db):
+        config.set_config("ollama_model", hub.RETIRED_DEFAULT)
+        with machine(48.0, "cuda"):
+            hub.resize_stale_default()
+            assert hub.resize_stale_default() is None
+
+    def test_a_model_the_user_picked_is_left_alone(self, isolated_db):
+        config.set_config("ollama_model", "mistral:7b")
+        with machine(48.0, "cuda"):
+            assert hub.resize_stale_default() is None
+        assert config.get_config()["ollama_model"] == "mistral:7b"
+
+    def test_it_does_nothing_when_the_old_default_is_still_the_right_answer(self, isolated_db):
+        config.set_config("ollama_model", hub.RETIRED_DEFAULT)
+        with machine(6.0):
+            assert hub.resize_stale_default() is None
+        assert config.get_config()["ollama_model"] == hub.RETIRED_DEFAULT
+
+    def test_it_never_moves_someone_onto_the_blind_fallback(self, isolated_db):
+        """Detection failing is not a reason to rewrite a working config."""
+        config.set_config("ollama_model", hub.RETIRED_DEFAULT)
+
+        def boom(refresh=False):
+            raise OSError("no detection")
+
+        with patch.object(hub, "detect_specs", boom):
+            assert hub.resize_stale_default() is None
+        assert config.get_config()["ollama_model"] == hub.RETIRED_DEFAULT
+
+    def test_it_runs_at_startup(self):
+        from pathlib import Path
+        app_src = (Path(__file__).resolve().parents[1] / "carrot" / "app.py"
+                   ).read_text(encoding="utf-8")
+        startup = app_src[app_src.index("def _startup():"):]
+        assert "resize_stale_default" in startup[:1200]

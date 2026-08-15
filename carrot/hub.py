@@ -34,7 +34,7 @@ from typing import Optional
 
 import requests
 
-from carrot.config import CARROT_DIR, get_config
+from carrot.config import CARROT_DIR, get_config, set_config
 from carrot.leaderboard import get_hardware_profile
 
 # The Carrot Hub website. The catalog it serves has the same shape as
@@ -760,6 +760,115 @@ def default_model(refresh: bool = False) -> dict:
                 "properly."),
         "fallback": True,
     }
+
+
+# The tag every install got written into its config by bootstrap, whatever
+# machine it was. Not a user's choice — a constant that happened to be stored.
+RETIRED_DEFAULT = "gemma4:e4b"
+
+# Written whenever the model was decided *for* the user, so this migration
+# never has to guess twice.
+MODEL_SOURCE_KEY = "ollama_model_source"
+
+
+def resize_stale_default() -> Optional[str]:
+    """Re-size a model that was written by bootstrap rather than chosen.
+
+    Every existing install has `gemma4:e4b` in its config, because bootstrap
+    put it there on first run — it needs 6 GB, and it went to 4 GB laptops and
+    24 GB workstations alike. Fixing the default for new installs and leaving
+    every existing one on the wrong model would fix nothing for anybody who
+    already has Carrot.
+
+    Nothing distinguishes "bootstrap wrote this" from "the user picked this"
+    in an old config, so the rule is narrow: only the retired constant, only
+    when no source marker exists, and only once — the marker is written either
+    way. Someone who deliberately chose `gemma4:e4b` gets moved once to
+    something that fits their machine better and can move back in the picker;
+    that is the cost of not leaving everyone else stranded.
+
+    Returns the new tag if it changed anything, else None.
+    """
+    try:
+        cfg = get_config()
+        if cfg.get(MODEL_SOURCE_KEY):
+            return None
+        current = (cfg.get("ollama_model") or "").strip()
+        if current != RETIRED_DEFAULT:
+            # Either unset — the resolver handles that — or a real choice.
+            set_config(MODEL_SOURCE_KEY, "user" if current else "unset")
+            return None
+        picked = default_model()
+        if picked.get("fallback") or picked["id"] == current:
+            set_config(MODEL_SOURCE_KEY, "auto")
+            return None
+        for key in ("ollama_model", "ollama_model_recap", "ollama_model_search"):
+            if (cfg.get(key) or "").strip() in ("", RETIRED_DEFAULT):
+                set_config(key, picked["id"])
+        set_config(MODEL_SOURCE_KEY, "auto")
+        return picked["id"]
+    except Exception:
+        return None
+
+
+def find_more(installed: Optional[set] = None, refresh: bool = False) -> list:
+    """Catalog rows for the model picker, sized to this machine.
+
+    The picker is where a person decides what answers the next question, so it
+    is also where "I want a better one" happens. It used to offer six hardcoded
+    tags with hand-written size hints — the same six on a Raspberry Pi and a
+    threadripper. These are the same rows the Hub tab draws, ordered so that
+    what fits comes first.
+
+    Models that do not fit are kept rather than hidden, at the bottom, each
+    carrying what it would need. A short list with no explanation reads as
+    Carrot having few models; "won't run — needs 24 GB, this machine has 12"
+    reads as a machine having limits, which is the true one and the one that
+    tells you what to do about it.
+    """
+    specs = detect_specs(refresh=refresh)
+    have = installed or set()
+    budget = specs.get("model_budget_gb") or 0
+    rows = []
+    for entry in annotate_fit(get_catalog()["models"], specs):
+        if entry["id"] in have:
+            continue
+        fits = entry["fit"] != "too_big"
+        rows.append({
+            "name": entry["id"],
+            "label": entry.get("label") or entry["id"],
+            "size_hint": f"~{entry.get('download_gb')} GB",
+            "blurb": entry.get("blurb") or "",
+            "fit": entry["fit"],
+            "min_mem_gb": entry.get("min_mem_gb"),
+            "est_tps": entry.get("est_tps"),
+            "runs_here": fits,
+            # Said on the row rather than in a tooltip: the reason a model is
+            # greyed out is the single most useful sentence on this screen.
+            "why_not": ("" if fits else
+                        f"needs {entry.get('min_mem_gb')} GB — this machine has "
+                        f"{budget} GB for models"),
+        })
+    # Fit band first, then the better model within it — the same ranking the
+    # recommender uses, so the picker and the splash cannot disagree about
+    # which of two models that both fit is the one worth having.
+    #
+    # Except inside "won't run", which sorts by how close it is instead. Best
+    # first there would lead with the 70B — the least attainable thing in the
+    # catalog — where "needs 8.5 GB, you have 6" is the row that tells someone
+    # something they can act on.
+    order = {"great": 0, "good": 1, "tight": 2, "too_big": 3}
+    by_id = {m["id"]: m for m in get_catalog()["models"]}
+
+    def key(row):
+        band = order.get(row["fit"], 9)
+        if row["fit"] == "too_big":
+            return (band, float(row.get("min_mem_gb") or 0), 0.0)
+        quality = _quality_key(by_id.get(row["name"], {}))
+        return (band, -quality[0], -quality[1])
+
+    rows.sort(key=key)
+    return rows
 
 
 def configured_or_default_model() -> str:

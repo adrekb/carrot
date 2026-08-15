@@ -486,6 +486,15 @@ def _startup():
         conv_mod.purge_temporary()
     except Exception:
         pass
+    # Every install made before the default learned to read hardware has
+    # `gemma4:e4b` sitting in its config, put there by bootstrap rather than
+    # chosen. Fixing new installs and leaving those on the wrong model would
+    # fix nothing for anyone who already has Carrot. Runs once — see
+    # hub.resize_stale_default.
+    try:
+        hub_mod.resize_stale_default()
+    except Exception:
+        pass
     vectors_mod.migrate_legacy_embeddings()
     dr_mod.start_scheduler()
     scheduled_mod.start_scheduler()
@@ -770,16 +779,18 @@ async def hub_choose(req: ModelSelectRequest):
 
 
 # ===== Models =====
-
-# Curated catalog shown in the model picker for one-click install.
-SUGGESTED_MODELS = [
-    {"name": "gemma4:e4b", "label": "Gemma 4 E4B", "size_hint": "~4 GB", "blurb": "Default all-rounder"},
-    {"name": "llama3.2:3b", "label": "Llama 3.2 3B", "size_hint": "~2 GB", "blurb": "Fast, light"},
-    {"name": "qwen2.5-coder:7b", "label": "Qwen 2.5 Coder 7B", "size_hint": "~4.7 GB", "blurb": "Code-focused"},
-    {"name": "mistral:7b", "label": "Mistral 7B", "size_hint": "~4.1 GB", "blurb": "General purpose"},
-    {"name": "phi4:14b", "label": "Phi 4 14B", "size_hint": "~9.1 GB", "blurb": "Strong reasoning"},
-    {"name": "deepseek-r1:8b", "label": "DeepSeek R1 8B", "size_hint": "~4.9 GB", "blurb": "Reasoning"},
-]
+#
+# There used to be a `SUGGESTED_MODELS` list here: six tags with hand-written
+# size hints, the same six for a Raspberry Pi and a threadripper, `gemma4:e4b`
+# at the top labelled "Default all-rounder". It was the last place in the app
+# that recommended hardware-blind, and it was the place users actually looked —
+# the picker is the screen you open to decide what answers the next question.
+#
+# What replaces it is the Hub's own catalog, annotated against this machine:
+# `hub.find_more()`. Suggestions are things that fit, best first; things that
+# do not fit are still listed, last, saying what they would need. That is the
+# Hub's whole job, and it belongs here rather than behind a tab, because
+# nobody opens a catalog to browse — they open the picker and want more.
 
 
 def prompt_overhead() -> Dict[str, Any]:
@@ -888,10 +899,10 @@ async def list_models():
     installed_names = {m["name"] for m in installed}
     cfg = config.get_config()
     active = hub_mod.configured_or_default_model()
-    suggested = [
-        {**m, "installed": m["name"] in installed_names}
-        for m in SUGGESTED_MODELS
-    ]
+    # Already-installed tags are dropped by `find_more` rather than marked,
+    # because "Find more" is a list of what you could add — a row you already
+    # have is noise on it, and it is one line above in the same popup.
+    suggested = hub_mod.find_more(installed=installed_names)
 
     # Models from configured cloud providers belong in the picker too —
     # a key you already pasted is useless if the UI only offers Ollama.

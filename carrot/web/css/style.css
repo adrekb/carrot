@@ -1408,6 +1408,26 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 .model-row .m-install:hover { color: var(--accent); border-color: rgba(255, 92, 31, 0.4); }
 .model-row .m-install .ico { width: 11px; height: 11px; }
 
+/* Fit, on the row. The picker is where somebody decides what answers the next
+   question, so "will this actually run on my machine" is part of the name,
+   not something to go and look up. */
+.m-fit {
+  font-size: var(--text-xs);
+  padding: 1px 6px;
+  border-radius: var(--r-pill);
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+.m-fit-great { color: rgb(126, 200, 128); background: rgba(126, 200, 128, 0.14); }
+.m-fit-good  { color: rgb(126, 200, 128); background: rgba(126, 200, 128, 0.10); }
+.m-fit-tight { color: rgb(233, 176, 74); background: rgba(230, 160, 30, 0.14); }
+.m-fit-too_big { color: var(--muted); background: rgba(128, 128, 128, 0.14); }
+/* Kept in the list rather than hidden. A short list with no explanation reads
+   as Carrot having few models; a dimmed row saying "needs 24 GB, this machine
+   has 12" reads as a machine having limits, which is the true one. */
+.model-row-unfit { opacity: 0.55; }
+.model-row-unfit .m-meta { font-style: italic; }
+
 /* Auto is a choice about *how* to choose, so it reads as a sentence rather
    than a model name — no mono, and a line saying what it will do. */
 .model-auto-row { align-items: flex-start; }

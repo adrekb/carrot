@@ -785,22 +785,40 @@ function renderModelPop(data) {
         }
     }
 
-    const notInstalled = data.suggested.filter(m => !m.installed);
+    // "Find more" — the catalog, sized to this machine. Rows arrive already
+    // ordered: what runs well first, what won't run at all last, each of
+    // those carrying the reason. The server drops anything already installed,
+    // since it is one section above in the same popup.
+    const notInstalled = (data.suggested || []).filter(m => !m.installed);
     if (!notInstalled.length) {
-        suggestedEl.innerHTML = '<div class="empty" style="padding:4px 9px">All suggestions installed.</div>';
+        suggestedEl.innerHTML = '<div class="empty" style="padding:4px 9px">Nothing left to add.</div>';
     }
+    const FIT_LABEL = { great: 'Runs great', good: 'Runs well', tight: 'Slow here', too_big: "Won't run" };
     for (const m of notInstalled) {
         const row = document.createElement('div');
-        row.className = 'model-row';
+        row.className = 'model-row' + (m.runs_here === false ? ' model-row-unfit' : '');
         row.style.cursor = 'default';
+        // The reason a row is greyed out is the most useful sentence on this
+        // screen, so it goes on the row rather than into a tooltip.
+        const meta = m.runs_here === false
+            ? escHtml(m.why_not || '')
+            : `${escHtml(m.size_hint || '')}${m.est_tps ? ` · ~${m.est_tps} tok/s` : ''}`;
         row.innerHTML = `
-            <span class="m-name" title="${escHtml(m.blurb)}">${escHtml(m.name)}</span>
-            <span class="m-meta">${escHtml(m.size_hint)}</span>`;
-        const btn = document.createElement('button');
-        btn.className = 'm-install';
-        btn.innerHTML = '<svg class="ico"><use href="#i-download"/></svg>Install';
-        btn.onclick = (e) => { e.stopPropagation(); pullModel(m.name); };
-        row.appendChild(btn);
+            <span class="m-name" title="${escHtml(m.blurb || '')}">${escHtml(m.name)}</span>
+            <span class="m-meta">${meta}</span>`;
+        if (m.fit && FIT_LABEL[m.fit]) {
+            const badge = document.createElement('span');
+            badge.className = 'm-fit m-fit-' + m.fit;
+            badge.textContent = FIT_LABEL[m.fit];
+            row.querySelector('.m-name').after(badge);
+        }
+        if (m.runs_here !== false) {
+            const btn = document.createElement('button');
+            btn.className = 'm-install';
+            btn.innerHTML = '<svg class="ico"><use href="#i-download"/></svg>Install';
+            btn.onclick = (e) => { e.stopPropagation(); pullModel(m.name); };
+            row.appendChild(btn);
+        }
         suggestedEl.appendChild(row);
     }
 }
