@@ -1,0 +1,65 @@
+# Run the test suite on every push and every pull request.
+#
+# Until now the only workflow was `release.yml`, which builds installers and
+# fires on tags. So the suite ran on a maintainer's laptop or not at all, and
+# the first machine that ever ran the tests for a contributor's patch was the
+# reviewer's — which is the same as saying nobody could open a pull request
+# and find out whether it worked.
+name: Tests
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+# A second push to the same branch makes the first run's answer irrelevant.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both ends of the supported range from pyproject (`>=3.10`). The
+        # floor is what catches a 3.11-only syntax or stdlib call slipping in;
+        # the ceiling is what most people will actually run.
+        python: ["3.10", "3.12"]
+        # Windows is not optional here. Carrot's file handling, its SQLite
+        # locking and half its path logic behave differently there, and it is
+        # the platform the one-click installer targets first.
+        os: [ubuntu-latest, windows-latest]
+        exclude:
+          # One matrix cell per platform is enough for the older interpreter.
+          - os: windows-latest
+            python: "3.10"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      - name: Install
+        # `vectors` and `cloud` are in because tests exercise the ANN backend
+        # and the Anthropic provider wiring, and without them those tests skip
+        # silently — a green run that proved less than it looked like it did.
+        # `browser`, `speech`, `animation` and `desktop` stay out: they are
+        # hundreds of megabytes for code paths the suite mocks anyway.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,vectors,cloud]"
+
+      - name: Run tests
+        # No Ollama, no network, no API keys on the runner. The suite is built
+        # to run without them; this makes that a requirement rather than a
+        # description, so a test that quietly starts needing one fails here
+        # instead of on somebody's first clone.
+        env:
+          CARROT_NO_BACKGROUND: "1"
+        run: pytest tests -q --durations=10
