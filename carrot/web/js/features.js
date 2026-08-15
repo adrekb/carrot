@@ -1398,7 +1398,49 @@ async function renderArtifact(id, host) {
     } else {
         card.appendChild(artifactFrame(artifact));
     }
+    const source = artifactCode(artifact);
+    if (source) card.appendChild(source);
     host.appendChild(card);
+}
+
+// The working, under the answer.
+//
+// A computed figure and the script that produced it are one answer, and the
+// old shape put the script first — a screenful of matplotlib with the picture
+// somewhere below it, so the thing the reader asked for arrived last. This
+// inverts it: the figure is what you see, the source is one click away and
+// stays with the figure when the conversation is reopened.
+function artifactCode(artifact) {
+    const code = ((artifact.meta || {}).code || '').trim();
+    if (!code) return null;
+    const wrap = document.createElement('details');
+    wrap.className = 'artifact-code';
+    const summary = document.createElement('summary');
+    summary.innerHTML = `<span>Show code</span>`
+        + `<span class="artifact-code-lang">${escHtml((artifact.meta || {}).code_language || 'python')}</span>`;
+    wrap.appendChild(summary);
+
+    const pre = document.createElement('pre');
+    const el = document.createElement('code');
+    // textContent, never innerHTML: this is source the model wrote, and the
+    // whole point of the artifact sandbox is that such text never becomes
+    // markup in the app document.
+    el.textContent = code;
+    pre.appendChild(el);
+    wrap.appendChild(pre);
+
+    const copy = document.createElement('button');
+    copy.className = 'artifact-btn artifact-code-copy';
+    copy.textContent = 'Copy';
+    copy.onclick = (e) => {
+        e.preventDefault();
+        navigator.clipboard.writeText(code).then(() => {
+            copy.textContent = 'Copied';
+            setTimeout(() => { copy.textContent = 'Copy'; }, 1200);
+        }, () => { copy.textContent = 'Copy failed'; });
+    };
+    wrap.appendChild(copy);
+    return wrap;
 }
 
 function artifactFrame(artifact) {
@@ -1440,6 +1482,10 @@ function openArtifactFull(artifact) {
         frame.style.height = '70vh';
         card.appendChild(frame);
     }
+    // The source travels with the figure here too — "Open" is where somebody
+    // goes to read it properly, which is exactly when they want the working.
+    const source = artifactCode(artifact);
+    if (source) card.appendChild(source);
     const close = () => host.remove();
     host.querySelector('[data-close]').onclick = close;
     host.onclick = (e) => { if (e.target === host) close(); };

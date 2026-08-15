@@ -49,6 +49,10 @@ KINDS = {KIND_HTML, KIND_SVG, KIND_MARKDOWN, KIND_MERMAID, KIND_IMAGE,
 # runaway generation cannot fill the database.
 MAX_CONTENT_BYTES = 2 * 1024 * 1024
 MAX_ARTIFACTS_PER_CONVERSATION = 50
+# The script kept beside a figure. A generous script and not a source file:
+# what belongs here is the twenty lines that drew the chart, and a cap keeps a
+# model that decides to attach its whole workspace from filling the row.
+MAX_CODE_CHARS = 16000
 
 # Only raster formats a browser renders natively.
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp"}
@@ -181,6 +185,18 @@ def create(kind: str, content: str, *, title: str = "", conversation_id: str = "
         raise ArtifactError("an artifact needs content")
     if len(content.encode("utf-8")) > MAX_CONTENT_BYTES:
         raise ArtifactError("artifact content is too large")
+
+    # The source that produced the picture, kept beside it.
+    #
+    # A chart and the script that drew it are one answer, and splitting them
+    # across a code block and an image loses which produced which — reopen the
+    # conversation a week later and the figure is orphaned from the numbers
+    # that made it. Held in meta rather than as its own artifact because it is
+    # not a second thing to look at: the figure is the answer and the code is
+    # the working, which is why the card shows one and offers the other.
+    meta = dict(meta or {})
+    if meta.get("code"):
+        meta["code"] = str(meta["code"])[:MAX_CODE_CHARS]
 
     artifact = {
         "id": uuid.uuid4().hex[:16],

@@ -4293,6 +4293,52 @@ td, th, .si-sub, .small, .editor-status {
   padding: 8px 12px;
   border-bottom: 1px solid var(--border);
 }
+
+/* The working, folded under the answer. Closed by default and quiet when
+   closed: it is a footnote to the figure, not a second thing competing with
+   it for the reader's eye. */
+.artifact-code { border-top: 1px solid var(--border); position: relative; }
+.artifact-code > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  cursor: pointer;
+  font-size: var(--text-sm);
+  color: var(--muted);
+  list-style: none;
+  user-select: none;
+}
+.artifact-code > summary::-webkit-details-marker { display: none; }
+/* A disclosure triangle that turns, drawn rather than typed so it inherits
+   the text colour and does not depend on a font having the glyph. */
+.artifact-code > summary::before {
+  content: '';
+  width: 0; height: 0;
+  border-left: 5px solid currentColor;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform 120ms ease;
+  flex: 0 0 auto;
+}
+.artifact-code[open] > summary::before { transform: rotate(90deg); }
+.artifact-code > summary:hover { color: var(--text); }
+.artifact-code-lang {
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  opacity: 0.7;
+}
+.artifact-code pre {
+  margin: 0;
+  padding: 10px 12px 12px;
+  overflow-x: auto;
+  background: var(--card2);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+.artifact-code pre code { font-family: var(--mono); white-space: pre; }
+.artifact-code-copy { position: absolute; top: 4px; right: 10px; }
+.artifact-code:not([open]) .artifact-code-copy { display: none; }
 .artifact-title {
   flex: 1;
   font-family: var(--prose);
