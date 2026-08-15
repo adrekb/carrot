@@ -6866,3 +6866,45 @@ select.dd-open { border-color: var(--accent-line); }
   font-family: var(--mono);
   font-size: var(--text-xs);
 }
+
+/* ===== Goal chips — a commitment offered, not assumed ===== */
+.goal-chips { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.goal-chip {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 6px 10px 6px 9px;
+  border: 1px solid var(--border-hi);
+  border-radius: var(--r-sm);
+  background: var(--card2);
+  font-size: var(--text-sm);
+}
+.goal-chip-box { flex: 0 0 auto; margin: 0; cursor: pointer; }
+.goal-chip-label {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+  cursor: pointer;
+}
+.goal-chip-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.goal-chip-when { color: var(--muted); font-size: var(--text-xs); white-space: nowrap; }
+.goal-chip-dismiss {
+  flex: 0 0 auto;
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: var(--text-base);
+  line-height: 1;
+  padding: 0 2px;
+  cursor: pointer;
+}
+.goal-chip-dismiss:hover { color: var(--text); }
+.goal-chip-deciding { opacity: 0.6; pointer-events: none; }
+/* Kept, and saying so once. The confirmation is the point of the state
+   change — a checkbox that ticks and says nothing leaves you wondering
+   whether it went anywhere. */
+.goal-chip-kept { border-color: rgba(126, 200, 128, 0.45); }
+.goal-chip-kept-note { color: rgb(126, 200, 128); font-size: var(--text-xs); white-space: nowrap; }

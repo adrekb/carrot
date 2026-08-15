@@ -3459,3 +3459,100 @@ function applyAgentModel(key) {
     const [provider, ...rest] = key.split('::');
     agentModel = { provider, model: rest.join('::') };
 }
+
+// ===== Goal chips =====
+//
+// Carrot noticing a commitment and asking to keep it. The chip is a question:
+// a tick makes it a goal and a memory, a dismiss stores nothing and stops the
+// subject being raised again. Doing nothing is also an answer — the proposal
+// stays undecided and is asked once more when the conversation is reopened,
+// rather than being silently accepted or silently dropped.
+
+async function mountGoalChips(messageEl, conversationId) {
+    if (!messageEl) return;
+    const convId = conversationId || currentConversationId;
+    if (!convId) return;
+    let proposals = [];
+    try {
+        const data = await api(`/api/goals/proposals?conversation_id=${encodeURIComponent(convId)}`);
+        proposals = data.proposals || [];
+    } catch (_) { return; }
+    if (!proposals.length) return;
+
+    let host = messageEl.querySelector('.goal-chips');
+    if (!host) {
+        host = document.createElement('div');
+        host.className = 'goal-chips';
+        messageEl.appendChild(host);
+    }
+    for (const p of proposals) {
+        if (host.querySelector(`[data-goal-id="${p.id}"]`)) continue;
+        host.appendChild(goalChip(p));
+    }
+}
+
+function goalChip(proposal) {
+    const chip = document.createElement('div');
+    chip.className = 'goal-chip';
+    chip.dataset.goalId = proposal.id;
+
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.className = 'goal-chip-box';
+    box.id = `goal-chip-${proposal.id}`;
+
+    const label = document.createElement('label');
+    label.className = 'goal-chip-label';
+    label.htmlFor = box.id;
+    // The deadline is part of the sentence, not a detail below it — it is the
+    // thing that makes this a commitment rather than a wish, and it is what
+    // the user is being asked to confirm.
+    label.innerHTML = `<span class="goal-chip-title">${escHtml(proposal.title)}</span>`
+        + (proposal.deadline ? `<span class="goal-chip-when">by ${escHtml(formatGoalDate(proposal.deadline))}</span>` : '');
+
+    const dismiss = document.createElement('button');
+    dismiss.className = 'goal-chip-dismiss';
+    dismiss.title = 'Not a goal — and stop suggesting this';
+    dismiss.textContent = '×';
+
+    const decide = async (accepted) => {
+        chip.classList.add('goal-chip-deciding');
+        try {
+            await api(`/api/goals/${encodeURIComponent(proposal.id)}/decide`,
+                      { method: 'POST', body: JSON.stringify({ accepted }) });
+        } catch (e) {
+            chip.classList.remove('goal-chip-deciding');
+            box.checked = false;
+            return;
+        }
+        if (accepted) {
+            chip.classList.add('goal-chip-kept');
+            chip.querySelector('.goal-chip-dismiss').remove();
+            const kept = document.createElement('span');
+            kept.className = 'goal-chip-kept-note';
+            kept.textContent = 'Tracking this';
+            chip.appendChild(kept);
+        } else {
+            chip.remove();
+        }
+    };
+
+    box.onchange = () => { if (box.checked) decide(true); };
+    dismiss.onclick = () => decide(false);
+
+    chip.appendChild(box);
+    chip.appendChild(label);
+    chip.appendChild(dismiss);
+    return chip;
+}
+
+// "2027-03-12" reads as a database row; "12 Mar 2027" reads as a date. A
+// month-only deadline stays month-only rather than being invented into a day.
+function formatGoalDate(iso) {
+    const parts = String(iso || '').split('-');
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const month = months[parseInt(parts[1], 10) - 1];
+    if (!month) return iso;
+    if (parts.length >= 3) return `${parseInt(parts[2], 10)} ${month} ${parts[0]}`;
+    return `${month} ${parts[0]}`;
+}

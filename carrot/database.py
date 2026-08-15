@@ -643,6 +643,25 @@ ADDED_COLUMNS = (
     # The best tier among the sources a claim cites — what the writer is
     # allowed to state flat and what it has to attribute.
     ("research_findings", "tier", "TEXT NOT NULL DEFAULT 'unknown'"),
+    # A goal used to be something you went to a tab and typed. Now chat can
+    # propose one, which means a goal has a state before it is a goal:
+    # proposed, and then accepted or declined by the person it is about.
+    #
+    # Every goal that existed before this column was typed by hand, and typing
+    # it *was* the acceptance — so `accepted` is the truth about the old rows
+    # rather than a default chosen to be safe.
+    ("goals", "status", "TEXT NOT NULL DEFAULT 'accepted'"),
+    ("goals", "deadline", "TEXT DEFAULT ''"),
+    # What the goal is *about*, normalised, so a proposal the user declined is
+    # not offered again next week in slightly different words.
+    ("goals", "subject", "TEXT DEFAULT ''"),
+    # Where it came from. A goal you cannot trace back to the sentence you said
+    # is one you have to take Carrot's word for, and the whole point of
+    # proposing rather than asserting is that you can check.
+    ("goals", "conversation_id", "TEXT DEFAULT ''"),
+    ("goals", "message_id", "TEXT DEFAULT ''"),
+    ("goals", "source_text", "TEXT DEFAULT ''"),
+    ("goals", "decided_at", "TEXT DEFAULT ''"),
 )
 
 # Indexes over columns that ADDED_COLUMNS creates. These cannot live in SCHEMA,

@@ -60,6 +60,7 @@ from carrot import (
     context_windows as ctxwin_mod,
     pruning as pruning_mod,
     components as components_mod,
+    commitments as commitments_mod,
     interests as interests_mod,
     sysmon as sysmon_mod,
     markets as markets_mod,
@@ -240,6 +241,10 @@ class GoalRequest(BaseModel):
     description: str = ""
     category: str = ""
     metadata: Dict[str, Any] = {}
+
+
+class GoalDecisionRequest(BaseModel):
+    accepted: bool
 
 
 class DataPointRequest(BaseModel):
@@ -3700,6 +3705,21 @@ def _post_turn(conversation_id, user_message, assistant_text, message_id,
                 )
             except Exception:
                 pass
+        # A commitment in the turn becomes a *proposal*, not a goal. The chip
+        # in the thread is the question; a tick is the answer. Same place as
+        # memory extraction because it asks the same question of the same
+        # text, and best-effort for the same reason — nobody is waiting on it,
+        # and a goal Carrot failed to notice is a smaller harm than a turn that
+        # died doing bookkeeping.
+        if settings.get("goal_chips_enabled", True):
+            try:
+                commitments_mod.propose_from_turn(
+                    user_text=user_message,
+                    conversation_id=conversation_id,
+                    message_id=str(message_id or ""),
+                )
+            except Exception:
+                LOG.debug("commitment proposal skipped", exc_info=True)
         if settings.get("summarize_enabled", True):
             try:
                 summarize_mod.maybe_summarize(conversation_id)
@@ -4369,6 +4389,28 @@ async def list_goals(category: str = None):
 @app.post("/api/goals")
 async def create_goal(req: GoalRequest):
     return goals_mod.create_goal(req.title, req.description, req.category, req.metadata)
+
+
+@app.get("/api/goals/proposals")
+async def list_goal_proposals(conversation_id: str = ""):
+    """Undecided proposals, so reopening a conversation shows the question again.
+
+    A chip that evaporates on refresh is a question the user never got to
+    answer, which is the same as not having asked.
+    """
+    if conversation_id:
+        return {"proposals": goals_mod.proposals_for(conversation_id)}
+    return {"proposals": goals_mod.by_status(goals_mod.STATUS_PROPOSED)}
+
+
+@app.post("/api/goals/{goal_id}/decide")
+async def decide_goal(goal_id: str, req: GoalDecisionRequest):
+    """Tick or dismiss. Accepting writes a memory as well as keeping the goal;
+    dismissing keeps the row only so the subject is not offered again."""
+    decided = goals_mod.decide(goal_id, accepted=bool(req.accepted))
+    if decided is None:
+        raise HTTPException(status_code=404, detail="No undecided proposal with that id")
+    return decided
 
 
 @app.post("/api/goals/{goal_id}/data")
