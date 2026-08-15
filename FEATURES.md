@@ -50,6 +50,7 @@ tools, 89 settings, ~2,115 tests.
 32. [Setup and first run](#32-setup-and-first-run)
 33. [Help and tutorial](#33-help-and-tutorial)
 34. [Settings reference](#34-settings-reference)
+    - [The command line](#34a-the-command-line)
 35. [What Carrot deliberately does not do](#35-what-carrot-deliberately-does-not-do)
 
 ---
@@ -681,6 +682,29 @@ Each declares whether it mutates anything and at what risk. Risk is judged per
 flattening a file with work in it, and asking hardest about the safest thing a tool
 does is how someone who said "just do it" ends up staring at a modal.
 
+**No result is a dead end.** Every size limit here used to be a cliff — the
+first 20k characters of a file, the hundredth grep match, the first 8k of a
+command's output — announced as "truncated" and unreachable, because none of
+the tools took an offset. On a 60k-line log whose failure is at the bottom, the
+model's only honest options were to guess or to give up.
+
+- `read_file` takes `offset` and `limit` and reports `lines 1-N of TOTAL`,
+  naming the exact call that returns the next window. Lines, not bytes, because
+  that is the coordinate grep results and tracebacks already speak.
+- `search_files` reports the **true** match count and parks the full list for
+  reading. Knowing a symbol has 900 uses is a different answer from seeing 100
+  of them, and usually the one that decides whether to rename it.
+- `run_command` keeps the *end* as well as the start and omits the middle — a
+  failing test run puts its summary last, and cutting from the front threw away
+  the only part anyone runs the command to see.
+
+What does not fit is written to a spill file and named by a `carrot:output/…`
+handle that `read_file` accepts like any path. Deliberately not a new tool: a
+second tool would cost every request its schema forever to serve the minority
+of calls that overflow. Handles resolve inside Carrot's own spill directory,
+never the workspace, so they neither escape nor litter the user's project;
+the newest 200 are kept.
+
 ---
 
 ## 16. Model council (consensus)
@@ -797,6 +821,17 @@ Outbound webhook targets are also supported.
   so repeated imports do not duplicate
 - **Editors** — open a file in your actual editor (VS Code and others, detected)
 - **GitHub** — OAuth device flow sign-in and a contribution grid on the dashboard
+- **Carrot as an MCP server** — `carrot mcp` serves Carrot's memory, document
+  index, conversation history, goals and reminders over stdio MCP, so Cursor,
+  VS Code or Claude Desktop can ask Carrot what it knows without you leaving
+  them. `carrot mcp-config` prints the block to paste. **Read-only, by
+  construction**: a stdio pipe has no interactive channel, so no approval
+  prompt can be shown, so nothing needing one is exposed. Writing stays inside
+  Carrot where the approval UI is, and a test asserts the tool list never
+  acquires a verb.
+
+  "Open in Cursor" hands you off and Carrot is gone. This is the direction that
+  was missing — the memory follows you into the app you already use.
 
 ---
 
@@ -969,6 +1004,30 @@ measurement failed.
 | `coder_mode` | `act` | Plan or act in the Code tab |
 
 Every safety-relevant default is the cautious one.
+
+---
+
+## 34a. The command line
+
+Everything below works without the GUI running, against the same database. It is
+the honest test of whether a feature is in the kernel or only in the shell.
+
+| Command | What it does |
+| --- | --- |
+| `carrot start` | Run the server (`http://127.0.0.1:8181`) |
+| `carrot status` | Model, provider, database and index health |
+| `carrot token` | Print the session token, for `curl` and shortcuts |
+| `carrot route` | Which provider and model serves each task |
+| `carrot search <query>` | Search past conversations, time expressions included |
+| `carrot index <dir>` / `carrot index-scan` | Add a folder to the document index, then index it |
+| `carrot find <query>` | Search indexed documents |
+| `carrot memory` / `carrot memory <query>` | What Carrot believes about you |
+| `carrot notes [folder]` | List notes |
+| `carrot goals` / `carrot reminders` | The open ones |
+| `carrot recap` | Build today's briefing |
+| `carrot scan` | Scan for assignments |
+| `carrot terminal` | The agent terminal, in your shell |
+| `carrot backup [path]` / `carrot restore <archive>` | Export and re-import everything |
 
 ---
 
