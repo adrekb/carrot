@@ -64,6 +64,38 @@ def temp_data_dir(tmp_path_factory, monkeypatch):
     return db_path
 
 
+# The machine the suite pretends to be.
+#
+# The default model is chosen from the hardware now, which means that without
+# this the suite's answers depend on the laptop it runs on: the same assertion
+# passes on a developer with 8 GB and fails on one with a 24 GB card, and CI
+# gets a third answer. A pinned profile makes "the default is gemma4:e4b" a
+# statement about a stated machine rather than about whoever ran the tests.
+#
+# 6 GB is chosen so that it is: the catalog's best all-rounder inside that
+# budget is gemma4:e4b, which is what the app shipped for everyone before it
+# learned to ask. Tests that care about other machines patch `detect_specs`
+# themselves — see test_default_model.py.
+TEST_MACHINE = {
+    "os": "Linux", "cpu": "test cpu", "cpu_cores": 8, "ram_gb": 12.0,
+    "gpu": None, "vram_gb": 0.0, "backend": "cpu", "model_budget_gb": 6.0,
+}
+
+
+@pytest.fixture(autouse=True)
+def pinned_hardware(monkeypatch):
+    """Fixed specs, and an empty memo, for every test.
+
+    The memo is the reason this is autouse rather than opt-in. It is a module
+    global with a five-minute life, so one test that patches the detector
+    leaves its answer sitting there for whatever runs next — the same
+    shared-mutable-state failure as a shared database, in miniature."""
+    from carrot import hub
+
+    hub._specs_memo.clear()
+    monkeypatch.setattr(hub, "detect_specs", lambda refresh=False: dict(TEST_MACHINE))
+
+
 @pytest.fixture
 def isolated_db(temp_data_dir):
     """The temporary database, with the schema already created.

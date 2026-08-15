@@ -214,7 +214,10 @@ def run_deep_research_stream(model: str = None, include_web_search: bool = True)
     if not client.is_available():
         yield {"error": "Ollama not available"}
         return
-    model = model or config.get("ollama_model_recap") or config.get("ollama_model")
+    from carrot import hub as hub_mod
+
+    model = (model or config.get("ollama_model_recap")
+             or hub_mod.configured_or_default_model())
 
     # --- 1. analyze ---
     yield {"stage": "analyze", "detail": "reading your recent conversations, goals, and reminders"}

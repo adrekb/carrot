@@ -2,8 +2,21 @@
 from carrot import bootstrap
 
 
-def test_default_model_is_gemma4_e4b():
-    assert bootstrap.DEFAULT_MODEL == "gemma4:e4b"
+def test_the_constant_is_a_floor_and_not_the_default():
+    """There is no longer one model that is right for every machine, so this
+    is only what is left when hardware detection itself fails. Small on
+    purpose: too small is slow-witted, too big does not run at all, and only
+    one of those gets the user to the screen where they can choose."""
+    from carrot import hub
+
+    assert bootstrap.DEFAULT_MODEL == hub.FALLBACK_MODEL
+    entry = next(m for m in hub.BUNDLED_CATALOG if m["id"] == bootstrap.DEFAULT_MODEL)
+    assert entry["min_mem_gb"] <= 4.0
+
+
+def test_the_default_comes_from_the_machine(isolated_db):
+    """The pinned test machine has 6 GB for models — see conftest."""
+    assert bootstrap.get_target_model() == "gemma4:e4b"
 
 
 def test_bootstrap_state_roundtrip(tmp_path, monkeypatch):

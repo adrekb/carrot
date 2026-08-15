@@ -153,7 +153,10 @@ class OllamaClient:
     def __init__(self):
         config = get_config()
         self.base_url = config.get("ollama_host", "http://localhost:11434")
-        self.default_model = config.get("ollama_model", "gemma4:e4b")
+        from carrot import hub as hub_mod
+
+        self.default_model = (config.get("ollama_model")
+                              or hub_mod.configured_or_default_model())
         self.classifier_model = config.get("ollama_model_query", self.default_model)
         self.embedding_model = "nomic-embed-text"
 

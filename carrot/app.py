@@ -647,7 +647,7 @@ async def api_status():
     rem_count = conn.execute("SELECT COUNT(*) as c FROM reminders").fetchone()["c"]
     conn.close()
 
-    default_model = config.get_config().get("ollama_model", bootstrap_mod.DEFAULT_MODEL)
+    default_model = hub_mod.configured_or_default_model()
     model_loaded = False
     if available:
         model_loaded = bootstrap_mod.is_model_available(default_model)
@@ -887,7 +887,7 @@ async def list_models():
     installed = client.list_models() if client.is_available() else []
     installed_names = {m["name"] for m in installed}
     cfg = config.get_config()
-    active = cfg.get("ollama_model", bootstrap_mod.DEFAULT_MODEL)
+    active = hub_mod.configured_or_default_model()
     suggested = [
         {**m, "installed": m["name"] in installed_names}
         for m in SUGGESTED_MODELS
@@ -977,7 +977,7 @@ async def list_models():
         # way to be told one. See carrot/context_windows.py.
         "windows": _model_windows(installed, context_info, remote),
         "overhead": prompt_overhead(),
-        "default_model": bootstrap_mod.DEFAULT_MODEL,
+        "default_model": hub_mod.configured_or_default_model(),
         "suggested": suggested,
         "remote": remote,
         "chat_provider": chat_provider,

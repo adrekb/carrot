@@ -68,7 +68,7 @@ def test_detect_specs_cpu_only(monkeypatch):
     })
     monkeypatch.setattr(hub, "_detect_nvidia_vram_gb", lambda: 0.0)
     monkeypatch.setattr(hub, "_is_apple_silicon", lambda: False)
-    specs = hub.detect_specs()
+    specs = hub._detect_specs_uncached()
     assert specs["backend"] == "cpu"
     assert specs["model_budget_gb"] == 8.0  # half of RAM
 
@@ -78,7 +78,7 @@ def test_detect_specs_cuda(monkeypatch):
         "os": "Windows", "cpu": "i9", "cpu_cores": 16, "ram_gb": 32.0, "gpu": "RTX 3060",
     })
     monkeypatch.setattr(hub, "_detect_nvidia_vram_gb", lambda: 12.0)
-    specs = hub.detect_specs()
+    specs = hub._detect_specs_uncached()
     assert specs["backend"] == "cuda"
     assert specs["model_budget_gb"] == 12.0  # VRAM is the budget
 
@@ -89,7 +89,7 @@ def test_detect_specs_apple_silicon(monkeypatch):
     })
     monkeypatch.setattr(hub, "_detect_nvidia_vram_gb", lambda: 0.0)
     monkeypatch.setattr(hub, "_is_apple_silicon", lambda: True)
-    specs = hub.detect_specs()
+    specs = hub._detect_specs_uncached()
     assert specs["backend"] == "metal"
     assert specs["vram_gb"] == 16.0  # unified memory
     assert specs["model_budget_gb"] == pytest.approx(16.0 * 0.65, abs=0.1)
@@ -147,7 +147,7 @@ def test_stale_cache_survives_failed_refresh(tmp_path, monkeypatch):
 
 def test_hub_endpoint_returns_specs_and_picks(client, monkeypatch):
     from carrot import hub as hub_mod
-    monkeypatch.setattr(hub_mod, "detect_specs", lambda: {
+    monkeypatch.setattr(hub_mod, "detect_specs", lambda refresh=False: {
         "os": "Linux", "cpu": "x", "cpu_cores": 8, "ram_gb": 16.0, "gpu": "none",
         "vram_gb": 0.0, "backend": "cpu", "model_budget_gb": 8.0,
     })
@@ -379,7 +379,7 @@ def test_live_search_offline_degrades_gracefully(monkeypatch):
 
 def test_hub_search_endpoint(client, monkeypatch):
     from carrot import hub as hub_mod
-    monkeypatch.setattr(hub_mod, "detect_specs", lambda: {
+    monkeypatch.setattr(hub_mod, "detect_specs", lambda refresh=False: {
         "ram_gb": 32.0, "vram_gb": 24.0, "backend": "cuda", "model_budget_gb": 24.0,
         "os": "Linux", "cpu": "x", "cpu_cores": 16, "gpu": "RTX 4090",
     })

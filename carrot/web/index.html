@@ -294,13 +294,17 @@
     <p class="splash-sub">Setting up your local assistant</p>
     <div id="splash-status" class="splash-status">Checking Ollama…</div>
     <div id="splash-specs" class="splash-specs hidden"></div>
+    <!-- What this machine will not do well, before the user tries it. A
+         limit discovered after twenty minutes of a 3B failing to edit a file
+         reads as the app being broken. -->
+    <div id="splash-feasibility" class="splash-feasibility hidden"></div>
     <div id="splash-picks" class="splash-picks hidden"></div>
     <div id="splash-catalog" class="splash-catalog hidden"></div>
     <div class="splash-progress"><div id="splash-bar" class="splash-bar"></div></div>
     <div id="splash-detail" class="splash-detail"></div>
     <div class="splash-actions">
       <button id="splash-btn" class="btn btn-primary hidden" onclick="runBootstrap()">Set up now</button>
-      <button id="splash-skip" class="btn btn-ghost hidden" onclick="skipModelChoice()" title="For experienced users — keep the stock default and move on">Skip — use default</button>
+      <button id="splash-skip" class="btn btn-ghost hidden" onclick="skipModelChoice()" title="Skip the picker — Carrot installs the model it sized to this machine">Skip — use the one that fits</button>
     </div>
     <a id="splash-hub-link" class="splash-hub-link hidden" href="#" onclick="toggleSplashCatalog();return false">See every model and why some won't run here →</a>
   </div>

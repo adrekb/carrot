@@ -1448,6 +1448,17 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   align-items: center;
   justify-content: center;
   z-index: 100;
+  /* The card grew past a laptop viewport once it started explaining what the
+     machine cannot do — three limitations is 289px of prose — and with
+     nothing scrollable the "Set up now" button went below the fold on a 720px
+     screen with no way to reach it. `auto` rather than `scroll` so short
+     cards, which is most of them, gain no bar. `align-items: center` becomes
+     `safe center` for the overflow case: plain centring pushes the top of an
+     oversized flex item above the scroll origin, which cuts off the heading
+     instead of the footer. */
+  align-items: safe center;
+  overflow-y: auto;
+  padding: 24px 0;
 }
 
 .splash-card {
@@ -3043,6 +3054,23 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   padding: 6px 10px;
   margin-bottom: 14px;
 }
+/* Warning, not error. What it describes is a machine being honest about its
+   size, not something having gone wrong — and a red box on the first screen
+   the user ever sees reads as a failed install. */
+.splash-feasibility {
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  text-align: left;
+  color: var(--text);
+  background: rgba(230, 160, 30, 0.10);
+  border: 1px solid rgba(230, 160, 30, 0.35);
+  border-radius: var(--r-sm);
+  padding: 9px 11px;
+  margin: -6px 0 14px;
+}
+.splash-feasibility strong { color: rgb(233, 176, 74); }
+.splash-feasibility-list { margin: 6px 0 0; padding-left: 18px; color: var(--muted); }
+.splash-feasibility-list li { margin-bottom: 3px; }
 .splash-picks { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
 .splash-pick {
   text-align: left;

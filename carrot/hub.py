@@ -28,6 +28,7 @@ import math
 import platform
 import re
 import subprocess
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -191,7 +192,29 @@ def estimate_tokens_per_sec(download_gb: float, backend: str, fit: str) -> Optio
     return max(1, round(tps))
 
 
-def detect_specs() -> dict:
+# Detection spawns `nvidia-smi`, `rocm-smi` and the platform GPU probe, which
+# is fine once on a settings screen and not fine on a path the model resolver
+# takes. Hardware does not change between two questions in a conversation, so
+# the answer is memoised for a few minutes and `refresh=True` is what the Hub
+# tab's own refresh button means.
+_SPECS_TTL_SECONDS = 300
+_specs_memo: dict = {}
+
+
+def detect_specs(refresh: bool = False) -> dict:
+    """Hardware profile plus the fields the recommender needs.
+
+    Memoised — see above. Every caller that wants a fresh reading says so."""
+    cached = _specs_memo.get("specs")
+    if cached and not refresh and (time.time() - _specs_memo.get("at", 0)) < _SPECS_TTL_SECONDS:
+        return cached
+    specs = _detect_specs_uncached()
+    _specs_memo["specs"] = specs
+    _specs_memo["at"] = time.time()
+    return specs
+
+
+def _detect_specs_uncached() -> dict:
     """Hardware profile plus the fields the recommender needs.
 
     ``model_budget_gb`` is the memory we're willing to plan models into:
@@ -671,9 +694,153 @@ def recommend(models: list, specs: dict) -> dict:
     return {"best": best, "light": light, "by_use_case": by_use_case, "fits_anything": True}
 
 
+# ===== What this machine should start with =====
+#
+# The default used to be a constant: `gemma4:e4b`, for everyone. It needs 6 GB,
+# which makes it a bad answer twice over — it thrashes on an 8 GB laptop where
+# a 3B would have been quick and pleasant, and it is a toy on a workstation
+# with a 24 GB card that could have run something four times better. The Hub
+# has known how to size a model to a machine since it was written; the default
+# simply never asked it.
+#
+# What "good" means here is deliberately not `recommend()["best"]`, which the
+# splash preselects. `best` is the strongest thing that fits, and on 64 GB of
+# unified memory that is a 43 GB download. As a *default* — the thing a user
+# who skipped setup silently gets — that is a first launch that appears to hang
+# for an hour on a connection nobody asked about. The default is the best
+# all-rounder that fits and can be fetched in a reasonable time; the machine's
+# actual ceiling is still one click away in the Hub, and `best` is still what
+# the splash offers.
+FIRST_RUN_DOWNLOAD_CEILING_GB = 12.0
+
+# When detection fails or nothing in the catalog fits, this. Small on purpose:
+# a default that is too small is slow-witted, and a default that is too big
+# does not run at all, and only one of those lets the user get to the screen
+# where they can pick something better.
+FALLBACK_MODEL = "llama3.2:3b"
+
+
+def default_model(refresh: bool = False) -> dict:
+    """The model this machine should start with, and why.
+
+    Never raises. This sits under `get_target_model()`, which runs during
+    bootstrap on a machine that may have no config database yet — an exception
+    here would be a first launch that fails before it can explain itself.
+    """
+    try:
+        specs = detect_specs(refresh=refresh)
+        models = annotate_fit(get_catalog()["models"], specs)
+        affordable = [
+            m for m in models
+            if m["fit"] in ("great", "good")
+            and float(m.get("download_gb") or 0) <= FIRST_RUN_DOWNLOAD_CEILING_GB
+            and "chat" in (m.get("use_cases") or [])
+        ]
+        if affordable:
+            pick = max(affordable, key=_quality_key)
+            return {
+                "id": pick["id"],
+                "label": pick.get("label") or pick["id"],
+                "fit": pick["fit"],
+                "est_tps": pick.get("est_tps"),
+                "budget_gb": specs.get("model_budget_gb"),
+                "backend": specs.get("backend"),
+                "why": (f"{pick.get('label') or pick['id']} is the strongest all-rounder "
+                        f"that fits the {specs.get('model_budget_gb')} GB this machine has "
+                        f"for models."),
+                "fallback": False,
+            }
+    except Exception:
+        pass
+    return {
+        "id": FALLBACK_MODEL, "label": FALLBACK_MODEL, "fit": "unknown",
+        "est_tps": None, "budget_gb": None, "backend": None,
+        "why": ("Carrot could not read this machine's memory, so it started with a "
+                "small model that runs almost anywhere. The Hub will size one "
+                "properly."),
+        "fallback": True,
+    }
+
+
+def configured_or_default_model() -> str:
+    """The local model to use: the user's choice, else this machine's default.
+
+    One function so the answer cannot differ between the client that sends the
+    request, the router that picks a route, and the screen that shows which
+    model is active. They each had their own `"gemma4:e4b"` literal, which
+    agreed only because they were all wrong in the same way.
+    """
+    try:
+        chosen = (get_config().get("ollama_model") or "").strip()
+    except Exception:
+        chosen = ""
+    return chosen or default_model()["id"]
+
+
+# What a machine has to be able to run for each kind of work to be worth doing
+# on it. Not invented thresholds — the question asked of the catalog is "is
+# there a model for this that actually fits", which is the same question the
+# Hub answers for every card it draws.
+FEASIBILITY_TASKS = {
+    "chat": "Everyday questions and writing",
+    "coding": "Writing and changing code",
+    "reasoning": "Multi-step problems and research",
+    "vision": "Reading images and screenshots",
+}
+
+
+def feasibility(refresh: bool = False) -> dict:
+    """What this machine can and cannot do on-device, said plainly.
+
+    The warning people need at the start is not "your GPU is small". It is
+    "the Code tab will be slow and probably wrong here, and connecting a cloud
+    model is how you fix that" — a sentence about the work they were about to
+    try, delivered before they try it rather than after twenty minutes of a 3B
+    failing to edit a file.
+    """
+    specs = detect_specs(refresh=refresh)
+    models = annotate_fit(get_catalog()["models"], specs)
+    tasks = []
+    for use_case, label in FEASIBILITY_TASKS.items():
+        candidates = [m for m in models if use_case in (m.get("use_cases") or [])]
+        comfortable = [m for m in candidates if m["fit"] in ("great", "good")]
+        tight = [m for m in candidates if m["fit"] == "tight"]
+        if comfortable:
+            verdict, detail = "on_device", ""
+        elif tight:
+            smallest = min(tight, key=lambda m: float(m.get("min_mem_gb", 0)))
+            verdict = "slow"
+            detail = (f"the smallest model for this needs {smallest['min_mem_gb']} GB and "
+                      f"this machine has {specs.get('model_budget_gb')} GB for models, so "
+                      f"it will run partly on the CPU and be slow.")
+        else:
+            smallest = (min(candidates, key=lambda m: float(m.get("min_mem_gb", 0)))
+                        if candidates else None)
+            verdict = "needs_cloud"
+            detail = (f"nothing that does this fits in {specs.get('model_budget_gb')} GB"
+                      + (f" — the smallest is {smallest['min_mem_gb']} GB." if smallest else "."))
+        tasks.append({"use_case": use_case, "label": label,
+                      "verdict": verdict, "detail": detail})
+
+    limited = [t for t in tasks if t["verdict"] != "on_device"]
+    if not limited:
+        warning = ""
+    else:
+        names = ", ".join(t["label"].lower() for t in limited)
+        warning = (
+            f"This machine has {specs.get('model_budget_gb')} GB to give a model"
+            + (f" on the {specs.get('backend')} backend" if specs.get("backend") else "")
+            + f". {names.capitalize()} will not work well on-device here. Everything "
+              "else in Carrot still runs locally — connect a cloud model in Settings "
+              "for the parts that need one, or keep going and expect the rough edges."
+        )
+    return {"specs": specs, "tasks": tasks, "warning": warning,
+            "on_device_only": not limited}
+
+
 def hub_overview(refresh: bool = False) -> dict:
     """Everything the setup splash and the Hub tab need, in one payload."""
-    specs = detect_specs()
+    specs = detect_specs(refresh=refresh)
     catalog = get_catalog(refresh=refresh)
     models = annotate_fit(catalog["models"], specs)
     recs = recommend(catalog["models"], specs)
@@ -682,6 +849,12 @@ def hub_overview(refresh: bool = False) -> dict:
         "specs": specs,
         "models": models,
         "recommendations": recs,
+        # What the machine should start with, and what it will not do well.
+        # Both belong in the same payload the splash already fetches: a
+        # warning that needs a second request is a warning that arrives after
+        # the user has clicked past the screen it was for.
+        "default_model": default_model(),
+        "feasibility": feasibility(),
         "trending": annotate_fit(fetch_hf_trending(), specs),
         "hub_url": hub_url,
         "browse_url": HUB_BROWSE_URL,

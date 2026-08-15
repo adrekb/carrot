@@ -2991,6 +2991,24 @@ function renderSplashPicks(hub) {
     specsEl.classList.remove('hidden');
     link.classList.remove('hidden');
 
+    // What this machine cannot do on-device, said before the user tries it.
+    // The limit is real either way; the only question is whether they learn
+    // it here or after twenty minutes of the Code tab going nowhere.
+    const feas = hub.feasibility || {};
+    const warnEl = document.getElementById('splash-feasibility');
+    if (warnEl) {
+        if (feas.warning) {
+            const rough = (feas.tasks || []).filter(t => t.verdict !== 'on_device');
+            warnEl.innerHTML = `<strong>Worth knowing about this machine.</strong> `
+                + escHtml(feas.warning)
+                + (rough.length ? `<ul class="splash-feasibility-list">` + rough.map(t =>
+                    `<li>${escHtml(t.label)} — ${escHtml(t.detail)}</li>`).join('') + `</ul>` : '');
+            warnEl.classList.remove('hidden');
+        } else {
+            warnEl.classList.add('hidden');
+        }
+    }
+
     const recs = hub.recommendations || {};
     if (!recs.best) return;
     const picks = [{ role: 'Recommended', m: recs.best }];
@@ -3072,7 +3090,11 @@ function pickSplashModel(id) {
 }
 
 function skipModelChoice() {
-    // Experienced users: no picker, stock default, straight to setup.
+    // Skipping the picker is not skipping the sizing. `splashModel = null`
+    // sends the server to `get_target_model()`, which asks the Hub what fits
+    // this machine — it used to reach a constant, so the one path taken by
+    // users who did not want to think about it was the one that ignored
+    // their hardware entirely.
     splashModel = null;
     runBootstrap();
 }

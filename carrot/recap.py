@@ -180,7 +180,12 @@ def run_recap(model: str = None, include_web_search: bool = True):
     if include_web_search:
         web_context = fetch_live_tech_news()
 
-    result = summarize_news(articles, model or config.get("ollama_model_recap"), web_context=web_context)
+    from carrot import hub as hub_mod
+
+    result = summarize_news(
+        articles,
+        model or config.get("ollama_model_recap") or hub_mod.configured_or_default_model(),
+        web_context=web_context)
     if result.get("success"):
         save_recap_to_db(result, articles)
     return result
@@ -223,7 +228,10 @@ def run_recap_stream(model: str = None, include_web_search: bool = True):
         ok = web_context and not web_context.startswith("Failed")
         yield {"stage": "web", "detail": "web search complete" if ok else "web search unavailable, using RSS only"}
 
-    model = model or config.get("ollama_model_recap") or config.get("ollama_model")
+    from carrot import hub as hub_mod
+
+    model = (model or config.get("ollama_model_recap")
+             or hub_mod.configured_or_default_model())
     yield {"stage": "summarize", "detail": f"summarizing {len(articles)} articles with {model or client.default_model}"}
 
     prompt = _build_recap_prompt(articles, web_context)

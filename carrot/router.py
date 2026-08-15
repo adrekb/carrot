@@ -358,7 +358,9 @@ def local_model(task: str) -> str:
     pinned = assignment(task)
     if pinned and pinned["provider"] == PROVIDER_LOCAL:
         return pinned["model"]
-    return config.get("ollama_model", "gemma4:e4b")
+    from . import hub as hub_mod
+
+    return config.get("ollama_model") or hub_mod.configured_or_default_model()
 
 
 # ===== Hardware-aware auto-pick =====

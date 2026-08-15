@@ -31,9 +31,17 @@ CARROT_DIR = _default_data_dir()
 CONFIG_DB_KEY = "config"
 DEFAULTS = {
     "ollama_host": "http://localhost:11434",
-    "ollama_model": "gemma4:e4b",
-    "ollama_model_recap": "gemma4:e4b",
-    "ollama_model_search": "gemma4:e4b",
+    # Empty means "nobody has chosen yet", and that is a different thing from
+    # any particular model. It used to be `gemma4:e4b` for every machine ever
+    # to run Carrot — 6 GB, which thrashes on an 8 GB laptop where a 3B would
+    # have been quick, and is a toy on a workstation with a 24 GB card. The
+    # Hub has always known how to size a model to a machine; the default never
+    # asked it. `hub.configured_or_default_model()` is where the question gets
+    # asked now, and it is asked lazily, because a default that ran nvidia-smi
+    # from an import would run it in every process that touches config.
+    "ollama_model": "",
+    "ollama_model_recap": "",
+    "ollama_model_search": "",
     "data_dir": CARROT_DIR,
     "conversations_dir": os.path.join(CARROT_DIR, "conversations"),
     "notes_dir": os.path.join(CARROT_DIR, "notes"),
