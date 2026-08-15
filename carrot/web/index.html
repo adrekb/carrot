@@ -299,6 +299,16 @@
          reads as the app being broken. -->
     <div id="splash-feasibility" class="splash-feasibility hidden"></div>
     <div id="splash-picks" class="splash-picks hidden"></div>
+    <!-- The bundled catalog is a snapshot taken whenever this build was cut,
+         so on release day it is already recommending last quarter's models.
+         This asks Hugging Face what exists now and sizes the answer to this
+         machine. A button rather than automatic: the first screen should not
+         depend on the network, and a local-first app should not reach out
+         before it is asked. -->
+    <button id="splash-find" class="btn btn-ghost splash-find hidden" onclick="splashFindForMachine()">
+      Find models for my machine →
+    </button>
+    <div id="splash-find-note" class="splash-find-note hidden"></div>
     <div id="splash-catalog" class="splash-catalog hidden"></div>
     <div class="splash-progress"><div id="splash-bar" class="splash-bar"></div></div>
     <div id="splash-detail" class="splash-detail"></div>

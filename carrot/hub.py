@@ -347,13 +347,22 @@ def get_catalog(refresh: bool = False) -> dict:
 # whose running footprint fits the machine's budget.
 
 QUANT_LADDER = [
-    # (name, GB of weights per B params, quality note)
+    # (name, GB of weights per B params)
     ("Q8_0", 1.07),
     ("Q6_K", 0.82),
     ("Q5_K_M", 0.71),
     ("Q4_K_M", 0.60),
+    # The floor. Q2_K used to sit below this and it made the descent dishonest:
+    # asked for the best match on a 12 GB card, the planner offered a 24B at
+    # Q2_K — 10.9 GB of memory for a model compressed until it is worse than
+    # the 8B at Q8_0 that fits in 11.0 GB beside it. Two-bit is not "the same
+    # model, smaller"; it is a different and worse model wearing the big one's
+    # name, and the number in the name is what the user is choosing on.
+    #
+    # So a model that cannot fit at Q3_K_M does not fit. The descent stops
+    # here and the answer becomes a smaller base model at a higher bit-rate,
+    # which is the better machine anyway.
     ("Q3_K_M", 0.49),
-    ("Q2_K", 0.35),
 ]
 # Running footprint = weights + KV cache + runtime, roughly:
 _MEM_OVERHEAD_FACTOR = 1.15
@@ -361,8 +370,14 @@ _MEM_OVERHEAD_FLAT_GB = 1.2
 
 
 def quant_plan(params_b: float, budget_gb: float) -> dict:
-    """Best-quality quant that fits the budget, or the smallest one marked
-    tight/too_big when nothing does."""
+    """Best-quality quant that fits the budget, or Q3_K_M marked tight/too_big
+    when nothing does.
+
+    The ladder stops at Q3_K_M rather than descending to two-bit. An 8B at
+    Q8_0 beats a 24B squeezed to Q2_K and costs the same memory, so a model
+    that only "fits" at two bits does not fit — it is reported as too big and
+    a smaller model at a higher bit-rate wins, which is the true answer.
+    """
     chosen = None
     for name, gb_per_b in QUANT_LADDER:
         download = params_b * gb_per_b
@@ -492,7 +507,18 @@ def _rank_key(m: dict, profile: dict):
     fit_score = {"great": 3, "good": 2.5, "tight": 0.5}.get(m.get("fit"), 0)
     match = sum(1 for uc in profile.get("use_cases", []) if uc in (m.get("use_cases") or []))
     popularity = math.log10(max(m.get("downloads", 0), 1))
-    return (fit_score * 10 + match * 8 + popularity, float(m.get("params_b") or 0))
+    # Fitting is not the same as being worth running.
+    #
+    # Without this a 2.6B and a 9B both score "great" on a 12 GB card and
+    # popularity decides, so the best match offered for a machine with room to
+    # spare was a model a third of what it could hold — the gemma4-for-everyone
+    # mistake arriving from the other direction. Capped, because past a point
+    # the extra parameters buy less than the tokens per second they cost, and
+    # only for comfortable fits: a `tight` model is already being punished for
+    # being too big and must not be rewarded for it here.
+    headroom = min(float(m.get("params_b") or 0), 32.0) * 0.4 if fit_score >= 2.5 else 0.0
+    return (fit_score * 10 + match * 8 + popularity + headroom,
+            float(m.get("params_b") or 0))
 
 
 def live_search(workload: str = "", sort: str = "trending",
@@ -510,8 +536,16 @@ def live_search(workload: str = "", sort: str = "trending",
     # One pipeline tag per query; extra required modalities filter locally.
     if wanted_modalities:
         params["pipeline_tag"] = HF_PIPELINE_FOR_MODALITY[wanted_modalities[0]]
+    # Narrow the query rather than filter the answer. HF's GGUF index sorted
+    # by trend is mostly community merges — roleplay finetunes with names like
+    # "Uncensored-Heretic-NEO" — so an unfiltered popularity list is a poor
+    # answer to "what should my assistant be", however current it is. The
+    # coding path already knew this; `instruct` is the same lever for the
+    # general case, and it is what publishers actually name the tuned weights.
     if "coding" in profile["use_cases"]:
         params["search"] = "coder"
+    elif "chat" in profile["use_cases"]:
+        params["search"] = "instruct"
     cache_key = json.dumps(params, sort_keys=True)
     rows = _hf_api_get(params, cache_key)
     if rows is None:
@@ -551,11 +585,39 @@ HF_CACHE_PATH = os.path.join(CARROT_DIR, "config", "hub_hf_trending.json")
 _PARAMS_RE = re.compile(r"(\d+(?:\.\d+)?)\s*[bB]\b")
 
 
+# GGUF repos that are not models you can talk to.
+#
+# The live list is the whole HF GGUF index sorted by popularity, and the most
+# downloaded thing on it is frequently a speech recogniser or an embedding
+# model — both ship as GGUF, both are tiny, both therefore "fit" any machine
+# and win on popularity. Asked for the best match for this machine, the first
+# answer offered was `nemotron-3.5-asr-streaming-0.6b`: pressing Set up now
+# would have installed a speech-to-text model as somebody's assistant.
+#
+# Matched on the repo name because that is all the models API gives without a
+# request per repo. It is a coarse filter and it is meant to be — the cost of
+# wrongly dropping one chat model is that it is missing from a list of forty;
+# the cost of keeping an ASR model is that it is recommended as an assistant.
+_NOT_AN_ASSISTANT = (
+    "asr", "whisper", "wav2vec", "speech", "tts", "voice", "vocoder", "audiogen",
+    "embed", "embedding", "bge-", "gte-", "e5-", "rerank", "reranker", "colbert",
+    "clip", "siglip", "stable-diffusion", "sdxl", "flux", "vae", "upscal",
+    "ocr", "detect", "segment", "-sd-", "diffusion",
+)
+
+
+def _is_an_assistant(repo_id: str) -> bool:
+    name = repo_id.lower().replace("_", "-")
+    return not any(bad in name for bad in _NOT_AN_ASSISTANT)
+
+
 def _hf_repo_to_entry(repo: dict) -> Optional[dict]:
     """Turn an HF API row into a catalog-shaped entry, or None if we can't
     size it (no parameter count in the name means no honest fit estimate)."""
     repo_id = repo.get("id") or ""
     if "/" not in repo_id:
+        return None
+    if not _is_an_assistant(repo_id):
         return None
     match = _PARAMS_RE.search(repo_id.split("/")[-1].replace("-", " ").replace("_", " "))
     if not match:
@@ -573,7 +635,11 @@ def _hf_repo_to_entry(repo: dict) -> Optional[dict]:
         use_cases.append("coding")
     if any(k in name_lower for k in ("-r1", "reason", "think", "qwq", "math")):
         use_cases.append("reasoning")
-    if any(k in name_lower for k in ("instruct", "chat", "assistant")):
+    # `-it` is Google's suffix for instruction-tuned and is as common as the
+    # word. Without it, `gemma-3-12b-it` reads as a base model — untuned
+    # weights offered as somebody's assistant, which answers a question by
+    # continuing it.
+    if any(k in name_lower for k in ("instruct", "chat", "assistant", "-it-"))             or name_lower.endswith("-it") or "-it-gguf" in name_lower:
         use_cases.append("chat")
     return {
         "id": f"hf.co/{repo_id}:Q4_K_M",
@@ -679,7 +745,14 @@ def recommend(models: list, specs: dict) -> dict:
         smallest = min(annotated, key=lambda m: float(m.get("min_mem_gb", 0))) if annotated else None
         return {"best": smallest, "light": smallest, "by_use_case": {}, "fits_anything": False}
 
-    best = max(comfortable, key=_quality_key)
+    # "Strongest that fits" is not the same question as "best all-rounder",
+    # and ranking on quality alone answered the wrong one: on a 12 GB card it
+    # offered Qwen 2.5 Coder 14B under the word RECOMMENDED, which is a code
+    # specialist being handed to someone who has not said they write code.
+    # The general pick has to declare `chat`; there is a per-use-case row
+    # right below it for anyone who wants the specialist.
+    all_rounders = [m for m in comfortable if "chat" in (m.get("use_cases") or [])]
+    best = max(all_rounders or comfortable, key=_quality_key)
     light = min(comfortable, key=lambda m: float(m.get("min_mem_gb", 0)))
     by_use_case = {}
     for uc in USE_CASES:
@@ -811,8 +884,20 @@ def resize_stale_default() -> Optional[str]:
         return None
 
 
-def find_more(installed: Optional[set] = None, refresh: bool = False) -> list:
+def find_more(installed: Optional[set] = None, refresh: bool = False,
+              live: bool = False) -> list:
     """Catalog rows for the model picker, sized to this machine.
+
+    `live=True` asks Hugging Face what exists now instead of reading the list
+    compiled into this build. That list is a snapshot of whatever was good on
+    the day the build was cut, and by the time somebody downloads and runs it,
+    offering those models with no caveat is a confident claim about the
+    present that a shipped binary cannot support. Rows say which they are, so
+    the picker can label a built-in row as the old list it is.
+
+    Not the default, because this runs whenever the picker opens and the
+    popup should not wait on a network round-trip. The button asks; the
+    fallback is local and honest about being local.
 
     The picker is where a person decides what answers the next question, so it
     is also where "I want a better one" happens. It used to offer six hardcoded
@@ -829,8 +914,22 @@ def find_more(installed: Optional[set] = None, refresh: bool = False) -> list:
     specs = detect_specs(refresh=refresh)
     have = installed or set()
     budget = specs.get("model_budget_gb") or 0
+
+    source = "bundled"
+    entries = None
+    if live:
+        try:
+            found = live_search(limit=40)
+            if found.get("results"):
+                entries = found["results"]
+                source = "huggingface"
+        except Exception:
+            entries = None
+    if entries is None:
+        entries = annotate_fit(get_catalog()["models"], specs)
+
     rows = []
-    for entry in annotate_fit(get_catalog()["models"], specs):
+    for entry in entries:
         if entry["id"] in have:
             continue
         fits = entry["fit"] != "too_big"
@@ -843,6 +942,9 @@ def find_more(installed: Optional[set] = None, refresh: bool = False) -> list:
             "min_mem_gb": entry.get("min_mem_gb"),
             "est_tps": entry.get("est_tps"),
             "runs_here": fits,
+            # So the picker can say "this came from the list built into your
+            # download" rather than presenting it as what is good today.
+            "source": source,
             # Said on the row rather than in a tooltip: the reason a model is
             # greyed out is the single most useful sentence on this screen.
             "why_not": ("" if fits else

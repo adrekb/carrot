@@ -534,9 +534,11 @@ async function setRecapTime(value) {
 }
 
 // ===== Model picker =====
-async function loadModels() {
+async function loadModels(opts) {
     try {
-        const data = await api('/api/models');
+        // `live` only on request: the popup draws the models you already have
+        // without waiting on Hugging Face, and "Find current" is what asks.
+        const data = await api('/api/models' + ((opts || {}).live ? '?live=true' : ''));
         // The label has to show what chat *actually* runs on. `active_model` is
         // only the Ollama default, so reading it here made a pinned cloud model
         // silently revert to the local one in the picker on every refresh.
@@ -792,6 +794,20 @@ function renderModelPop(data) {
     const notInstalled = (data.suggested || []).filter(m => !m.installed);
     if (!notInstalled.length) {
         suggestedEl.innerHTML = '<div class="empty" style="padding:4px 9px">Nothing left to add.</div>';
+    }
+    // Where these rows came from, said before they are read. The list built
+    // into a download is a snapshot of the day the build was cut; presenting
+    // it as what is good now is the claim worth avoiding, not the age itself.
+    if (notInstalled.length && notInstalled[0].source === 'bundled') {
+        const bar = document.createElement('div');
+        bar.className = 'model-source-note';
+        bar.innerHTML = '<span>Built into this download — may be out of date.</span>';
+        const go = document.createElement('button');
+        go.className = 'm-install';
+        go.textContent = 'Find current';
+        go.onclick = (e) => { e.stopPropagation(); loadModels({ live: true }); };
+        bar.appendChild(go);
+        suggestedEl.appendChild(bar);
     }
     const FIT_LABEL = { great: 'Runs great', good: 'Runs well', tight: 'Slow here', too_big: "Won't run" };
     for (const m of notInstalled) {
@@ -3027,13 +3043,27 @@ function renderSplashPicks(hub) {
         }
     }
 
-    const recs = hub.recommendations || {};
-    if (!recs.best) return;
-    const picks = [{ role: 'Recommended', m: recs.best }];
-    if (recs.light && recs.light.id !== recs.best.id) picks.push({ role: 'Light & fast', m: recs.light });
-    const coding = (recs.by_use_case || {}).coding;
-    if (coding && !picks.some(p => p.m.id === coding.id)) picks.push({ role: 'For coding', m: coding });
+    // No suggestions here. The bundled catalog is a snapshot of whatever was
+    // good on the day this build was cut, and by the time somebody downloads
+    // and runs it that is a recommendation for last quarter's models made
+    // with total confidence. Naming a model on this screen is a promise about
+    // the present that a shipped binary cannot keep.
+    //
+    // So the screen offers to go and look instead, and the answer comes from
+    // Hugging Face. The bundle stays in the build for one job — being the
+    // fallback when there is no network — and when it is used it says so.
+    const find = document.getElementById('splash-find');
+    find.textContent = 'Find models for my machine →';
+    find.onclick = splashFindForMachine;
+    find.disabled = false;
+    find.classList.remove('hidden');
+}
 
+// Both the bundled recommendations and the live Hugging Face results draw the
+// same card, because they are the same decision — the only difference is where
+// the row came from.
+function renderSplashCards(picks) {
+    const picksEl = document.getElementById('splash-picks');
     picksEl.innerHTML = '';
     picksEl.classList.remove('hidden');
     for (const p of picks) {
@@ -3052,9 +3082,75 @@ function renderSplashPicks(hub) {
         };
         picksEl.appendChild(card);
     }
-    // Preselect the recommendation so plain "Set up now" does the right thing.
-    splashModel = recs.best.id;
-    picksEl.querySelector('.splash-pick').classList.add('selected');
+    // Preselect the first so plain "Set up now" does the right thing.
+    if (picks.length) {
+        splashModel = picks[0].m.id;
+        picksEl.querySelector('.splash-pick').classList.add('selected');
+    }
+}
+
+// "Find models for my machine" — the only way a model gets named on this
+// screen. It asks Hugging Face what exists right now; the sizing stays local
+// (specs → quant plan → fit), so what comes back is current *and* runnable,
+// rather than a trending list that ignores the machine or a bundled list that
+// ignores the date.
+async function splashFindForMachine() {
+    const btn = document.getElementById('splash-find');
+    const note = document.getElementById('splash-find-note');
+    btn.disabled = true;
+    btn.textContent = 'Asking Hugging Face…';
+    let live = [];
+    let offline = '';
+    try {
+        // `workload=assistant` rather than an unfiltered trending list: with
+        // no stated use case the ranking is fit plus popularity, and the most
+        // downloaded thing that fits any machine is a 0.6B speech model. This
+        // screen is choosing the thing that answers questions.
+        const data = await api('/api/hub/search?workload=assistant&sort=trending&limit=6');
+        live = (data.results || []).filter(m => m.fit !== 'too_big');
+        if (!live.length) offline = data.detail || '';
+    } catch (e) {
+        offline = 'Could not reach Hugging Face.';
+    }
+
+    if (live.length) {
+        renderSplashCards(live.map((m, i) => ({
+            role: i === 0 ? 'Best match for this machine' : 'Also fits',
+            m,
+        })));
+        note.textContent = `Live from Hugging Face · ${live.length} that run on this machine`;
+        note.classList.remove('hidden');
+        btn.classList.add('hidden');
+        return;
+    }
+
+    // No network. This is the one job the bundled catalog still has, and it
+    // is labelled as what it is — an old list — because a stale
+    // recommendation presented as a current one is the thing worth avoiding,
+    // not the staleness itself.
+    const bundled = splashBundledPicks();
+    if (bundled.length) {
+        renderSplashCards(bundled);
+        note.textContent = (offline ? offline + ' ' : '')
+            + 'Showing the list built into this download, which may be out of date.';
+    } else {
+        note.textContent = (offline || 'Nothing found.')
+            + ' You can set up Ollama now and pick a model later.';
+    }
+    note.classList.remove('hidden');
+    btn.textContent = 'Try again';
+    btn.disabled = false;
+}
+
+// The offline fallback, from the payload the splash already has.
+function splashBundledPicks() {
+    const recs = (splashHub || {}).recommendations || {};
+    if (!recs.best) return [];
+    const picks = [{ role: 'Fits this machine', m: recs.best }];
+    if (recs.light && recs.light.id !== recs.best.id) {
+        picks.push({ role: 'Light & fast', m: recs.light });
+    }
+    return picks;
 }
 
 function hideSplash() { document.getElementById('splash').classList.add('hidden'); }

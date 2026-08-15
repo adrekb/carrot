@@ -285,3 +285,210 @@ class TestAnInstallThatAlreadyHasTheOldDefault:
                    ).read_text(encoding="utf-8")
         startup = app_src[app_src.index("def _startup():"):]
         assert "resize_stale_default" in startup[:1200]
+
+
+class TestTheGeneralPickIsAGeneralist:
+    def test_recommended_is_not_a_code_specialist(self):
+        """On a 12 GB card it offered Qwen 2.5 Coder 14B under the word
+        RECOMMENDED — a specialist handed to somebody who never said they
+        write code. "Strongest that fits" is a different question from "best
+        all-rounder", and it was answering the first one."""
+        with machine(12.0, "cuda"):
+            best = hub.recommend(hub.BUNDLED_CATALOG, specs(12.0, "cuda"))["best"]
+        assert "chat" in best["use_cases"]
+
+    def test_the_specialist_is_still_one_row_down(self):
+        with machine(12.0, "cuda"):
+            recs = hub.recommend(hub.BUNDLED_CATALOG, specs(12.0, "cuda"))
+        assert "coder" in recs["by_use_case"]["coding"]["id"]
+
+    def test_a_machine_with_only_specialists_still_gets_a_pick(self):
+        """Better a specialist than an empty screen."""
+        only = [m for m in hub.BUNDLED_CATALOG if "chat" not in m["use_cases"]]
+        best = hub.recommend(only, specs(48.0, "cuda"))["best"]
+        assert best is not None
+
+
+class TestFindingModelsThatExistToday:
+    """The bundled catalog is a snapshot taken when the build was cut, so on
+    release day it already recommends last quarter's models."""
+
+    def test_the_splash_offers_to_go_and_look(self):
+        from pathlib import Path
+        root = Path(__file__).resolve().parents[1] / "carrot" / "web"
+        assert 'id="splash-find"' in (root / "index.html").read_text(encoding="utf-8")
+        assert "splashFindForMachine" in (root / "js" / "app.js").read_text(encoding="utf-8")
+
+    def test_it_is_a_button_and_not_automatic(self):
+        """The first screen should not depend on the network, and a
+        local-first app should not reach out before it is asked."""
+        from pathlib import Path
+        js = (Path(__file__).resolve().parents[1] / "carrot" / "web" / "js"
+              / "app.js").read_text(encoding="utf-8")
+        render = js[js.index("function renderSplashPicks"):js.index("function renderSplashCards")]
+        assert "hub/search" not in render
+
+    def test_the_splash_names_no_model_until_it_has_looked(self):
+        """Naming a model on the setup screen from a list compiled months ago
+        is a confident claim about the present that a shipped binary cannot
+        support. The screen offers to go and look instead."""
+        from pathlib import Path
+        js = (Path(__file__).resolve().parents[1] / "carrot" / "web" / "js"
+              / "app.js").read_text(encoding="utf-8")
+        render = js[js.index("function renderSplashPicks"):js.index("function renderSplashCards")]
+        assert "renderSplashCards(" not in render
+
+    def test_the_built_in_list_is_the_offline_fallback_and_says_so(self):
+        from pathlib import Path
+        js = (Path(__file__).resolve().parents[1] / "carrot" / "web" / "js"
+              / "app.js").read_text(encoding="utf-8")
+        find = js[js.index("async function splashFindForMachine"):]
+        assert "splashBundledPicks()" in find
+        assert "out of date" in find
+
+    def test_the_picker_labels_a_built_in_row_as_one(self, isolated_db):
+        with machine(6.0):
+            rows = hub.find_more()
+        assert rows and all(r["source"] == "bundled" for r in rows)
+
+    def test_the_picker_can_ask_for_the_current_list(self, isolated_db):
+        found = [{"id": "org/Fresh-7B-GGUF", "downloads": 5000}]
+        with machine(12.0, "cuda"), patch.object(hub, "_hf_api_get", lambda p, k: found):
+            rows = hub.find_more(live=True)
+        assert rows and rows[0]["source"] == "huggingface"
+        assert any("Fresh-7B" in r["name"] for r in rows)
+
+    def test_asking_for_current_falls_back_rather_than_emptying_the_list(self, isolated_db):
+        """Offline is not a reason to show nothing — it is a reason to say
+        which list you are looking at."""
+        with machine(6.0), patch.object(hub, "_hf_api_get", lambda p, k: None):
+            rows = hub.find_more(live=True)
+        assert rows and all(r["source"] == "bundled" for r in rows)
+
+    def test_the_popup_does_not_wait_on_the_network_to_draw(self):
+        """`live` is opt-in: the models you already have must not be gated on
+        a Hugging Face round-trip."""
+        from pathlib import Path
+        js = (Path(__file__).resolve().parents[1] / "carrot" / "web" / "js"
+              / "app.js").read_text(encoding="utf-8")
+        loader = js[js.index("async function loadModels"):js.index("async function loadModels") + 500]
+        assert "(opts || {}).live" in loader
+
+    def test_live_results_are_still_sized_to_this_machine(self, isolated_db):
+        """Current *and* runnable. A trending list that ignores the machine is
+        the same mistake as a stale list that ignores it."""
+        rows = [{"id": "org/Big-70B-GGUF", "downloads": 9000},
+                {"id": "org/Small-3B-GGUF", "downloads": 8000}]
+        with machine(6.0), patch.object(hub, "_hf_api_get", lambda p, k: rows):
+            found = hub.live_search()
+        ids = [m["id"] for m in found["results"]]
+        assert any("Small-3B" in i for i in ids)
+        assert not any("Big-70B" in i for i in ids)
+
+    def test_being_offline_says_so_rather_than_showing_nothing(self, isolated_db):
+        with machine(6.0), patch.object(hub, "_hf_api_get", lambda p, k: None):
+            found = hub.live_search()
+        assert found["source"] == "offline" and found["detail"]
+
+
+class TestTheLiveListIsNotJustPopular:
+    """Current is necessary and not sufficient. HF's GGUF index sorted by
+    trend is mostly community roleplay merges, and the most downloaded thing
+    that fits any machine is a speech model."""
+
+    def test_a_speech_model_is_not_an_assistant(self):
+        """Asked for the best match for this machine, the first answer was
+        `nemotron-3.5-asr-streaming-0.6b` — pressing Set up now would have
+        installed speech-to-text as somebody's assistant."""
+        assert not hub._is_an_assistant("nvidia/nemotron-3.5-asr-streaming-0.6b")
+        assert not hub._is_an_assistant("BAAI/bge-large-en-v1.5-GGUF")
+        assert not hub._is_an_assistant("openai/whisper-large-v3-GGUF")
+
+    def test_real_models_survive_the_filter(self):
+        for keep in ("Qwen/Qwen3.5-9B-Instruct-GGUF", "meta-llama/Llama-4-8B-GGUF",
+                     "Qwen/Qwen2.5-Coder-7B-GGUF", "google/gemma-3-12b-it"):
+            assert hub._is_an_assistant(keep), keep
+
+    def test_it_asks_hugging_face_for_instruct_rather_than_filtering_after(self):
+        seen = {}
+
+        def capture(params, key):
+            seen.update(params)
+            return []
+
+        with machine(12.0, "cuda"), patch.object(hub, "_hf_api_get", capture):
+            hub.live_search(workload="assistant")
+        assert seen.get("search") == "instruct"
+
+    def test_the_coding_path_still_asks_for_coders(self):
+        seen = {}
+
+        def capture(params, key):
+            seen.update(params)
+            return []
+
+        with machine(12.0, "cuda"), patch.object(hub, "_hf_api_get", capture):
+            hub.live_search(workload="write code")
+        assert seen.get("search") == "coder"
+
+    def test_a_google_instruction_tuned_tag_reads_as_chat(self):
+        """`-it` is as common as the word, and without it `gemma-3-12b-it`
+        reads as base weights — which answer a question by continuing it."""
+        entry = hub._hf_repo_to_entry({"id": "google/gemma-3-12b-it", "downloads": 10})
+        assert "chat" in entry["use_cases"]
+
+    def test_fitting_is_not_the_same_as_being_worth_running(self):
+        """A 2.6B and a 9B both score `great` on a 12 GB card, and popularity
+        decided — so the best match for a machine with room to spare was a
+        model a third of what it could hold."""
+        small = {"fit": "great", "params_b": 2.6, "downloads": 250_000, "use_cases": []}
+        large = {"fit": "great", "params_b": 9.0, "downloads": 250_000, "use_cases": []}
+        profile = {"use_cases": [], "modalities": []}
+        assert hub._rank_key(large, profile) > hub._rank_key(small, profile)
+
+    def test_a_tight_model_is_not_rewarded_for_being_too_big(self):
+        tight = {"fit": "tight", "params_b": 30.0, "downloads": 250_000, "use_cases": []}
+        good = {"fit": "great", "params_b": 8.0, "downloads": 250_000, "use_cases": []}
+        profile = {"use_cases": [], "modalities": []}
+        assert hub._rank_key(good, profile) > hub._rank_key(tight, profile)
+
+
+class TestTheQuantDescentHasAFloor:
+    """An 8B at Q8_0 beats a 24B squeezed to Q2_K, and costs the same memory.
+    Two-bit is not the same model made smaller; it is a worse model wearing
+    the big one's name — and the number in the name is what is being chosen
+    on."""
+
+    def test_two_bit_is_not_on_the_ladder(self):
+        assert not any(name.startswith("Q2") for name, _ in hub.QUANT_LADDER)
+
+    def test_the_floor_is_three_bit(self):
+        assert hub.QUANT_LADDER[-1][0] == "Q3_K_M"
+
+    def test_a_24b_does_not_squeeze_onto_a_12gb_card(self):
+        """It used to be planned at Q2_K and reported as a *good* fit — the
+        best match this machine was offered."""
+        plan = hub.quant_plan(24.0, 12.0)
+        assert plan["quant"] == "Q3_K_M"
+        assert plan["fit"] in ("tight", "too_big")
+
+    def test_the_smaller_model_at_a_higher_bit_rate_wins_instead(self):
+        big = hub.quant_plan(24.0, 12.0)
+        small = hub.quant_plan(8.0, 12.0)
+        assert small["fit"] in ("great", "good")
+        assert {"great": 0, "good": 1, "tight": 2, "too_big": 3}[small["fit"]] \
+            < {"great": 0, "good": 1, "tight": 2, "too_big": 3}[big["fit"]]
+        assert small["quant"] == "Q8_0"
+
+    def test_a_16gb_card_does_get_the_24b(self):
+        """The floor is not a ban on big models — it is a ban on pretending a
+        two-bit one is the same thing."""
+        plan = hub.quant_plan(24.0, 16.0)
+        assert plan["quant"] == "Q3_K_M" and plan["fit"] in ("great", "good")
+
+    def test_room_to_spare_still_buys_quality_not_just_size(self):
+        """A 24 GB card should run a 24B at more than the floor."""
+        assert hub.quant_plan(24.0, 24.0)["quant"] in ("Q6_K", "Q5_K_M", "Q8_0")
+
+    def test_a_model_that_needs_two_bit_to_fit_is_reported_as_too_big(self):
+        assert hub.quant_plan(70.0, 12.0)["fit"] == "too_big"

@@ -1408,6 +1408,17 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 .model-row .m-install:hover { color: var(--accent); border-color: rgba(255, 92, 31, 0.4); }
 .model-row .m-install .ico { width: 11px; height: 11px; }
 
+/* Where a list came from, above the list. */
+.model-source-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 9px 7px;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
 /* Fit, on the row. The picker is where somebody decides what answers the next
    question, so "will this actually run on my machine" is part of the name,
    not something to go and look up. */
@@ -3091,6 +3102,13 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 .splash-feasibility strong { color: rgb(233, 176, 74); }
 .splash-feasibility-list { margin: 6px 0 0; padding-left: 18px; color: var(--muted); }
 .splash-feasibility-list li { margin-bottom: 3px; }
+.splash-find { width: 100%; margin-bottom: 8px; font-size: var(--text-sm); }
+.splash-find-note {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  text-align: center;
+  margin-bottom: 14px;
+}
 .splash-picks { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
 .splash-pick {
   text-align: left;

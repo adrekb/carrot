@@ -302,9 +302,12 @@ def test_quant_descent_uses_best_quality_that_fits():
     plan_small = hub.quant_plan(8.0, 8.0)
     assert plan_small["quant"] != "Q8_0"
     assert plan_small["min_mem_gb"] <= 8.0
-    # Truly hopeless: smallest quant, honestly marked.
+    # Truly hopeless: the lowest quant Carrot will offer, honestly marked.
+    # Not Q2_K — the ladder floors at Q3_K_M, because an 8B at Q8_0 beats a
+    # 70B at two bits and a model that only fits at two bits does not fit.
+    # See TestTheQuantDescentHasAFloor in test_default_model.py.
     plan_none = hub.quant_plan(70.0, 4.0)
-    assert plan_none["quant"] == "Q2_K"
+    assert plan_none["quant"] == "Q3_K_M"
     assert plan_none["fit"] == "too_big"
 
 

@@ -893,7 +893,11 @@ async def set_model_context_window(req: ContextWindowRequest):
 
 
 @app.get("/api/models")
-async def list_models():
+async def list_models(live: bool = False):
+    """`live=true` asks Hugging Face for the "find more" section instead of
+    reading the list compiled into this build. Off by default because the
+    picker popup should not wait on a network round-trip to draw the models
+    you already have."""
     client = ollama_mod.OllamaClient()
     installed = client.list_models() if client.is_available() else []
     installed_names = {m["name"] for m in installed}
@@ -902,7 +906,7 @@ async def list_models():
     # Already-installed tags are dropped by `find_more` rather than marked,
     # because "Find more" is a list of what you could add — a row you already
     # have is noise on it, and it is one line above in the same popup.
-    suggested = hub_mod.find_more(installed=installed_names)
+    suggested = hub_mod.find_more(installed=installed_names, live=live)
 
     # Models from configured cloud providers belong in the picker too —
     # a key you already pasted is useless if the UI only offers Ollama.
