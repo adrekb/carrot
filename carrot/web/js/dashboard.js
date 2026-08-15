@@ -874,6 +874,7 @@ async function loadSettings() {
     if (typeof loadHooksPanel === 'function') loadHooksPanel();
     if (typeof loadConsensusPanel === 'function') loadConsensusPanel();
     if (typeof loadAmbientPanel === 'function') loadAmbientPanel();
+    if (typeof loadComponents === 'function') loadComponents();
 
     const toggle = document.getElementById('recap-auto-toggle');
     if (toggle) toggle.checked = !!cfg.recap_auto_enabled;
@@ -1206,4 +1207,99 @@ async function renderMarketsWidget(w, body) {
     body.innerHTML = '<div class="mkt-list">' + rows + '</div>' +
         '<div class="muted small mkt-foot">' + escHtml(asOf) + (asOf ? ' · ' : '') +
         'delayed' + (data.stale ? ' · last known values' : '') + '</div>';
+}
+
+// ===== Add-ons =====
+//
+// The optional pieces of Carrot, each a button rather than two terminal
+// commands. The state of a row comes from the server, because an install
+// outlives the screen that started it: switch tabs mid-download and come
+// back, and the row is still going.
+
+let componentsPoll = null;
+
+async function loadComponents() {
+    const host = document.getElementById('components-list');
+    if (!host) return;
+    let rows = [];
+    try {
+        rows = (await api('/api/components')).components || [];
+    } catch (_) {
+        host.innerHTML = '<div class="empty">Could not read the add-on list.</div>';
+        return;
+    }
+    renderComponents(rows);
+    // Keep polling only while something is actually running, so an idle
+    // Settings tab is not asking a question every two seconds forever.
+    const busy = rows.some(r => r.state === 'installing');
+    clearTimeout(componentsPoll);
+    if (busy) componentsPoll = setTimeout(loadComponents, 2000);
+}
+
+function renderComponents(rows) {
+    const host = document.getElementById('components-list');
+    host.innerHTML = '';
+    for (const row of rows) {
+        const el = document.createElement('div');
+        el.className = 'component-row' + (row.installed ? ' component-installed' : '');
+
+        const main = document.createElement('div');
+        main.className = 'component-main';
+        main.innerHTML =
+            `<div class="component-title">${escHtml(row.label)}`
+            + (row.installed ? '<span class="component-badge">Installed</span>' : '')
+            + `</div>`
+            + `<div class="component-unlocks">${escHtml(row.unlocks)}</div>`
+            + (row.detail ? `<div class="component-detail">${escHtml(row.detail)}</div>` : '')
+            + (row.note ? `<div class="component-note">${escHtml(row.note)}</div>` : '');
+        el.appendChild(main);
+
+        const side = document.createElement('div');
+        side.className = 'component-side';
+        if (row.state === 'installing') {
+            side.innerHTML = `<span class="component-progress">${escHtml(row.message || 'Working…')}</span>`;
+        } else if (row.installed) {
+            side.innerHTML = `<span class="component-size">${escHtml(row.size_hint || '')}</span>`;
+        } else {
+            const size = document.createElement('span');
+            size.className = 'component-size';
+            size.textContent = row.size_hint || '';
+            side.appendChild(size);
+            const btn = document.createElement('button');
+            btn.className = 'btn btn-ghost component-install';
+            btn.textContent = 'Install';
+            btn.onclick = () => installComponent(row.id, btn);
+            side.appendChild(btn);
+        }
+        el.appendChild(side);
+
+        // A failure says what happened and leaves the button there. The tail
+        // of pip's output is the part that says why; the rest is resolver
+        // noise nobody can act on.
+        if (row.state === 'failed') {
+            const failed = document.createElement('div');
+            failed.className = 'component-failed';
+            failed.textContent = row.message || 'That did not work.';
+            if (row.error) {
+                const pre = document.createElement('pre');
+                pre.textContent = row.error;
+                failed.appendChild(pre);
+            }
+            el.appendChild(failed);
+        }
+        host.appendChild(el);
+    }
+}
+
+async function installComponent(id, btn) {
+    btn.disabled = true;
+    btn.textContent = 'Starting…';
+    try {
+        await api(`/api/components/${encodeURIComponent(id)}/install`, { method: 'POST' });
+    } catch (e) {
+        btn.disabled = false;
+        btn.textContent = 'Install';
+        return;
+    }
+    loadComponents();
 }

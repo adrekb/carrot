@@ -1461,6 +1461,22 @@
     <div class="page">
       <div class="page-head"><h2>Settings</h2></div>
 
+      <!-- The optional parts, installable without a terminal. Carrot is
+           already running in the interpreter that needs them, so it can put
+           them there — telling somebody to open a shell and work out which
+           Python to point at is the end of the road for most people. -->
+      <div class="settings-card">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-download"/></svg>
+          <h3>Add-ons</h3>
+        </div>
+        <p class="muted small">
+          Things Carrot can do once the pieces are here. Each is a one-click install into
+          the same Python that Carrot runs on — no terminal, and nothing installs itself.
+        </p>
+        <div id="components-list" class="components-list"></div>
+      </div>
+
       <div class="settings-card">
         <div class="settings-head">
           <svg class="ico"><use href="#i-palette"/></svg>

@@ -103,7 +103,10 @@ class TestFindingTheEngine:
         """Rather than failing four minutes into a render."""
         monkeypatch.setattr(animation, "_manim_command", lambda: [])
         out = animation._tool_render_animation(source="class X(Scene): pass")
-        assert "not installed" in out and "pip install carrot[animation]" in out
+        # Settings, not a pip command. The command is right and it is also
+        # the thing most people cannot act on.
+        assert "not installed" in out and "Add-ons" in out
+        assert "pip" not in out
 
 
 class TestTheScene:

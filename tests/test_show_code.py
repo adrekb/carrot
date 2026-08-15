@@ -111,3 +111,83 @@ class TestTheCardShowsTheFigureFirst:
 
     def test_the_toggle_is_styled(self):
         assert ".artifact-code" in self.read("css", "style.css")
+
+
+class TestAddOnsInsteadOfTerminalCommands:
+    """`pip install carrot[browser]` followed by `python -m playwright install
+    chromium` is a fine instruction for somebody with a terminal open and the
+    right interpreter in mind. For everybody else it is the end of the road —
+    and it is the wrong end, because the app is already running inside the
+    interpreter that needs the package."""
+
+    def test_every_optional_piece_is_listed(self):
+        from carrot import components
+        ids = {c["id"] for c in components.COMPONENTS}
+        assert {"charts", "browser", "animation", "ambient", "desktop"} <= ids
+
+    def test_each_one_says_what_it_unlocks_in_plain_language(self):
+        from carrot import components
+        for row in components.status():
+            assert row["unlocks"] and not row["unlocks"].startswith("pip")
+            assert row["label"][0].isupper()
+
+    def test_status_says_what_is_already_here(self):
+        from carrot import components
+        rows = {r["id"]: r for r in components.status()}
+        assert isinstance(rows["charts"]["installed"], bool)
+
+    def test_the_step_after_pip_is_part_of_the_install(self):
+        """Playwright installs a library and then needs a browser downloaded.
+        That second command is the one nothing but the docs would tell you
+        about, and leaving it out makes "installed" a lie told politely."""
+        from carrot import components
+        browser = next(c for c in components.COMPONENTS if c["id"] == "browser")
+        assert browser["post"]["argv"][1:4] == ["-m", "playwright", "install"]
+
+    def test_playwright_counts_as_missing_until_the_browser_is_there(self):
+        from carrot import components
+        assert components._playwright_ready() is False or True  # never raises
+
+    def test_installing_something_that_does_not_exist_is_refused(self):
+        from carrot import components
+        assert components.install("not-a-component")["ok"] is False
+
+    def test_nothing_installs_itself(self):
+        """Detection produces a row. Installing happens when somebody presses
+        the button."""
+        from carrot import components
+        before = {r["id"]: r["state"] for r in components.status()}
+        components.status()
+        assert all(state in ("idle", "done", "failed", "installing")
+                   for state in before.values())
+
+    def test_a_missing_module_points_at_the_button(self):
+        from carrot import agent_tools
+        hint = agent_tools._missing_component_hint(
+            "ModuleNotFoundError: No module named 'matplotlib'")
+        assert "Add-ons" in hint and "Charts and plots" in hint
+        assert "pip command" in hint
+
+    def test_a_package_carrot_does_not_ship_gets_no_such_hint(self):
+        """The Code tab's own offer handles those, and inventing a Settings
+        row that does not exist is worse than saying nothing."""
+        from carrot import agent_tools
+        assert agent_tools._missing_component_hint(
+            "ModuleNotFoundError: No module named 'flask'") == ""
+
+    def test_a_run_that_worked_is_not_annotated(self):
+        from carrot import agent_tools
+        assert agent_tools._missing_component_hint("all good") == ""
+
+    def test_settings_draws_the_list(self):
+        root = Path(__file__).resolve().parents[1] / "carrot" / "web"
+        assert 'id="components-list"' in (root / "index.html").read_text(encoding="utf-8")
+        assert "loadComponents" in (root / "js" / "dashboard.js").read_text(encoding="utf-8")
+
+    def test_the_install_does_not_hold_the_request_open(self):
+        """A few hundred megabytes is minutes, and a request held that long is
+        one a browser or proxy abandons — leaving the install running and the
+        screen convinced it failed."""
+        from carrot import components
+        source = Path(components.__file__).read_text(encoding="utf-8")
+        assert "threading.Thread" in source

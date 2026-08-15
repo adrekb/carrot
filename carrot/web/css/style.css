@@ -6804,3 +6804,65 @@ select.dd-open { border-color: var(--accent-line); }
    text is one people do not try twice. */
 .latex-source.dropping { background: var(--accent-soft); }
 .latex-preview img { max-width: 100%; height: auto; border-radius: var(--r-sm); }
+
+/* ===== Add-ons — the optional pieces, as buttons rather than commands ===== */
+.components-list { display: flex; flex-direction: column; margin-top: 4px; }
+.component-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--border);
+}
+.component-row:last-child { border-bottom: none; }
+.component-main { flex: 1 1 260px; min-width: 0; }
+.component-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: var(--text-base);
+}
+.component-badge {
+  font-size: var(--text-xs);
+  font-weight: 500;
+  padding: 1px 7px;
+  border-radius: var(--r-pill);
+  color: rgb(126, 200, 128);
+  background: rgba(126, 200, 128, 0.14);
+}
+.component-unlocks { font-size: var(--text-sm); color: var(--text); margin-top: 2px; }
+.component-detail, .component-note {
+  font-size: var(--text-sm);
+  color: var(--muted);
+  margin-top: 3px;
+  line-height: 1.45;
+}
+/* A system package Carrot cannot install for you is a different kind of
+   sentence from a description, and has to read like one. */
+.component-note { color: rgb(233, 176, 74); }
+.component-side {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+.component-size { font-size: var(--text-xs); color: var(--muted); white-space: nowrap; }
+.component-progress { font-size: var(--text-sm); color: var(--accent); white-space: nowrap; }
+.component-failed {
+  flex: 1 1 100%;
+  font-size: var(--text-sm);
+  color: rgb(226, 120, 110);
+  margin-top: 2px;
+}
+.component-failed pre {
+  margin: 5px 0 0;
+  padding: 7px 9px;
+  overflow-x: auto;
+  background: var(--card2);
+  border-radius: var(--r-sm);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+}

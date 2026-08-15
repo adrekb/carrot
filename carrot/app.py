@@ -59,6 +59,7 @@ from carrot import (
     providers as providers_mod,
     context_windows as ctxwin_mod,
     pruning as pruning_mod,
+    components as components_mod,
     interests as interests_mod,
     sysmon as sysmon_mod,
     markets as markets_mod,
@@ -5395,6 +5396,33 @@ async def clear_router_route(task: str):
 async def router_recommendation():
     """A local model sized to this machine's memory."""
     return router_mod.recommend_local_model()
+
+
+# ===== Optional components =====
+#
+# The parts of Carrot that arrive as an optional package. The app is already
+# running in the interpreter that needs them, so it can put them there — which
+# is the whole point: `pip install carrot[browser]` followed by
+# `python -m playwright install chromium` is a fine instruction for somebody
+# with a terminal open and the end of the road for everybody else.
+
+@app.get("/api/components")
+async def list_components():
+    return {"components": components_mod.status()}
+
+
+@app.post("/api/components/{component_id}/install")
+async def install_component(component_id: str):
+    """Start an install and return at once; the row polls for progress.
+
+    Not synchronous — a few hundred megabytes is minutes, and a request held
+    open that long is one a browser or proxy abandons, leaving the install
+    running and the screen convinced it failed.
+    """
+    result = components_mod.install(component_id)
+    if not result.get("ok"):
+        raise HTTPException(status_code=404, detail=result.get("error", "unknown component"))
+    return result
 
 
 # ===== Extension packs =====

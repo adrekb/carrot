@@ -65,6 +65,13 @@ desktop = ["pyautogui>=0.9.54"]
 # purpose — it is a system package, and scenes written with Text() never
 # need it.
 animation = ["manim>=0.18.0", "imageio-ffmpeg>=0.5.0"]
+# Charts. Not a Carrot dependency in the ordinary sense — the plotting script
+# runs in the user's own Python through run_command, not inside the app — but
+# it is the library the model is told to reach for, so a machine without it
+# fails at the advertised path. Settings → Add-ons installs it into the
+# interpreter that will actually do the importing; this extra is for people
+# who would rather do it at install time.
+charts = ["matplotlib>=3.8.0"]
 
 [tool.setuptools.packages.find]
 include = ["carrot*"]
