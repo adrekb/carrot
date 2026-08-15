@@ -67,17 +67,17 @@ def _search_conversations(query: str = "", **_) -> str:
 
 
 def _list_goals(**_) -> str:
+    """Through `render_status`, like chat.
+
+    This used to list every row including proposals nobody had accepted, and
+    read the deadline out of `metadata["due"]` — which is where it was guessed
+    at before there was a column for it, so every deadline came back empty.
+    Two implementations of "the user's goals" is how Carrot says one thing in
+    the app and another in Cursor.
+    """
     from . import goals as goals_mod
 
-    rows = goals_mod.list_goals(limit=50)
-    if not rows:
-        return "no goals recorded"
-    lines = []
-    for goal in rows:
-        due = goal.get("metadata", {}).get("due") if isinstance(goal.get("metadata"), dict) else None
-        suffix = f" — due {due}" if due else ""
-        lines.append(f"- {goal['title']}{suffix}")
-    return "\n".join(lines)
+    return goals_mod.render_status()
 
 
 def _list_reminders(**_) -> str:

@@ -6908,3 +6908,14 @@ select.dd-open { border-color: var(--accent-line); }
    whether it went anywhere. */
 .goal-chip-kept { border-color: rgba(126, 200, 128, 0.45); }
 .goal-chip-kept-note { color: rgb(126, 200, 128); font-size: var(--text-xs); white-space: nowrap; }
+
+/* A document that is a view of the database says so, and does not pretend to
+   be a page you can type into. */
+.side-item-system .si-sub { color: var(--accent); }
+.note-readonly-banner {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  padding: 2px 2px 8px;
+  line-height: 1.45;
+}
+.note-readonly { opacity: 0.92; cursor: default; }

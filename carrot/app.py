@@ -61,6 +61,7 @@ from carrot import (
     pruning as pruning_mod,
     components as components_mod,
     commitments as commitments_mod,
+    systemdocs as systemdocs_mod,
     interests as interests_mod,
     sysmon as sysmon_mod,
     markets as markets_mod,
@@ -3713,11 +3714,19 @@ def _post_turn(conversation_id, user_message, assistant_text, message_id,
         # died doing bookkeeping.
         if settings.get("goal_chips_enabled", True):
             try:
-                commitments_mod.propose_from_turn(
-                    user_text=user_message,
-                    conversation_id=conversation_id,
-                    message_id=str(message_id or ""),
-                )
+                # Progress first, and if it was progress, do not also propose.
+                # "Finished chapter 3 of the thesis" carries committing
+                # language, so without this precedence one sentence about an
+                # existing goal both updates it and offers to create a second
+                # one — which is how a tracker starts double-counting what
+                # somebody has on.
+                progressed = commitments_mod.note_progress_from_turn(user_message)
+                if not progressed:
+                    commitments_mod.propose_from_turn(
+                        user_text=user_message,
+                        conversation_id=conversation_id,
+                        message_id=str(message_id or ""),
+                    )
             except Exception:
                 LOG.debug("commitment proposal skipped", exc_info=True)
         if settings.get("summarize_enabled", True):
@@ -4460,11 +4469,19 @@ async def complete_reminder(reminder_id: str, req: ReminderCompleteRequest = Rem
 
 @app.get("/api/notes")
 async def list_notes(folder: str = None):
-    return notes_mod.list_notes(folder=folder)
+    # System docs first: they are pinned, and "what have I committed to" is a
+    # document-shaped question that belongs beside the documents. Only at the
+    # top level — a folder is somewhere you filed things, and these were never
+    # filed anywhere.
+    docs = [] if folder else systemdocs_mod.listing()
+    return docs + notes_mod.list_notes(folder=folder)
 
 
 @app.get("/api/notes/{note_id}")
 async def get_note(note_id: str):
+    system = systemdocs_mod.get(note_id)
+    if system is not None:
+        return system
     note = notes_mod.get_note(note_id)
     if note is None:
         raise HTTPException(status_code=404, detail="Note not found")
@@ -4478,6 +4495,15 @@ async def create_note(req: NoteRequest):
 
 @app.put("/api/notes/{note_id}")
 async def update_note(note_id: str, req: NoteUpdateRequest):
+    # Refused, not ignored. A save that appears to work and changes nothing is
+    # how somebody loses an afternoon's edits — and the edit is meaningless
+    # anyway, because this document is regenerated from the goals table every
+    # time it is opened.
+    if note_id in systemdocs_mod.SYSTEM_IDS:
+        raise HTTPException(
+            status_code=409,
+            detail="This page is a view of your goals, not a file. Change a goal "
+                   "by ticking a chip in a conversation or by asking Carrot.")
     result = notes_mod.update_note(note_id, req.content, title=req.title)
     if result is None:
         raise HTTPException(status_code=404, detail="Note not found")
@@ -4486,6 +4512,9 @@ async def update_note(note_id: str, req: NoteUpdateRequest):
 
 @app.delete("/api/notes/{note_id}")
 async def delete_note(note_id: str):
+    if note_id in systemdocs_mod.SYSTEM_IDS:
+        raise HTTPException(status_code=409,
+                            detail="This page is a view of your goals and cannot be deleted.")
     ok = notes_mod.delete_note(note_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Note not found")

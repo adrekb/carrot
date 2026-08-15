@@ -213,6 +213,7 @@ let currentNoteId = null;
 let crepeInstance = null;
 let crepeReady = false;
 let noteSaveTimer = null;
+let currentNoteReadonly = false;
 let lastSavedBody = '';
 let noteAutosaveInterval = null;
 
@@ -240,9 +241,13 @@ function renderNotesList() {
     }
     for (const n of items) {
         const div = document.createElement('div');
-        div.className = 'side-item' + (n.id === currentNoteId ? ' active' : '');
+        div.className = 'side-item' + (n.id === currentNoteId ? ' active' : '')
+                      + (n.system ? ' side-item-system' : '');
         const preview = (n.body || '').replace(/[#*`>\-]/g, '').trim().slice(0, 48);
-        div.innerHTML = `<div class="si-title">${escHtml(n.title || n.id)}</div><div class="si-sub">${escHtml(preview)}</div>`;
+        // A system doc is not a note somebody made, so it says what it is
+        // rather than showing the first line of itself as a preview.
+        div.innerHTML = `<div class="si-title">${escHtml(n.title || n.id)}</div>`
+                      + `<div class="si-sub">${escHtml(n.system ? 'Kept by Carrot' : preview)}</div>`;
         div.onclick = () => openNote(n.id);
         container.appendChild(div);
     }
@@ -262,6 +267,10 @@ async function newNote() {
 async function openNote(noteId) {
     const note = await api(`/api/notes/${noteId}`);
     currentNoteId = noteId;
+    // A read-only doc is a view of the database. Autosave must not fire on it
+    // — the server refuses the write, but a save that is attempted and refused
+    // every 1.5 seconds is an error loop nobody asked for.
+    currentNoteReadonly = !!note.readonly;
     lastSavedBody = note.body || '';
     document.getElementById('note-empty').classList.add('hidden');
     document.getElementById('note-title').value = note.title || '';
@@ -274,6 +283,39 @@ async function openNote(noteId) {
     // it goes, which is the whole point of writing the destination into it.
     if (typeof resetDocDestination === 'function') resetDocDestination();
     if (typeof refreshDocReferences === 'function') refreshDocReferences();
+    applyNoteReadonly(note);
+}
+
+// A view of the database, presented as one. The title is not editable because
+// it is not a name anybody chose, and the editor is not editable because the
+// page is regenerated from the goals table every time it is opened — typing
+// into it would be typing into something about to be thrown away.
+function applyNoteReadonly(note) {
+    const title = document.getElementById('note-title');
+    const host = document.getElementById('note-editor-host');
+    const fallback = document.getElementById('note-fallback');
+    const readonly = !!(note && note.readonly);
+    if (title) title.readOnly = readonly;
+    if (fallback) fallback.readOnly = readonly;
+    if (host) host.setAttribute('contenteditable', readonly ? 'false' : 'true');
+    for (const el of [host, fallback]) {
+        if (el) el.classList.toggle('note-readonly', readonly);
+    }
+    let banner = document.getElementById('note-readonly-note');
+    if (readonly) {
+        if (!banner) {
+            banner = document.createElement('div');
+            banner.id = 'note-readonly-note';
+            banner.className = 'note-readonly-banner';
+            title.parentElement.insertBefore(banner, title.nextSibling);
+        }
+        banner.textContent =
+            'Kept by Carrot — this is your goals, rendered. Tick a chip in a '
+            + 'conversation or ask Carrot to change one.';
+        banner.classList.remove('hidden');
+    } else if (banner) {
+        banner.classList.add('hidden');
+    }
 }
 
 async function mountEditor(markdown) {
@@ -331,13 +373,13 @@ function scheduleNoteSave() {
 }
 
 function noteAutosaveTick() {
-    if (!currentNoteId) return;
+    if (!currentNoteId || currentNoteReadonly) return;
     const body = getEditorMarkdown();
     if (body !== lastSavedBody) scheduleNoteSave();
 }
 
 async function saveNoteNow() {
-    if (!currentNoteId) return;
+    if (!currentNoteId || currentNoteReadonly) return;
     const body = getEditorMarkdown();
     const title = document.getElementById('note-title').value.trim() || 'Untitled note';
     try {

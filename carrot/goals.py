@@ -248,3 +248,125 @@ def proposals_for(conversation_id: str):
     ).fetchall()
     conn.close()
     return [_row_to_goal(r) for r in rows]
+
+
+# ===== Status =====
+#
+# "What's the status on my goals?" is an ordinary chat question over these
+# rows, not a screen you go to. That only works if there is one function
+# answering it, because the moment chat and the MCP server each compute
+# "overdue" for themselves is the moment Carrot says one thing in the app and
+# another in Cursor.
+
+def _today() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def _is_overdue(deadline: str, today: str) -> bool:
+    """A month-only deadline is overdue once the month is over, not on the 1st.
+
+    "By March" is a promise about March, and calling it late on 1 March is
+    the kind of pedantry that makes a tracker feel like an adversary.
+    """
+    if not deadline:
+        return False
+    if len(deadline) == 7:                      # YYYY-MM
+        return today[:7] > deadline
+    return today > deadline
+
+
+def status_report(limit: int = 50):
+    """Open goals, what is overdue, and what was finished — in one shape.
+
+    Deadlines come from the column rather than from `metadata`, which is where
+    they used to be guessed at. A goal with no deadline is not a lesser goal;
+    it simply has nothing to be late for, and is sorted after the dated ones
+    rather than being given an invented date to sort by.
+    """
+    today = _today()
+    open_goals, done, overdue = [], [], []
+    for goal in by_status(STATUS_ACCEPTED, limit=limit):
+        goal["overdue"] = _is_overdue(goal.get("deadline") or "", today)
+        (overdue if goal["overdue"] else open_goals).append(goal)
+    for goal in by_status(STATUS_DONE, limit=limit):
+        done.append(goal)
+
+    def order(g):
+        # Dated first, in date order; undated after, newest first. `zzzz` sorts
+        # last against any ISO date without pretending to be one.
+        return (g.get("deadline") or "zzzz", g.get("created_at") or "")
+
+    overdue.sort(key=order)
+    open_goals.sort(key=order)
+    return {
+        "today": today,
+        "overdue": overdue,
+        "open": open_goals,
+        "done": done,
+        "proposed": by_status(STATUS_PROPOSED, limit=limit),
+    }
+
+
+def render_status(report=None) -> str:
+    """The report as a few lines of prose, for a model to read or repeat.
+
+    Written here rather than in each caller so chat and an editor asking over
+    MCP get the same sentences — which is the whole point of the memory
+    following you between them.
+    """
+    report = report or status_report()
+    if not (report["overdue"] or report["open"] or report["done"]):
+        return ("No goals are being tracked yet. Carrot offers one when you say "
+                "you will do something with a date or a target attached.")
+
+    def line(goal):
+        when = goal.get("deadline")
+        target = (goal.get("metadata") or {}).get("target")
+        suffix = f" — due {when}" if when else (f" — {target}" if target else "")
+        return f"- {goal['title']}{suffix}"
+
+    parts = []
+    if report["overdue"]:
+        parts.append("Past their date:\n" + "\n".join(line(g) for g in report["overdue"]))
+    if report["open"]:
+        parts.append("Open:\n" + "\n".join(line(g) for g in report["open"]))
+    if report["done"]:
+        parts.append("Finished:\n" + "\n".join(line(g) for g in report["done"][:10]))
+    return "\n\n".join(parts)
+
+
+def mark_done(goal_id: str):
+    goal = get_goal(goal_id)
+    if goal is None or goal.get("status") not in (STATUS_ACCEPTED, STATUS_DONE):
+        return None
+    ts = now_iso()
+    conn = get_db()
+    conn.execute("UPDATE goals SET status = ?, updated_at = ? WHERE id = ?",
+                 (STATUS_DONE, ts, goal_id))
+    conn.commit()
+    conn.close()
+    return get_goal(goal_id)
+
+
+def note_progress(goal_id: str, note: str):
+    """Record a step without closing the goal.
+
+    Progress is cheap on purpose: "finished phase A, moving to B" should cost
+    nothing and ask nothing. It is appended to the goal's own history rather
+    than becoming a new goal, because two rows for one commitment is how a
+    tracker starts lying about how much you have on.
+    """
+    goal = get_goal(goal_id)
+    if goal is None or goal.get("status") != STATUS_ACCEPTED:
+        return None
+    data = goal.get("metadata") or {}
+    entries = data.get("progress", [])
+    entries.append({"note": note[:400], "at": now_iso()})
+    data["progress"] = entries[-20:]
+    ts = now_iso()
+    conn = get_db()
+    conn.execute("UPDATE goals SET metadata = ?, updated_at = ? WHERE id = ?",
+                 (json.dumps(data), ts, goal_id))
+    conn.commit()
+    conn.close()
+    return get_goal(goal_id)

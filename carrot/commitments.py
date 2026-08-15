@@ -207,3 +207,49 @@ def _subject_is_settled(text: str) -> bool:
     """
     lowered = (text or "").lower()
     return any(subject and subject in lowered for subject in goals_mod.declined_subjects())
+
+
+# ===== Progress =====
+#
+# "Finished chapter 3, moving to 4" is not a new commitment and it is not a
+# question. It is a fact about a goal that already exists, and the manifesto
+# for this feature is one word: cheap. It should cost nothing and ask nothing —
+# no chip, no confirmation, no second inference — because a tracker that makes
+# you confirm every step is one you stop telling things to.
+#
+# So it is matched, not classified. The subject of an open goal appearing in a
+# sentence with progress language is enough, and the worst case is a note
+# attached to the right goal that the user did not think of as an update. That
+# is a line in a list. Getting it wrong in the other direction — asking — is
+# what makes people close the feature.
+_PROGRESS = re.compile(
+    r"\b(finished|done with|completed|wrapped up|submitted|shipped|handed in|"
+    r"moving on to|moving to|started|halfway|nearly done|almost done)\b",
+    re.I,
+)
+
+
+def note_progress_from_turn(user_text: str) -> Optional[Dict[str, Any]]:
+    """Attach a progress note to an open goal this sentence is plainly about.
+
+    Returns the updated goal, or None. Never asks and never raises.
+    """
+    text = (user_text or "").strip()
+    if not text or len(text) > 1000 or not _PROGRESS.search(text):
+        return None
+    lowered = text.lower()
+
+    best = None
+    for goal in goals_mod.by_status(goals_mod.STATUS_ACCEPTED):
+        subject = (goal.get("subject") or "").strip().lower()
+        # The subject has to actually appear. A goal is not "plainly about"
+        # a sentence that merely sounds like progress — otherwise the first
+        # open goal collects every "done!" in the conversation.
+        if subject and len(subject) >= 3 and subject in lowered:
+            # Longest match wins, so "thesis chapter" beats "thesis" when both
+            # are goals and both appear.
+            if best is None or len(subject) > len(best[0]):
+                best = (subject, goal)
+    if best is None:
+        return None
+    return goals_mod.note_progress(best[1]["id"], text)

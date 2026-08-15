@@ -1224,6 +1224,19 @@ def _tool_show_artifact(kind: str, content: str = "", title: str = "",
     return f"[[carrot:artifact:{artifact['id']}]] showed \"{label}\" in the chat"
 
 
+def _tool_list_goals(**_) -> str:
+    """What the user has committed to, and what is late.
+
+    Chat could propose a goal and could not read one back, so "what's the
+    status on my goals?" was a question the app collected the answer to and
+    could not say. Rendering lives in `goals.render_status` rather than here,
+    so an editor asking the same thing over MCP gets the same sentences.
+    """
+    from . import goals as goals_mod
+
+    return goals_mod.render_status()
+
+
 def _tool_read_url(url: str, **_) -> str:
     """Read one web page.
 
@@ -1893,6 +1906,18 @@ TOOLS: Dict[str, Dict[str, Any]] = {
             },
             "required": ["kind"],
         },
+    },
+    "list_goals": {
+        "handler": _tool_list_goals,
+        "mutating": False,
+        "risk": "low",
+        "description": (
+            "The user's goals: what is open, what is past its date, what is "
+            "finished. Use it for any question about goals, deadlines, "
+            "commitments or what they are working towards — the answer is these "
+            "rows, not something to guess at from the conversation."
+        ),
+        "parameters": {"type": "object", "properties": {}},
     },
     "read_url": {
         "handler": _tool_read_url,
