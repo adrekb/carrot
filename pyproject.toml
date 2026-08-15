@@ -1,5 +1,8 @@
 [build-system]
-requires = ["setuptools>=68.0"]
+# 77 is the floor for PEP 639 (`license = "MIT"` as an SPDX string plus
+# `license-files`). On anything older setuptools reads the string as a path
+# and the build fails rather than quietly dropping the license.
+requires = ["setuptools>=77.0.3"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,6 +10,10 @@ name = "carrot"
 version = "0.3.3"
 description = "Carrot - On-device AI assistant with structured memory, local document search, agent tools, and hybrid model routing"
 requires-python = ">=3.10"
+# Without this the wheel carries no license and PyPI, pip-licenses and every
+# corporate policy scanner read that as "all rights reserved".
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = [
     "fastapi>=0.104.0",
     "uvicorn>=0.24.0",
@@ -72,6 +79,11 @@ animation = ["manim>=0.18.0", "imageio-ffmpeg>=0.5.0"]
 # interpreter that will actually do the importing; this extra is for people
 # who would rather do it at install time.
 charts = ["matplotlib>=3.8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# A typo in a marker name is otherwise a silently un-run test.
+addopts = "--strict-markers"
 
 [tool.setuptools.packages.find]
 include = ["carrot*"]
