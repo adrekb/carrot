@@ -1,1 +1,0 @@
-Electron 30 with context isolation and no nodeIntegration; React 18 via @vitejs/plugin-react; Vite 5 for dev server and build; electron-builder 24 targeting Windows NSIS; Axios as HTTP client in dependencies; Python FastAPI backend spawned as a child process.

@@ -1,1 +1,0 @@
-Electron-based desktop shell for Carrot that launches a React frontend, an always-on-top voice overlay window, and a local FastAPI backend, exposing IPC bridges between the renderer and Node process.
