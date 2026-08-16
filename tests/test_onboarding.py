@@ -54,7 +54,9 @@ class TestTheFlow:
         assert "maybeShowOnboarding();" in APP_JS
         boot = APP_JS[APP_JS.index("document.addEventListener('DOMContentLoaded'"):]
         assert boot.index("loadWorkspaces();") < boot.index("maybeShowOnboarding();")
-        assert boot.index("maybeShowOnboarding();") < boot.index("switchTab('dashboard');")
+        # The landing tab, whatever it is. It was 'dashboard'; that page is gone
+        # and Conversations is where the app opens now.
+        assert boot.index("maybeShowOnboarding();") < boot.index("switchTab('workspace');")
 
     def test_a_backend_it_cannot_reach_does_not_block_the_app(self):
         """If /api/config fails, showing an unfinishable wizard is worse than

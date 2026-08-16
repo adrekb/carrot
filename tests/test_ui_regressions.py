@@ -441,79 +441,33 @@ class TestTheCodeTabWatchesItsPlanToo:
 class TestTheConversationPageIsYours:
     """Four panels nobody chose, on the page you open most.
 
-    A morning recap and a deadline list are useful to some people and pure
-    noise to others, and the home page is the worst place to guess on
-    someone's behalf.
+    This class used to check that each of them could be switched off and that
+    the control to switch them back on outlived the column it emptied. The
+    panels are gone now — recap, deadlines, milestones and machine stats, and
+    the rail that held them — so the property to protect is the stronger one
+    the old tests were circling: the conversation page holds the conversation
+    and nothing else.
+
+    Kept as assertions rather than deleted, because "there is no rail" is
+    exactly the thing a later feature will quietly undo by adding a card
+    beside the transcript because there is room for one.
     """
 
-    def test_every_panel_can_be_named(self):
-        # The toggle finds cards by this attribute; a panel without one is
-        # unreachable from the menu and silently permanent.
+    def test_there_is_no_rail(self):
+        assert 'id="ws-left"' not in read("index.html")
+
+    def test_the_control_went_with_it(self):
+        """A Panels button with no panels is a menu of nothing."""
         html = read("index.html")
-        rail = html.split('<aside id="ws-left">')[1].split("</aside>")[0]
-        for panel in ("recap", "deadlines", "milestones", "engine"):
-            assert f'data-panel="{panel}"' in rail
+        assert 'id="rail-menu"' not in html
+        assert 'id="rail-btn"' not in html
 
-    def test_the_choice_survives_a_restart(self):
-        js = read("js", "app.js")
-        assert "localStorage.setItem(RAIL_KEY" in js
-        assert "/api/config/ui_rail_hidden" in js
-
-    def test_it_paints_before_the_network_answers(self):
-        """Local-first for the same reason the theme is: a panel you switched
-        off must not flash on and then vanish."""
-        js = read("js", "app.js")
-        assert "let railHidden = readRailPref();" in js
-        # And the server copy must never override a local choice, which is the
-        # more recent expression of intent and what already painted.
-        sync = js.split("function syncRailFromServer(")[1].split("\n}")[0]
-        assert "if (stored ||" in sync
-
-    def test_an_unknown_panel_id_is_ignored(self):
-        # A stored list from a later version, or a hand-edited one, must not
-        # be able to hide something that no longer exists or was never a panel.
-        js = read("js", "app.js")
-        assert "filter(id => known.includes(id))" in js
-
-    def test_a_hidden_panel_is_not_fetched_for(self):
-        # Hiding it in CSS while still polling would keep the cost and lose
-        # the point.
-        js = read("js", "app.js")
-        body = js.split("async function loadWorkspace()")[1].split("\n}")[0]
-        assert "if (shown('recap')) loadRecapCard();" in body
-
-    def test_hiding_everything_removes_the_column(self):
-        """Switching them all off has to give the width back.
-
-        A 320px column standing empty is not less clutter, it is the same
-        clutter with the content taken out.
-        """
-        js = read("js", "app.js")
-        assert "?.classList.toggle('hidden', railHidden.length >= RAIL_PANELS.length)" in js
-        # The rail is a flex child with a fixed width, so `hidden` has to beat
-        # both of those, not just `display: flex`.
-        assert "#ws-left.hidden { display: none; }" in read("css", "style.css")
-
-    def test_the_control_outlives_the_thing_it_controls(self):
-        """It lives in the tabstrip, not the rail. A button that disappears
-        along with what it switches off cannot switch it back on."""
-        html = read("index.html")
-        strip = html.split('<div id="ws-tabstrip">')[1].split("</div>\n      <div id=")[0]
-        assert 'id="rail-menu"' in strip
-        rail = html.split('<aside id="ws-left">')[1].split("</aside>")[0]
-        assert 'id="rail-menu"' not in rail
-
-    def test_the_engine_card_says_what_it_answers(self):
-        """"Local Engine" named the implementation, not the question. After
-        the conversation and message counts were added it had stopped being
-        about the engine at all."""
-        html = read("index.html")
-        assert "This machine" in html
-        # The comment above the card explains the rename and names the old
-        # title, so compare against the markup rather than the file.
-        markup = re.sub(r"<!--.*?-->", "", html, flags=re.S)
-        assert "Local Engine" not in markup
-
+    @pytest.mark.parametrize("card", ["card-recap", "card-deadlines",
+                                      "card-milestones", "card-engine"])
+    def test_no_panel_survives(self, card):
+        """One left behind is a card rendering into a column that is not there
+        — invisible, still fetched for, still costing a request a minute."""
+        assert f'id="{card}"' not in read("index.html")
 
 class TestTheTypefacesActuallyShip:
     """The stylesheet referenced ten font files and the logo; none was ever

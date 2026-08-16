@@ -99,7 +99,7 @@ class TestTheBrowserApplies:
         """Otherwise a disabled pack's tab paints for one frame."""
         js = self.read("carrot", "web", "js", "app.js")
         boot = js[js.index("document.addEventListener('DOMContentLoaded'"):]
-        assert boot.index("applyExtensionTabs()") < boot.index("switchTab('dashboard')")
+        assert boot.index("applyExtensionTabs()") < boot.index("switchTab('workspace')")
 
     def test_a_failed_probe_does_not_hide_a_tab(self):
         """Failing closed would make an unreachable backend look like a
@@ -115,7 +115,7 @@ class TestTheBrowserApplies:
 
     def test_someone_sitting_on_the_tab_is_moved_off_it(self):
         js = self.read("carrot", "web", "js", "app.js")
-        assert "currentTab === tab) switchTab('dashboard')" in js
+        assert "currentTab === tab) switchTab('workspace')" in js
 
 
 class TestEveryPackExplainsItself:

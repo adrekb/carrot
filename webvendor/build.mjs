@@ -56,7 +56,34 @@ await esbuild.build({
   assetNames: '[name]',
 });
 
-// 5. Monaco web workers (served from /vendor/workers/)
+// 5. reveal.js — exposed as window.Reveal (+ reveal.css)
+await esbuild.build({
+  ...common,
+  entryPoints: [path.join(here, 'src', 'reveal-entry.js')],
+  outfile: path.join(outDir, 'reveal.js'),
+});
+
+// 6. Excalidraw — exposed as window.CarrotCanvas (+ excalidraw.css)
+//
+// React is bundled in rather than shared: it is the only thing here that wants
+// it, and a global React on the page would be a second framework every other
+// script could start depending on by accident.
+await esbuild.build({
+  ...common,
+  entryPoints: [path.join(here, 'src', 'excalidraw-entry.js')],
+  outfile: path.join(outDir, 'excalidraw.js'),
+  // The library reads this to pick its production build; without it esbuild
+  // leaves the development branch in, which is slower and far larger.
+  define: { 'process.env.NODE_ENV': '"production"' },
+  // Its package exports are keyed on a `development`/`production` condition
+  // rather than on a plain path, so without naming one esbuild cannot resolve
+  // either the entry or its stylesheet at all.
+  conditions: ['production'],
+  loader: { ...common.loader, '.png': 'dataurl', '.jpg': 'dataurl' },
+  assetNames: '[name]-[hash]',
+});
+
+// 7. Monaco web workers (served from /vendor/workers/)
 const workers = {
   'editor.worker': 'monaco-editor/esm/vs/editor/editor.worker.js',
   'json.worker': 'monaco-editor/esm/vs/language/json/json.worker.js',

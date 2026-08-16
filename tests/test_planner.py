@@ -480,8 +480,21 @@ class TestPlannerTabIsReachable:
         from pathlib import Path
         return Path(__file__).resolve().parents[1].joinpath("carrot", "web", *parts).read_text(encoding="utf-8")
 
-    def test_there_is_a_nav_entry(self):
-        assert 'data-tab="planner"' in self.read("index.html")
+    def test_there_is_a_way_in(self):
+        """The point of the original test, at the new address.
+
+        It asserted a nav entry. The nav is four items now, so a shortcut on
+        the Work screen is what "reachable" means — and the assertion has to
+        move rather than go, because the failure it catches is the one this
+        engine shipped with: working code with nothing anywhere that opens it.
+        """
+        html = self.read("index.html")
+        assert 'class="work-shortcut" data-tab="planner"' in html
+
+    def test_its_way_in_is_gated_with_its_pack(self):
+        """A live door to a pack that is switched off is worse than no door."""
+        js = self.read("js", "app.js")
+        assert '.work-shortcut[data-tab="${tab}"]' in js
 
     def test_the_view_exists(self):
         assert 'id="view-planner"' in self.read("index.html")

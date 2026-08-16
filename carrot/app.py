@@ -34,6 +34,7 @@ from carrot import (
     goals as goals_mod,
     reminders as rem_mod,
     notes as notes_mod,
+    links as links_mod,
     leaderboard as lb_mod,
     bootstrap as bootstrap_mod,
     hub as hub_mod,
@@ -180,6 +181,9 @@ class ChatRequest(BaseModel):
     # File a newly created conversation into this workspace. The quick-ask
     # panel uses it to ask a question "in" a project without opening the app.
     workspace_id: Optional[str] = None
+    # Which surface asked. "code" marks the Code tab's agent so its sessions
+    # stay out of chat history; None is the ordinary chat box.
+    surface: Optional[str] = None
     # A chat that is answered but not remembered, and deleted afterwards.
     temporary: Optional[bool] = False
     # Whether what Carrot remembers about the user may be used this turn.
@@ -3744,9 +3748,15 @@ def _open_conversation(req):
     """Resolve (or create) the conversation a chat request targets."""
     if req.conversation_id is None:
         temporary = bool(getattr(req, "temporary", False))
+        meta = {}
+        if temporary:
+            meta[conv_mod.TEMPORARY_KEY] = True
+        surface = (getattr(req, "surface", None) or "").strip()
+        if surface:
+            meta[conv_mod.SURFACE_KEY] = surface
         created = conv_mod.create_conversation(
             title=req.message[:80],
-            metadata={conv_mod.TEMPORARY_KEY: True} if temporary else None,
+            metadata=meta or None,
         )
         req.conversation_id = created["id"]
         # Only on creation: filing an existing conversation elsewhere because
@@ -4476,7 +4486,19 @@ async def list_notes(folder: str = None):
     # top level — a folder is somewhere you filed things, and these were never
     # filed anywhere.
     docs = [] if folder else systemdocs_mod.listing()
-    return docs + notes_mod.list_notes(folder=folder)
+    notes = notes_mod.list_notes(folder=folder)
+    # Which workspace each document is in, so the browser can filter by it.
+    # One query for all of them rather than one per document.
+    try:
+        homes = workspaces_mod.workspace_map(workspaces_mod.KIND_NOTE)
+        names = {w["id"]: w.get("name") or "" for w in workspaces_mod.list_workspaces()}
+    except Exception:
+        homes, names = {}, {}
+    for note in notes:
+        home = homes.get(note.get("id"))
+        note["workspace"] = home or ""
+        note["workspace_name"] = names.get(home, "")
+    return docs + notes
 
 
 @app.get("/api/write/start")
@@ -4499,10 +4521,17 @@ async def write_start():
                 "format": notes_mod.FORMAT_MARKDOWN,
                 "available": True,
             },
+            # Subtitles are a qualifier, not a description. They sit on one
+            # line under the title and are ellipsized, so a sentence here
+            # becomes a card three lines taller than the one beside it and the
+            # row stops reading as a row. What the thing is for belongs in the
+            # card's `title` attribute, where it is available on hover without
+            # costing every card the height.
             {
                 "id": "latex",
                 "title": "LaTeX",
-                "subtitle": "Paper, thesis, anything with equations",
+                "subtitle": "Equations",
+                "detail": "Paper, thesis, anything with equations",
                 "format": notes_mod.FORMAT_LATEX,
                 "available": latex_on,
                 "requires": None if latex_on else {
@@ -4513,8 +4542,56 @@ async def write_start():
                               "citation checking.",
                 },
             },
+            {
+                "id": "canvas",
+                "title": "Canvas",
+                "subtitle": "Infinite surface",
+                "detail": "An endless surface for boxes, notes and arrows",
+                "format": notes_mod.FORMAT_CANVAS,
+                "available": True,
+            },
+            {
+                "id": "slides",
+                "title": "Slides",
+                "subtitle": "Presentation",
+                "detail": "A deck you write in Markdown and present",
+                "format": notes_mod.FORMAT_SLIDES,
+                "available": True,
+            },
         ],
     }
+
+
+# ===== Links between documents =====
+
+@app.get("/api/links/graph")
+async def links_graph():
+    return links_mod.graph()
+
+
+@app.get("/api/links/backlinks/{note_id}")
+async def links_backlinks(note_id: str):
+    return links_mod.backlinks(note_id)
+
+
+@app.get("/api/links/suggest")
+async def links_suggest(q: str = "", limit: int = 8):
+    return links_mod.suggest(q, limit=limit)
+
+
+@app.get("/api/links/resolve")
+async def links_resolve(title: str):
+    """Where a `[[title]]` goes when clicked.
+
+    A miss is not a 404. Linking to something unwritten is normal, and the
+    caller's next move is to offer to create it — which needs the title back,
+    spelled the way it was written.
+    """
+    note = links_mod.resolve(title)
+    if note is None:
+        return {"found": False, "title": title}
+    return {"found": True, "id": note["id"], "title": note["title"],
+            "format": note.get("format") or notes_mod.FORMAT_MARKDOWN}
 
 
 @app.get("/api/notes/{note_id}")

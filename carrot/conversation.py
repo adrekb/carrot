@@ -336,6 +336,16 @@ def delete_folder(folder_id: str) -> bool:
 
 TEMPORARY_KEY = "temporary"
 
+# Which part of the app started this conversation.
+#
+# The Code tab's agent posts to the same /api/chat/stream as the chat box,
+# so without this its sessions are ordinary conversations and show up in
+# chat history — "create a simulation for magnetic fields" listed beside
+# what you actually asked Carrot. Recorded at creation because it is a fact
+# about where the conversation came from and can never change afterwards.
+SURFACE_KEY = "surface"
+SURFACE_CODE = "code"
+
 
 def is_temporary(conv_id: str) -> bool:
     """Whether this conversation is exempt from being remembered."""

@@ -512,7 +512,13 @@ class TestAgentPanel:
         """
         html = self.read("index.html")
         assert html.count('id="mode-plan"') == 1
-        code_view = html[html.index('id="view-code"'):html.index('id="view-latex"')]
+        # Bounded by the next view rather than by a named neighbour. It used to
+        # end at `id="view-latex"`, which stopped existing the day LaTeX became
+        # a pane inside Write — and a slice anchored on a section that has
+        # moved fails for a reason that has nothing to do with what it tests.
+        start = html.index('id="view-code"')
+        end = html.index('<section id="view-', start + 1)
+        code_view = html[start:end]
         assert code_view.count('class="mode-switch"') == 1
 
     def test_the_status_line_says_what_the_agent_may_do(self):
