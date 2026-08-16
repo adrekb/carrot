@@ -1,5 +1,8 @@
 // ===== Carrot AI — workspace frontend =====
-let currentTab = 'dashboard';
+// Conversations is where the app opens. A dashboard of widgets nobody
+// chose, in front of the thing people came to do, is a room you walk
+// through rather than a room you use.
+let currentTab = 'workspace';
 let currentConversationId = null;
 let currentModel = null;
 // The provider that serves `currentModel`. Sent with every turn so the server
@@ -114,7 +117,71 @@ function dueLabel(dueAt) {
 }
 
 // ===== Tabs =====
+// Tabs that became panes inside Write. Anything still asking for them by name
+// — a saved deep link, an older call site — lands in Write rather than on a
+// blank screen where a <section> used to be.
+const FOLDED_INTO_WRITE = { latex: 'notes', graph: 'notes' };
+
+// Chat and Agent are the same conversation with the leash on or off, so they
+// are a switch above the transcript rather than two tabs. Asking about a
+// codebase and asking Carrot to go and change it should not feel like two
+// applications.
+// Both modes are the same conversation: same transcript, same composer. The
+// only thing that changes is where what you type goes, and that the agent's
+// settings appear in the corner while it is the one answering. Agent used to
+// be a page of its own with a task box and three cards of policy above it,
+// which made "ask about this" and "go and do this" feel like two applications.
+const CHAT_MODES = {
+    chat:  [],
+    agent: ['agent-settings'],
+};
+
+function setChatMode(mode) {
+    for (const [name, ids] of Object.entries(CHAT_MODES)) {
+        for (const id of ids) {
+            document.getElementById(id)?.classList.toggle('hidden', name !== mode);
+        }
+    }
+    // `on`, not `active` — that is the class .mode-opt is styled on, the same
+    // one the LaTeX split/reading switch uses. Setting `active` matched no rule
+    // at all, so both halves rendered identically and there was no way to tell
+    // which one you were in.
+    for (const name of Object.keys(CHAT_MODES)) {
+        document.getElementById(`chat-mode-${name}`)?.classList.toggle('on', name === mode);
+    }
+    document.getElementById('view-workspace')?.setAttribute('data-chat-mode', mode);
+    const input = document.getElementById('cmd-input');
+    if (input) {
+        input.placeholder = mode === 'agent'
+            ? 'Give Carrot a task — it will work in a real browser and report back'
+            : 'Ask anything — Ctrl+K to focus, / for skills';
+    }
+    if (typeof syncChatBlank === 'function') syncChatBlank();
+    if (mode === 'agent' && typeof loadAgent === 'function') loadAgent();
+}
+
+function isChatMode(mode) {
+    return (document.getElementById('view-workspace')?.getAttribute('data-chat-mode') || 'chat') === mode;
+}
+
 function switchTab(tab) {
+    const folded = FOLDED_INTO_WRITE[tab];
+    if (folded) {
+        const wantedGraph = tab === 'graph';
+        tab = folded;
+        if (wantedGraph) {
+            switchTab(tab);
+            if (typeof toggleGraphPane === 'function' && !isWriteMode('graph')) toggleGraphPane();
+            return;
+        }
+    }
+    // Agent is a mode of the conversation, so asking for it opens the
+    // conversation and throws the switch.
+    if (tab === 'agent') {
+        switchTab('workspace');
+        setChatMode('agent');
+        return;
+    }
     currentTab = tab;
     document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
     const el = document.getElementById(`view-${tab}`);
@@ -122,24 +189,30 @@ function switchTab(tab) {
     document.querySelectorAll('.app-nav .nav-item').forEach(b => {
         b.classList.toggle('active', b.dataset.tab === tab);
     });
-    // Auto-expand "More" when one of its sub-sections is active.
-    const moreList = document.getElementById('nav-more-list');
-    if (moreList && moreList.querySelector(`.nav-item[data-tab="${tab}"]`)) {
-        moreList.classList.remove('hidden');
-        const moreBtn = document.querySelector('.nav-more');
-        if (moreBtn) moreBtn.classList.add('open');
+    // The nav is four entries and there is no drawer to expand. A view with no
+    // nav item of its own — the Hub, a Settings sub-page, Research — leaves the
+    // highlight on whichever of the four it was opened from, which is where the
+    // person still is as far as they are concerned.
+    const HOME_TAB = { hub: 'settings', extensions: 'settings', memory: 'settings',
+                       leaderboard: 'settings', help: 'settings',
+                       research: 'workspace', chats: 'workspace', search: 'workspace',
+                       files: 'notes', workspaces: 'notes', inbox: 'notes',
+                       goals: 'notes', reminders: 'notes', assignments: 'notes',
+                       planner: 'notes', ambient: 'workspace' };
+    const home = HOME_TAB[tab];
+    if (home) {
+        document.querySelector(`.app-nav .nav-item[data-tab="${home}"]`)?.classList.add('active');
     }
     // The chat command bar only belongs to the Conversations view.
     const cmdbar = document.getElementById('cmdbar');
     if (cmdbar) cmdbar.classList.toggle('hidden', tab !== 'workspace');
+    if (typeof syncChatBlank === 'function') syncChatBlank();
     const loaders = {
-        dashboard: loadDashboard,
         workspace: loadWorkspace,
         settings: loadSettings,
         chats: loadConversations,
         notes: loadNotes,
         code: loadCodeTab,
-        latex: () => loadLatexTab(),
         planner: loadPlanner,
         goals: loadGoals,
         reminders: loadReminders,
@@ -148,7 +221,6 @@ function switchTab(tab) {
         hub: loadHub,
         research: () => loadResearch(),
         ambient: () => loadAmbient(),
-        agent: () => loadAgent(),
         workspaces: () => loadWorkspaces(),
         help: () => loadHelp(),
         leaderboard: loadLeaderboard,
@@ -875,6 +947,165 @@ async function selectAutoModel() {
     }
 }
 
+// ===== History, in the corner =====
+//
+// What you have asked and what the agent has run, in one list, told apart by a
+// chip rather than by living in two different places. Two kinds of record that
+// answer the same question — "what was I doing" — so they belong in one list.
+//
+// Code is deliberately not here. Its history is the Checkpoints panel in the
+// Code tab, and it is a different kind of record: what an agent *did to your
+// files*, which you search by file and by change rather than by what you said.
+// Folding it in would make both harder to use, which is why Cursor keeps them
+// apart too.
+let navCollapsed = false;
+let historyFilter = 'all';
+let historyCache = [];
+
+function toggleNavCollapsed() {
+    navCollapsed = !navCollapsed;
+    document.body.classList.toggle('nav-collapsed', navCollapsed);
+    try { localStorage.setItem('carrot-nav-collapsed', navCollapsed ? '1' : '0'); } catch (_) {}
+    const btn = document.getElementById('nav-collapse');
+    if (btn) btn.title = navCollapsed ? 'Expand the sidebar' : 'Collapse the sidebar';
+}
+
+function restoreNavCollapsed() {
+    let stored = '0';
+    try { stored = localStorage.getItem('carrot-nav-collapsed') || '0'; } catch (_) {}
+    if (stored === '1') toggleNavCollapsed();
+}
+
+function toggleHistoryMenu() {
+    const pop = document.getElementById('history-pop');
+    if (!pop) return;
+    const opening = pop.classList.contains('hidden');
+    pop.classList.toggle('hidden');
+    if (opening) loadHistory();
+}
+
+function closeHistoryMenu() {
+    document.getElementById('history-pop')?.classList.add('hidden');
+}
+
+function setHistoryFilter(kind) {
+    historyFilter = kind;
+    for (const chip of document.querySelectorAll('.history-chip')) {
+        chip.classList.toggle('active', chip.dataset.kind === kind);
+    }
+    renderHistory();
+}
+
+// Epoch seconds, whatever the source called it.
+//
+// Conversations timestamp in ISO text and documents in seconds. Sorting one
+// list by both means comparing a string to a number, which is NaN — and a sort
+// whose comparator returns NaN does not error, it just leaves the order
+// roughly as it found it. Normalising here is what makes "most recent first"
+// actually true across the two.
+function historyEpoch(value) {
+    if (!value) return 0;
+    if (typeof value === 'number') return value;
+    const parsed = Date.parse(value);
+    return isNaN(parsed) ? 0 : parsed / 1000;
+}
+
+async function loadHistory() {
+    const [convs, runs] = await Promise.all([
+        api('/api/conversations').catch(() => []),
+        api('/api/agent/runs').then(r => r.runs || []).catch(() => []),
+    ]);
+    historyCache = [
+        ...(Array.isArray(convs) ? convs : (convs.conversations || []))
+            // Code sessions are conversations too — same endpoint, same table.
+            // They belong to the Code tab's own history, not to this one.
+            .filter(c => (c.metadata || {}).surface !== 'code')
+            .map(c => ({
+            kind: 'chat',
+            id: c.id,
+            title: c.title || 'Untitled',
+            when: historyEpoch(c.updated_at || c.created_at),
+        })),
+        ...runs.map(r => ({
+            kind: 'agent',
+            id: r.id,
+            title: r.task || r.title || 'Agent run',
+            when: historyEpoch(r.created_at || r.started_at),
+        })),
+    ].sort((a, b) => b.when - a.when);
+    renderHistory();
+}
+
+function renderHistory() {
+    const host = document.getElementById('history-list');
+    if (!host) return;
+    const items = historyCache.filter(i => historyFilter === 'all' || i.kind === historyFilter);
+    if (!items.length) {
+        host.innerHTML = '<div class="history-empty">Nothing here yet.</div>';
+        return;
+    }
+    host.innerHTML = items.slice(0, 40).map(i => `
+        <button class="history-item" data-kind="${i.kind}" data-id="${escHtml(String(i.id))}">
+          <span class="history-dot chip-${i.kind}"></span>
+          <span class="history-title">${escHtml(i.title)}</span>
+          <span class="history-when">${escHtml(writeWhen(i.when))}</span>
+        </button>`).join('');
+    for (const el of host.querySelectorAll('.history-item')) {
+        el.onclick = () => openHistoryItem(el.dataset.kind, el.dataset.id);
+    }
+}
+
+function openHistoryItem(kind, id) {
+    closeHistoryMenu();
+    switchTab('workspace');
+    if (kind === 'agent') {
+        setChatMode('agent');
+        if (typeof openAgentRun === 'function') openAgentRun(id);
+        return;
+    }
+    setChatMode('chat');
+    if (typeof openConversation === 'function') openConversation(id);
+}
+
+// ===== Settings sub-pages =====
+//
+// Extensions, Memory, Leaderboard and Help were four entries in a sidebar that
+// had grown past the point anybody could read it. They are still whole pages;
+// they are reached from the place you go when you want to change something,
+// and Back brings you here rather than to wherever you happened to be before.
+// Unlike the Hub, which returns you to your work, these belong to Settings —
+// so the door leads back into the room you came from.
+function openSettingsPage(tab) {
+    switchTab(tab);
+}
+
+function backToSettings() {
+    switchTab('settings');
+}
+
+// ===== The Hub, without a tab =====
+//
+// "Where do I get more models" is a question you only ask with the model list
+// already open, so that list is where it is answered. The Hub keeps its view
+// and loses its nav entry: it opens from the picker and closes back to
+// whatever you were doing, which is what a place you visit once in a while
+// should do rather than sit in the sidebar being walked past.
+let tabBeforeModelHub = null;
+
+function openModelHub() {
+    document.getElementById('model-pop')?.classList.add('hidden');
+    // Not recorded if the Hub is somehow already open, or Close would bring
+    // you back to the Hub.
+    if (currentTab !== 'hub') tabBeforeModelHub = currentTab;
+    switchTab('hub');
+}
+
+function closeModelHub() {
+    const back = tabBeforeModelHub || 'workspace';
+    tabBeforeModelHub = null;
+    switchTab(back);
+}
+
 // Popovers above the command bar are clamped to the space that actually
 // exists. A fixed max-height ran off the top of the screen on short
 // windows, leaving options you could see but never scroll to.
@@ -1012,9 +1243,24 @@ async function pullModel(name) {
 }
 
 // ===== Chat (streaming) =====
+
+// Whether the conversation has anything in it yet.
+//
+// One function owns this because two things depend on it and they must agree:
+// the heading, and where the composer sits. Driven off the empty-state element
+// still being present rather than off a counter, so it cannot drift from what
+// is actually on screen.
+function syncChatBlank() {
+    const blank = !!document.getElementById('chat-empty');
+    const onChat = currentTab === 'workspace'
+        && (typeof isChatMode !== 'function' || isChatMode('chat'));
+    document.body.classList.toggle('chat-blank', blank && onChat);
+}
+
 function clearChatEmpty() {
     const empty = document.getElementById('chat-empty');
     if (empty) empty.remove();
+    syncChatBlank();
 }
 
 // The sources behind an answer, as cards above it.
@@ -1305,7 +1551,19 @@ async function branchFromMessage(div) {
 
 async function sendChat() {
     const input = document.getElementById('cmd-input');
-    const msg = input.value.trim();
+    // In Agent mode the same box starts a run. One composer, two things it can
+    // mean — which is the whole point of the switch above the transcript.
+    if (typeof isChatMode === 'function' && isChatMode('agent')
+        && typeof startAgentRun === 'function') {
+        const task = input.value.trim();
+        if (!task) return;
+        input.value = '';
+        appendMessage('user', task);
+        clearChatEmpty();
+        startAgentRun(task);
+        return;
+    }
+    const msg = input.value.trim() + takeArtifactRequest();
     // An attachment on its own is a valid turn ("what is this?").
     if (!msg && !pendingAttachments.length) return;
     const attachments = pendingAttachments.slice();
@@ -1534,6 +1792,81 @@ async function setSearchMode(id) {
     } catch (e) {
         console.warn('could not save search mode', e);
     }
+}
+
+// ===== The composer's plus menu =====
+//
+// Three of these are the things you reach for while writing a question, and
+// they all point at machinery that already exists. Upload opens the file
+// picker, Deep research is the research run, web search is the existing mode
+// picker surfaced where you look for it rather than as its own control.
+
+// Deep research, from the conversation. It was a tab, which meant deciding
+// before you started typing that this was a research question rather than
+// realising it halfway through writing one.
+function startDeepResearch() {
+    const input = document.getElementById('cmd-input');
+    const question = (input?.value || '').trim();
+    switchTab('research');
+    // Carries the half-written question across rather than making you retype
+    // it — realising mid-sentence that this needs research is the common case.
+    const target = document.getElementById('research-question');
+    if (target && question) {
+        target.value = question;
+        if (input) input.value = '';
+    }
+    if (target) target.focus();
+}
+
+// The web search mode picker already exists on the composer row. This opens
+// that rather than duplicating its state, because two controls for one setting
+// is how they end up disagreeing.
+function toggleWebSearchFromMenu() {
+    closeToolMenu();
+    toggleSearchPop();
+}
+
+// Searching your own conversations, documents and files. Carries whatever is
+// half-typed in the composer across, for the same reason Deep research does.
+function openSearchFromMenu() {
+    closeToolMenu();
+    const input = document.getElementById('cmd-input');
+    const query = (input?.value || '').trim();
+    switchTab('search');
+    const target = document.getElementById('search-input');
+    if (target) {
+        if (query) { target.value = query; if (input) input.value = ''; }
+        target.focus();
+        if (query && typeof doSearch === 'function') doSearch();
+    }
+}
+
+// Artifacts are made when the model calls show_artifact, so there is nothing
+// to "open" — what this does is ask for one, by adding the request to the turn
+// you are about to send.
+//
+// A per-turn flag on the request would be tidier, and is the right shape once
+// the server has somewhere to put it. This does the same job with no protocol
+// change and, importantly, is visible: you can see what was asked for in the
+// message you sent, rather than wondering why this reply came back as a chart.
+let artifactRequested = false;
+
+function toggleArtifactMode() {
+    artifactRequested = !artifactRequested;
+    const item = document.getElementById('artifact-item');
+    const sub = document.getElementById('artifact-sub');
+    if (item) item.classList.toggle('on', artifactRequested);
+    if (sub) sub.textContent = artifactRequested
+        ? 'on — the next reply will build one'
+        : 'build something you can open and use';
+}
+
+// Consumed by sendChat. Clears itself, because "make this an artifact" is
+// about the turn you are sending and not a mode you leave switched on.
+function takeArtifactRequest() {
+    if (!artifactRequested) return '';
+    toggleArtifactMode();
+    return '\n\nBuild this as an artifact I can open and use.';
 }
 
 // Renders one streamed turn into the chat view. Shared by the chat box and by
@@ -1833,6 +2166,13 @@ function setChatRunning(running) {
 }
 
 async function stopChat() {
+    // In Agent mode the same button stops the run, for the same reason the
+    // send button starts one: from the outside they are the same act.
+    if (typeof isChatMode === 'function' && isChatMode('agent')
+        && typeof agentRunId !== 'undefined' && agentRunId) {
+        if (typeof stopAgentRun === 'function') await stopAgentRun();
+        return;
+    }
     // Ask the server first. That stops the provider call, keeps the text
     // already written, and stores it — none of which aborting the fetch does.
     const stopped = currentTurnId && await api(
@@ -1995,11 +2335,12 @@ function newChat() {
     const messagesEl = document.getElementById('chat-messages');
     messagesEl.innerHTML = `
         <div class="chat-empty" id="chat-empty">
-            <span class="logo-mask big"></span>
-            <p id="chat-empty-line">Ask anything below.</p>
+            <h1 class="chat-empty-title">Where should we begin?</h1>
+            <p id="chat-empty-line" class="chat-empty-note"></p>
         </div>`;
     renderEmptyStateLine();
     switchTab('workspace');
+    syncChatBlank();
     focusCmd();
 }
 
@@ -2433,15 +2774,13 @@ function syncRailFromServer(cfg) {
 
 // ===== Workspace cards =====
 async function loadWorkspace() {
-    applyRail();
-    // A panel you switched off does not get fetched for. Hiding it in CSS
-    // while still polling for it would keep the cost and lose the point.
-    const shown = id => !railHidden.includes(id);
-    if (shown('recap')) loadRecapCard();
-    if (shown('deadlines')) loadDeadlinesCard();
-    if (shown('milestones')) loadMilestonesCard();
-    // Not gated: the status call also drives the engine dot in the menu bar
-    // and the empty state's privacy line, neither of which is this panel.
+    // The rail and its four cards are gone, so the three calls that filled
+    // them are gone with it. Leaving them in would have cost a recap, a
+    // deadline list and a milestone query on every visit to the page people
+    // open most, all of it rendering into elements that no longer exist.
+    //
+    // refreshStatus stays: it also drives the engine dot in the menu bar and
+    // the privacy line under the heading, neither of which was that panel.
     refreshStatus();
 }
 
@@ -3323,11 +3662,14 @@ async function applyExtensionTabs() {
     const enabled = new Set(info.enabled || []);
     for (const tab of managed) {
         const on = enabled.has(tab);
-        document.querySelectorAll(`.nav-item[data-tab="${tab}"]`)
+        // Nav items and the Work shortcuts alike: with the sidebar collapsed to
+        // four, a pack's way in is a button on the Work screen, and gating one
+        // without the other leaves a live door to a switched-off pack.
+        document.querySelectorAll(`.nav-item[data-tab="${tab}"], .work-shortcut[data-tab="${tab}"]`)
             .forEach(el => el.classList.toggle('hidden', !on));
         // Somebody sitting on a tab when its pack is switched off should not
         // be left looking at a view they can no longer navigate back to.
-        if (!on && currentTab === tab) switchTab('dashboard');
+        if (!on && currentTab === tab) switchTab('workspace');
     }
 }
 
@@ -3335,6 +3677,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Before the first await, so the workspace never paints a frame with the
     // composer sitting on top of the terminal.
     watchComposerHeight();
+    restoreNavCollapsed();
     await loadRecapConfig();
     await refreshStatus();
     showBuildVersion();
@@ -3346,7 +3689,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     await applyExtensionTabs();
     // Onboarding decides whether the bootstrap splash runs at all.
     maybeShowOnboarding();
-    switchTab('dashboard');
+    switchTab('workspace');
     loadTerminalHistory();
     setInterval(refreshStatus, 15000);
     // The council chip lives in the composer, so its state has to be known
@@ -3373,7 +3716,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             document.getElementById('search-pop')?.classList.add('hidden');
         }
         if (!document.getElementById('tool-menu')?.contains(e.target)) closeToolMenu();
-        if (!document.getElementById('rail-menu')?.contains(e.target)) closeRailMenu();
+        if (!document.getElementById('history-menu')?.contains(e.target)) closeHistoryMenu();
         const cmdbar = document.getElementById('cmdbar');
         if (!cmdbar.contains(e.target)) hideSkillPop();
     });
@@ -3658,13 +4001,12 @@ function renderEmptyStateLine() {
         : (currentProvider === 'ollama' || currentProvider === null);
     let text;
     if (local) {
-        text = 'Everything runs on your machine. Ask anything below.';
+        text = 'Everything runs on your machine.';
     } else if (autoModel) {
-        text = 'Carrot picks a model for each message, and some go over the '
-             + 'internet. Ask anything below.';
+        text = 'Carrot picks a model for each message, and some go over '
+             + 'the internet.';
     } else {
-        text = `Answers come from ${currentModel || 'a hosted model'} over the internet. `
-             + 'Ask anything below.';
+        text = `Answers come from ${currentModel || 'a hosted model'} over the internet.`;
     }
     line.textContent = text;
     line.classList.toggle('cloud', !local);

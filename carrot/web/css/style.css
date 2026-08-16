@@ -636,6 +636,17 @@ body {
   gap: 12px;
 }
 
+/* Anything that takes the transcript's place — the Agent pane today — has to
+   claim its space the same way the transcript does. Without this it inherits
+   no flex basis inside the column, collapses to 0×0, and switching to Agent
+   looks like a button that does nothing: the markup is there, correct and
+   populated, and none of it has any height. */
+.chat-pane {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
 .chat-empty {
   flex: 1;
   display: flex; flex-direction: column;
@@ -1278,9 +1289,26 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   max-width: 210px;
   transition: border-color 0.15s;
 }
-#model-btn:hover { border-color: var(--border-hi); }
+/* Which model is answering is the one piece of live state on this row that
+   changes what you get back, so it carries the accent rather than sitting in
+   the same grey as the controls around it. The tint, the edge and the label —
+   never accent text on accent-soft, which is the same hue on itself and drops
+   below 3:1 on the blue accent. */
+#model-btn {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+}
+#model-btn:hover { border-color: var(--accent); }
 #model-btn .ico { color: var(--accent); width: 13px; height: 13px; }
-#model-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: var(--text-sm); }
+/* The label stays --text on the tint, at 11:1. `--accent-hi` here would be
+   the accent on a tint of itself, which measures 4.20 on the blue and is the
+   same fault the splash chip had. The tint, the edge and the icon carry the
+   colour; the name of the model stays readable. */
+#model-label {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--mono); font-size: var(--text-sm);
+  color: var(--text);
+}
 
 #model-pop {
   position: absolute;
@@ -3075,12 +3103,23 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 
 /* ===== Carrot Hub — hardware-aware model catalog ===== */
 .splash-card { width: min(500px, 92vw); }
+/* Accent as the tint, never as the text.
+ *
+ * This read `color: var(--accent)` over `background: var(--accent-soft)` —
+ * the same hue at full strength on itself at 18%. On the orange accent that
+ * was merely thin; on the blue it is one colour on itself, and the line that
+ * tells you what hardware was detected could not be read at all. The tint
+ * carries the accent, the text is text, which is the same arrangement the
+ * feasibility box below already uses and the reason it stayed legible.
+ *
+ * The border was a hardcoded orange, so it stayed orange under all six accent
+ * themes; --accent-line is the token that tracks whichever one is chosen. */
 .splash-specs {
   font-size: var(--text-sm);
   font-family: var(--mono);
-  color: var(--accent);
+  color: var(--text);
   background: var(--accent-soft);
-  border: 1px solid rgba(255, 92, 31, 0.25);
+  border: 1px solid var(--accent-line);
   border-radius: var(--r-sm);
   padding: 6px 10px;
   margin-bottom: 14px;
@@ -4681,9 +4720,14 @@ td, th, .si-sub, .small, .editor-status {
   transition: background 120ms ease, color 120ms ease;
 }
 .mode-opt:hover { color: var(--text); }
+/* The selected half, unmistakably. `#16120e` was a near-black chosen for the
+   orange accent; on the blue it is dark ink on a dark blue and the switch
+   reads as two identical words. --on-accent is the token that tracks whichever
+   accent is set, which is the whole reason it exists. */
 .mode-opt.on {
-  background: var(--accent);
-  color: #16120e;
+  background: var(--accent-fill, var(--accent));
+  color: var(--on-accent);
+  font-weight: var(--w-medium, 500);
 }
 .agent-hint {
   font-size: var(--text-sm);
@@ -6940,9 +6984,9 @@ select.dd-open { border-color: var(--accent-line); }
 /* The cards. A fixed page-shaped face rather than a stretched box, because
    the thing being offered is a document and a document has proportions —
    that is most of what makes a row of these read as paper. */
-.write-start-cards { display: flex; flex-wrap: wrap; gap: 16px; }
+.write-start-cards { display: flex; flex-wrap: wrap; gap: 18px; }
 .write-card {
-  width: 108px;
+  width: 144px;
   background: none;
   border: none;
   padding: 0;
@@ -6954,7 +6998,9 @@ select.dd-open { border-color: var(--accent-line); }
 }
 .write-card-face {
   display: block;
-  height: 140px;
+  /* A page, not a tile. The ratio is held by aspect-ratio rather than a fixed
+     height so the face stays a page shape if the card width ever changes. */
+  aspect-ratio: 8 / 10;
   border: 1px solid var(--border-hi);
   border-radius: var(--r-sm);
   background: var(--card2);
@@ -6970,8 +7016,31 @@ select.dd-open { border-color: var(--accent-line); }
 .wc-ink { fill: var(--text); opacity: 0.75; }
 .wc-faint { fill: var(--text); opacity: 0.22; }
 .wc-accent { fill: var(--accent); opacity: 0.85; }
-.write-card-title { font-size: var(--text-sm); }
-.write-card-sub { font-size: var(--text-xs); color: var(--muted); line-height: 1.35; }
+/* A mark drawn *on* an accent shape — the title line on the front slide of the
+   deck. It reads against the accent rather than against the page. */
+.wc-page { fill: var(--on-accent); opacity: 0.9; }
+.write-card-title {
+  font-size: var(--text-sm);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* One line, ellipsized, always occupying its line even when empty.
+ *
+ * These were full sentences that wrapped to three and four lines, so no two
+ * cards were the same height and the row read as a heap rather than a set.
+ * `min-height` rather than content-dependent height keeps Blank — which has no
+ * subtitle — aligned with the three that do. */
+.write-card-sub {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  line-height: 1.35;
+  min-height: 1.35em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 /* Not hidden, and not pretending to work. A card you cannot use yet still
    says what it is, because "there is no LaTeX here" and "LaTeX is one switch
    away" call for different things from the reader. */
@@ -7039,3 +7108,768 @@ select.dd-open { border-color: var(--accent-line); }
   white-space: nowrap;
 }
 .write-recent-when { font-size: var(--text-xs); color: var(--muted); flex: 0 0 auto; }
+
+/* ===== Links, Graph, Canvas, Slides =====
+ *
+ * Four features that share one idea: a document is a thing you can point at.
+ * The wikilink is the pointer, the graph is all of them at once, the canvas is
+ * what you get when the pointing is spatial rather than textual, and a deck is
+ * a document that happens to be read one screen at a time. */
+
+/* ----- [[wikilink]] autocomplete ----- */
+/* Below .dd-menu, which is the top layer by invariant — a select popup opened
+   over any of this must still be the thing you can click. */
+.wiki-popup {
+  position: fixed;
+  z-index: 3500;
+  min-width: 240px;
+  max-width: 320px;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--card2);
+  border: 1px solid var(--border-hi);
+  border-radius: var(--r-sm);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .45);
+  padding: var(--s-2);
+}
+.wiki-item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-4);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  font-size: var(--text-sm);
+}
+.wiki-item.active { background: var(--accent-soft); }
+.wiki-item-title {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wiki-item-sub { color: var(--faint); font-size: var(--text-2xs); margin-left: auto; flex: 0 0 auto; }
+
+/* ----- Backlinks ----- */
+.note-backlinks {
+  flex: 0 0 auto;
+  max-height: 30%;
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+  background: var(--bg2);
+  padding: var(--s-4) var(--s-6);
+}
+.backlinks-head {
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--faint);
+  margin-bottom: var(--s-3);
+}
+.backlink {
+  padding: var(--s-3);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.backlink:hover { background: var(--card); }
+.backlink-title { font-size: var(--text-sm); color: var(--text); }
+.backlink-ctx {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  margin-top: var(--s-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ----- Graph ----- */
+.graph-wrap { display: flex; flex-direction: column; width: 100%; height: 100%; overflow: hidden; }
+.graph-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  padding: var(--s-4) var(--s-6);
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+.graph-filter {
+  width: 240px;
+  padding: var(--s-3) var(--s-4);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font-size: var(--text-sm);
+  outline: none;
+}
+.graph-filter:focus { border-color: var(--accent-line); }
+.graph-legend {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  margin-left: auto;
+  font-size: var(--text-xs);
+  color: var(--faint);
+}
+.graph-key { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.graph-key-doc { background: var(--text); }
+.graph-key-ghost { border: 1.5px solid var(--muted); }
+.graph-stage { flex: 1; position: relative; min-height: 0; }
+#graph-canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+.graph-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: var(--s-7);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  max-width: 34rem;
+  margin: auto;
+}
+.graph-empty code {
+  font-family: var(--mono);
+  background: var(--card2);
+  padding: 1px 5px;
+  border-radius: var(--r-xs);
+  color: var(--accent);
+}
+
+/* ----- Canvas ----- */
+.canvas-pane { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.canvas-body { flex: 1; display: flex; min-height: 0; }
+.canvas-stage {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  min-width: 0;
+  cursor: grab;
+  /* The grid is what tells you the surface is moving. Without it, panning an
+     empty region looks like nothing happening at all. */
+  background-color: var(--bg2);
+  background-image:
+    linear-gradient(var(--border) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+/* The world is unbounded and the stage is a window onto it. Transform-origin
+   at the corner keeps the arithmetic in flyTo and fit honest — with a centred
+   origin every coordinate would need the stage's half-size folded in. */
+.canvas-world { position: absolute; top: 0; left: 0; transform-origin: 0 0; will-change: transform; }
+.canvas-edges { position: absolute; pointer-events: none; overflow: visible; }
+.canvas-edge { stroke: var(--muted); stroke-width: 1.5; opacity: .5; }
+.canvas-box {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  background: var(--card);
+  border: 1px solid var(--border-hi);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+  cursor: move;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, .28);
+}
+.canvas-box.selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.canvas-box-title {
+  padding: var(--s-3) var(--s-4);
+  font-size: var(--text-sm);
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  outline: none;
+  cursor: text;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.canvas-box-body {
+  flex: 1;
+  padding: var(--s-3) var(--s-4);
+  font-size: var(--text-xs);
+  color: var(--muted);
+  outline: none;
+  cursor: text;
+  overflow-y: auto;
+  white-space: pre-wrap;
+}
+/* A box with no name is the one the navigator cannot list, so the placeholder
+   is a prompt rather than a label. */
+.canvas-box-title:empty::before,
+.canvas-box-body:empty::before {
+  content: attr(data-placeholder);
+  color: var(--faint);
+  pointer-events: none;
+}
+.canvas-box-resize {
+  position: absolute;
+  right: 0; bottom: 0;
+  width: 14px; height: 14px;
+  cursor: nwse-resize;
+  background: linear-gradient(135deg, transparent 50%, var(--border-hi) 50%);
+}
+.canvas-hint {
+  position: absolute;
+  left: var(--s-5); bottom: var(--s-4);
+  font-size: var(--text-2xs);
+  color: var(--faint);
+  pointer-events: none;
+  background: var(--bg2);
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--r-sm);
+  opacity: .8;
+}
+/* The navigator. On a plane with no edges this is the only way back to
+   anything, so it is always present rather than a panel you open. */
+/* The rail: one column, per-format contents. What used to be the canvas
+   navigator, the LaTeX outline in a left sidebar, and a backlinks strip under
+   the editor — three answers to "where am I" in three different places. */
+.doc-rail {
+  width: 220px;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+  background: var(--bg2);
+  min-height: 0;
+  overflow: hidden;
+}
+.rail-section { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.rail-section.hidden { display: none; }
+.rail-head {
+  padding: var(--s-4) var(--s-5) var(--s-3);
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--faint);
+  flex: 0 0 auto;
+}
+.doc-rail .side-list { flex: 1; overflow-y: auto; }
+.canvas-nav-head {
+  padding: var(--s-4) var(--s-5) var(--s-3);
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--faint);
+}
+.canvas-nav-filter {
+  margin: 0 var(--s-4) var(--s-3);
+  padding: var(--s-3) var(--s-4);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font-size: var(--text-sm);
+  outline: none;
+}
+.canvas-nav-filter:focus { border-color: var(--accent-line); }
+.canvas-nav-list { flex: 1; overflow-y: auto; padding: 0 var(--s-3) var(--s-4); }
+.canvas-nav-item {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-4);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  color: var(--text);
+}
+.canvas-nav-item:hover { background: var(--card); }
+/* The tint marks the selection; the text stays text. `--accent` on
+   `--accent-soft` is the same hue on itself and drops to 2.98:1 on the blue
+   accent — see .splash-specs. The dot carries the colour instead. */
+.canvas-nav-item.active { background: var(--accent-soft); color: var(--text); }
+.canvas-nav-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex: 0 0 auto;
+}
+.canvas-nav-item.active .canvas-nav-dot { background: var(--accent); }
+.canvas-nav-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.canvas-nav-empty, .canvas-nav-note {
+  padding: var(--s-3) var(--s-4);
+  font-size: var(--text-xs);
+  color: var(--faint);
+  line-height: 1.5;
+}
+.canvas-nav-note { border-top: 1px solid var(--border); margin-top: var(--s-3); }
+
+/* ----- Slides ----- */
+.slides-pane { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.slides-body { flex: 1; display: flex; min-height: 0; }
+.slides-source {
+  flex: 0 0 42%;
+  min-width: 0;
+  padding: var(--s-5);
+  border: none;
+  border-right: 1px solid var(--border);
+  background: var(--bg2);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: var(--text-sm);
+  line-height: 1.7;
+  resize: none;
+  outline: none;
+}
+.slides-preview {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: var(--s-6);
+  overflow-y: auto;
+  background: var(--bg);
+}
+/* 16:9, because that is the shape it will be presented at. A preview in the
+   pane's own proportions teaches you the wrong thing about where the text
+   lands. */
+.slide-surface {
+  aspect-ratio: 16 / 9;
+  width: 100%;
+  padding: var(--s-7);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  overflow: auto;
+}
+.slide-surface h1 { font-size: var(--text-2xl); margin-bottom: var(--s-4); }
+.slide-surface h2 { font-size: var(--text-xl); margin-bottom: var(--s-4); }
+.slide-surface li { margin-bottom: var(--s-2); }
+.slide-notes {
+  margin-top: var(--s-4);
+  padding: var(--s-4);
+  border-left: 2px solid var(--accent-line);
+  background: var(--card);
+  border-radius: var(--r-sm);
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+.slide-notes b { color: var(--faint); text-transform: uppercase; font-size: var(--text-2xs); margin-right: var(--s-3); }
+.slides-film {
+  flex: 0 0 auto;
+  display: flex;
+  gap: var(--s-3);
+  overflow-x: auto;
+  padding: var(--s-3) var(--s-5);
+  border-top: 1px solid var(--border);
+  background: var(--bg2);
+}
+.slide-thumb {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex: 0 0 auto;
+  max-width: 200px;
+  padding: var(--s-3) var(--s-4);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  font-size: var(--text-xs);
+}
+.slide-thumb:hover { border-color: var(--border-hi); }
+.slide-thumb.active { border-color: var(--accent); background: var(--accent-soft); }
+.slide-thumb-n { color: var(--faint); font-family: var(--mono); font-size: var(--text-2xs); }
+.slide-thumb-t { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Presenting. Covers everything, including the nav. */
+.slides-present { position: fixed; inset: 0; z-index: 3000; background: var(--bg); }
+.slides-present .reveal { width: 100%; height: 100%; }
+/* reveal.css paints `.reveal-viewport` white, and none of its themes are
+   bundled to say otherwise — so without this the deck is Carrot's light text
+   on reveal's white page, which is no more readable than the accent-on-accent
+   the splash chip used to have. The viewport is the element that actually
+   carries the page colour; setting it on the overlay behind it does nothing. */
+.slides-present .reveal-viewport { background: var(--bg); }
+/* reveal ships its own type scale in absolute units; these pull it back onto
+   Carrot's fonts without fighting its layout maths. */
+.slides-present .reveal { font-family: var(--prose); color: var(--text); }
+.slides-present .reveal h1,
+.slides-present .reveal h2,
+.slides-present .reveal h3 { font-family: var(--display); color: var(--text); text-transform: none; }
+.slides-present .reveal a { color: var(--accent); }
+.slides-present .reveal code { font-family: var(--mono); }
+.slides-present .reveal .controls { color: var(--accent); }
+.slides-present .reveal .progress { color: var(--accent); }
+.slides-exit {
+  position: absolute;
+  top: var(--s-5); right: var(--s-5);
+  z-index: 3001;
+  width: 34px; height: 34px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--card2);
+  border: 1px solid var(--border-hi);
+  border-radius: 50%;
+  color: var(--muted);
+  cursor: pointer;
+}
+.slides-exit:hover { color: var(--text); border-color: var(--accent-line); }
+
+/* Write-start card face for the canvas: the connector between two boxes. */
+.wc-faint-stroke { stroke: var(--faint); stroke-width: 2; fill: none; opacity: .5; }
+
+/* ===== Write, as one tab =====
+ *
+ * Notes, LaTeX and Graph were three nav entries, which meant opening a paper
+ * from the document list threw you into a tab that had no document list in it.
+ * They are all Write now: the list on the left never moves, the middle is
+ * whatever the open document is, and the rail on the right says where you are
+ * inside it. */
+
+/* Every editor pane fills the main column the same way, so switching format
+   does not change the shape of the page. */
+.latex-pane, .graph-pane { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+
+/* Backlinks moved into the rail, so they are a column rather than a strip
+   across the bottom of the editor. */
+.note-backlinks {
+  flex: 1;
+  overflow-y: auto;
+  max-height: none;
+  border-top: none;
+  background: transparent;
+  padding: 0 var(--s-3) var(--s-4);
+}
+.backlinks-head { padding: 0 var(--s-3); }
+
+/* The graph toolbar is an editor toolbar, so its filter should not stretch. */
+.graph-pane .graph-filter { width: 220px; flex: 0 0 auto; }
+.graph-pane .graph-legend { margin-left: var(--s-5); }
+
+/* Lit when the graph is what the main pane is showing. */
+#graph-toggle.active { color: var(--accent); background: var(--accent-soft); }
+
+/* The outline's own left-sidebar width no longer applies — it lives in the
+   rail now, which is one width for every format. */
+.latex-outline-side { width: auto; }
+
+/* ===== Write's document browser =====
+ *
+ * A permanent sidebar listing every document was a column of whichever note
+ * repeats most, and it was wrong for both of the things people do here: start
+ * something, or go back to one of the handful they were last in. Both are on
+ * the screen you land on. Editing gets the full width. */
+
+.write-start { max-width: 1100px; }
+.write-start-recents-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  flex-wrap: wrap;
+}
+.write-browse-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  margin-left: auto;
+}
+.write-search {
+  width: 220px;
+  padding: var(--s-3) var(--s-4);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-family: var(--sans);
+  outline: none;
+}
+.write-search:focus { border-color: var(--accent-line); }
+.write-filter {
+  padding: var(--s-3) var(--s-4);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-family: var(--sans);
+  outline: none;
+  cursor: pointer;
+}
+.write-filter:focus { border-color: var(--accent-line); }
+.write-browse-empty {
+  padding: var(--s-7) 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+/* The way back, in the same place in every format. */
+.write-back { flex: 0 0 auto; }
+
+/* The grid grows to fill the width the sidebar used to take. */
+.write-start-recents { display: flex; flex-wrap: wrap; gap: 18px; }
+
+/* ===== The conversation, empty =====
+ *
+ * A logo and a line saying the box below is a box, with the box itself parked
+ * at the bottom of an otherwise empty screen. The question and the place you
+ * answer it belong together, in the middle, and everything else can wait until
+ * there is a conversation to put it around. */
+.chat-empty-title {
+  font-size: var(--text-3xl);
+  font-weight: var(--w-display);
+  color: var(--text);
+  text-align: center;
+  letter-spacing: -0.01em;
+}
+/* Whether this machine is actually doing the work. Kept — a privacy claim is
+   the one thing on this screen worth reading twice — but demoted, because it
+   is an answer to a question the heading is not asking. */
+.chat-empty-note {
+  font-size: var(--text-sm);
+  color: var(--faint);
+  text-align: center;
+  max-width: 34rem;
+}
+
+/* With nothing said yet, the heading and the composer meet at the middle of
+   the page: the heading fills the top half and sits at its foot, the composer
+   starts exactly where that half ends. Both are anchored to the same 50% line
+   rather than to guessed offsets, so they stay together at any window height
+   and the composer grows downward into empty space as the question gets
+   longer. */
+body.chat-blank #cmdbar { top: 50%; bottom: auto; }
+body.chat-blank .chat-empty {
+  position: fixed;
+  left: var(--nav-w);
+  right: 0;
+  top: 0;
+  height: 50vh;
+  justify-content: flex-end;
+  padding-bottom: var(--s-6);
+  /* Fixed and half the window tall, so it lies across the tab strip — Chat /
+     Agent, the history button, the session tab. It is a heading and a line of
+     text, nothing you click, so it must not take the pointer. Without this it
+     is an invisible sheet swallowing every click in the top half of the app,
+     and scripted .click() still works because that skips hit-testing, so it
+     looks fine to a test and dead to a person. */
+  pointer-events: none;
+}
+/* A terminal below an empty conversation is a panel for a session that has not
+   started. */
+body.chat-blank #terminal-panel { opacity: 0; pointer-events: none; }
+
+/* ===== Settings sub-pages ===== */
+.settings-links {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--s-4);
+  margin-bottom: var(--s-7);
+}
+.settings-link {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  align-items: center;
+  gap: 0 var(--s-4);
+  padding: var(--s-4) var(--s-5);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--sans);
+  color: var(--text);
+}
+.settings-link:hover { border-color: var(--accent-line); background: var(--card2); }
+.settings-link .ico { grid-row: 1 / 3; color: var(--muted); width: 20px; height: 20px; }
+.settings-link-title { font-size: var(--text-base); }
+.settings-link-sub { font-size: var(--text-xs); color: var(--faint); }
+
+/* Find more models — the Hub's one entry point, at the head of the list you
+   are already reading when the question occurs to you. */
+.model-find-more {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  align-items: center;
+  gap: 0 var(--s-3);
+  width: 100%;
+  padding: var(--s-4) var(--s-5);
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--sans);
+  font-size: var(--text-sm);
+  color: var(--text);
+}
+.model-find-more:hover { background: var(--card2); }
+.model-find-more .ico { grid-row: 1 / 3; color: var(--accent); }
+.model-find-sub { font-size: var(--text-xs); color: var(--faint); }
+
+/* ===== A sidebar you can put away ===== */
+#nav-collapse { flex: 0 0 auto; margin-right: var(--s-2); }
+/* One variable does the whole job: the nav is sized from it, and so is the
+   command bar's left edge, so collapsing moves both without either knowing
+   about the other. */
+body.nav-collapsed { --nav-w: 60px; }
+body.nav-collapsed .nav-label,
+body.nav-collapsed .nav-group { display: none; }
+body.nav-collapsed .app-nav .nav-item {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+}
+body.nav-collapsed .brand-name,
+body.nav-collapsed .brand-sub { display: none; }
+
+/* ===== History ===== */
+#history-menu { position: relative; flex: 0 0 auto; }
+#history-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px;
+  background: none; border: none; border-radius: var(--r-sm);
+  color: var(--muted); cursor: pointer;
+}
+#history-btn:hover { background: var(--card2); color: var(--text); }
+#history-pop {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 3400;
+  width: 340px;
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--card2);
+  border: 1px solid var(--border-hi);
+  border-radius: var(--r-sm);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .45);
+}
+.history-filters { display: flex; gap: var(--s-2); padding: 0 var(--s-4) var(--s-3); }
+.history-chip {
+  padding: 3px var(--s-3);
+  border-radius: var(--r-pill);
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--muted);
+  font-family: var(--sans);
+  font-size: var(--text-2xs);
+  cursor: pointer;
+}
+.history-chip.active { border-color: var(--accent-line); background: var(--accent-soft); color: var(--text); }
+.history-list { overflow-y: auto; padding: 0 var(--s-2) var(--s-3); }
+.history-item {
+  display: flex; align-items: center; gap: var(--s-3);
+  width: 100%;
+  padding: var(--s-3) var(--s-4);
+  background: none; border: none; border-radius: var(--r-sm);
+  cursor: pointer; text-align: left;
+  font-family: var(--sans); font-size: var(--text-sm); color: var(--text);
+}
+.history-item:hover { background: var(--card3); }
+/* The chip is the whole point: one list, two kinds of record, told apart at a
+   glance rather than by reading. */
+.history-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
+.chip-chat { --chip: var(--accent); }
+.chip-agent { --chip: var(--green); }
+.history-dot.chip-chat { background: var(--accent); }
+.history-dot.chip-agent { background: var(--green); }
+.history-chip.chip-chat.active { border-color: var(--accent); }
+.history-chip.chip-agent.active { border-color: var(--green); background: rgba(126, 200, 128, 0.14); }
+.history-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-when { font-size: var(--text-2xs); color: var(--faint); flex: 0 0 auto; }
+.history-empty { padding: var(--s-5); color: var(--faint); font-size: var(--text-sm); }
+
+/* The rest of Work: files, workspaces, maps and the things you owe. Not
+   documents you start, so not cards — but with no sidebar this is the only
+   way in to any of them. */
+.work-shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+  margin: var(--s-6) 0 var(--s-7);
+}
+.work-shortcut {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-5);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+.work-shortcut:hover { border-color: var(--accent-line); background: var(--card2); }
+.work-shortcut .ico { width: 15px; height: 15px; color: var(--muted); }
+.work-shortcut:hover .ico { color: var(--accent); }
+
+/* ===== Agent settings, folded away =====
+ *
+ * Allowed sites, stored credentials and step limits are real settings and not
+ * what anyone opens this screen for. They were three cards of chrome sitting
+ * above the box you type the task into. */
+.agent-settings {
+  margin: 0 0 var(--s-5);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--card);
+}
+.agent-settings-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-5);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  color: var(--text);
+  list-style: none;
+}
+.agent-settings-summary::-webkit-details-marker { display: none; }
+.agent-settings-summary .ico { width: 15px; height: 15px; color: var(--muted); }
+.agent-settings-hint { color: var(--faint); font-size: var(--text-xs); margin-left: auto; }
+.agent-settings[open] .agent-settings-summary { border-bottom: 1px solid var(--border); }
+.agent-settings-body { padding: var(--s-5); }
+.agent-settings-body .ext-section { margin: 0; }
+
+/* Agent settings in the tab strip: a fold, not a page. */
+#ws-tabstrip .agent-settings {
+  margin: 0;
+  order: 10;
+  margin-left: auto;
+  background: none;
+  border: none;
+}
+#ws-tabstrip .agent-settings-summary { padding: var(--s-2) var(--s-3); font-size: var(--text-xs); }
+#ws-tabstrip .agent-settings[open] { position: relative; }
+#ws-tabstrip .agent-settings[open] .agent-settings-body {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 3400;
+  width: min(680px, 80vw);
+  max-height: 60vh;
+  overflow-y: auto;
+  background: var(--card2);
+  border: 1px solid var(--border-hi);
+  border-radius: var(--r-sm);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .45);
+}
+#ws-tabstrip .agent-settings[open] .agent-settings-summary { border-bottom: none; }
+.agent-run-opts { display: flex; flex-wrap: wrap; gap: var(--s-5); margin-bottom: var(--s-5); }
+.agent-run-opts .inline-check { display: flex; align-items: center; gap: var(--s-3); font-size: var(--text-sm); }
+
+/* ===== Canvas: Excalidraw's surface =====
+ *
+ * The hand-rolled grid, the boxes and their drag handles are gone. What is
+ * left is a mount point that must be a positioned, sized block — the library
+ * measures its container on mount, and a zero-height parent gives a canvas
+ * nobody can see. */
+.canvas-stage {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg2);
+}
+.canvas-stage .excalidraw { --zIndex-layerUI: 4; }
+/* Its popovers must clear the composer and the app's own popovers without
+   climbing over the select menu, which stays the top layer. */
+.canvas-stage .excalidraw .Island,
+.canvas-stage .excalidraw .Stack { z-index: 5; }

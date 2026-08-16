@@ -230,31 +230,18 @@ async function loadNotes() {
     if (!currentNoteId) showWriteStart();
 }
 
+// The document list is the browse screen now, not a column down the side.
+//
+// Both names are kept because they are called from a dozen places — every
+// save, create and delete refreshes "the list" — and the browse grid is what
+// that means. Rebuilding it while a document is open is wasted work the user
+// cannot see, so it only runs when the browse screen is actually showing.
 function renderNotesList() {
-    const filter = (document.getElementById('notes-filter').value || '').toLowerCase();
-    const container = document.getElementById('notes-list');
-    container.innerHTML = '';
-    const items = notesCache.filter(n =>
-        !filter || (n.title || '').toLowerCase().includes(filter) || (n.body || '').toLowerCase().includes(filter));
-    if (!items.length) {
-        container.innerHTML = '<div class="empty" style="padding:10px">No notes.</div>';
-        return;
-    }
-    for (const n of items) {
-        const div = document.createElement('div');
-        div.className = 'side-item' + (n.id === currentNoteId ? ' active' : '')
-                      + (n.system ? ' side-item-system' : '');
-        const preview = (n.body || '').replace(/[#*`>\-]/g, '').trim().slice(0, 48);
-        // A system doc is not a note somebody made, so it says what it is
-        // rather than showing the first line of itself as a preview.
-        div.innerHTML = `<div class="si-title">${escHtml(n.title || n.id)}</div>`
-                      + `<div class="si-sub">${escHtml(n.system ? 'Kept by Carrot' : preview)}</div>`;
-        div.onclick = () => openNote(n.id);
-        container.appendChild(div);
-    }
+    if (typeof isWriteMode === 'function' && !isWriteMode('start')) return;
+    renderWriteStartRecents();
 }
 
-function filterNotesList() { renderNotesList(); }
+function filterNotesList() { renderWriteStartRecents(); }
 
 async function newNote() {
     // The sidebar + makes a markdown document without asking, which is what a
@@ -268,6 +255,83 @@ async function newNote() {
     openNote(created.id);
 }
 
+// Which editor the Write tab is currently showing.
+//
+// Four document formats now share one tab, so something has to own "hide the
+// other three". Keeping that in one function — rather than each editor hiding
+// its rivals on the way in — is what stops a canvas and a deck being on screen
+// at once the first time a new format is added.
+// `owns` is everything belonging to the mode, hidden whenever another mode is
+// showing. `reveal` is the subset this function turns on — the rest are owned
+// by whoever knows better: the editor host and its textarea fallback are
+// chosen by mountEditor depending on whether Milkdown loaded, and doc-refs
+// appears only when the document has @/to lines in it. Listing them under
+// `owns` but not `reveal` is what lets this hide them without also claiming
+// the right to show them.
+const WRITE_MODES = {
+    prose:  { owns: ['note-toolbar', 'note-editor-host', 'note-fallback', 'doc-refs'],
+              reveal: ['note-toolbar'], rail: 'rail-backlinks' },
+    latex:  { owns: ['latex-pane'], rail: 'rail-outline' },
+    canvas: { owns: ['canvas-pane'], rail: 'rail-canvas' },
+    slides: { owns: ['slides-pane'], rail: null },
+    graph:  { owns: ['graph-pane'], rail: null },
+    start:  { owns: ['write-start'], rail: null },
+};
+
+function showWriteMode(mode) {
+    for (const [name, spec] of Object.entries(WRITE_MODES)) {
+        const active = name === mode;
+        const reveal = spec.reveal || spec.owns;
+        for (const id of spec.owns) {
+            const el = document.getElementById(id);
+            if (!el) continue;
+            if (!active) el.classList.add('hidden');
+            else if (reveal.includes(id)) el.classList.remove('hidden');
+        }
+    }
+    document.getElementById('note-empty')?.classList.add('hidden');
+
+    // The rail is one column whose contents depend on the format. It is hidden
+    // entirely when the mode has nothing to put in it, rather than standing
+    // there empty taking 220px from the document.
+    const wanted = WRITE_MODES[mode]?.rail || null;
+    for (const spec of Object.values(WRITE_MODES)) {
+        if (spec.rail) document.getElementById(spec.rail)?.classList.toggle('hidden', spec.rail !== wanted);
+    }
+    const rail = document.getElementById('doc-rail');
+    // Backlinks are the one rail that earns its place only sometimes: a
+    // document nothing links to would otherwise show an empty column.
+    const railEmpty = wanted === 'rail-backlinks'
+        && !document.getElementById('note-backlinks')?.innerHTML.trim();
+    if (rail) rail.classList.toggle('hidden', !wanted || railEmpty);
+
+    document.getElementById('graph-toggle')?.classList.toggle('active', mode === 'graph');
+    document.getElementById('view-notes')?.setAttribute('data-write-mode', mode);
+}
+
+// The graph is a way of reading the document list, so it toggles against
+// whatever was open rather than replacing it — leaving the graph puts you back
+// in the document you were in, not on a start screen.
+let writeModeBeforeGraph = null;
+
+function toggleGraphPane() {
+    switchTab('notes');
+    if (isWriteMode('graph')) {
+        const back = writeModeBeforeGraph;
+        writeModeBeforeGraph = null;
+        if (back && back !== 'graph' && currentNoteId) { openNote(currentNoteId); return; }
+        showWriteStart();
+        return;
+    }
+    writeModeBeforeGraph = document.getElementById('view-notes')?.getAttribute('data-write-mode');
+    showWriteMode('graph');
+    loadGraphTab();
+}
+
+function isWriteMode(mode) {
+    return document.getElementById('view-notes')?.getAttribute('data-write-mode') === mode;
+}
+
 async function openNote(noteId) {
     const note = await api(`/api/notes/${noteId}`);
     // A LaTeX document is a different editor, not a different setting on this
@@ -279,7 +343,22 @@ async function openNote(noteId) {
         openLatexDoc(note);
         return;
     }
+    if (note.format === 'canvas' && typeof openCanvasDoc === 'function') {
+        hideWriteStart();
+        currentNoteId = noteId;
+        renderNotesList();
+        await openCanvasDoc(note);
+        return;
+    }
+    if (note.format === 'slides' && typeof openSlidesDoc === 'function') {
+        hideWriteStart();
+        currentNoteId = noteId;
+        renderNotesList();
+        await openSlidesDoc(note);
+        return;
+    }
     hideWriteStart();
+    showWriteMode('prose');
     document.getElementById('note-editor-host').classList.remove('hidden');
     currentNoteId = noteId;
     // A read-only doc is a view of the database. Autosave must not fire on it
@@ -298,6 +377,7 @@ async function openNote(noteId) {
     // it goes, which is the whole point of writing the destination into it.
     if (typeof resetDocDestination === 'function') resetDocDestination();
     if (typeof refreshDocReferences === 'function') refreshDocReferences();
+    if (typeof refreshBacklinks === 'function') refreshBacklinks(noteId);
     applyNoteReadonly(note);
 }
 
@@ -373,9 +453,27 @@ async function mountEditor(markdown) {
     }
 }
 
+// Milkdown escapes `[` when it serialises back to markdown, so a note
+// containing `[[Philosophers]]` comes out of the editor as
+// `\[\[Philosophers]]`. Nothing looks wrong — the editor renders the escape
+// invisibly — but the link no longer parses, so simply *opening* a note with
+// wikilinks in it and letting autosave run silently unlinks the whole
+// document, and the graph empties out with nothing to point at.
+//
+// Undone on the way out rather than by teaching ProseMirror a new node type:
+// a wikilink is not a construct the editor has to understand, it is text that
+// something else reads, and the only requirement is that the text survives the
+// round trip intact.
+function unescapeWikilinks(md) {
+    return (md || '').replace(
+        /\\\[\\\[([^\]\n]*?)\\?\]\\?\]/g,
+        (_m, inner) => '[[' + inner.replace(/\\\|/g, '|') + ']]');
+}
+
 function getEditorMarkdown() {
     if (crepeInstance && crepeReady) {
-        try { return crepeInstance.getMarkdown(); } catch (_) { return lastSavedBody; }
+        try { return unescapeWikilinks(crepeInstance.getMarkdown()); }
+        catch (_) { return lastSavedBody; }
     }
     return document.getElementById('note-fallback').value;
 }
@@ -389,12 +487,21 @@ function scheduleNoteSave() {
 
 function noteAutosaveTick() {
     if (!currentNoteId || currentNoteReadonly) return;
+    // This poll is global and `currentNoteId` is shared by every editor. On a
+    // canvas or a deck the Milkdown instance still holds whatever prose was
+    // last open, so without this guard the tick would notice a difference and
+    // save that markdown over the canvas JSON — destroying the document 1.5
+    // seconds after opening it. Those editors do their own saving.
+    if (!isWriteMode('prose')) return;
     const body = getEditorMarkdown();
     if (body !== lastSavedBody) scheduleNoteSave();
 }
 
 async function saveNoteNow() {
     if (!currentNoteId || currentNoteReadonly) return;
+    // Same reasoning as the autosave tick: this writes the prose editor's
+    // buffer, which is not this document unless prose is what is on screen.
+    if (!isWriteMode('prose')) return;
     const body = getEditorMarkdown();
     const title = document.getElementById('note-title').value.trim() || 'Untitled note';
     try {
@@ -2940,6 +3047,11 @@ async function sendAgentTask() {
                     || 'What is in the attached file?',
                 attachments: attachments.map(a => ({ name: a.name, mime: a.mime, data: a.data })),
                 conversation_id: agentConversationId,
+                // Marks the conversation this creates as a Code session, so it
+                // stays out of chat history. Code's own record is the
+                // Checkpoints panel, which is a different question — what
+                // changed on disk, not what was said.
+                surface: 'code',
                 // The agent's own pick, falling back to the composer's when
                 // it is set to "Same as chat".
                 model: agentModel ? agentModel.model
@@ -3629,17 +3741,15 @@ let writeStartCards = null;
 
 async function showWriteStart() {
     const start = document.getElementById('write-start');
-    const empty = document.getElementById('note-empty');
     if (!start) return;
-    document.getElementById('note-editor-host').classList.add('hidden');
-    document.getElementById('note-fallback').classList.add('hidden');
-    if (empty) empty.classList.add('hidden');
+    // One call, rather than a list of things to hide that has to be extended
+    // every time a format is added — which is how a canvas ended up still on
+    // screen behind the start screen, still taking the pointer.
+    //
     // The toolbar belongs to a document. On a start screen there is no
     // document, so Send, Obsidian and Delete are three buttons pointed at
     // nothing — and Delete pointed at nothing is the one worth removing.
-    const toolbar = document.getElementById('note-toolbar');
-    if (toolbar) toolbar.classList.add('hidden');
-    start.classList.remove('hidden');
+    showWriteMode('start');
     currentNoteId = null;
 
     if (!writeStartCards) {
@@ -3650,11 +3760,11 @@ async function showWriteStart() {
     renderWriteStartRecents();
 }
 
+// Only hides the start screen. Which toolbar comes back is showWriteMode's
+// decision — this used to reveal the prose one unconditionally, which put
+// Send/Obsidian/Delete above a canvas.
 function hideWriteStart() {
-    const start = document.getElementById('write-start');
-    if (start) start.classList.add('hidden');
-    const toolbar = document.getElementById('note-toolbar');
-    if (toolbar) toolbar.classList.remove('hidden');
+    document.getElementById('write-start')?.classList.add('hidden');
 }
 
 function renderWriteStartCards() {
@@ -3665,13 +3775,22 @@ function renderWriteStartCards() {
         el.type = 'button';
         el.className = 'write-card' + (card.available ? '' : ' write-card-locked');
         el.dataset.cardId = card.id;
+        // Exactly one line under the title, always — either the qualifier or,
+        // on a locked card, what to switch on. Appending the lock note to the
+        // subtitle made that one card taller than the other three.
+        const sub = card.available
+            ? (card.subtitle || '')
+            : `Needs the ${(card.requires || {}).label || 'pack'}`;
         el.innerHTML =
             `<span class="write-card-face write-card-face-${escHtml(card.id)}">`
             + writeCardArt(card) + `</span>`
             + `<span class="write-card-title">${escHtml(card.title)}</span>`
-            + (card.subtitle ? `<span class="write-card-sub">${escHtml(card.subtitle)}</span>` : '')
-            + (card.available ? '' : `<span class="write-card-sub write-card-needs">Needs the ${escHtml((card.requires || {}).label || 'pack')}</span>`);
-        el.title = card.available ? '' : ((card.requires || {}).detail || '');
+            + `<span class="write-card-sub${card.available ? '' : ' write-card-needs'}">${escHtml(sub)}</span>`;
+        // What it is for, on hover — it costs no height here and the subtitle
+        // has room for a qualifier only.
+        el.title = card.available
+            ? (card.detail || card.subtitle || '')
+            : ((card.requires || {}).detail || '');
         el.onclick = () => card.available
             ? startNewDocument(card)
             : explainLockedCard(card);
@@ -3682,35 +3801,83 @@ function renderWriteStartCards() {
 // A page, drawn rather than photographed. Docs shows a thumbnail of the
 // template; there is no template here, so the face shows the shape of the
 // thing — prose lines for markdown, an equation for LaTeX.
+// Each face is the document seen from far enough away that you cannot read it
+// — which is exactly how you recognise a kind of document. They share a page
+// and a left margin so the row reads as four documents rather than four icons,
+// and each one is doing the thing it makes: prose has paragraphs, LaTeX has an
+// equation set off from the text, a canvas has boxes joined by a line, a deck
+// is a stack of 16:9 frames.
 function writeCardArt(card) {
-    if (card.format === 'latex') {
+    if (card.format === 'canvas') {
         return `<svg viewBox="0 0 96 124" aria-hidden="true">
-            <rect x="18" y="14" width="60" height="12" rx="2" class="wc-ink"/>
-            <rect x="18" y="36" width="60" height="4" rx="2" class="wc-faint"/>
-            <rect x="18" y="46" width="46" height="4" rx="2" class="wc-faint"/>
-            <rect x="26" y="62" width="44" height="20" rx="3" class="wc-accent"/>
-            <rect x="18" y="94" width="60" height="4" rx="2" class="wc-faint"/>
-            <rect x="18" y="104" width="38" height="4" rx="2" class="wc-faint"/>
+            <line x1="34" y1="42" x2="58" y2="72" class="wc-faint-stroke"/>
+            <line x1="34" y1="42" x2="30" y2="86" class="wc-faint-stroke"/>
+            <rect x="14" y="28" width="34" height="24" rx="3" class="wc-accent"/>
+            <rect x="52" y="60" width="32" height="24" rx="3" class="wc-ink"/>
+            <rect x="16" y="78" width="28" height="20" rx="3" class="wc-faint"/>
         </svg>`;
     }
-    // Smaller than it wants to be. Beside the LaTeX face — which is a page
-    // with writing on it — a plus at a third of the width reads as a different
-    // kind of object rather than the same object empty, and the row stops
-    // looking like a set of documents.
+    if (card.format === 'slides') {
+        // Three 16:9 frames, offset — a deck is a sequence, not a page.
+        return `<svg viewBox="0 0 96 124" aria-hidden="true">
+            <rect x="26" y="26" width="56" height="32" rx="3" class="wc-faint"/>
+            <rect x="21" y="44" width="56" height="32" rx="3" class="wc-ink"/>
+            <rect x="16" y="62" width="56" height="32" rx="3" class="wc-accent"/>
+            <rect x="24" y="72" width="26" height="4" rx="2" class="wc-page"/>
+        </svg>`;
+    }
+    if (card.format === 'latex') {
+        return `<svg viewBox="0 0 96 124" aria-hidden="true">
+            <rect x="22" y="16" width="52" height="7" rx="2" class="wc-ink"/>
+            <rect x="34" y="28" width="28" height="3" rx="1.5" class="wc-faint"/>
+            <rect x="18" y="44" width="60" height="3" rx="1.5" class="wc-faint"/>
+            <rect x="18" y="52" width="60" height="3" rx="1.5" class="wc-faint"/>
+            <rect x="28" y="66" width="40" height="14" rx="2" class="wc-accent"/>
+            <rect x="18" y="90" width="60" height="3" rx="1.5" class="wc-faint"/>
+            <rect x="18" y="98" width="44" height="3" rx="1.5" class="wc-faint"/>
+        </svg>`;
+    }
+    // Blank is a page with a plus on it, at the weight of a heading — beside
+    // three pages with writing on them, a bare plus reads as a different kind
+    // of object rather than the same object empty.
     return `<svg viewBox="0 0 96 124" aria-hidden="true">
-        <rect x="46" y="55" width="4" height="18" rx="2" class="wc-accent"/>
-        <rect x="39" y="62" width="18" height="4" rx="2" class="wc-accent"/>
+        <rect x="44" y="48" width="8" height="28" rx="4" class="wc-accent"/>
+        <rect x="34" y="58" width="28" height="8" rx="4" class="wc-accent"/>
     </svg>`;
 }
+
+// What a new document of each kind is called, and what is in it before
+// anybody types. A canvas starts as valid empty JSON rather than as an empty
+// string, so the editor never has to treat "new" as a special case of "broken".
+const DOC_STARTERS = {
+    latex:  { title: 'Untitled document', content: () => LATEX_STARTER },
+    canvas: { title: 'Untitled canvas', content: () => JSON.stringify({ nodes: [], edges: [] }) },
+    slides: { title: 'Untitled deck', content: () => SLIDES_STARTER },
+    markdown: { title: 'Untitled note', content: () => '' },
+};
+
+const SLIDES_STARTER = `# Your deck
+
+A subtitle, maybe
+
+---
+
+## The first point
+
+- Written in Markdown
+- \`---\` on its own line starts a new slide
+- A line saying \`Notes:\` puts the rest in the speaker notes
+`;
 
 async function startNewDocument(card) {
     // Straight in. A blank document is the least ambiguous request in the
     // application and it should not be answered with a dialogue.
+    const starter = DOC_STARTERS[card.format] || DOC_STARTERS.markdown;
     const created = await api('/api/notes', {
         method: 'POST',
         body: JSON.stringify({
-            title: card.format === 'latex' ? 'Untitled document' : 'Untitled note',
-            content: card.format === 'latex' ? LATEX_STARTER : '',
+            title: starter.title,
+            content: starter.content(),
             format: card.format,
         }),
     });
@@ -3743,37 +3910,108 @@ function explainLockedCard(card) {
     alert(detail);
 }
 
+// What each format is called on a document's badge.
+const DOC_KIND_LABEL = { latex: 'TeX', canvas: 'Canvas', slides: 'Deck', markdown: 'Doc' };
+
+// The filters, read off the controls. Empty means "no opinion", which is the
+// default for all three — the screen opens showing everything, most recent
+// first, and narrows only when asked.
+function writeBrowseQuery() {
+    const val = (id) => (document.getElementById(id)?.value || '').trim();
+    return {
+        text: val('notes-filter').toLowerCase(),
+        format: val('write-filter-type'),
+        days: parseInt(val('write-filter-date'), 10) || 0,
+        workspace: val('write-filter-workspace'),
+    };
+}
+
+function writeBrowseMatches(note, q) {
+    if (q.format && (note.format || 'markdown') !== q.format) return false;
+    if (q.workspace && (note.workspace || '') !== q.workspace) return false;
+    if (q.days) {
+        const age = (Date.now() / 1000 - (note.created_at || 0)) / 86400;
+        if (age > q.days) return false;
+    }
+    if (q.text) {
+        const hay = ((note.title || '') + ' ' + (note.body || '')).toLowerCase();
+        if (!hay.includes(q.text)) return false;
+    }
+    return true;
+}
+
+// The workspace filter is built from the documents themselves rather than from
+// the workspace list: offering a workspace with nothing in it is a filter that
+// can only ever return nothing.
+function renderWorkspaceFilter() {
+    const sel = document.getElementById('write-filter-workspace');
+    if (!sel) return;
+    const seen = new Map();
+    for (const note of notesCache || []) {
+        if (note.workspace) seen.set(note.workspace, note.workspace_name || note.workspace);
+    }
+    const keep = sel.value;
+    sel.innerHTML = '<option value="">Any workspace</option>'
+        + [...seen.entries()].sort((a, b) => a[1].localeCompare(b[1]))
+            .map(([id, name]) => `<option value="${escHtml(id)}">${escHtml(name)}</option>`).join('');
+    if ([...sel.options].some(o => o.value === keep)) sel.value = keep;
+    // Nothing is filed anywhere on a fresh install, so the control would be a
+    // dropdown with one entry that does nothing.
+    sel.classList.toggle('hidden', seen.size === 0);
+}
+
 function renderWriteStartRecents() {
     const host = document.getElementById('write-start-recents');
-    host.innerHTML = '';
-    const recents = [...(notesCache || [])]
-        .sort((a, b) => (b.created_at || 0) - (a.created_at || 0))
-        .slice(0, 12);
-    if (!recents.length) {
-        host.innerHTML = '<div class="empty">Nothing written yet.</div>';
-        return;
-    }
-    for (const note of recents) {
-        const el = document.createElement('button');
-        el.type = 'button';
-        el.className = 'write-recent';
+    const empty = document.getElementById('write-browse-empty');
+    const label = document.getElementById('write-browse-label');
+    if (!host) return;
+    renderWorkspaceFilter();
+
+    const q = writeBrowseQuery();
+    const filtering = !!(q.text || q.format || q.days || q.workspace);
+    let items = [...(notesCache || [])]
+        .filter(n => writeBrowseMatches(n, q))
+        .sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+
+    // Unfiltered, this is a recents shelf and a dozen is the point. Filtered,
+    // it is a search result and truncating one would be a lie.
+    if (label) label.textContent = filtering
+        ? `${items.length} document${items.length === 1 ? '' : 's'}` : 'Recent documents';
+    if (!filtering) items = items.slice(0, 18);
+
+    host.innerHTML = items.map(note => {
         const preview = (note.body || '').replace(/[#*`>\-]/g, '').trim().slice(0, 220);
-        el.innerHTML =
-            `<span class="write-recent-page">${escHtml(preview)}</span>`
-            + `<span class="write-recent-foot">`
-            + `<span class="write-recent-kind write-recent-kind-${escHtml(note.format || 'markdown')}">`
-            + (note.system ? '★' : (note.format === 'latex' ? 'TeX' : 'Doc')) + `</span>`
-            + `<span class="write-recent-title">${escHtml(note.title || note.id)}</span>`
-            + `<span class="write-recent-when">${escHtml(writeWhen(note.created_at))}</span>`
-            + `</span>`;
-        el.onclick = () => { hideWriteStart(); openNote(note.id); };
-        host.appendChild(el);
+        const kind = note.system ? '★' : (DOC_KIND_LABEL[note.format] || 'Doc');
+        return `<button type="button" class="write-recent" data-id="${escHtml(note.id)}">
+            <span class="write-recent-page">${escHtml(preview)}</span>
+            <span class="write-recent-foot">
+              <span class="write-recent-kind write-recent-kind-${escHtml(note.format || 'markdown')}">${escHtml(kind)}</span>
+              <span class="write-recent-title">${escHtml(note.title || note.id)}</span>
+              <span class="write-recent-when">${escHtml(writeWhen(note.created_at))}</span>
+            </span></button>`;
+    }).join('');
+    for (const el of host.querySelectorAll('.write-recent')) {
+        el.onclick = () => { hideWriteStart(); openNote(el.dataset.id); };
+    }
+
+    if (empty) {
+        empty.textContent = !(notesCache || []).length
+            ? 'Nothing written yet.'
+            : (items.length ? '' : 'No document matches those filters.');
+        empty.classList.toggle('hidden', !!items.length);
     }
 }
 
-function writeWhen(epochSeconds) {
-    if (!epochSeconds) return '';
-    const then = new Date(epochSeconds * 1000);
+// Accepts epoch seconds or an ISO string.
+//
+// Documents carry an mtime in seconds; conversations carry `updated_at` as ISO
+// text. Multiplying a string by 1000 gives NaN, which formats as
+// "undefined NaN, NaN" without throwing — a date that is wrong in a way no
+// error ever reports.
+function writeWhen(when) {
+    if (!when) return '';
+    const then = typeof when === 'string' ? new Date(when) : new Date(when * 1000);
+    if (isNaN(then.getTime())) return '';
     const days = Math.floor((Date.now() - then.getTime()) / 86400000);
     if (days <= 0) return 'Today';
     if (days === 1) return 'Yesterday';

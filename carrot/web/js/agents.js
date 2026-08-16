@@ -459,7 +459,9 @@ async function removeSecret(name) {
 }
 
 function agentStep(html, kind) {
-    const host = document.getElementById('agent-steps');
+    agentLogHeader();
+    const host = document.getElementById('agent-log-body')
+              || document.getElementById('agent-steps');
     const step = document.createElement('div');
     step.className = 'agent-step ' + (kind || '');
     step.innerHTML = html;
@@ -467,12 +469,75 @@ function agentStep(html, kind) {
     step.scrollIntoView({ block: 'nearest' });
 }
 
+// ===== The work log =====
+//
+// A run is a long silence with occasional lines in it. What makes that bearable
+// is knowing it is still going and roughly how long it has been — so the log
+// opens with a header that counts, and collapses to that header once the run
+// is over. Finished work is a summary you can expand, not a wall you scroll
+// past to reach the answer.
+
+let agentLogTimer = null;
+let agentLogStarted = 0;
+
+function agentLogHeader() {
+    let head = document.getElementById('agent-log-head');
+    if (head) return head;
+    const host = document.getElementById('agent-steps');
+    const details = document.createElement('details');
+    details.id = 'agent-log';
+    details.className = 'agent-log';
+    details.open = true;
+    details.innerHTML = '<summary id="agent-log-head" class="agent-log-head">'
+        + '<span class="agent-log-time">Working</span>'
+        + '<svg class="ico agent-log-chev"><use href="#i-chevron"/></svg></summary>'
+        + '<div id="agent-log-body" class="agent-log-body"></div>';
+    host.appendChild(details);
+    return details.querySelector('#agent-log-head');
+}
+
+function startAgentLog() {
+    agentLogStarted = Date.now();
+    agentLogHeader();
+    clearInterval(agentLogTimer);
+    const tick = () => {
+        const el = document.querySelector('#agent-log-head .agent-log-time');
+        if (!el) return;
+        el.textContent = 'Working for ' + Math.round((Date.now() - agentLogStarted) / 1000) + 's';
+    };
+    tick();
+    agentLogTimer = setInterval(tick, 1000);
+}
+
+// The run is over: stop counting, say how long it took, and fold. The steps
+// stay one click away rather than being thrown out — that record is the only
+// place what the agent actually did is written down.
+function endAgentLog() {
+    clearInterval(agentLogTimer);
+    agentLogTimer = null;
+    const el = document.querySelector('#agent-log-head .agent-log-time');
+    if (el) el.textContent = 'Worked for ' + Math.round((Date.now() - agentLogStarted) / 1000) + 's';
+    document.getElementById('agent-log')?.removeAttribute('open');
+}
+
 function prepareAgentPanes() {
     document.getElementById('agent-steps').innerHTML = '';
     document.getElementById('agent-plan').classList.add('hidden');
     document.getElementById('agent-result').classList.add('hidden');
-    document.getElementById('agent-run-btn').classList.add('hidden');
-    document.getElementById('agent-stop-btn').classList.remove('hidden');
+    // Run and Stop were buttons on the agent's own page. The composer's send
+    // and stop do both jobs now, so these are optional — and optional rather
+    // than deleted because `getElementById(...).classList` on a missing
+    // element throws, which would take the whole run down before it started.
+    agentBusy(true);
+    startAgentLog();
+}
+
+// The composer's own send/stop pair, driven by the run. Same control the chat
+// uses, because from the outside a long agent run and a long answer are the
+// same thing: something is happening and you may want it to stop.
+function agentBusy(busy) {
+    document.getElementById('send-btn')?.classList.toggle('hidden', busy);
+    document.getElementById('stop-btn')?.classList.toggle('hidden', !busy);
 }
 
 async function runAgentStream(url, payload) {
@@ -543,8 +608,8 @@ async function runAgentStream(url, payload) {
         agentStep('failed: ' + escHtml(e.message), 'denied');
     } finally {
         agentRunId = null;
-        document.getElementById('agent-run-btn').classList.remove('hidden');
-        document.getElementById('agent-stop-btn').classList.add('hidden');
+        agentBusy(false);
+        endAgentLog();
         // An agent run is the longest thing in the app and the least likely to
         // be watched all the way through. The status is in the toast, so a run
         // that ended in "needs input" is distinguishable from one that worked
@@ -557,8 +622,10 @@ async function runAgentStream(url, payload) {
     }
 }
 
-async function startAgentRun() {
-    const task = document.getElementById('agent-task').value.trim();
+// The task comes from the chat composer now. The dedicated box it used to
+// read is gone with the page that held it.
+async function startAgentRun(task) {
+    task = (task || '').trim();
     if (!task) return;
     prepareAgentPanes();
     await runAgentStream('/api/agent/run', {

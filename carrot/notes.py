@@ -107,7 +107,19 @@ def get_note(note_id: str):
 # LaTeX document somebody has not started writing yet.
 FORMAT_MARKDOWN = "markdown"
 FORMAT_LATEX = "latex"
-FORMATS = (FORMAT_MARKDOWN, FORMAT_LATEX)
+# A canvas and a slide deck are documents, not places. They live in the same
+# directory as everything else, are listed in the same sidebar, and are opened
+# by the same click — what differs is the editor that click lands you in, which
+# is a thing `format` already decided. The alternative was a tab each, and the
+# app does not need two more tabs.
+#
+# Their bodies are not prose. A canvas is JSON after the frontmatter; a deck is
+# markdown with `---` between slides. Both stay in `.md` files with the same
+# frontmatter so that every existing thing — listing, renaming, deleting, the
+# workspace file history — keeps working without being taught about them.
+FORMAT_CANVAS = "canvas"
+FORMAT_SLIDES = "slides"
+FORMATS = (FORMAT_MARKDOWN, FORMAT_LATEX, FORMAT_CANVAS, FORMAT_SLIDES)
 
 
 def normalize_format(value) -> str:

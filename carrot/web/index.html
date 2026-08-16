@@ -322,6 +322,12 @@
 
 <!-- ===== Top brand bar ===== -->
 <header id="menubar">
+  <!-- Collapse sits at the head of the column it collapses, which is where
+       every application that has one puts it. -->
+  <button id="nav-collapse" class="icon-btn" onclick="toggleNavCollapsed()"
+          title="Collapse the sidebar">
+    <svg class="ico"><use href="#i-more"/></svg>
+  </button>
   <div class="brand">
     <span class="brand-mark"><span class="logo-mask"></span></span>
     <span class="brand-name">CARROT</span>
@@ -346,10 +352,7 @@
         </div>
       </div>
     </div>
-    <button id="hub-btn" class="btn btn-ghost small" onclick="switchTab('hub')" title="Model Hub — models matched to your hardware">
-      <svg class="ico"><use href="#i-download"/></svg><span>Model Hub</span>
-    </button>
-    <span id="engine-status">
+        <span id="engine-status">
       <span id="engine-dot" class="dot"></span>
       <span id="engine-label">Connecting</span>
       <span class="engine-sep">·</span>
@@ -361,161 +364,170 @@
 <!-- ===== App body: left nav + views ===== -->
 <div id="app-body">
 <nav class="app-nav">
-  <button class="nav-item active" data-tab="dashboard" onclick="switchTab('dashboard')">
-    <svg class="ico"><use href="#i-grid"/></svg><span class="nav-label">Dashboard</span>
+  <!-- Four. Not four plus a drawer holding the other seventeen — a "More"
+       that opens 971px of links in a 652px column is the same twenty-one
+       destinations with a lid on. Everything below is reachable from inside
+       one of these, at the moment you actually want it:
+
+         Chat      conversations, Agent, deep research, search, artifacts
+         Work      documents, files, workspaces, maps, the things you owe
+         Code      the editor and its tree
+         Settings  extensions, memory, help, leaderboard, the model hub -->
+  <button class="nav-item active" data-tab="workspace" onclick="switchTab('workspace')">
+    <svg class="ico"><use href="#i-chat"/></svg><span class="nav-label">Chat</span>
   </button>
-  <button class="nav-item" data-tab="workspace" onclick="switchTab('workspace')">
-    <svg class="ico"><use href="#i-chat"/></svg><span class="nav-label">Conversations</span>
+  <button class="nav-item" data-tab="notes" onclick="switchTab('notes')">
+    <svg class="ico"><use href="#i-folder"/></svg><span class="nav-label">Work</span>
+    <span id="notification-badge" class="notif-badge hidden">0</span>
+  </button>
+  <button class="nav-item" data-tab="code" onclick="switchTab('code')">
+    <svg class="ico"><use href="#i-terminal"/></svg><span class="nav-label">Code</span>
   </button>
   <button class="nav-item" data-tab="settings" onclick="switchTab('settings')">
     <svg class="ico"><use href="#i-gear"/></svg><span class="nav-label">Settings</span>
   </button>
-  <div class="nav-divider"></div>
-  <button class="nav-more" onclick="toggleNavMore()">
-    <svg class="ico"><use href="#i-more"/></svg><span class="nav-label">More</span>
-    <svg class="ico chev nav-more-chev"><use href="#i-chevron"/></svg>
-  </button>
-  <div id="nav-more-list" class="nav-more-list hidden">
-    <!-- Eighteen destinations in one vertical wall meant reading all of
-         them to find one. Four groups, because the eye lands on a heading
-         and then scans four or five items instead of eighteen. -->
-    <div class="nav-group">Your work</div>
-    <button class="nav-item sub" data-tab="chats" onclick="switchTab('chats')"><svg class="ico"><use href="#i-chat"/></svg><span class="nav-label">Chats</span></button>
-    <button class="nav-item sub" data-tab="search" onclick="switchTab('search')"><svg class="ico"><use href="#i-search"/></svg><span class="nav-label">Search</span></button>
-    <button class="nav-item sub" data-tab="notes" onclick="switchTab('notes')"><svg class="ico"><use href="#i-note"/></svg><span class="nav-label">Notes</span></button>
-    <button class="nav-item sub" data-tab="files" onclick="switchTab('files')"><svg class="ico"><use href="#i-archive"/></svg><span class="nav-label">Your Files</span></button>
-    <button class="nav-item sub" data-tab="workspaces" onclick="switchTab('workspaces')"><svg class="ico"><use href="#i-folder"/></svg><span class="nav-label">Workspaces</span></button>
-    <button class="nav-item sub" data-tab="inbox" onclick="switchTab('inbox')"><svg class="ico"><use href="#i-inbox"/></svg><span class="nav-label">Inbox</span><span id="notification-badge" class="notif-badge hidden">0</span></button>
-    <div class="nav-group">Tools</div>
-    <button class="nav-item sub" data-tab="code" onclick="switchTab('code')"><svg class="ico"><use href="#i-terminal"/></svg><span class="nav-label">Code</span></button>
-    <button class="nav-item sub" data-tab="agent" onclick="switchTab('agent')"><svg class="ico"><use href="#i-robot"/></svg><span class="nav-label">Agent</span></button>
-    <button class="nav-item sub" data-tab="research" onclick="switchTab('research')"><svg class="ico"><use href="#i-flask"/></svg><span class="nav-label">Research</span></button>
-    <!-- Hidden until the Ambient Recall pack is switched on; see applyExtensionTabs. -->
-    <button class="nav-item sub" data-tab="ambient" onclick="switchTab('ambient')"><svg class="ico"><use href="#i-eye"/></svg><span class="nav-label">Ambient</span></button>
-    <button class="nav-item sub" data-tab="latex" onclick="switchTab('latex')"><svg class="ico"><use href="#i-doc"/></svg><span class="nav-label">LaTeX</span></button>
-    <div class="nav-group">Planning</div>
-    <button class="nav-item sub" data-tab="planner" onclick="switchTab('planner')"><svg class="ico"><use href="#i-cap"/></svg><span class="nav-label">Planner</span></button>
-    <button class="nav-item sub" data-tab="goals" onclick="switchTab('goals')"><svg class="ico"><use href="#i-target"/></svg><span class="nav-label">Goals</span></button>
-    <button class="nav-item sub" data-tab="reminders" onclick="switchTab('reminders')"><svg class="ico"><use href="#i-bell"/></svg><span class="nav-label">Reminders</span></button>
-    <button class="nav-item sub" data-tab="assignments" onclick="switchTab('assignments')"><svg class="ico"><use href="#i-clipboard"/></svg><span class="nav-label">Assignments</span></button>
-    <div class="nav-group">System</div>
-    <button class="nav-item sub" data-tab="hub" onclick="switchTab('hub')"><svg class="ico"><use href="#i-download"/></svg><span class="nav-label">Model Hub</span></button>
-    <button class="nav-item sub" data-tab="extensions" onclick="switchTab('extensions')"><svg class="ico"><use href="#i-puzzle"/></svg><span class="nav-label">Extensions</span></button>
-    <button class="nav-item sub" data-tab="memory" onclick="switchTab('memory')"><svg class="ico"><use href="#i-brain"/></svg><span class="nav-label">Memory</span></button>
-    <button class="nav-item sub" data-tab="leaderboard" onclick="switchTab('leaderboard')"><svg class="ico"><use href="#i-trophy"/></svg><span class="nav-label">Leaderboard</span></button>
-    <button class="nav-item sub" data-tab="help" onclick="switchTab('help')"><svg class="ico"><use href="#i-help"/></svg><span class="nav-label">Help</span></button>
-  </div>
 </nav>
 
 <!-- ===== Views ===== -->
 <main id="views">
 
   <!-- Dashboard -->
-  <section id="view-dashboard" class="view active">
-    <div id="dash-main">
-      <div class="dash-head">
-        <div>
-          <h1 id="dash-greeting">Good day.</h1>
-          <p class="dash-sub" id="dash-sub">Here's your workspace overview.</p>
-        </div>
-        <div class="dash-date" id="dash-date"></div>
-      </div>
-      <div id="dash-canvas">
-        <div class="empty-widget" id="canvas-empty">
-          <span class="logo-mask big"></span>
-          <p>No widgets yet — add your first widget.</p>
-          <button class="btn btn-primary" onclick="openCatalog()">Add widget</button>
-        </div>
-      </div>
-    </div>
-    <aside id="dash-rail">
-      <div class="empty-widget rail-empty" id="rail-empty">
-        <p>Rail is empty.</p>
-        <button class="btn btn-ghost" onclick="openCatalog()">Add widget</button>
-      </div>
-    </aside>
-    <button class="fab" id="add-widget-fab" title="Add widget" onclick="openCatalog()">
-      <svg class="ico"><use href="#i-plus"/></svg><span>Add widget</span>
-    </button>
-  </section>
+  <!-- Dashboard is gone. It was a page of widgets nobody chose, in front of
+       the thing people open the app to do. Conversations is the landing
+       page now. -->
 
-  <!-- Workspace -->
-  <section id="view-workspace" class="view">
-    <aside id="ws-left">
-      <div class="card" data-panel="recap">
-        <div class="card-head">
-          <span class="card-ico"><svg class="ico"><use href="#i-news"/></svg></span>
-          <span class="card-title">Morning Recap</span>
-          <!-- Two, because they answer different questions. "For you" reads
-               what you have been asking about and researches that; "General"
-               is the old fixed-feed briefing, which is still the right answer
-               on a fresh install with no history to read. The server falls
-               back to the second on its own when there is nothing recurring,
-               so this is a preference rather than a prerequisite. -->
-          <button class="card-action" onclick="runInterestRecap()">For you</button>
-          <button class="card-action" onclick="runRecap()">General</button>
-        </div>
-        <div class="card-body" id="card-recap"><div class="empty">No recap yet. &ldquo;For you&rdquo; builds one from what you have been asking about lately, with citations.</div></div>
-      </div>
-      <div class="card" data-panel="deadlines">
-        <div class="card-head">
-          <span class="card-ico"><svg class="ico"><use href="#i-cap"/></svg></span>
-          <span class="card-title">Deadlines</span>
-          <span class="card-badge hidden" id="deadline-badge"></span>
-        </div>
-        <div class="card-body" id="card-deadlines"><div class="empty">Nothing due. Add reminders to see them here.</div></div>
-      </div>
-      <div class="card" data-panel="milestones">
-        <div class="card-head">
-          <span class="card-ico"><svg class="ico"><use href="#i-pulse"/></svg></span>
-          <span class="card-title">Milestones</span>
-          <button class="card-action" onclick="switchTab('goals')">All</button>
-        </div>
-        <div class="card-body" id="card-milestones"><div class="empty">No goals yet.</div></div>
-      </div>
-      <!-- "Local Engine" named the implementation, not the thing you wanted to
-           know. What this panel actually answers is "what is running, and
-           where" — and after the counts were added it stopped being about the
-           engine at all. -->
-      <div class="card" data-panel="engine">
-        <div class="card-head">
-          <span class="card-ico"><svg class="ico"><use href="#i-chip"/></svg></span>
-          <span class="card-title">This machine</span>
-        </div>
-        <div class="card-body" id="card-engine"><div class="empty">Checking…</div></div>
-      </div>
-    </aside>
+  <section id="view-workspace" class="view active">
+    <!-- The rail is gone with its Panels control. Four cards nobody chose —
+         a recap, deadlines, milestones, machine stats — down the side of the
+         page you open most. Everything they showed has a home of its own. -->
 
     <div id="ws-center">
       <div id="ws-tabstrip">
+        <!-- History, in the corner. Everything you have said and everything
+             the agent has run, in one list, told apart by a chip rather than
+             by being in two different places. Code keeps its own — what you
+             asked in a conversation and what an agent did to your files are
+             different kinds of record, and mixing them makes both harder to
+             search. -->
+        <div id="history-menu">
+          <button id="history-btn" onclick="toggleHistoryMenu()" title="Chat and agent history">
+            <svg class="ico"><use href="#i-clock"/></svg>
+          </button>
+          <div id="history-pop" class="hidden">
+            <div class="pop-section">History</div>
+            <div class="history-filters">
+              <button class="history-chip active" data-kind="all" onclick="setHistoryFilter('all')">All</button>
+              <button class="history-chip chip-chat" data-kind="chat" onclick="setHistoryFilter('chat')">Chat</button>
+              <button class="history-chip chip-agent" data-kind="agent" onclick="setHistoryFilter('agent')">Agent</button>
+            </div>
+            <div id="history-list" class="history-list"></div>
+          </div>
+        </div>
         <div class="ws-tab active">
           <span class="logo-mask sm"></span>
           <span id="chat-title">New session</span>
         </div>
         <button class="ws-tab-action" title="New chat" onclick="newChat()"><svg class="ico"><use href="#i-plus"/></svg></button>
-        <!-- Four panels nobody chose, on the page you open most. A morning
-             recap and a deadline list are useful to some people and pure noise
-             to others, and the home page is the worst place to guess.
-             The control lives here rather than in the rail because switching
-             the last panel off removes the rail entirely — a 320px column
-             holding nothing but its own settings button is worse than no
-             column. Here it is reachable whether or not there is a rail. -->
-        <div id="rail-menu">
-          <button id="rail-btn" onclick="toggleRailMenu()" title="Choose which panels show beside the conversation">
-            <svg class="ico"><use href="#i-gear"/></svg>
-            <span>Panels</span>
-          </button>
-          <div id="rail-pop" class="hidden">
-            <div class="pop-section">Show beside the conversation</div>
-            <div id="rail-pop-list"></div>
+        <!-- Chat and Agent are two ways of using the same conversation, not two
+             places. Agent was its own tab, which made "ask about this" and "go
+             and do this" feel like different applications rather than the same
+             one with the leash on or off. -->
+        <details id="agent-settings" class="agent-settings">
+        <summary class="agent-settings-summary">
+          <svg class="ico"><use href="#i-shield"/></svg>
+          <span>Agent settings</span>
+          <span class="agent-settings-hint">sites, credentials, limits</span>
+        </summary>
+        <div class="agent-settings-body">
+            <div class="agent-run-opts">
+              <label class="inline-check"><span>Where it may work</span>
+                <select id="agent-surface">
+                  <option value="browser" selected>Browser only</option>
+                  <option value="desktop">Desktop only</option>
+                  <option value="both">Browser and desktop</option>
+                </select></label>
+              <label class="inline-check">
+                <input type="checkbox" id="agent-approve-plan" checked>
+                Approve the plan before it starts</label>
+            </div>
+
+<div class="ext-section">
+        <div class="ext-head"><h3>What Carrot may touch</h3></div>
+        <p class="muted small">
+          Nothing here is on by default. The agent asks before visiting a site that is not listed,
+          and refuses outright to type a stored credential into one that is not.
+        </p>
+
+        <div class="policy-grid">
+          <div class="policy-card">
+            <h4>Allowed sites</h4>
+            <div class="composer inline">
+              <input type="text" id="policy-domain" placeholder="canvas.university.edu or *.university.edu">
+              <button class="btn btn-ghost" onclick="addAllowedDomain()">Allow</button>
+            </div>
+            <div id="policy-domains" class="chips"></div>
+          </div>
+
+          <div class="policy-card">
+            <h4>Stored credentials</h4>
+            <p class="muted small">
+              Carrot types these into sites you have allowed. The model never sees the value —
+              not in its context, not in the log.
+            </p>
+            <div class="composer inline">
+              <input type="text" id="policy-secret-name" placeholder="name, e.g. canvas">
+              <input type="password" id="policy-secret-value" placeholder="value">
+              <button class="btn btn-ghost" onclick="addSecret()">Store</button>
+            </div>
+            <div id="policy-secrets" class="chips"></div>
+          </div>
+
+          <div class="policy-card">
+            <h4>Limits</h4>
+            <div id="policy-budget" class="muted small"></div>
+            <label class="inline-check">
+              <input type="checkbox" id="policy-desktop-control" onchange="setPolicyFlag('agent_desktop_control_enabled', this.checked)">
+              Let Carrot control the mouse and keyboard directly
+            </label>
+            <label class="inline-check">
+              <input type="checkbox" id="policy-critical" onchange="setPolicyFlag('agent_allow_critical_actions', this.checked)">
+              Allow high-consequence actions (payments, deletions) with a typed confirmation
+            </label>
           </div>
         </div>
       </div>
-      <div id="chat-messages">
-        <div class="chat-empty" id="chat-empty">
-          <span class="logo-mask big"></span>
-          <p id="chat-empty-line">Ask anything below.</p>
         </div>
+      </details>
+        <div id="chat-mode-switch" class="mode-switch" role="group" aria-label="How Carrot works on this">
+          <button class="mode-opt on" id="chat-mode-chat" onclick="setChatMode('chat')"
+                  title="Ask, discuss, get answers">Chat</button>
+          <button class="mode-opt" id="chat-mode-agent" onclick="setChatMode('agent')"
+                  title="Give Carrot a task and let it work">Agent</button>
+        </div>
+        <!-- The Panels control and its rail are gone. Four panels nobody
+             chose, on the page you open most, plus a settings button for
+             them in the strip above the conversation. -->
+      </div>
+      <div id="chat-messages">
+        <!-- One question, at the size of a question. The logo and the line
+             telling you the box below is a box were decoration in front of an
+             empty room; what belongs here is the prompt itself, with the
+             composer directly under it rather than parked at the bottom of a
+             screen with nothing in between. -->
+        <div class="chat-empty" id="chat-empty">
+          <h1 class="chat-empty-title">Where should we begin?</h1>
+          <p id="chat-empty-line" class="chat-empty-note"></p>
+        </div>
+        <!-- The agent's work, in the conversation. It had its own page with
+             its own task box; ChatGPT's does not, and that is right — you ask
+             in the same place you ask for everything else and watch it happen
+             in the thread. These keep their ids so every function that fills
+             them still does. -->
+        <div id="agent-availability" class="notice hidden"></div>
+        <div id="agent-plan" class="agent-plan hidden"></div>
+        <div id="agent-steps" class="agent-steps"></div>
+        <div id="agent-result" class="agent-result hidden"></div>
+        <div id="agent-runs" class="hidden"></div>
       </div>
       <!-- Collapsed to start. A terminal open by default takes 190px off the
            conversation for a tool most turns never touch, and it made the
@@ -563,18 +575,22 @@
     </div>
   </section>
 
-  <!-- Notes -->
+  <!-- Write -->
   <section id="view-notes" class="view">
+    <!-- No document list down the side.
+         A permanent sidebar of every document is a column of "Bin day" that is
+         wrong for the two things people actually do: starting something, and
+         going back to one of the handful they were last in. Both belong on the
+         screen you land on, which is where the browser is — with a search and
+         filters, because that is what you need when the handful is not enough.
+         Editing is then the whole width. -->
     <div class="split">
-      <aside class="split-side">
-        <div class="split-side-head">
-          <input type="text" id="notes-filter" placeholder="Filter notes" oninput="filterNotesList()">
-          <button class="icon-btn" title="New note" onclick="newNote()"><svg class="ico"><use href="#i-plus"/></svg></button>
-        </div>
-        <div id="notes-list" class="side-list"></div>
-      </aside>
       <div class="split-main">
         <div class="editor-toolbar" id="note-toolbar">
+          <!-- The way back, now that there is no list down the side. First in
+               the toolbar, in the same place in every format. -->
+          <button class="icon-btn write-back" title="All documents" onclick="showWriteStart()">
+            <svg class="ico"><use href="#i-grid"/></svg></button>
           <input type="text" id="note-title" class="title-input" placeholder="Untitled note" oninput="scheduleNoteSave()">
           <span id="note-status" class="editor-status"></span>
           <span id="note-words" class="editor-words"></span>
@@ -589,19 +605,199 @@
         <div id="doc-refs" class="doc-refs hidden"></div>
         <div id="note-editor-host" class="milkdown-host"></div>
         <textarea id="note-fallback" class="note-fallback hidden" placeholder="Write your note…" oninput="scheduleNoteSave()"></textarea>
+        <!-- Canvas. An endless surface; the navigator on the right is how you
+             find your way back to anything you named. -->
+        <div id="canvas-pane" class="canvas-pane hidden">
+          <div class="editor-toolbar">
+            <button class="icon-btn write-back" title="All documents" onclick="showWriteStart()">
+            <svg class="ico"><use href="#i-grid"/></svg></button>
+          <input type="text" id="canvas-title" class="title-input" placeholder="Untitled canvas"
+                   oninput="scheduleCanvasSave()">
+            <span id="canvas-status" class="editor-status"></span>
+            <span id="canvas-zoom" class="editor-words">100%</span>
+            <button class="btn btn-ghost" onclick="fitCanvasToContent()">Fit</button>
+            <button class="btn btn-ghost" onclick="deleteCurrentNote()">Delete</button>
+          </div>
+          <!-- The navigator that used to live here is now the shared rail on
+               the right, beside the outline and the backlinks — every format
+               answers "where am I" in the same place. -->
+          <div class="canvas-body">
+            <!-- Excalidraw mounts here. It brings its own toolbar, panning,
+                 zoom and undo, so the surface has nothing of ours on it. -->
+            <div id="canvas-stage" class="canvas-stage"></div>
+          </div>
+        </div>
+
+        <!-- Slides. Markdown on the left, the current slide on the right,
+             the deck along the bottom. -->
+        <div id="slides-pane" class="slides-pane hidden">
+          <div class="editor-toolbar">
+            <button class="icon-btn write-back" title="All documents" onclick="showWriteStart()">
+            <svg class="ico"><use href="#i-grid"/></svg></button>
+          <input type="text" id="slides-title" class="title-input" placeholder="Untitled deck"
+                   oninput="scheduleSlidesSave()">
+            <span id="slides-status" class="editor-status"></span>
+            <span id="slides-count" class="editor-words"></span>
+            <button class="btn btn-ghost" onclick="addSlide()">Add slide</button>
+            <button class="btn btn-primary" onclick="presentDeck()">Present</button>
+            <button class="btn btn-ghost" onclick="deleteCurrentNote()">Delete</button>
+          </div>
+          <div class="slides-body">
+            <textarea id="slides-source" class="slides-source" spellcheck="false"
+                      placeholder="# Title&#10;&#10;---&#10;&#10;## Next slide"></textarea>
+            <div id="slides-preview" class="slides-preview"></div>
+          </div>
+          <div id="slides-film" class="slides-film"></div>
+        </div>
+        <!-- LaTeX. Was its own tab, which meant opening a paper from the
+             document list threw you somewhere with no document list. It is a
+             format, so it is a pane. -->
+        <div id="latex-pane" class="latex-pane hidden">
+          <div class="editor-toolbar">
+            <button class="icon-btn write-back" title="All documents" onclick="showWriteStart()">
+              <svg class="ico"><use href="#i-grid"/></svg></button>
+            <input type="text" id="latex-title" class="title-input" placeholder="Untitled document"
+                   spellcheck="false">
+            <div class="mode-switch" role="group" aria-label="Editing mode">
+              <button class="mode-opt" id="latex-mode-split" onclick="setLatexMode('split')"
+                      title="Source and rendered output side by side">Split</button>
+              <button class="mode-opt" id="latex-mode-lite" onclick="setLatexMode('lite')"
+                      title="Just the rendered document">Reading</button>
+            </div>
+            <span class="spacer"></span>
+            <input type="file" id="latex-image-input" accept="image/*" hidden
+                   onchange="insertLatexImage(this.files[0]); this.value=''">
+            <button class="btn btn-ghost" onclick="pickLatexImage()"
+                    title="Insert a figure — or just paste or drop one into the text">Image</button>
+            <button class="btn btn-ghost" id="latex-ai-btn" onclick="editSelectionWithAI()"
+                    title="Rewrite exactly what you have selected">Edit with AI</button>
+            <button class="btn btn-ghost" onclick="exportLatex('md')">.md</button>
+            <button class="btn btn-ghost" onclick="exportLatex('html')">.html</button>
+            <button class="btn btn-ghost" onclick="exportLatex('txt')">.txt</button>
+            <button class="btn btn-primary" onclick="saveLatexDocSmart()">Save</button>
+          </div>
+          <div class="latex-panes" id="latex-panes">
+            <textarea id="latex-source" class="latex-source" spellcheck="false"
+                      placeholder="Write. $e^{i\pi} + 1 = 0$ inline, or $$…$$ on its own line."
+                      oninput="latexChanged()" onselect="latexSelectionChanged()"></textarea>
+            <div id="latex-preview" class="latex-preview md"></div>
+          </div>
+          <div id="latex-ai-bar" class="latex-ai-bar hidden"></div>
+        </div>
+
+        <!-- Graph. Not a document but a way of reading the document list, so
+             it takes the main pane and leaves the list where it is. -->
+        <div id="graph-pane" class="graph-pane hidden">
+          <div class="editor-toolbar">
+            <button class="icon-btn write-back" title="All documents" onclick="showWriteStart()">
+              <svg class="ico"><use href="#i-grid"/></svg></button>
+            <input type="text" id="graph-filter" class="graph-filter"
+                   placeholder="Highlight documents…" oninput="filterGraph(this.value)">
+            <span class="graph-legend">
+              <span class="graph-key graph-key-doc"></span> document
+              <span class="graph-key graph-key-ghost"></span> mentioned, not written
+            </span>
+            <span class="spacer"></span>
+            <button class="btn btn-ghost" onclick="resetGraphView()">Reset view</button>
+            <button class="btn btn-ghost" onclick="loadGraphTab()">Rebuild</button>
+          </div>
+          <div class="graph-stage">
+            <canvas id="graph-canvas"></canvas>
+            <div id="graph-empty" class="graph-empty hidden">
+              Nothing is linked yet. Type <code>[[</code> in a document to link it to another,
+              and the shape of what you have written shows up here.
+            </div>
+          </div>
+        </div>
+
         <!-- The start screen. Not an empty-state sentence telling you to pick
-             something from a list: the two things you can start are the first
+             something from a list: the things you can start are the first
              thing on the page, and what you were working on is under them. -->
         <div id="write-start" class="write-start hidden">
           <div class="write-start-head">Start a new document</div>
           <div id="write-start-cards" class="write-start-cards"></div>
+
+          <!-- The rest of Work. Files, workspaces and the things you owe are
+               not documents you start, so they are not cards above — but they
+               are the other half of what this tab is for, and with the sidebar
+               gone this is the only way in to any of them. -->
+          <div class="work-shortcuts">
+            <button class="work-shortcut" onclick="switchTab('files')">
+              <svg class="ico"><use href="#i-archive"/></svg><span>Files</span></button>
+            <button class="work-shortcut" onclick="switchTab('workspaces')">
+              <svg class="ico"><use href="#i-folder"/></svg><span>Workspaces</span></button>
+            <button class="work-shortcut" onclick="toggleGraphPane()">
+              <svg class="ico"><use href="#i-branch"/></svg><span>Maps</span></button>
+            <button class="work-shortcut" onclick="switchTab('inbox')">
+              <svg class="ico"><use href="#i-inbox"/></svg><span>Inbox</span></button>
+            <button class="work-shortcut" onclick="switchTab('goals')">
+              <svg class="ico"><use href="#i-target"/></svg><span>Goals</span></button>
+            <button class="work-shortcut" onclick="switchTab('reminders')">
+              <svg class="ico"><use href="#i-bell"/></svg><span>Reminders</span></button>
+            <button class="work-shortcut" onclick="switchTab('assignments')">
+              <svg class="ico"><use href="#i-clipboard"/></svg><span>Assignments</span></button>
+            <!-- Hidden with its pack, like the tab it replaced. -->
+            <button class="work-shortcut" data-tab="planner" onclick="switchTab('planner')">
+              <svg class="ico"><use href="#i-cap"/></svg><span>Planner</span></button>
+          </div>
+
           <div class="write-start-head write-start-recents-head">
-            <span>Recent documents</span>
+            <span id="write-browse-label">Recent documents</span>
+            <div class="write-browse-tools">
+              <input type="text" id="notes-filter" class="write-search"
+                     placeholder="Search documents" oninput="filterNotesList()">
+              <select id="write-filter-type" class="write-filter" onchange="filterNotesList()"
+                      title="Kind of document">
+                <option value="">Any kind</option>
+                <option value="markdown">Document</option>
+                <option value="latex">LaTeX</option>
+                <option value="canvas">Canvas</option>
+                <option value="slides">Slides</option>
+              </select>
+              <select id="write-filter-date" class="write-filter" onchange="filterNotesList()"
+                      title="When it was last touched">
+                <option value="">Any time</option>
+                <option value="1">Today</option>
+                <option value="7">Last 7 days</option>
+                <option value="30">Last 30 days</option>
+                <option value="365">Last year</option>
+              </select>
+              <select id="write-filter-workspace" class="write-filter" onchange="filterNotesList()"
+                      title="Which workspace it belongs to"></select>
+              <!-- The graph is the same documents arranged by their links, so
+                   it is a way of viewing this list rather than a place of its
+                   own — the same relationship grid and list have in Docs. -->
+              <button class="icon-btn" id="graph-toggle" title="See how these documents link to each other"
+                      onclick="toggleGraphPane()"><svg class="ico"><use href="#i-branch"/></svg></button>
+            </div>
           </div>
           <div id="write-start-recents" class="write-start-recents"></div>
+          <div id="write-browse-empty" class="write-browse-empty hidden"></div>
         </div>
-        <div id="note-empty" class="editor-empty hidden">Select a note on the left, or create a new one.</div>
+        <div id="note-empty" class="editor-empty hidden">Select a document on the left, or create a new one.</div>
       </div>
+
+      <!-- The rail. One place, per-format contents: what links here for prose,
+           the section outline for LaTeX, the named boxes for a canvas. Three
+           panels that answered the same question in three different corners of
+           the app are now one column that never moves. -->
+      <aside id="doc-rail" class="doc-rail hidden">
+        <div id="rail-backlinks" class="rail-section hidden">
+          <div class="rail-head">Linked from</div>
+          <div id="note-backlinks" class="note-backlinks"></div>
+        </div>
+        <div id="rail-outline" class="rail-section hidden">
+          <div class="rail-head">Outline</div>
+          <div id="latex-outline" class="side-list"></div>
+          <div id="latex-stats" class="latex-stats"></div>
+        </div>
+        <div id="rail-canvas" class="rail-section hidden">
+          <div class="rail-head">Navigator</div>
+          <input type="text" id="canvas-nav-filter" class="canvas-nav-filter"
+                 placeholder="Find a box" oninput="filterCanvasNav()">
+          <div id="canvas-nav-list" class="canvas-nav-list"></div>
+        </div>
+      </aside>
     </div>
   </section>
 
@@ -769,53 +965,9 @@
   </section>
 
   <!-- Planner -->
-  <!-- LaTeX Notes, from the pack of the same name. Source and result at once,
-       because checking a formula against what it renders to is the whole loop
-       of writing one, and an outline because a paper is navigated by section
-       rather than by scrollbar. -->
-  <section id="view-latex" class="view">
-    <div class="split">
-      <aside class="split-side latex-outline-side">
-        <div class="split-side-head">
-          <span class="side-label">Outline</span>
-          <button class="icon-btn" title="New document" onclick="newLatexDoc()">
-            <svg class="ico"><use href="#i-plus"/></svg></button>
-        </div>
-        <div id="latex-outline" class="side-list"></div>
-        <div id="latex-stats" class="latex-stats"></div>
-      </aside>
-      <div class="split-main">
-        <div class="editor-toolbar">
-          <input type="text" id="latex-title" class="title-input" placeholder="Untitled document"
-                 spellcheck="false">
-          <div class="mode-switch" role="group" aria-label="Editing mode">
-            <button class="mode-opt" id="latex-mode-split" onclick="setLatexMode('split')"
-                    title="Source and rendered output side by side">Split</button>
-            <button class="mode-opt" id="latex-mode-lite" onclick="setLatexMode('lite')"
-                    title="Just the rendered document">Reading</button>
-          </div>
-          <span class="spacer"></span>
-          <input type="file" id="latex-image-input" accept="image/*" hidden
-                 onchange="insertLatexImage(this.files[0]); this.value=''">
-          <button class="btn btn-ghost" onclick="pickLatexImage()"
-                  title="Insert a figure — or just paste or drop one into the text">Image</button>
-          <button class="btn btn-ghost" id="latex-ai-btn" onclick="editSelectionWithAI()"
-                  title="Rewrite exactly what you have selected">Edit with AI</button>
-          <button class="btn btn-ghost" onclick="exportLatex('md')">.md</button>
-          <button class="btn btn-ghost" onclick="exportLatex('html')">.html</button>
-          <button class="btn btn-ghost" onclick="exportLatex('txt')">.txt</button>
-          <button class="btn btn-primary" onclick="saveLatexDocSmart()">Save</button>
-        </div>
-        <div class="latex-panes" id="latex-panes">
-          <textarea id="latex-source" class="latex-source" spellcheck="false"
-                    placeholder="Write. $e^{i\pi} + 1 = 0$ inline, or $$…$$ on its own line."
-                    oninput="latexChanged()" onselect="latexSelectionChanged()"></textarea>
-          <div id="latex-preview" class="latex-preview md"></div>
-        </div>
-        <div id="latex-ai-bar" class="latex-ai-bar hidden"></div>
-      </div>
-    </div>
-  </section>
+  <!-- LaTeX Notes used to be a section here. It is a document format, so it
+       is now a pane inside Write alongside prose, canvas and slides. -->
+
 
   <section id="view-planner" class="view">
     <div class="page">
@@ -1079,7 +1231,9 @@
   <!-- Help -->
   <section id="view-help" class="view">
     <div class="page">
-      <div class="page-head"><h2>Help</h2></div>
+      <div class="page-head"><h2>Help</h2>
+        <button class="btn btn-ghost" onclick="backToSettings()"
+                title="Back to Settings">Back to Settings</button></div>
 
       <div class="tutorial" id="tutorial">
         <div class="tutorial-head">
@@ -1155,98 +1309,17 @@
   </section>
 
   <!-- Carrot Agent -->
-  <section id="view-agent" class="view">
-    <div class="page">
-      <div class="page-head"><h2>Agent</h2></div>
-      <p class="muted">
-        Give Carrot a task and it will carry it out in a real browser — finding a page, filling a form,
-        pulling up your assignments. It shows you its plan before it starts, asks before anything that
-        cannot be undone, and stops the moment you tell it to.
-      </p>
-
-      <div id="agent-availability" class="notice hidden"></div>
-
-      <div class="composer">
-        <textarea id="agent-task" rows="3"
-                  placeholder="What should Carrot do? e.g. &quot;Open my CS 3110 Canvas page, find assignment 4, and tell me what it asks for and when it's due&quot;"></textarea>
-        <div class="row">
-          <select id="agent-surface">
-            <option value="browser" selected>Browser only</option>
-            <option value="desktop">Desktop only</option>
-            <option value="both">Browser and desktop</option>
-          </select>
-          <label class="inline-check">
-            <input type="checkbox" id="agent-approve-plan" checked>
-            Approve the plan before it starts
-          </label>
-          <button class="btn btn-primary" id="agent-run-btn" onclick="startAgentRun()">Run task</button>
-          <button class="btn btn-danger hidden" id="agent-stop-btn" onclick="stopAgentRun()">Stop</button>
-        </div>
-      </div>
-
-      <div id="agent-plan" class="agent-plan hidden"></div>
-      <div id="agent-steps" class="agent-steps"></div>
-      <div id="agent-result" class="agent-result hidden"></div>
-
-      <div class="ext-section">
-        <div class="ext-head"><h3>What Carrot may touch</h3></div>
-        <p class="muted small">
-          Nothing here is on by default. The agent asks before visiting a site that is not listed,
-          and refuses outright to type a stored credential into one that is not.
-        </p>
-
-        <div class="policy-grid">
-          <div class="policy-card">
-            <h4>Allowed sites</h4>
-            <div class="composer inline">
-              <input type="text" id="policy-domain" placeholder="canvas.university.edu or *.university.edu">
-              <button class="btn btn-ghost" onclick="addAllowedDomain()">Allow</button>
-            </div>
-            <div id="policy-domains" class="chips"></div>
-          </div>
-
-          <div class="policy-card">
-            <h4>Stored credentials</h4>
-            <p class="muted small">
-              Carrot types these into sites you have allowed. The model never sees the value —
-              not in its context, not in the log.
-            </p>
-            <div class="composer inline">
-              <input type="text" id="policy-secret-name" placeholder="name, e.g. canvas">
-              <input type="password" id="policy-secret-value" placeholder="value">
-              <button class="btn btn-ghost" onclick="addSecret()">Store</button>
-            </div>
-            <div id="policy-secrets" class="chips"></div>
-          </div>
-
-          <div class="policy-card">
-            <h4>Limits</h4>
-            <div id="policy-budget" class="muted small"></div>
-            <label class="inline-check">
-              <input type="checkbox" id="policy-desktop-control" onchange="setPolicyFlag('agent_desktop_control_enabled', this.checked)">
-              Let Carrot control the mouse and keyboard directly
-            </label>
-            <label class="inline-check">
-              <input type="checkbox" id="policy-critical" onchange="setPolicyFlag('agent_allow_critical_actions', this.checked)">
-              Allow high-consequence actions (payments, deletions) with a typed confirmation
-            </label>
-          </div>
-        </div>
-      </div>
-
-      <div class="ext-section">
-        <div class="ext-head"><h3>Past runs</h3></div>
-        <p class="muted small">Every action the agent took, what the policy decided, and what came back.</p>
-        <div id="agent-runs" class="list"></div>
-      </div>
-    </div>
-  </section>
-
+  <!-- Agent used to be a section here. It is a mode of a conversation now;
+       its pane lives inside the Chat tab. -->
   <section id="view-hub" class="view">
     <div class="page">
       <div class="page-head">
         <h2>Model Hub</h2>
         <div class="row">
+          <!-- Opened from the model picker and closed back to wherever you
+               were. It is somewhere you visit to answer one question, not a
+               place in the sidebar you have to walk past every day. -->
+          <button class="btn btn-ghost" onclick="closeModelHub()" title="Back to what you were doing">Close</button>
           <button class="btn btn-ghost" onclick="refreshHubCatalog()" title="Re-fetch the daily catalog now">Refresh catalog</button>
           <a id="hub-site-link" class="btn btn-primary" href="#" target="_blank" rel="noopener">Browse on Hugging Face ↗</a>
         </div>
@@ -1292,7 +1365,9 @@
 
   <section id="view-extensions" class="view">
     <div class="page">
-      <div class="page-head"><h2>Extensions</h2></div>
+      <div class="page-head"><h2>Extensions</h2>
+        <button class="btn btn-ghost" onclick="backToSettings()"
+                title="Back to Settings">Back to Settings</button></div>
       <p class="muted">Customize Carrot with reusable skills and external tools over MCP.</p>
 
       <div class="ext-section">
@@ -1353,7 +1428,9 @@
   <!-- Leaderboard -->
   <section id="view-leaderboard" class="view">
     <div class="page">
-      <div class="page-head"><h2>Leaderboard</h2></div>
+      <div class="page-head"><h2>Leaderboard</h2>
+        <button class="btn btn-ghost" onclick="backToSettings()"
+                title="Back to Settings">Back to Settings</button></div>
       <p class="muted">Crowd-sourced hardware and model directory. Find the best setup for your machine.</p>
       <div class="stat-grid">
         <div class="card stat-card" id="lb-total"></div>
@@ -1387,7 +1464,9 @@
   <!-- Memory — what Carrot believes about you, and where it learned it -->
   <section id="view-memory" class="view">
     <div class="page">
-      <div class="page-head"><h2>Memory</h2></div>
+      <div class="page-head"><h2>Memory</h2>
+        <button class="btn btn-ghost" onclick="backToSettings()"
+                title="Back to Settings">Back to Settings</button></div>
       <p class="muted">
         What Carrot has learned about you from your conversations. Every entry links back to
         the message it came from and says where it was learned — edit anything that's wrong,
@@ -1471,6 +1550,33 @@
   <section id="view-settings" class="view">
     <div class="page">
       <div class="page-head"><h2>Settings</h2></div>
+
+      <!-- Four tabs that were four entries in a sidebar nobody could
+           read. They are still whole pages — they are just reached from
+           the place you go when you want to change something, and they
+           come back here when you are done. -->
+      <div class="settings-links">
+        <button class="settings-link" onclick="openSettingsPage('extensions')">
+          <svg class="ico"><use href="#i-puzzle"/></svg>
+          <span class="settings-link-title">Extensions</span>
+          <span class="settings-link-sub">Skills and MCP tools</span>
+        </button>
+        <button class="settings-link" onclick="openSettingsPage('memory')">
+          <svg class="ico"><use href="#i-brain"/></svg>
+          <span class="settings-link-title">Memory</span>
+          <span class="settings-link-sub">What Carrot has learned about you</span>
+        </button>
+        <button class="settings-link" onclick="openSettingsPage('leaderboard')">
+          <svg class="ico"><use href="#i-trophy"/></svg>
+          <span class="settings-link-title">Leaderboard</span>
+          <span class="settings-link-sub">Hardware and model directory</span>
+        </button>
+        <button class="settings-link" onclick="openSettingsPage('help')">
+          <svg class="ico"><use href="#i-help"/></svg>
+          <span class="settings-link-title">Help</span>
+          <span class="settings-link-sub">Getting started and shortcuts</span>
+        </button>
+      </div>
 
       <!-- The optional parts, installable without a terminal. Carrot is
            already running in the interpreter that needs them, so it can put
@@ -1980,6 +2086,40 @@
         <svg class="ico"><use href="#i-plus"/></svg>
       </button>
       <div id="tool-pop" class="hidden">
+        <!-- What you reach for mid-question, above the settings you touch
+             once. Upload, deep research and artifacts are things you add to
+             the turn you are writing; web search is how much of the internet
+             that turn is allowed to see. -->
+        <button class="tool-item" onclick="document.getElementById('attach-input').click(); closeToolMenu()">
+          <svg class="ico"><use href="#i-paperclip"/></svg>
+          <span>Upload a file</span>
+          <span class="tool-sub">a document, an image, a spreadsheet</span>
+        </button>
+        <button class="tool-item" onclick="startDeepResearch(); closeToolMenu()">
+          <svg class="ico"><use href="#i-flask"/></svg>
+          <span>Deep research</span>
+          <span class="tool-sub">go and read, then report back with sources</span>
+        </button>
+        <button class="tool-item" id="artifact-item" onclick="toggleArtifactMode()">
+          <svg class="ico"><use href="#i-palette"/></svg>
+          <span>Artifact</span>
+          <span class="tool-sub" id="artifact-sub">build something you can open and use</span>
+        </button>
+        <button class="tool-item" id="websearch-item" onclick="toggleWebSearchFromMenu()">
+          <svg class="ico"><use href="#i-search"/></svg>
+          <span>Web search</span>
+          <span class="tool-sub" id="websearch-sub">how much Carrot may look up</span>
+        </button>
+        <!-- Searching your own things, as opposed to the web above it. It was
+             a tab, which is a strange place for it: you look for something
+             while you are in the middle of asking about it, not by going
+             somewhere to look. -->
+        <button class="tool-item" onclick="openSearchFromMenu()">
+          <svg class="ico"><use href="#i-archive"/></svg>
+          <span>Search your work</span>
+          <span class="tool-sub">conversations, documents and files</span>
+        </button>
+        <div class="tool-sep"></div>
         <button id="temp-btn" class="tool-item"
                 onclick="toggleTemporaryChat(); closeToolMenu()">
           <svg class="ico"><use href="#i-ghost"/></svg>
@@ -2044,6 +2184,15 @@
         <svg class="ico chev"><use href="#i-chevron"/></svg>
       </button>
       <div id="model-pop" class="hidden">
+        <!-- The Hub reached from the one place you are already thinking about
+             models, rather than from a tab in the sidebar. "Where do I get
+             more of these" is a question you only ever ask with this list
+             open. -->
+        <button class="model-find-more" onclick="openModelHub()">
+          <svg class="ico"><use href="#i-download"/></svg>
+          <span>Find more models</span>
+          <span class="model-find-sub">browse what runs on this machine</span>
+        </button>
         <div class="pop-scroll">
           <div id="model-auto"></div>
           <div class="pop-section">On this machine</div>
@@ -2073,6 +2222,17 @@
   </div>
 </div>
 
+<!-- Presenting. Outside the view system on purpose: a deck covers the whole
+     window, including the nav and the command bar, because a presentation with
+     the application's sidebar down one side is not a presentation. Escape
+     leaves. -->
+<div id="slides-present" class="slides-present hidden">
+  <button class="slides-exit" onclick="exitPresent()" title="Leave the presentation (Esc)">
+    <svg class="ico"><use href="#i-x"/></svg>
+  </button>
+  <div class="reveal"><div class="slides"></div></div>
+</div>
+
 <script src="/vendor/marked.js"></script>
 <!-- Maths. The fonts have shipped since the notes editor landed — Milkdown
      pulls KaTeX in and esbuild emitted them — but the library was reachable
@@ -2094,6 +2254,9 @@
 <script src="/js/planner.js"></script>
 <script src="/js/ambient.js"></script>
 <script src="/js/latexnote.js"></script>
+<script src="/js/links.js"></script>
+<script src="/js/canvas.js"></script>
+<script src="/js/slides.js"></script>
 <!-- Last, and self-contained: it upgrades every <select> on the page by
      listening at the document, including the ones the scripts above build
      later, so nothing here has to load before it. -->

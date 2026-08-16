@@ -934,12 +934,9 @@ async function disconnectGithub() {
 
 // ===== Nav helpers =====
 
-function toggleNavMore() {
-    const list = document.getElementById('nav-more-list');
-    const btn = document.querySelector('.nav-more');
-    list.classList.toggle('hidden');
-    btn.classList.toggle('open');
-}
+// The "More" drawer is gone — the nav is four entries. Kept as a no-op only
+// long enough for any stale markup to stop calling it; nothing does today.
+function toggleNavMore() {}
 
 function topSearch() {
     const val = document.getElementById('top-search-input').value.trim();

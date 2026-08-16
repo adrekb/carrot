@@ -466,7 +466,11 @@ function openLatexDoc(note) {
     document.getElementById('latex-title').value = note.title || 'Untitled document';
     document.getElementById('latex-source').value = note.body || '';
     latexDirty = false;
-    switchTab('latex');
+    // Was `switchTab('latex')`, which left Write for a tab with no document
+    // list in it — so opening a paper from the list meant losing the list.
+    // LaTeX is a format, so it is a pane in Write like the others.
+    showWriteMode('latex');
+    loadLatexTab();
     renderLatexPreview();
     renderLatexOutline();
     const stats = document.getElementById('latex-stats');

@@ -61,9 +61,24 @@ class TestFormatLivesOnTheFile:
 
 
 class TestTheCards:
-    def test_blank_and_latex_are_both_offered(self, client):
+    def test_every_kind_of_document_is_offered(self, client):
+        """The exact list, in order, on purpose.
+
+        This is the screen's whole content, so a card appearing or vanishing is
+        a change somebody should have to write down. Blank stays first because
+        it is what most people want and the eye starts there.
+        """
         cards = client.get("/api/write/start").json()["cards"]
-        assert [c["id"] for c in cards] == ["blank", "latex"]
+        assert [c["id"] for c in cards] == ["blank", "latex", "canvas", "slides"]
+
+    def test_canvas_and_slides_need_no_pack(self, client):
+        """Unlike LaTeX, neither depends on an extension being switched on, so
+        neither can be offered in a state where opening it does nothing."""
+        cards = {c["id"]: c for c in client.get("/api/write/start").json()["cards"]}
+        assert cards["canvas"]["available"] is True
+        assert cards["canvas"]["format"] == notes.FORMAT_CANVAS
+        assert cards["slides"]["available"] is True
+        assert cards["slides"]["format"] == notes.FORMAT_SLIDES
 
     def test_blank_is_always_available(self, client):
         cards = {c["id"]: c for c in client.get("/api/write/start").json()["cards"]}

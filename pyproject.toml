@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "carrot"
-version = "0.3.3"
+version = "0.4.0"
 description = "Carrot - On-device AI assistant with structured memory, local document search, agent tools, and hybrid model routing"
 requires-python = ">=3.10"
 # Without this the wheel carries no license and PyPI, pip-licenses and every

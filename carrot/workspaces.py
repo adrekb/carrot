@@ -358,6 +358,21 @@ def workspace_of(kind: str, item_id: str) -> Optional[str]:
     return row["workspace_id"] if row else None
 
 
+def workspace_map(kind: str) -> Dict[str, str]:
+    """Every item of one kind, mapped to the workspace it is in.
+
+    The bulk form of `workspace_of`. Filtering a document list by workspace
+    needs the answer for every document at once, and asking one at a time is a
+    query per document on a screen that exists to be fast.
+    """
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT item_id, workspace_id FROM workspace_items WHERE kind = ?", (kind,)
+    ).fetchall()
+    conn.close()
+    return {row["item_id"]: row["workspace_id"] for row in rows}
+
+
 def item_ids(workspace_id: str, kind: str) -> List[str]:
     conn = get_db()
     rows = conn.execute(
