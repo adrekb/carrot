@@ -119,6 +119,58 @@ class TestNarrowingIt:
         assert body["items"] == [] and body["total"] == 0
 
 
+class TestMakingSomewhereToPutThings:
+    """The rail lists workspaces and had no way to add one.
+
+    Everything else you can start is in the New menu; a workspace was the one
+    thing that sent you to a different tab to make it, which is the shape the
+    drive exists to get rid of.
+    """
+
+    def read(self, *parts):
+        from pathlib import Path
+
+        return (Path(__file__).resolve().parents[1] / "carrot" / "web"
+                ).joinpath(*parts).read_text(encoding="utf-8")
+
+    def test_the_new_menu_offers_one(self):
+        js = self.read("js", "features.js")
+        assert 'data-card="__workspace"' in js
+
+    def test_it_is_wired_to_something_that_exists(self):
+        js = self.read("js", "features.js")
+        assert "newDriveWorkspace()" in js
+        assert "async function newDriveWorkspace" in js
+
+    def test_it_does_not_use_a_prompt_electron_disables(self):
+        """window.prompt returns null without showing anything in Electron, so
+        the menu item would be a button that quietly does nothing."""
+        js = self.read("js", "features.js")
+        block = js[js.index("async function newDriveWorkspace"):]
+        body = block[:block.index("\n}")]
+        assert "prompt(" not in body.replace("inlineTextPrompt(", "")
+        assert "inlineTextPrompt(" in body
+
+    def test_a_workspace_is_named_rather_than_counted(self):
+        """Standing in a workspace is being somewhere, not narrowing something.
+        Counting it meant a workspace you had just made was headed "0 items"."""
+        js = self.read("js", "features.js")
+        assert "function drivePlaceName" in js
+        assert "drivePlaceName()" in js
+
+    def test_creating_one_lands_in_it(self, client, isolated_db):
+        """The endpoint the menu calls has to give back the id, or there is
+        nothing to select afterwards and you are told you made something while
+        looking at everything you already had."""
+        made = client.post("/api/workspaces",
+                           json={"name": "Michaelmas term", "folder_id": None}).json()
+        assert made.get("id")
+        assert made.get("name") == "Michaelmas term"
+
+        places = client.get("/api/work/places").json()["workspaces"]
+        assert any(w["id"] == made["id"] and w["count"] == 0 for w in places)
+
+
 class TestDeletingSeveral:
     """The one destructive thing on this screen.
 

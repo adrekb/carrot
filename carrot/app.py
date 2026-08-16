@@ -40,6 +40,7 @@ from carrot import (
     bootstrap as bootstrap_mod,
     hub as hub_mod,
     calfeed as calfeed_mod,
+    ambient_capture as ambient_capture_mod,
     attachments as attach_mod,
     artifacts as artifacts_mod,
     interop as interop_mod,
@@ -1273,6 +1274,21 @@ def _prepare_history(conv, message, skill_slug, extra_system=None, mode=None,
         cal_block = calfeed_mod.agent_context()
         if cal_block:
             history.append({"role": "system", "content": cal_block})
+    except Exception:
+        pass
+
+    # Whether the screen history can be searched, said every turn rather than
+    # left to a tool call.
+    #
+    # A tool the model has to remember to reach for is the version that fails
+    # on a small model: asked "what was I reading yesterday" it will answer
+    # from nothing rather than notice it has a way to look, and asked the same
+    # question with capture switched off it will apologise for a limitation it
+    # cannot describe. One line costs almost nothing and removes both.
+    try:
+        roster = ambient_capture_mod.agent_roster_line()
+        if roster:
+            history.append({"role": "system", "content": roster})
     except Exception:
         pass
 

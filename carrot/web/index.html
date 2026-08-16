@@ -1977,6 +1977,34 @@
         <div id="ambient-try-result" class="muted small"></div>
       </div>
 
+      <!-- Recording the screen and letting the assistant read the recording
+           are two permissions, so they are two switches. Wanting a searchable
+           history that does not turn up in conversation is a coherent thing to
+           want, and one checkbox cannot say it.
+
+           It lives here rather than on the Ambient screen because this is
+           where the other privacy decisions are, and because recall belongs in
+           chat: there is no third place to visit. -->
+      <div class="settings-card">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-eye"/></svg>
+          <h3>Asking about what you saw</h3>
+        </div>
+        <p class="muted small">
+          With this on you can ask in chat — "that paper I was reading yesterday",
+          "the error about a certificate" — and Carrot searches the text it read off
+          your screen. With it off the assistant is told it cannot see any of this, so
+          it says so and points you back here rather than inventing an answer.
+          Capture has to be running for there to be anything to search.
+        </p>
+        <label class="settings-row" for="ambient-agent-aware">
+          <input type="checkbox" id="ambient-agent-aware"
+                 onchange="ambientSetAgentAware(this.checked)">
+          <span>Let the assistant search my screen history</span>
+        </label>
+        <div id="ambient-agent-aware-note" class="muted small"></div>
+      </div>
+
       <div class="settings-card">
         <div class="settings-head">
           <svg class="ico"><use href="#i-pulse"/></svg>

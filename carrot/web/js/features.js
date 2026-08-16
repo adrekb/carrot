@@ -3985,10 +3985,17 @@ function toggleDriveNew() {
             + escHtml(card.available ? (card.subtitle || '')
                 : 'Needs the ' + ((card.requires || {}).label || 'pack'))
             + '</span></button>').join('');
-        // A map and a file are things you make here too, and neither is a
-        // document format, so neither comes from the cards.
+        // A workspace, a map and a folder of files are things you make here
+        // too, and none of them is a document format, so none comes from the
+        // cards. The workspace is first of the three because it is the only
+        // one that makes somewhere to put things — the rail lists workspaces
+        // and had no way to add one, so the only route to a new one was a
+        // different tab.
         pop.innerHTML +=
-            '<button class="drive-new-item" data-card="__map">'
+            '<button class="drive-new-item" data-card="__workspace">'
+            + '<span>Workspace</span>'
+            + '<span class="drive-new-sub">somewhere to keep a project together</span></button>'
+            + '<button class="drive-new-item" data-card="__map">'
             + '<span>Map</span><span class="drive-new-sub">see how your documents link</span></button>'
             + '<button class="drive-new-item" data-card="__file">'
             + '<span>Add a folder of files</span>'
@@ -3997,6 +4004,7 @@ function toggleDriveNew() {
             const card = (writeStartCards || []).find(c => c.id === el.dataset.card);
             el.onclick = () => {
                 pop.classList.add('hidden');
+                if (el.dataset.card === '__workspace') { newDriveWorkspace(); return; }
                 if (el.dataset.card === '__map') { setDrivePlace('maps'); return; }
                 if (el.dataset.card === '__file') { switchTab('files'); return; }
                 if (card.available) startNewDocument(card); else explainLockedCard(card);
@@ -4004,6 +4012,35 @@ function toggleDriveNew() {
         }
     }
     pop.classList.toggle('hidden');
+}
+
+// Make one from here, and land in it.
+//
+// Not window.prompt: Electron disables it, so it returns null without showing
+// anything and the menu item becomes a button that does nothing.
+async function newDriveWorkspace() {
+    const name = await inlineTextPrompt({
+        title: 'Name the workspace',
+        placeholder: 'Thesis, Home, Michaelmas term…',
+        action: 'Create',
+    });
+    if (name === null) return;
+    const title = (name || '').trim();
+    if (!title) return;
+    try {
+        const made = await api('/api/workspaces', {
+            method: 'POST', body: JSON.stringify({ name: title, folder_id: null }),
+        });
+        // The rail has to know about it before anything can select it.
+        await renderDrivePlaces();
+        if (typeof loadWorkspaces === 'function') loadWorkspaces();
+        // Somewhere empty that you were just told you made is a screen that
+        // looks like nothing happened, so go and stand in it — the heading
+        // names it, and the next thing filed goes here.
+        if (made && made.id) setDriveWorkspace(made.id);
+    } catch (e) {
+        alert('Could not make that workspace: ' + e.message);
+    }
 }
 
 // The rail's workspace list, with what is in each.
@@ -4239,6 +4276,20 @@ async function renameDocument(id, current) {
 
 const DRIVE_PLACE_NAME = { all: 'Everything', documents: 'Documents', file: 'Files' };
 
+// What the heading calls where you are. A workspace is named after itself,
+// read off the rail rather than kept in a second place that can disagree with
+// it — and a workspace with nothing in it yet still has a name, which is the
+// case that made this necessary: standing in one you had just created, the
+// heading said "0 items".
+function drivePlaceName() {
+    if (drivePlace.startsWith('ws:')) {
+        const button = document.querySelector(
+            '.drive-place[data-place="' + CSS.escape(drivePlace) + '"] span');
+        return button ? button.textContent : 'Workspace';
+    }
+    return DRIVE_PLACE_NAME[drivePlace] || 'Everything';
+}
+
 async function renderWriteStartRecents() {
     const host = document.getElementById('write-start-recents');
     const empty = document.getElementById('write-browse-empty');
@@ -4286,10 +4337,14 @@ async function renderWriteStartRecents() {
     // Unfiltered this is a shelf of what you were last in, and a screenful is
     // the point. Filtered it is a result, and truncating one would misreport
     // how much there is.
+    // A place is named; a search is counted. Standing in a workspace is being
+    // somewhere, not narrowing something, so it keeps its name — the count is
+    // for when you typed or picked a filter.
+    const searching = !!(q.text || q.format || q.days || q.workspace);
     if (label) {
-        label.textContent = filtering
+        label.textContent = searching
             ? items.length + ' item' + (items.length === 1 ? '' : 's')
-            : (DRIVE_PLACE_NAME[drivePlace] || 'Everything');
+            : drivePlaceName();
     }
     if (!filtering) items = items.slice(0, 24);
 
@@ -4332,9 +4387,15 @@ async function renderWriteStartRecents() {
         // An empty vault and an empty search result are different sentences.
         // `driveItems` is now the searched listing, so a search that matches
         // nothing would otherwise report that you have never written anything.
+        // And an empty workspace is a third sentence: you have just made
+        // somewhere to put things, and "nothing matches those filters" reads
+        // as though it went wrong.
         empty.textContent = !driveAllItems.length
             ? 'Nothing here yet.'
-            : (items.length ? '' : 'Nothing matches those filters.');
+            : items.length ? ''
+            : (!searching && drivePlace.startsWith('ws:'))
+                ? 'Nothing filed in ' + drivePlaceName() + ' yet.'
+                : 'Nothing matches those filters.';
         empty.classList.toggle('hidden', !!items.length);
     }
 }

@@ -107,6 +107,11 @@ def policy() -> Dict[str, Any]:
     stored = get_config().get("ambient_policy", {}) or {}
     return {
         "enabled": bool(stored.get("enabled", False)),
+        # Reading the screen and letting the assistant search what was read are
+        # two different permissions, and collapsing them would mean the only
+        # way to stop the assistant seeing your screen is to stop recording it.
+        # Off until asked for, like everything else here.
+        "agent_aware": bool(stored.get("agent_aware", False)),
         "excluded_apps": list(stored.get("excluded_apps", [])),
         "excluded_titles": list(stored.get("excluded_titles", [])),
         "excluded_urls": list(stored.get("excluded_urls", [])),

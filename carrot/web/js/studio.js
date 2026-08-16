@@ -795,6 +795,8 @@ async function loadAmbientPanel() {
         saveAmbientPolicy({ enabled: e.target.checked });
     host.appendChild(master);
 
+    renderAgentAwareRow(p);
+
     // What the gate says right now — including "it is off", which is the most
     // common answer and the most confusing one to leave unsaid.
     const state = document.createElement('div');
@@ -902,6 +904,31 @@ async function saveAmbientPolicy(changes) {
         alert('Could not save that: ' + (e.detail || e.message));
     }
     loadAmbientPanel();
+}
+
+// Whether chat may read what was captured — a different decision from whether
+// to capture, so a different switch.
+async function ambientSetAgentAware(on) {
+    await saveAmbientPolicy({ agent_aware: !!on });
+}
+
+// The switch is honest about the case where it is on and does nothing: turned
+// on while capture is off, there is nothing to search, and a checkbox that
+// looks satisfied while answering nothing is worse than one that says so.
+function renderAgentAwareRow(policy) {
+    const box = document.getElementById('ambient-agent-aware');
+    if (!box) return;
+    box.checked = !!policy.agent_aware;
+    const note = document.getElementById('ambient-agent-aware-note');
+    if (!note) return;
+    if (policy.agent_aware && !policy.enabled) {
+        note.textContent = 'Nothing is being recorded, so there is nothing to search '
+            + 'yet — turn on reading the screen above.';
+    } else if (policy.agent_aware) {
+        note.textContent = 'Chat can search what was on your screen.';
+    } else {
+        note.textContent = '';
+    }
 }
 
 async function addAmbientExclusion() {
