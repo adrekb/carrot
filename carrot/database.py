@@ -532,6 +532,42 @@ SCHEMA = SCHEMA + FTS_SCHEMA + AUX_FTS_SCHEMA
 _schema_ready: set = set()
 
 
+def _ensure_wal(conn):
+    """Put the database in WAL mode, without that being able to fail a request.
+
+    `PRAGMA journal_mode=WAL` is the one statement in this function that does
+    not honour the busy timeout. Changing journal mode needs a lock no busy
+    handler is consulted for, so when any other connection is mid-transaction
+    it returns SQLITE_BUSY *immediately* — not after thirty seconds, after
+    zero. Every other statement here waits; this one never did.
+
+    That was the flake. A full test run would fail once every few runs on a
+    different unrelated file each time, always at setup, always
+    `database is locked`, and always instantly — which is what made it look
+    like corruption rather than contention. Two connections overlapping for a
+    millisecond is all it takes, and a suite of three thousand tests offers a
+    great many milliseconds.
+
+    Two changes make it a non-event. The mode is only *set* when it is not
+    already WAL, and WAL is a persistent property of the file rather than of a
+    connection — so after the first connection in the database's life, nothing
+    tries to change it again. And if that first attempt loses a race it is
+    allowed to: journal mode is a performance property, not a correctness one,
+    and whichever connection wins sets it for everybody. Failing a chat turn
+    to report that a pragma had to wait is the wrong trade in every direction.
+    """
+    try:
+        current = conn.execute("PRAGMA journal_mode").fetchone()[0]
+    except sqlite3.Error:
+        return
+    if str(current).lower() == "wal":
+        return
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+    except sqlite3.OperationalError:
+        pass
+
+
 def get_db():
     os.makedirs(DBCORE_DIR, exist_ok=True)
     # Checked before connecting, because connecting creates the file. A
@@ -548,12 +584,13 @@ def get_db():
     # disk, and "database is locked" surfaces as a lost message rather than
     # as a wait.
     conn = sqlite3.connect(DB_PATH, timeout=30)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
     # Wait for readers to finish a checkpoint instead of erroring, same
     # reasoning. Cheap on a database this size and worth it on a laptop that
-    # is also compiling something.
+    # is also compiling something. First, because everything below it is a
+    # statement that can meet a lock.
     conn.execute("PRAGMA busy_timeout=30000")
+    _ensure_wal(conn)
+    conn.execute("PRAGMA foreign_keys=ON")
     conn.row_factory = sqlite3.Row
     if DB_PATH not in _schema_ready:
         conn.executescript(SCHEMA)
@@ -606,6 +643,25 @@ ADDED_COLUMNS = (
     # The best tier among the sources a claim cites — what the writer is
     # allowed to state flat and what it has to attribute.
     ("research_findings", "tier", "TEXT NOT NULL DEFAULT 'unknown'"),
+    # A goal used to be something you went to a tab and typed. Now chat can
+    # propose one, which means a goal has a state before it is a goal:
+    # proposed, and then accepted or declined by the person it is about.
+    #
+    # Every goal that existed before this column was typed by hand, and typing
+    # it *was* the acceptance — so `accepted` is the truth about the old rows
+    # rather than a default chosen to be safe.
+    ("goals", "status", "TEXT NOT NULL DEFAULT 'accepted'"),
+    ("goals", "deadline", "TEXT DEFAULT ''"),
+    # What the goal is *about*, normalised, so a proposal the user declined is
+    # not offered again next week in slightly different words.
+    ("goals", "subject", "TEXT DEFAULT ''"),
+    # Where it came from. A goal you cannot trace back to the sentence you said
+    # is one you have to take Carrot's word for, and the whole point of
+    # proposing rather than asserting is that you can check.
+    ("goals", "conversation_id", "TEXT DEFAULT ''"),
+    ("goals", "message_id", "TEXT DEFAULT ''"),
+    ("goals", "source_text", "TEXT DEFAULT ''"),
+    ("goals", "decided_at", "TEXT DEFAULT ''"),
 )
 
 # Indexes over columns that ADDED_COLUMNS creates. These cannot live in SCHEMA,

@@ -1,4 +1,0 @@
-- All persistent data lives under the gitignored `data/` directory (SQLite DB, conversations JSON, markdown notes, goals JSON, config files).
-- User-facing commands are exposed through the `carrot` console script defined in `pyproject.toml` `[project.scripts]` rather than ad-hoc entry points.
-- Both the Electron GUI and the CLI interact with the FastAPI backend over localhost HTTP — no direct Python imports across the boundary.
-- Search queries go through the shared SQLite FTS5 index on messages, goals, and notes rather than raw file scanning.

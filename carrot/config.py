@@ -66,6 +66,11 @@ DEFAULTS = {
     "recap_max_items": 10,
     # Memory
     "memory_enabled": True,
+    # Chat noticing a commitment and offering to track it. On by default and
+    # switchable, because it is the one feature here that speaks without being
+    # spoken to — and a thing that appears uninvited has to be a thing you can
+    # stop.
+    "goal_chips_enabled": True,
     "memory_min_confidence": 0.6,
     "summarize_enabled": True,
     # Local document index

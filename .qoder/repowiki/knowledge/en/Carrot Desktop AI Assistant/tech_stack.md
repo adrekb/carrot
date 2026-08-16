@@ -1,1 +1,0 @@
-Python 3.10+ with FastAPI/Uvicorn for the API layer, SQLite with FTS5 for persistence and full-text search, Ollama for local LLM inference, Electron + React for the desktop GUI, and Node.js/npm for frontend build and packaging — all declared centrally in `pyproject.toml` and consumed by both `carrot_core` and `electron_gui`.

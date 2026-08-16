@@ -18,5 +18,20 @@ venv/
 dist/
 gui/dist/
 gui/node_modules/
+# The other node_modules. `gui/` was ignored from the start and this one never
+# was, so 8,387 files of esbuild and Monaco sources were committed — a clone
+# that downloads a compiler to serve a bundle it already has. The bundles
+# themselves stay tracked (carrot/web/vendor), because those are what makes a
+# checkout run offline; this is only the machinery that produced them, and
+# `npm install` in webvendor/ brings it back.
+webvendor/node_modules/
 *.egg-info/
 build/carrot/_build.py
+.pytest_cache/
+
+# Editor and agent scratch. None of it is Carrot; all of it was committed.
+# .qoder alone carried 105 files, including a dozen screenshots of the UI
+# mid-verification that describe a version of the app that no longer exists.
+.claude/
+.qoder/
+_ui_check*.png

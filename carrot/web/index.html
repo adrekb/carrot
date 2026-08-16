@@ -574,7 +574,7 @@
         <div id="notes-list" class="side-list"></div>
       </aside>
       <div class="split-main">
-        <div class="editor-toolbar">
+        <div class="editor-toolbar" id="note-toolbar">
           <input type="text" id="note-title" class="title-input" placeholder="Untitled note" oninput="scheduleNoteSave()">
           <span id="note-status" class="editor-status"></span>
           <span id="note-words" class="editor-words"></span>
@@ -589,7 +589,18 @@
         <div id="doc-refs" class="doc-refs hidden"></div>
         <div id="note-editor-host" class="milkdown-host"></div>
         <textarea id="note-fallback" class="note-fallback hidden" placeholder="Write your note…" oninput="scheduleNoteSave()"></textarea>
-        <div id="note-empty" class="editor-empty">Select a note on the left, or create a new one.</div>
+        <!-- The start screen. Not an empty-state sentence telling you to pick
+             something from a list: the two things you can start are the first
+             thing on the page, and what you were working on is under them. -->
+        <div id="write-start" class="write-start hidden">
+          <div class="write-start-head">Start a new document</div>
+          <div id="write-start-cards" class="write-start-cards"></div>
+          <div class="write-start-head write-start-recents-head">
+            <span>Recent documents</span>
+          </div>
+          <div id="write-start-recents" class="write-start-recents"></div>
+        </div>
+        <div id="note-empty" class="editor-empty hidden">Select a note on the left, or create a new one.</div>
       </div>
     </div>
   </section>
@@ -793,7 +804,7 @@
           <button class="btn btn-ghost" onclick="exportLatex('md')">.md</button>
           <button class="btn btn-ghost" onclick="exportLatex('html')">.html</button>
           <button class="btn btn-ghost" onclick="exportLatex('txt')">.txt</button>
-          <button class="btn btn-primary" onclick="saveLatexDoc()">Save</button>
+          <button class="btn btn-primary" onclick="saveLatexDocSmart()">Save</button>
         </div>
         <div class="latex-panes" id="latex-panes">
           <textarea id="latex-source" class="latex-source" spellcheck="false"

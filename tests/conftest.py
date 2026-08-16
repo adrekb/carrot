@@ -61,6 +61,14 @@ def temp_data_dir(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(security, "TOKEN_PATH", str(data / "config" / "session.json"))
     monkeypatch.setattr(security, "LEGACY_TOKEN_PATH", str(data / "config" / "legacy.json"))
     monkeypatch.setattr(security, "_token", None)
+    # Notes are files, and they bind their directory at import time — so
+    # patching `config.CARROT_DIR` does not move them. Without this line the
+    # suite reads and writes the developer's real notes, which is the same
+    # failure the database had and just as invisible: a listing test passes
+    # either way, it just happens to be listing somebody's actual writing.
+    from carrot import notes
+
+    monkeypatch.setattr(notes, "NOTES_DIR", str(data / "notes"))
     return db_path
 
 

@@ -1,5 +1,0 @@
-- Renderer-to-Node communication goes exclusively through the `carrotAPI` object exposed by `preload.js` via `contextBridge.exposeInMainWorld`, never direct `ipcRenderer` usage in renderers.
-- IPC handlers are registered with `ipcMain.handle` returning promises, and errors are wrapped as `{ error: e.message }` responses rather than throwing.
-- BrowserWindow creation follows a factory function pattern (`createMainWindow`, `createOverlayWindow`) that returns the window instance and sets `webPreferences` with `contextIsolation: true` and `nodeIntegration: false`.
-- External services (FastAPI) are accessed via `fetch` against `http://127.0.0.1:8181` rather than through the IPC layer, keeping overlay and renderer logic self-contained.
-- Global shortcuts are registered at startup and fully unregistered on `before-quit`, with cleanup of spawned processes also handled in the same hook.

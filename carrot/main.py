@@ -30,6 +30,8 @@ def main():
         print("  restore <path>  Restore from an archive (replaces current data)")
         print("  route           Show which model serves each task")
         print("  token           Print the API session token")
+        print("  mcp             Serve Carrot's memory and search over MCP (stdio)")
+        print("  mcp-config      Print the config block to paste into an editor")
         print("  status          Show system status")
         return
 
@@ -271,6 +273,29 @@ def main():
         from carrot.security import session_token
 
         print(session_token())
+
+    elif command == "mcp":
+        # Deliberately no init_db() banner, no print, no splash. Everything on
+        # stdout here is protocol; one stray line and the editor sees a
+        # corrupt stream and reports nothing but that the server exited.
+        from carrot.mcp_server import serve
+
+        serve()
+
+    elif command == "mcp-config":
+        import json as _json
+
+        from carrot.mcp_server import client_config
+
+        print(_json.dumps(client_config(), indent=2))
+        # ASCII only, and on stderr. The Windows console is cp1252, where an
+        # em dash prints as a question mark; and stdout is kept clean so
+        # `carrot mcp-config > mcp.json` is a working command rather than a
+        # file with a sentence at the top of it.
+        print("\nPaste that into your editor's MCP settings. Cursor: "
+              "~/.cursor/mcp.json. Claude Desktop: claude_desktop_config.json. "
+              "Carrot then answers from the editor: what you decided, what you "
+              "wrote, what you committed to.", file=sys.stderr)
 
     elif command == "status":
         init_db()

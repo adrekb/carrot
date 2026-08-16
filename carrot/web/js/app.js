@@ -1780,6 +1780,11 @@ async function streamTurn(url, payload, skill) {
                            pendingArtifacts.map(id => `[[carrot:artifact:${id}]]`).join(' '));
         }
         if (speakReplies && full) speakText(full);
+        // A commitment Carrot noticed, offered rather than assumed. Runs
+        // after the answer because the proposal is written by the same
+        // post-turn bookkeeping that writes memories, and asking before that
+        // has finished would find nothing.
+        if (typeof mountGoalChips === 'function') mountGoalChips(assistantEl);
         // Copy needs the markdown, not the rendered HTML, and the answer only
         // exists now that the stream has finished.
         assistantEl.dataset.raw = full;
@@ -2206,6 +2211,13 @@ async function openConversation(convId) {
                     artifacts.map(a => `[[carrot:artifact:${a.id}]]`).join(' '));
             }
         } catch (_) { /* older conversation, or none stored */ }
+    }
+    // An undecided proposal is a question, and a question that disappears on
+    // reload is one the user never got to answer. Reopening the conversation
+    // asks it again, under the last reply.
+    if (typeof mountGoalChips === 'function') {
+        const last = rendered[rendered.length - 1];
+        if (last) mountGoalChips(last, convId);
     }
     switchTab('workspace');
 }

@@ -1,5 +1,6 @@
 """Tests for built-in agent tools: sandboxing, approval, and the undo journal."""
 import os
+import re
 import threading
 from unittest.mock import patch
 
@@ -80,6 +81,104 @@ def test_search_files(workspace):
 
 def test_search_files_invalid_pattern(workspace):
     assert "invalid pattern" in agent_tools.call("carrot__search_files", {"pattern": "([unclosed"})
+
+
+# ===== Nothing is out of reach =====
+#
+# Each of these used to end at a cliff: the reply said something had been cut
+# and offered no way to ask for the rest. The point of every assertion below is
+# the *recovery path*, not the cut.
+
+def _big_file(workspace, lines):
+    (workspace / "big.txt").write_text("\n".join(f"line {i}" for i in range(1, lines + 1)))
+
+
+def test_read_file_windows_and_says_how_to_continue(workspace):
+    _big_file(workspace, 5000)
+    first = agent_tools.call("carrot__read_file", {"path": "big.txt"})
+    assert "1\tline 1" in first
+    assert "of 5000" in first
+    assert "offset=" in first
+
+
+def test_read_file_offset_reaches_the_end(workspace):
+    _big_file(workspace, 5000)
+    tail = agent_tools.call("carrot__read_file", {"path": "big.txt", "offset": 4990})
+    assert "5000\tline 5000" in tail
+    # The last window is the end of the file, so it must not advertise another.
+    assert "Continue with" not in tail
+
+
+def test_read_file_walks_the_whole_file(workspace):
+    _big_file(workspace, 5000)
+    seen, offset, guard = set(), 1, 0
+    while offset and guard < 50:
+        guard += 1
+        chunk = agent_tools.call("carrot__read_file", {"path": "big.txt", "offset": offset})
+        seen.update(int(row.split("\t")[0]) for row in chunk.splitlines() if "\t" in row)
+        match = re.search(r"offset=(\d+)", chunk)
+        offset = int(match.group(1)) if match else 0
+    assert seen == set(range(1, 5001))
+
+
+def test_read_file_limit_is_honoured(workspace):
+    _big_file(workspace, 5000)
+    chunk = agent_tools.call("carrot__read_file", {"path": "big.txt", "offset": 10, "limit": 3})
+    rows = [r for r in chunk.splitlines() if "\t" in r]
+    assert len(rows) == 3
+    assert rows[0].startswith("10\t")
+
+
+def test_read_file_offset_past_the_end_says_so(workspace):
+    _big_file(workspace, 10)
+    assert "past the end" in agent_tools.call(
+        "carrot__read_file", {"path": "big.txt", "offset": 99})
+
+
+def test_search_files_spills_the_rest(workspace):
+    (workspace / "many.py").write_text("\n".join("hit here" for _ in range(400)))
+    matches = agent_tools.call("carrot__search_files", {"pattern": "hit"})
+    assert "of 400 matches" in matches
+    handle = re.search(r"read_file\(path='([^']+)'\)", matches).group(1)
+    assert handle.startswith(agent_tools.SPILL_PREFIX)
+    # The handle has to be readable through the ordinary tool, which is the
+    # whole reason it is shaped like a path.
+    everything = agent_tools.call("carrot__read_file", {"path": handle})
+    assert "many.py:1:" in everything
+
+
+def test_spill_handle_cannot_escape(workspace):
+    escaped = agent_tools.call(
+        "carrot__read_file", {"path": agent_tools.SPILL_PREFIX + "../../../etc/passwd"})
+    assert escaped.startswith("error:")
+
+
+def test_run_command_keeps_the_end_and_spills_the_whole(workspace):
+    noisy = {"success": False, "returncode": 1,
+             "output": "\n".join(f"noise {i}" for i in range(4000)) + "\nFAILED at the end"}
+    with patch("carrot.terminal.execute_command", return_value=noisy):
+        out = agent_tools.call("carrot__run_command", {"command": "pytest"})
+    # The summary of a failing run is its last line. Cutting from the front
+    # was throwing away the only part worth reading.
+    assert "FAILED at the end" in out
+    assert "omitted from the middle" in out
+    handle = re.search(r"read_file\(path='([^']+)'\)", out).group(1)
+    assert "noise 0" in agent_tools.call("carrot__read_file", {"path": handle})
+
+
+def test_run_command_pays_for_its_notice_inside_the_cap(workspace):
+    """The reply never exceeds the limit it is enforcing.
+
+    Spending the whole budget on the excerpt and appending the notice
+    afterwards makes the reply longer than the cap — and for output barely
+    over it, longer than the original, which is truncation that costs context
+    instead of saving it.
+    """
+    noisy = {"success": True, "returncode": 0, "output": "x" * (agent_tools.MAX_COMMAND_CHARS + 50)}
+    with patch("carrot.terminal.execute_command", return_value=noisy):
+        out = agent_tools.call("carrot__run_command", {"command": "noisy"})
+    body = out.split("\n", 1)[1]  # drop the "[ok]" status line
+    assert len(body) <= agent_tools.MAX_COMMAND_CHARS
 
 
 def test_unknown_tool(workspace):

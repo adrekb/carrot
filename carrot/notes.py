@@ -4,7 +4,19 @@ import uuid
 from datetime import datetime, timezone
 
 
-NOTES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "notes")
+# Where notes live, from the same resolver as everything else rather than from
+# this file's own location.
+#
+# It was `__file__/data/notes`, which for a checkout is the same path — so
+# nothing moves for anyone who has notes today. It was wrong in the two cases
+# that are not a checkout. An installed build puts the code in a read-only
+# directory, so notes had nowhere to be written; and `CARROT_DATA_DIR`, which
+# every other part of Carrot honours, was ignored here — which is why the dev
+# preview, whose whole promise is that it touches nothing real, opened with a
+# hundred and sixty of the developer's own notes in the sidebar.
+from carrot.config import CARROT_DIR
+
+NOTES_DIR = os.path.join(CARROT_DIR, "notes")
 
 
 def now_iso():
@@ -59,6 +71,7 @@ def list_notes(folder: str = None):
                         "folder": folder or "",
                         "path": filepath,
                         "title": meta.get("title", "") or f.replace(".md", ""),
+                        "format": normalize_format(meta.get("format")),
                         "created_at": os.path.getmtime(filepath),
                         "content": content,
                         "body": body,
@@ -79,11 +92,34 @@ def get_note(note_id: str):
         "path": filepath,
         "content": content,
         "title": meta.get("title", "") or note_id,
+        "format": normalize_format(meta.get("format")),
         "body": body,
     }
 
 
-def create_note(title: str, content: str = "", folder: str = None):
+# What kind of document this is, written into the file.
+#
+# The format belongs on the file rather than in a setting, because a workspace
+# is allowed to hold a thesis in TeX beside a shopping list in markdown, and a
+# preference forces every new document to be whatever the last one was. It also
+# saves the editor from guessing: opening a document reads what it is, instead
+# of sniffing the text for a \documentclass — which is exactly wrong for the
+# LaTeX document somebody has not started writing yet.
+FORMAT_MARKDOWN = "markdown"
+FORMAT_LATEX = "latex"
+FORMATS = (FORMAT_MARKDOWN, FORMAT_LATEX)
+
+
+def normalize_format(value) -> str:
+    """Anything unrecognised is markdown. A note written before this existed
+    has no `format:` line, and markdown is the truth about every one of them —
+    LaTeX documents had nowhere to record that they were LaTeX."""
+    value = (value or "").strip().lower()
+    return value if value in FORMATS else FORMAT_MARKDOWN
+
+
+def create_note(title: str, content: str = "", folder: str = None,
+                doc_format: str = FORMAT_MARKDOWN):
     note_id = str(uuid.uuid4())[:12]
     if folder:
         notes_dir = os.path.join(NOTES_DIR, folder)
@@ -92,6 +128,7 @@ def create_note(title: str, content: str = "", folder: str = None):
     else:
         filepath = get_note_path(note_id)
     frontmatter = f"---\ntitle: {title}\ncreated: {now_iso()}\n"
+    frontmatter += f"format: {normalize_format(doc_format)}\n"
     if folder:
         frontmatter += f"folder: {folder}\n"
     frontmatter += "---\n"
@@ -106,7 +143,8 @@ def create_note(title: str, content: str = "", folder: str = None):
     except Exception:
         pass
 
-    return {"id": note_id, "title": title, "folder": folder or "", "path": filepath}
+    return {"id": note_id, "title": title, "folder": folder or "", "path": filepath,
+            "format": normalize_format(doc_format)}
 
 
 def update_note(note_id: str, content: str, folder: str = None, title: str = None):
@@ -129,7 +167,10 @@ def update_note(note_id: str, content: str, folder: str = None, title: str = Non
     frontmatter = "---\n" + "".join(f"{k}: {v}\n" for k, v in meta.items()) + "---\n"
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(frontmatter + content)
-    return {"id": note_id, "path": filepath, "title": meta["title"]}
+    # `format` rides in `meta` and is written straight back, so a document does
+    # not silently become markdown the first time somebody edits it.
+    return {"id": note_id, "path": filepath, "title": meta["title"],
+            "format": normalize_format(meta.get("format"))}
 
 
 def delete_note(note_id: str):

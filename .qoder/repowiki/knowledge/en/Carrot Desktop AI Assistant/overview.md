@@ -1,1 +1,0 @@
-Monorepo for Carrot, an on-device personal AI assistant that pairs a Python FastAPI core (carrot_core) with an Electron desktop shell (electron_gui) to deliver a local-first chat, search, notes, goals, and reminders experience.

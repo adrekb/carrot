@@ -60,6 +60,8 @@ from carrot import (
     context_windows as ctxwin_mod,
     pruning as pruning_mod,
     components as components_mod,
+    commitments as commitments_mod,
+    systemdocs as systemdocs_mod,
     interests as interests_mod,
     sysmon as sysmon_mod,
     markets as markets_mod,
@@ -242,6 +244,10 @@ class GoalRequest(BaseModel):
     metadata: Dict[str, Any] = {}
 
 
+class GoalDecisionRequest(BaseModel):
+    accepted: bool
+
+
 class DataPointRequest(BaseModel):
     value: Any
     label: str = ""
@@ -263,6 +269,8 @@ class NoteRequest(BaseModel):
     title: str
     content: str = ""
     folder: str = ""
+    # Markdown or LaTeX, decided when the document is made and kept on it.
+    format: str = "markdown"
 
 
 class NoteUpdateRequest(BaseModel):
@@ -3700,6 +3708,29 @@ def _post_turn(conversation_id, user_message, assistant_text, message_id,
                 )
             except Exception:
                 pass
+        # A commitment in the turn becomes a *proposal*, not a goal. The chip
+        # in the thread is the question; a tick is the answer. Same place as
+        # memory extraction because it asks the same question of the same
+        # text, and best-effort for the same reason — nobody is waiting on it,
+        # and a goal Carrot failed to notice is a smaller harm than a turn that
+        # died doing bookkeeping.
+        if settings.get("goal_chips_enabled", True):
+            try:
+                # Progress first, and if it was progress, do not also propose.
+                # "Finished chapter 3 of the thesis" carries committing
+                # language, so without this precedence one sentence about an
+                # existing goal both updates it and offers to create a second
+                # one — which is how a tracker starts double-counting what
+                # somebody has on.
+                progressed = commitments_mod.note_progress_from_turn(user_message)
+                if not progressed:
+                    commitments_mod.propose_from_turn(
+                        user_text=user_message,
+                        conversation_id=conversation_id,
+                        message_id=str(message_id or ""),
+                    )
+            except Exception:
+                LOG.debug("commitment proposal skipped", exc_info=True)
         if settings.get("summarize_enabled", True):
             try:
                 summarize_mod.maybe_summarize(conversation_id)
@@ -4371,6 +4402,28 @@ async def create_goal(req: GoalRequest):
     return goals_mod.create_goal(req.title, req.description, req.category, req.metadata)
 
 
+@app.get("/api/goals/proposals")
+async def list_goal_proposals(conversation_id: str = ""):
+    """Undecided proposals, so reopening a conversation shows the question again.
+
+    A chip that evaporates on refresh is a question the user never got to
+    answer, which is the same as not having asked.
+    """
+    if conversation_id:
+        return {"proposals": goals_mod.proposals_for(conversation_id)}
+    return {"proposals": goals_mod.by_status(goals_mod.STATUS_PROPOSED)}
+
+
+@app.post("/api/goals/{goal_id}/decide")
+async def decide_goal(goal_id: str, req: GoalDecisionRequest):
+    """Tick or dismiss. Accepting writes a memory as well as keeping the goal;
+    dismissing keeps the row only so the subject is not offered again."""
+    decided = goals_mod.decide(goal_id, accepted=bool(req.accepted))
+    if decided is None:
+        raise HTTPException(status_code=404, detail="No undecided proposal with that id")
+    return decided
+
+
 @app.post("/api/goals/{goal_id}/data")
 async def add_goal_data(goal_id: str, req: DataPointRequest):
     return goals_mod.add_data_point(goal_id, req.value, req.label, req.metadata)
@@ -4418,11 +4471,57 @@ async def complete_reminder(reminder_id: str, req: ReminderCompleteRequest = Rem
 
 @app.get("/api/notes")
 async def list_notes(folder: str = None):
-    return notes_mod.list_notes(folder=folder)
+    # System docs first: they are pinned, and "what have I committed to" is a
+    # document-shaped question that belongs beside the documents. Only at the
+    # top level — a folder is somewhere you filed things, and these were never
+    # filed anywhere.
+    docs = [] if folder else systemdocs_mod.listing()
+    return docs + notes_mod.list_notes(folder=folder)
+
+
+@app.get("/api/write/start")
+async def write_start():
+    """What the Write start screen offers, and what it should not.
+
+    The LaTeX card exists only when the Academia pack is on. Offering a card
+    that opens an editor whose validate and compile do nothing is worse than
+    not offering it — the person finds out after they have started writing.
+    When it is off, the card is still described so the screen can say what to
+    switch on rather than silently having one fewer option.
+    """
+    latex_on = extensions_mod.is_enabled("academia")
+    return {
+        "cards": [
+            {
+                "id": "blank",
+                "title": "Blank document",
+                "subtitle": "",
+                "format": notes_mod.FORMAT_MARKDOWN,
+                "available": True,
+            },
+            {
+                "id": "latex",
+                "title": "LaTeX",
+                "subtitle": "Paper, thesis, anything with equations",
+                "format": notes_mod.FORMAT_LATEX,
+                "available": latex_on,
+                "requires": None if latex_on else {
+                    "pack": "academia",
+                    "label": "Academia Pack",
+                    "detail": "Turn on the Academia Pack in Extensions for LaTeX "
+                              "documents — it brings validation, compiling and "
+                              "citation checking.",
+                },
+            },
+        ],
+    }
 
 
 @app.get("/api/notes/{note_id}")
 async def get_note(note_id: str):
+    system = systemdocs_mod.get(note_id)
+    if system is not None:
+        return system
     note = notes_mod.get_note(note_id)
     if note is None:
         raise HTTPException(status_code=404, detail="Note not found")
@@ -4431,11 +4530,21 @@ async def get_note(note_id: str):
 
 @app.post("/api/notes")
 async def create_note(req: NoteRequest):
-    return notes_mod.create_note(req.title, req.content, req.folder or None)
+    return notes_mod.create_note(req.title, req.content, req.folder or None,
+                                 doc_format=req.format or notes_mod.FORMAT_MARKDOWN)
 
 
 @app.put("/api/notes/{note_id}")
 async def update_note(note_id: str, req: NoteUpdateRequest):
+    # Refused, not ignored. A save that appears to work and changes nothing is
+    # how somebody loses an afternoon's edits — and the edit is meaningless
+    # anyway, because this document is regenerated from the goals table every
+    # time it is opened.
+    if note_id in systemdocs_mod.SYSTEM_IDS:
+        raise HTTPException(
+            status_code=409,
+            detail="This page is a view of your goals, not a file. Change a goal "
+                   "by ticking a chip in a conversation or by asking Carrot.")
     result = notes_mod.update_note(note_id, req.content, title=req.title)
     if result is None:
         raise HTTPException(status_code=404, detail="Note not found")
@@ -4444,6 +4553,9 @@ async def update_note(note_id: str, req: NoteUpdateRequest):
 
 @app.delete("/api/notes/{note_id}")
 async def delete_note(note_id: str):
+    if note_id in systemdocs_mod.SYSTEM_IDS:
+        raise HTTPException(status_code=409,
+                            detail="This page is a view of your goals and cannot be deleted.")
     ok = notes_mod.delete_note(note_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Note not found")

@@ -1,7 +1,0 @@
-The module is organized as a single Python package (`carrot/`) with clear separation of concerns:
-- `app.py` defines the FastAPI application instance, mounts static `/css` and `/js` directories, and registers all HTTP routes under `/api/*`. Each route delegates to sibling modules (`conversation`, `search`, `goals`, `reminders`, `notes`, `computer_use`, `terminal`, `recap`, `leaderboard`) via short aliases imported at the top.
-- `main.py` is the CLI entry point implementing subcommands (`start`, `terminal`, `search`, `recap`, `scan`, `goals`, `reminders`, `notes`, `status`) that call into the same domain modules after initializing the database.
-- `database.py` owns the SQLite schema (conversations, messages with FTS5 virtual table, goals, reminders, config, leaderboard, message_embeddings) and provides `get_db()` / `init_db()` helpers with WAL journaling and foreign keys enabled.
-- `config.py` stores defaults in a `DEFAULTS` dict and persists overrides in the `config` table, merging runtime defaults with DB-stored values via `get_config()` / `set_config()`.
-- `__init__.py` re-exports the public API surface from all feature modules so consumers can `import carrot` and access functions directly.
-Dependency direction is one-way: `app.py` and `main.py` depend on feature modules; feature modules depend on `database` and `config`; nothing imports back into the app layer.

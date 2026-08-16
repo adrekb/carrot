@@ -74,6 +74,88 @@ def timeout_reason(seconds: Optional[int] = None) -> str:
 MAX_READ_CHARS = 20000
 MAX_LIST_ENTRIES = 300
 MAX_GREP_MATCHES = 100
+MAX_COMMAND_CHARS = 8000
+
+# ===== Spill =====
+#
+# Every limit above used to be a cliff. `read_file` returned the first 20k
+# characters and appended "... (truncated)"; the rest of the file was not
+# merely unread, it was unreachable, because the tool took no offset. Same for
+# a hundredth grep match and the 8001st character of a test run. The model was
+# told something had been cut and given no way to ask for it, so its options
+# were to guess or to say it could not tell — on a 60k-line log where the
+# failure is at the bottom, both are wrong.
+#
+# So nothing is dropped. What does not fit in the reply is written to a file
+# and the reply ends with the handle for it. Reading that handle back is not a
+# new tool: it goes through `read_file` like anything else, because a second
+# tool would cost every request its schema forever to serve the minority of
+# calls that overflow.
+SPILL_PREFIX = "carrot:output/"
+SPILL_KEEP = 200
+
+
+def _spill_dir() -> str:
+    from .config import CARROT_DIR
+
+    path = os.path.join(CARROT_DIR, "spill")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _spill(text: str, label: str) -> str:
+    """Park ``text`` on disk and return the handle that reads it back.
+
+    The handle is a path in name only — it is resolved against Carrot's own
+    spill directory, never the workspace, so it neither collides with the
+    user's files nor litters their project with the output of a build.
+    """
+    directory = _spill_dir()
+    name = f"{label}-{uuid.uuid4().hex[:12]}.txt"
+    try:
+        with open(os.path.join(directory, name), "w", encoding="utf-8", errors="replace") as handle:
+            handle.write(text)
+    except OSError as exc:  # pragma: no cover - disk full, read-only home
+        LOG.warning("could not spill %s output: %s", label, exc)
+        return ""
+    _prune_spill(directory)
+    return SPILL_PREFIX + name
+
+
+def _prune_spill(directory: str) -> None:
+    """Keep the newest ``SPILL_KEEP`` files and no more.
+
+    Spill is a cache of things the model might ask for during the turn that
+    produced them, not a record. Left alone it grows by the size of every
+    large file ever read, forever.
+    """
+    try:
+        entries = [e for e in os.scandir(directory) if e.is_file()]
+    except OSError:  # pragma: no cover
+        return
+    if len(entries) <= SPILL_KEEP:
+        return
+    entries.sort(key=lambda e: e.stat().st_mtime, reverse=True)
+    for stale in entries[SPILL_KEEP:]:
+        try:
+            os.remove(stale.path)
+        except OSError:  # pragma: no cover
+            pass
+
+
+def _resolve_spill(path: str) -> Optional[str]:
+    """Map a spill handle to a real file, or None if this is not one.
+
+    ``os.path.basename`` is what keeps this from being a file-read primitive
+    with a different name: a handle of ``carrot:output/../../../etc/passwd``
+    reduces to ``passwd`` and then fails to exist, rather than escaping.
+    """
+    if not path.startswith(SPILL_PREFIX):
+        return None
+    name = os.path.basename(path[len(SPILL_PREFIX):])
+    if not name:
+        return None
+    return os.path.join(_spill_dir(), name)
 
 
 def _now() -> str:
@@ -446,20 +528,61 @@ def revert_journal_entry(entry_id: str) -> Dict[str, Any]:
 
 # ===== Tool implementations =====
 
-def _tool_read_file(path: str, **_) -> str:
-    full = resolve(path)
+def _tool_read_file(path: str, offset: Any = 1, limit: Any = None, **_) -> str:
+    """Read a window of a text file, line-numbered from its real position.
+
+    ``offset`` is a line number rather than a byte or a page index because that
+    is the coordinate everything else in this file already speaks: grep returns
+    ``path:line``, a traceback names a line, and the numbers in this tool's own
+    output are lines. Anything else would need the model to convert, and it
+    would convert wrong.
+    """
+    spilled = _resolve_spill(path)
+    full = spilled if spilled is not None else resolve(path)
     if not os.path.isfile(full):
         return f"error: no such file: {path}"
     try:
         with open(full, "r", encoding="utf-8", errors="replace") as handle:
-            content = handle.read(MAX_READ_CHARS + 1)
+            lines = handle.read().splitlines()
     except OSError as exc:
         return f"error: {exc}"
-    truncated = len(content) > MAX_READ_CHARS
-    numbered = "\n".join(
-        f"{i + 1}\t{line}" for i, line in enumerate(content[:MAX_READ_CHARS].splitlines())
+
+    total = len(lines)
+    start = max(1, _as_int(offset, 1))
+    if start > total:
+        return f"error: {path} has {total} lines; offset {start} is past the end"
+
+    window: List[str] = []
+    size = 0
+    capped = _as_int(limit, 0)
+    for index in range(start - 1, total):
+        row = f"{index + 1}\t{lines[index]}"
+        if window and size + len(row) > MAX_READ_CHARS:
+            break
+        if capped and len(window) >= capped:
+            break
+        window.append(row)
+        size += len(row) + 1
+
+    body = "\n".join(window)
+    last = start + len(window) - 1
+    if last >= total:
+        return body
+    # The whole point of the window is that the model can ask for the next one,
+    # so the reply says which call that is rather than that something is
+    # missing. "truncated" on its own is what made the old cliff unrecoverable.
+    return (
+        f"{body}\n\n[lines {start}-{last} of {total}. "
+        f"Continue with read_file(path={path!r}, offset={last + 1}).]"
     )
-    return numbered + ("\n... (truncated)" if truncated else "")
+
+
+def _as_int(value: Any, fallback: int) -> int:
+    """Tolerate the string a model sends when a schema says integer."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
 
 
 def _tool_write_file(path: str, content: str = "", conversation_id: Optional[str] = None, **_) -> str:
@@ -580,11 +703,24 @@ def _tool_search_files(pattern: str, path: str = "", **_) -> str:
                         if regex.search(line):
                             rel = os.path.relpath(full, workspace_root())
                             matches.append(f"{rel}:{lineno}: {line.strip()[:200]}")
-                            if len(matches) >= MAX_GREP_MATCHES:
-                                return "\n".join(matches) + "\n... (more matches truncated)"
             except OSError:
                 continue
-    return "\n".join(matches) or "no matches"
+
+    if not matches:
+        return "no matches"
+    if len(matches) <= MAX_GREP_MATCHES:
+        return "\n".join(matches)
+
+    # A capped grep used to stop walking at the hundredth hit, so the count was
+    # unknown and the rest was gone. Finding out that a symbol has 900 uses is
+    # a different answer from seeing 100 of them, and it is usually the one
+    # that decides whether to rename it.
+    shown = "\n".join(matches[:MAX_GREP_MATCHES])
+    handle_path = _spill("\n".join(matches), "search")
+    tail = (f"\n\n[{MAX_GREP_MATCHES} of {len(matches)} matches. "
+            f"All of them: read_file(path={handle_path!r}).]") if handle_path else (
+            f"\n\n[{MAX_GREP_MATCHES} of {len(matches)} matches shown.]")
+    return shown + tail
 
 
 def _tool_run_command(command: str, **_) -> str:
@@ -592,9 +728,32 @@ def _tool_run_command(command: str, **_) -> str:
 
     result = terminal_mod.execute_command(command, cwd=workspace_root(), timeout=60)
     status = "ok" if result["success"] else f"exit {result['returncode']}"
-    output = result["output"][:8000]
+    full = result["output"] or ""
+    output = full[:MAX_COMMAND_CHARS]
+    if len(full) > MAX_COMMAND_CHARS:
+        # Keep the end, not just the start. A failing test run puts the
+        # summary and the traceback last, and the first 8000 characters of it
+        # are collection noise — the old cut threw away the only part anyone
+        # runs the command to see.
+        #
+        # The notice is paid for *inside* the cap, not added on top of it.
+        # Spending the whole budget on the excerpt and then appending "…
+        # omitted, full output at …" makes the reply longer than the limit it
+        # is enforcing, and for output that is barely over, longer than the
+        # untruncated original — the one case where truncating costs context
+        # instead of saving it. Priced at the worst-case omission count so the
+        # reservation is always an upper bound on the real one.
+        handle_path = _spill(full, "command")
+        where = (f" Full output: read_file(path={handle_path!r})." if handle_path else "")
+        notice = f"\n\n[... {len(full)} characters omitted from the middle.{where}]\n\n"
+        budget = max(0, MAX_COMMAND_CHARS - len(notice))
+        head, tail = budget - budget // 4, budget // 4
+        omitted = len(full) - head - tail
+        output = (f"{full[:head]}\n\n"
+                  f"[... {omitted} characters omitted from the middle.{where}]\n\n"
+                  f"{full[-tail:]}")
     if not result["success"]:
-        output += _missing_component_hint(result["output"])
+        output += _missing_component_hint(full)
     return f"[{status}]\n{output}"
 
 
@@ -1065,6 +1224,19 @@ def _tool_show_artifact(kind: str, content: str = "", title: str = "",
     return f"[[carrot:artifact:{artifact['id']}]] showed \"{label}\" in the chat"
 
 
+def _tool_list_goals(**_) -> str:
+    """What the user has committed to, and what is late.
+
+    Chat could propose a goal and could not read one back, so "what's the
+    status on my goals?" was a question the app collected the answer to and
+    could not say. Rendering lives in `goals.render_status` rather than here,
+    so an editor asking the same thing over MCP gets the same sentences.
+    """
+    from . import goals as goals_mod
+
+    return goals_mod.render_status()
+
+
 def _tool_read_url(url: str, **_) -> str:
     """Read one web page.
 
@@ -1365,10 +1537,20 @@ TOOLS: Dict[str, Dict[str, Any]] = {
         "handler": _tool_read_file,
         "mutating": False,
         "risk": "low",
-        "description": "Read a UTF-8 text file from the workspace. Returns line-numbered content.",
+        "description": "Read a UTF-8 text file from the workspace. Returns line-numbered content. "
+                       "Long files come back a window at a time and the reply says which call "
+                       "gets the next one, so nothing is out of reach.",
         "parameters": {
             "type": "object",
-            "properties": {"path": {"type": "string", "description": "Workspace-relative file path"}},
+            "properties": {
+                "path": {"type": "string", "description": "Workspace-relative file path, or a "
+                                                          "carrot:output/... handle returned by "
+                                                          "another tool"},
+                "offset": {"type": "integer", "description": "First line to read, 1-based. "
+                                                             "Defaults to the start of the file."},
+                "limit": {"type": "integer", "description": "Maximum lines to return. Omit to "
+                                                            "fill the window."},
+            },
             "required": ["path"],
         },
     },
@@ -1724,6 +1906,18 @@ TOOLS: Dict[str, Dict[str, Any]] = {
             },
             "required": ["kind"],
         },
+    },
+    "list_goals": {
+        "handler": _tool_list_goals,
+        "mutating": False,
+        "risk": "low",
+        "description": (
+            "The user's goals: what is open, what is past its date, what is "
+            "finished. Use it for any question about goals, deadlines, "
+            "commitments or what they are working towards — the answer is these "
+            "rows, not something to guess at from the conversation."
+        ),
+        "parameters": {"type": "object", "properties": {}},
     },
     "read_url": {
         "handler": _tool_read_url,
