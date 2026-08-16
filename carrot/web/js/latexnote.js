@@ -378,6 +378,9 @@ function dismissLatexEdit() {
 
 // ---------- Storage and export ----------
 
+// Superseded by `saveLatexDocSmart`, which updates the open document instead
+// of posting a new one every time. Kept because the old button may be cached
+// in a page somebody has not reloaded.
 async function saveLatexDoc() {
     const title = document.getElementById('latex-title').value.trim() || 'Untitled document';
     const content = document.getElementById('latex-source').value;
@@ -396,6 +399,7 @@ async function saveLatexDoc() {
 
 function newLatexDoc() {
     if (latexDirty && !confirm('Start a new document? The current one is unsaved.')) return;
+    currentLatexNoteId = null;
     document.getElementById('latex-title').value = '';
     document.getElementById('latex-source').value = '';
     latexDirty = false;
@@ -445,4 +449,54 @@ function loadLatexTab() {
     catch (_) { setLatexMode('split'); }
     latexChanged();
     latexSelectionChanged();
+}
+
+// ===== Opening an existing LaTeX document =====
+//
+// The LaTeX pane could make documents and could not open one. `saveLatexDoc`
+// posted a new note every time, so editing yesterday's paper meant a second
+// copy of it, and the tab itself started blank however much you had written.
+// Now the format lives on the file, so Write can route a document to the
+// editor it belongs in and this is the other end of that.
+
+let currentLatexNoteId = null;
+
+function openLatexDoc(note) {
+    currentLatexNoteId = note.id;
+    document.getElementById('latex-title').value = note.title || 'Untitled document';
+    document.getElementById('latex-source').value = note.body || '';
+    latexDirty = false;
+    switchTab('latex');
+    renderLatexPreview();
+    renderLatexOutline();
+    const stats = document.getElementById('latex-stats');
+    if (stats) stats.textContent = '';
+}
+
+// Saving updates the document that is open, and only creates one when there
+// is nothing open — which is what "save" means everywhere else and did not
+// mean here.
+async function saveLatexDocSmart() {
+    const title = document.getElementById('latex-title').value.trim() || 'Untitled document';
+    const content = document.getElementById('latex-source').value;
+    const stats = document.getElementById('latex-stats');
+    try {
+        if (currentLatexNoteId) {
+            await api(`/api/notes/${currentLatexNoteId}`, {
+                method: 'PUT',
+                body: JSON.stringify({ content, title }),
+            });
+        } else {
+            const created = await api('/api/notes', {
+                method: 'POST',
+                body: JSON.stringify({ title, content, folder: '', format: 'latex' }),
+            });
+            currentLatexNoteId = created.id;
+        }
+        latexDirty = false;
+        if (stats) stats.textContent = 'Saved.';
+        renderLatexOutline();
+    } catch (err) {
+        if (stats) stats.textContent = 'Could not save: ' + err;
+    }
 }

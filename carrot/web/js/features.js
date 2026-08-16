@@ -227,6 +227,7 @@ async function loadNotes() {
     if (!noteAutosaveInterval) {
         noteAutosaveInterval = setInterval(noteAutosaveTick, 1500);
     }
+    if (!currentNoteId) showWriteStart();
 }
 
 function renderNotesList() {
@@ -256,16 +257,30 @@ function renderNotesList() {
 function filterNotesList() { renderNotesList(); }
 
 async function newNote() {
+    // The sidebar + makes a markdown document without asking, which is what a
+    // plus means. The start screen is where the choice lives.
     const created = await api('/api/notes', {
         method: 'POST',
-        body: JSON.stringify({ title: 'Untitled note', content: '' }),
+        body: JSON.stringify({ title: 'Untitled note', content: '', format: 'markdown' }),
     });
     await loadNotes();
+    hideWriteStart();
     openNote(created.id);
 }
 
 async function openNote(noteId) {
     const note = await api(`/api/notes/${noteId}`);
+    // A LaTeX document is a different editor, not a different setting on this
+    // one. The format is on the file, so opening it is where that gets read —
+    // which is why a document keeps being what it is across reloads and across
+    // whatever anybody last created.
+    if (note.format === 'latex' && typeof openLatexDoc === 'function') {
+        hideWriteStart();
+        openLatexDoc(note);
+        return;
+    }
+    hideWriteStart();
+    document.getElementById('note-editor-host').classList.remove('hidden');
     currentNoteId = noteId;
     // A read-only doc is a view of the database. Autosave must not fire on it
     // — the server refuses the write, but a save that is attempted and refused
@@ -3597,4 +3612,172 @@ function formatGoalDate(iso) {
     if (!month) return iso;
     if (parts.length >= 3) return `${parseInt(parts[2], 10)} ${month} ${parts[0]}`;
     return `${month} ${parts[0]}`;
+}
+
+// ===== Write start screen =====
+//
+// A start screen rather than an empty state. "Select a note on the left" is a
+// sentence that tells somebody the thing they can already see; Docs opens with
+// what you can start and what you were last working on, which is the whole
+// screen doing work instead of apologising for being empty.
+//
+// The two blanks are cards and not a chooser behind one card. Markdown and
+// LaTeX are different documents, not a setting on the same document, and
+// making one of them a second click says the opposite.
+
+let writeStartCards = null;
+
+async function showWriteStart() {
+    const start = document.getElementById('write-start');
+    const empty = document.getElementById('note-empty');
+    if (!start) return;
+    document.getElementById('note-editor-host').classList.add('hidden');
+    document.getElementById('note-fallback').classList.add('hidden');
+    if (empty) empty.classList.add('hidden');
+    // The toolbar belongs to a document. On a start screen there is no
+    // document, so Send, Obsidian and Delete are three buttons pointed at
+    // nothing — and Delete pointed at nothing is the one worth removing.
+    const toolbar = document.getElementById('note-toolbar');
+    if (toolbar) toolbar.classList.add('hidden');
+    start.classList.remove('hidden');
+    currentNoteId = null;
+
+    if (!writeStartCards) {
+        try { writeStartCards = (await api('/api/write/start')).cards || []; }
+        catch (_) { writeStartCards = [{ id: 'blank', title: 'Blank document', format: 'markdown', available: true }]; }
+    }
+    renderWriteStartCards();
+    renderWriteStartRecents();
+}
+
+function hideWriteStart() {
+    const start = document.getElementById('write-start');
+    if (start) start.classList.add('hidden');
+    const toolbar = document.getElementById('note-toolbar');
+    if (toolbar) toolbar.classList.remove('hidden');
+}
+
+function renderWriteStartCards() {
+    const host = document.getElementById('write-start-cards');
+    host.innerHTML = '';
+    for (const card of writeStartCards) {
+        const el = document.createElement('button');
+        el.type = 'button';
+        el.className = 'write-card' + (card.available ? '' : ' write-card-locked');
+        el.dataset.cardId = card.id;
+        el.innerHTML =
+            `<span class="write-card-face write-card-face-${escHtml(card.id)}">`
+            + writeCardArt(card) + `</span>`
+            + `<span class="write-card-title">${escHtml(card.title)}</span>`
+            + (card.subtitle ? `<span class="write-card-sub">${escHtml(card.subtitle)}</span>` : '')
+            + (card.available ? '' : `<span class="write-card-sub write-card-needs">Needs the ${escHtml((card.requires || {}).label || 'pack')}</span>`);
+        el.title = card.available ? '' : ((card.requires || {}).detail || '');
+        el.onclick = () => card.available
+            ? startNewDocument(card)
+            : explainLockedCard(card);
+        host.appendChild(el);
+    }
+}
+
+// A page, drawn rather than photographed. Docs shows a thumbnail of the
+// template; there is no template here, so the face shows the shape of the
+// thing — prose lines for markdown, an equation for LaTeX.
+function writeCardArt(card) {
+    if (card.format === 'latex') {
+        return `<svg viewBox="0 0 96 124" aria-hidden="true">
+            <rect x="18" y="14" width="60" height="12" rx="2" class="wc-ink"/>
+            <rect x="18" y="36" width="60" height="4" rx="2" class="wc-faint"/>
+            <rect x="18" y="46" width="46" height="4" rx="2" class="wc-faint"/>
+            <rect x="26" y="62" width="44" height="20" rx="3" class="wc-accent"/>
+            <rect x="18" y="94" width="60" height="4" rx="2" class="wc-faint"/>
+            <rect x="18" y="104" width="38" height="4" rx="2" class="wc-faint"/>
+        </svg>`;
+    }
+    // Smaller than it wants to be. Beside the LaTeX face — which is a page
+    // with writing on it — a plus at a third of the width reads as a different
+    // kind of object rather than the same object empty, and the row stops
+    // looking like a set of documents.
+    return `<svg viewBox="0 0 96 124" aria-hidden="true">
+        <rect x="46" y="55" width="4" height="18" rx="2" class="wc-accent"/>
+        <rect x="39" y="62" width="18" height="4" rx="2" class="wc-accent"/>
+    </svg>`;
+}
+
+async function startNewDocument(card) {
+    // Straight in. A blank document is the least ambiguous request in the
+    // application and it should not be answered with a dialogue.
+    const created = await api('/api/notes', {
+        method: 'POST',
+        body: JSON.stringify({
+            title: card.format === 'latex' ? 'Untitled document' : 'Untitled note',
+            content: card.format === 'latex' ? LATEX_STARTER : '',
+            format: card.format,
+        }),
+    });
+    writeStartCards = null;          // pack state may have changed since load
+    await loadNotes();
+    hideWriteStart();
+    openNote(created.id);
+}
+
+// `String.raw`, because this is LaTeX: a plain template literal reads
+// `\usepackage` as a unicode escape and refuses to parse the file at all —
+// which takes every function in it down, not just this one.
+const LATEX_STARTER = String.raw`\documentclass{article}
+\usepackage{amsmath}
+
+\title{Untitled document}
+\author{}
+
+\begin{document}
+\maketitle
+
+\section{Introduction}
+
+\end{document}
+`;
+
+function explainLockedCard(card) {
+    const detail = (card.requires || {}).detail
+        || 'This document type needs an extension that is switched off.';
+    alert(detail);
+}
+
+function renderWriteStartRecents() {
+    const host = document.getElementById('write-start-recents');
+    host.innerHTML = '';
+    const recents = [...(notesCache || [])]
+        .sort((a, b) => (b.created_at || 0) - (a.created_at || 0))
+        .slice(0, 12);
+    if (!recents.length) {
+        host.innerHTML = '<div class="empty">Nothing written yet.</div>';
+        return;
+    }
+    for (const note of recents) {
+        const el = document.createElement('button');
+        el.type = 'button';
+        el.className = 'write-recent';
+        const preview = (note.body || '').replace(/[#*`>\-]/g, '').trim().slice(0, 220);
+        el.innerHTML =
+            `<span class="write-recent-page">${escHtml(preview)}</span>`
+            + `<span class="write-recent-foot">`
+            + `<span class="write-recent-kind write-recent-kind-${escHtml(note.format || 'markdown')}">`
+            + (note.system ? '★' : (note.format === 'latex' ? 'TeX' : 'Doc')) + `</span>`
+            + `<span class="write-recent-title">${escHtml(note.title || note.id)}</span>`
+            + `<span class="write-recent-when">${escHtml(writeWhen(note.created_at))}</span>`
+            + `</span>`;
+        el.onclick = () => { hideWriteStart(); openNote(note.id); };
+        host.appendChild(el);
+    }
+}
+
+function writeWhen(epochSeconds) {
+    if (!epochSeconds) return '';
+    const then = new Date(epochSeconds * 1000);
+    const days = Math.floor((Date.now() - then.getTime()) / 86400000);
+    if (days <= 0) return 'Today';
+    if (days === 1) return 'Yesterday';
+    if (days < 7) return `${days} days ago`;
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return `${months[then.getMonth()]} ${then.getDate()}, ${then.getFullYear()}`;
 }

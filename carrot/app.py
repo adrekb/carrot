@@ -269,6 +269,8 @@ class NoteRequest(BaseModel):
     title: str
     content: str = ""
     folder: str = ""
+    # Markdown or LaTeX, decided when the document is made and kept on it.
+    format: str = "markdown"
 
 
 class NoteUpdateRequest(BaseModel):
@@ -4477,6 +4479,44 @@ async def list_notes(folder: str = None):
     return docs + notes_mod.list_notes(folder=folder)
 
 
+@app.get("/api/write/start")
+async def write_start():
+    """What the Write start screen offers, and what it should not.
+
+    The LaTeX card exists only when the Academia pack is on. Offering a card
+    that opens an editor whose validate and compile do nothing is worse than
+    not offering it — the person finds out after they have started writing.
+    When it is off, the card is still described so the screen can say what to
+    switch on rather than silently having one fewer option.
+    """
+    latex_on = extensions_mod.is_enabled("academia")
+    return {
+        "cards": [
+            {
+                "id": "blank",
+                "title": "Blank document",
+                "subtitle": "",
+                "format": notes_mod.FORMAT_MARKDOWN,
+                "available": True,
+            },
+            {
+                "id": "latex",
+                "title": "LaTeX",
+                "subtitle": "Paper, thesis, anything with equations",
+                "format": notes_mod.FORMAT_LATEX,
+                "available": latex_on,
+                "requires": None if latex_on else {
+                    "pack": "academia",
+                    "label": "Academia Pack",
+                    "detail": "Turn on the Academia Pack in Extensions for LaTeX "
+                              "documents — it brings validation, compiling and "
+                              "citation checking.",
+                },
+            },
+        ],
+    }
+
+
 @app.get("/api/notes/{note_id}")
 async def get_note(note_id: str):
     system = systemdocs_mod.get(note_id)
@@ -4490,7 +4530,8 @@ async def get_note(note_id: str):
 
 @app.post("/api/notes")
 async def create_note(req: NoteRequest):
-    return notes_mod.create_note(req.title, req.content, req.folder or None)
+    return notes_mod.create_note(req.title, req.content, req.folder or None,
+                                 doc_format=req.format or notes_mod.FORMAT_MARKDOWN)
 
 
 @app.put("/api/notes/{note_id}")
