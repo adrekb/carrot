@@ -489,12 +489,15 @@ class TestPlannerTabIsReachable:
         engine shipped with: working code with nothing anywhere that opens it.
         """
         html = self.read("index.html")
-        assert 'class="work-shortcut" data-tab="planner"' in html
+        # The rail's own class. It was `work-shortcut` when Work was a start
+        # screen with a row of links; the drive renamed it, and a test that
+        # keeps asserting the old name stops protecting anything.
+        assert 'class="drive-place" data-tab="planner"' in html
 
     def test_its_way_in_is_gated_with_its_pack(self):
         """A live door to a pack that is switched off is worse than no door."""
         js = self.read("js", "app.js")
-        assert '.work-shortcut[data-tab="${tab}"]' in js
+        assert '.drive-place[data-tab="${tab}"]' in js
 
     def test_the_view_exists(self):
         assert 'id="view-planner"' in self.read("index.html")

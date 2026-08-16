@@ -129,9 +129,19 @@ class TestTheScreen:
         assert 'id="write-start-recents"' in html
 
     def test_recents_are_newest_first(self):
+        """Still true, and no longer the browser's job.
+
+        Work lists documents and indexed files together, and two lists that are
+        each sorted interleave wrongly when the client concatenates them — so
+        the ordering moved to `/api/work/items`, over the whole set. The
+        property is asserted against the endpoint in test_work.py; what matters
+        here is that the browser does not then re-order what it was given.
+        """
         js = read("js", "features.js")
-        block = js[js.index("function renderWriteStartRecents"):]
-        assert "(b.created_at || 0) - (a.created_at || 0)" in block
+        block = js[js.index("async function renderWriteStartRecents"):]
+        body = block[:block.index("\n}")]
+        assert ".sort(" not in body, "the browser is re-sorting a list the server ordered"
+        assert "/api/work/items" in body
 
     def test_opening_a_document_leaves_the_start_screen(self):
         js = read("js", "features.js")

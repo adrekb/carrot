@@ -277,8 +277,15 @@ async function editSelectionWithAI() {
     }
     latexSelection = { start, end, text: source.value.slice(start, end) };
 
-    const instruction = await inlineTextPrompt(
-        'What should change about the selected text?', 'simplify this');
+    // An object, not two strings. inlineTextPrompt destructures its first
+    // argument, so a string argument yields undefined for every field — the
+    // dialogue opened titled "Enter a value" with an empty box, which is a
+    // question nobody can answer because it does not say what it is asking.
+    const instruction = await inlineTextPrompt({
+        title: 'What should change about the selected text?',
+        placeholder: 'simplify this',
+        action: 'Rewrite',
+    });
     if (!instruction) return;
 
     bar.classList.remove('hidden');

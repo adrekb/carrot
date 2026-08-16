@@ -15,6 +15,7 @@ import re
 import json
 import uuid
 import contextlib
+from datetime import datetime
 from urllib.parse import urlparse
 import queue
 import logging
@@ -4558,6 +4559,216 @@ async def write_start():
                 "format": notes_mod.FORMAT_SLIDES,
                 "available": True,
             },
+        ],
+    }
+
+
+# ===== Work =====
+#
+# One listing for everything Work holds. Documents you wrote and files you
+# pointed Carrot at are different things in the database and the same thing on
+# this screen — something with a name, a kind and a date, that you are trying
+# to find again. Merging them here rather than in the browser means the sort is
+# done once, over the whole set, instead of over two lists that each look
+# sorted and interleave wrongly.
+
+def _work_preview(doc_format, body):
+    """The first lines of a document, at a size nobody reads.
+
+    You recognise your own writing by its shape — which only works if what is
+    shown is writing. A canvas is JSON and a deck is JSON-adjacent markup, so
+    for those the raw body is a tile of `{"type":"excalidraw","version":2,…`,
+    which is not a preview of anything. A canvas shows nothing rather than
+    showing its file format; a deck shows the words on its slides.
+    """
+    body = body or ""
+    if doc_format == notes_mod.FORMAT_CANVAS:
+        return ""
+    if doc_format == notes_mod.FORMAT_SLIDES:
+        try:
+            deck = json.loads(body)
+        except (ValueError, TypeError):
+            return re.sub(r"^-{3,}$", " ", body, flags=re.MULTILINE)[:220]
+        words = []
+        for slide in (deck.get("slides") or []):
+            for el in (slide.get("elements") or []):
+                if el.get("type") == "text" and el.get("text"):
+                    words.append(el["text"])
+        return " · ".join(words)[:220]
+    return body[:220]
+
+
+def _work_haystack(doc_format, body):
+    """Everything a search should look at, which is not what a tile shows.
+
+    The preview is 220 characters because that is what fits; searching it would
+    make a document findable by its opening paragraph and invisible by its
+    fourth. A canvas previews as nothing — showing a tile of `{"type":
+    "excalidraw"…` recognises nothing — but its labels are still words someone
+    typed and still worth finding, so the search reads them even though the
+    tile does not show them.
+    """
+    body = body or ""
+    if doc_format == notes_mod.FORMAT_CANVAS:
+        try:
+            scene = json.loads(body)
+        except (ValueError, TypeError):
+            return ""
+        return " ".join(
+            el["text"] for el in (scene.get("elements") or [])
+            if isinstance(el, dict) and el.get("text")
+        )
+    if doc_format == notes_mod.FORMAT_SLIDES:
+        try:
+            deck = json.loads(body)
+        except (ValueError, TypeError):
+            return body
+        words = []
+        for slide in (deck.get("slides") or []):
+            for el in (slide.get("elements") or []):
+                if el.get("text"):
+                    words.append(el["text"])
+            if slide.get("notes"):
+                words.append(slide["notes"])
+        return " ".join(words)
+    return body
+
+
+def _work_document_items(homes, names):
+    for note in notes_mod.list_notes():
+        home = homes.get(note.get("id"))
+        doc_format = notes_mod.normalize_format(note.get("format"))
+        body = note.get("body")
+        name = note.get("title") or note.get("id")
+        yield {
+            "id": note.get("id"),
+            "kind": "document",
+            "name": name,
+            "format": doc_format,
+            "workspace": home or "",
+            "workspace_name": names.get(home, ""),
+            "updated": note.get("created_at") or 0,
+            "path": note.get("path") or "",
+            "preview": _work_preview(doc_format, body),
+            # Stripped before the response goes out: it is the whole document,
+            # and sending every body to draw a grid of tiles would make the
+            # listing weigh what the vault weighs.
+            "_haystack": (name + " " + _work_haystack(doc_format, body)).lower(),
+        }
+
+
+def _work_file_items(limit):
+    """Indexed files. `updated` is normalised to epoch seconds to match the
+    documents, because a list sorted on two different time formats is a list
+    that is not sorted."""
+    for doc in indexer_mod.list_documents(limit=limit):
+        indexed = doc.get("indexed_at")
+        if isinstance(indexed, str):
+            try:
+                indexed = datetime.fromisoformat(indexed).timestamp()
+            except ValueError:
+                indexed = 0
+        path = doc.get("path") or ""
+        name = os.path.basename(path) or path
+        yield {
+            "id": path,
+            "kind": "file",
+            "name": name,
+            "format": (os.path.splitext(path)[1].lstrip(".") or "file").lower(),
+            "workspace": "",
+            "workspace_name": "",
+            "updated": indexed or 0,
+            "path": path,
+            "preview": "",
+            # The whole path, so "notes/2024" finds a file by where it lives.
+            "_haystack": path.lower(),
+        }
+
+
+@app.get("/api/work/items")
+async def work_items(workspace: str = "", kind: str = "", q: str = "", limit: int = 500):
+    try:
+        homes = workspaces_mod.workspace_map(workspaces_mod.KIND_NOTE)
+        names = {w["id"]: w.get("name") or "" for w in workspaces_mod.list_workspaces()}
+    except Exception:
+        homes, names = {}, {}
+
+    items = list(_work_document_items(homes, names))
+    # A file is not filed in a workspace, so asking for one excludes them all
+    # rather than showing every file under every workspace.
+    partial = ""
+    if not workspace:
+        try:
+            items.extend(_work_file_items(limit))
+        except Exception:
+            # Said out loud rather than swallowed. A listing that quietly drops
+            # every file looks exactly like a listing with no files in it, and
+            # the person reading it has no way to tell those apart.
+            LOG.exception("work: could not list indexed files")
+            partial = "Indexed files could not be read, so only documents are shown."
+
+    if workspace:
+        items = [i for i in items if i["workspace"] == workspace]
+    if kind:
+        items = [i for i in items if i["kind"] == kind or i["format"] == kind]
+    if q:
+        needle = q.lower()
+        items = [i for i in items if needle in i["_haystack"]]
+
+    items.sort(key=lambda i: i["updated"] or 0, reverse=True)
+    total = len(items)
+    shown = [{k: v for k, v in i.items() if k != "_haystack"} for i in items[:limit]]
+    return {"items": shown, "total": total, "partial": partial}
+
+
+class BulkDeleteRequest(BaseModel):
+    ids: List[str]
+
+
+@app.post("/api/work/delete")
+async def work_delete(req: BulkDeleteRequest):
+    """Delete several documents at once.
+
+    One request rather than one per document, because the case this exists for
+    is a hundred and sixty copies of the same note — and a hundred and sixty
+    round trips is a progress bar nobody asked for and a half-finished delete
+    if the window closes partway.
+
+    System docs are refused individually rather than failing the whole call: a
+    selection that happens to include Goals should delete everything else and
+    say what it skipped.
+    """
+    deleted, skipped = [], []
+    for note_id in req.ids:
+        if note_id in systemdocs_mod.SYSTEM_IDS:
+            skipped.append(note_id)
+            continue
+        try:
+            if notes_mod.delete_note(note_id):
+                deleted.append(note_id)
+            else:
+                skipped.append(note_id)
+        except Exception:
+            skipped.append(note_id)
+    return {"deleted": len(deleted), "skipped": len(skipped), "ids": deleted}
+
+
+@app.get("/api/work/places")
+async def work_places():
+    """The left rail: workspaces, with how much of Work is in each."""
+    try:
+        homes = workspaces_mod.workspace_map(workspaces_mod.KIND_NOTE)
+        spaces = workspaces_mod.list_workspaces()
+    except Exception:
+        homes, spaces = {}, []
+    counts = {}
+    for home in homes.values():
+        counts[home] = counts.get(home, 0) + 1
+    return {
+        "workspaces": [
+            {"id": w["id"], "name": w.get("name") or "Untitled",
+             "count": counts.get(w["id"], 0)}
+            for w in spaces
         ],
     }
 

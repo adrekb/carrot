@@ -131,17 +131,34 @@ const FOLDED_INTO_WRITE = { latex: 'notes', graph: 'notes' };
 // settings appear in the corner while it is the one answering. Agent used to
 // be a page of its own with a task box and three cards of policy above it,
 // which made "ask about this" and "go and do this" feel like two applications.
+// `owns` is hidden when the mode is not showing; `reveal` is the subset the
+// mode actually turns on. The agent's plan and result stay hidden until a run
+// fills them, and the availability warning until there is something wrong —
+// so agent mode must not switch them all on merely by being entered.
 const CHAT_MODES = {
-    chat:  [],
-    agent: ['agent-settings'],
+    chat:  { owns: [], reveal: [] },
+    // Moving these out of the transcript so they survive it being cleared also
+    // took them out of its show/hide, which is why "Browser control is
+    // unavailable" started appearing under an ordinary chat — a warning about
+    // a tool that chat does not use.
+    agent: { owns: ['agent-settings', 'agent-availability', 'agent-plan',
+                    'agent-steps', 'agent-result'],
+             reveal: ['agent-settings', 'agent-steps'] },
 };
 
 function setChatMode(mode) {
-    for (const [name, ids] of Object.entries(CHAT_MODES)) {
-        for (const id of ids) {
-            document.getElementById(id)?.classList.toggle('hidden', name !== mode);
+    for (const [name, spec] of Object.entries(CHAT_MODES)) {
+        const active = name === mode;
+        for (const id of spec.owns) {
+            const el = document.getElementById(id);
+            if (!el) continue;
+            if (!active) el.classList.add('hidden');
+            else if (spec.reveal.includes(id)) el.classList.remove('hidden');
         }
     }
+    // Whether browser control is actually missing is the agent's own to say,
+    // and loadAgent() below asks — so the warning is only unhidden by
+    // renderAgentAvailability finding something wrong, never by arriving here.
     // `on`, not `active` — that is the class .mode-opt is styled on, the same
     // one the LaTeX split/reading switch uses. Setting `active` matched no rule
     // at all, so both halves rendered identically and there was no way to tell
@@ -230,6 +247,26 @@ function switchTab(tab) {
     };
     if (loaders[tab]) loaders[tab]();
 }
+
+
+// ===== Undo, everywhere =====
+//
+// Three of the four editors already have it: Milkdown keeps prose history,
+// Excalidraw keeps the canvas's, and a textarea keeps LaTeX's. Those are all
+// reached by the browser's own Ctrl+Z, so this must not swallow the event when
+// one of them has focus — it only steps in for slides, which had no history at
+// all until one was written for it.
+document.addEventListener('keydown', (e) => {
+    const ctrl = e.ctrlKey || e.metaKey;
+    if (!ctrl || e.key.toLowerCase() !== 'z' && e.key.toLowerCase() !== 'y') return;
+    // Anything with its own undo keeps it.
+    const el = e.target;
+    if (el && (el.isContentEditable || el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return;
+    if (typeof isWriteMode !== 'function' || !isWriteMode('slides')) return;
+    e.preventDefault();
+    const redo = e.key.toLowerCase() === 'y' || e.shiftKey;
+    if (redo) redoSlides(); else undoSlides();
+}, true);
 
 function focusCmd() {
     document.getElementById('cmd-input').focus();
@@ -1743,11 +1780,17 @@ function renderSearchModes() {
 
     const list = document.getElementById('search-mode-list');
     if (!list) return;
+    // A tick on the one that is set, rather than a filled block behind it. The
+    // block was the loudest thing in the menu and it was marking the option you
+    // had already chosen — the thing you least need drawn to your attention
+    // while reading the other two.
     list.innerHTML = searchModes.map(mode => `
         <button class="pop-item${mode.id === currentSearchMode ? ' active' : ''}"
                 onclick="setSearchMode('${escHtml(mode.id)}')">
             <span class="pop-item-name">${escHtml(mode.label)}</span>
             <span class="pop-item-sub">${escHtml(mode.help)}</span>
+            ${mode.id === currentSearchMode
+                ? '<svg class="ico pop-item-check"><use href="#i-check"/></svg>' : ''}
         </button>`).join('');
 }
 
@@ -3665,7 +3708,7 @@ async function applyExtensionTabs() {
         // Nav items and the Work shortcuts alike: with the sidebar collapsed to
         // four, a pack's way in is a button on the Work screen, and gating one
         // without the other leaves a live door to a switched-off pack.
-        document.querySelectorAll(`.nav-item[data-tab="${tab}"], .work-shortcut[data-tab="${tab}"]`)
+        document.querySelectorAll(`.nav-item[data-tab="${tab}"], .drive-place[data-tab="${tab}"]`)
             .forEach(el => el.classList.toggle('hidden', !on));
         // Somebody sitting on a tab when its pack is switched off should not
         // be left looking at a view they can no longer navigate back to.
@@ -3687,6 +3730,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     loadWorkspaces();
     // Before the first switchTab, so a disabled pack's tab never paints.
     await applyExtensionTabs();
+    // Chat is the mode the app opens in, and saying so is what hides the
+    // agent's settings. Without this the class list has never run, so the
+    // control sits in the tab strip until somebody toggles the switch once.
+    setChatMode('chat');
     // Onboarding decides whether the bootstrap splash runs at all.
     maybeShowOnboarding();
     switchTab('workspace');
