@@ -4369,3 +4369,24 @@ document.addEventListener('mousedown', (e) => {
     if (e.target.closest('#privacy-panel') || e.target.closest('#privacy-chip')) return;
     togglePrivacyPanel();
 });
+
+// Escape closes it too.
+//
+// Clicking outside and clicking the chip again were the only two ways out, and
+// both are aimed clicks at a strip a few pixels wide down the edge of the
+// window — the panel opens upward from the very bottom of the rail, so on a
+// short window it lands over most of what you would otherwise click, and with
+// the rail collapsed the chip it toggles is a 60px target with a dot in it.
+// Reported as not being able to make it go away, which is exactly right.
+//
+// Bound in the capture phase so it runs before the composer's own Escape
+// handling: with a panel open over the page, dismissing the panel is what
+// Escape means, and it should not also clear what somebody was typing.
+document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const panel = document.getElementById('privacy-panel');
+    if (!panel || panel.classList.contains('hidden')) return;
+    e.stopPropagation();
+    togglePrivacyPanel();
+    document.getElementById('privacy-chip')?.focus();
+}, true);

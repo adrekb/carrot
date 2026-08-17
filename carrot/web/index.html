@@ -1331,10 +1331,15 @@
       </p>
 
       <div class="composer">
-        <input type="text" id="ws-new-name" placeholder="New workspace name">
+        <!-- Enter submits. A name field beside an Add button is a form to
+             everyone who has ever used one, and typing a name then pressing
+             Enter did nothing here. -->
+        <input type="text" id="ws-new-name" placeholder="New workspace name"
+               onkeydown="if(event.key==='Enter')createWorkspace()">
         <select id="ws-new-folder"></select>
         <button class="btn btn-primary" onclick="createWorkspace()">Add workspace</button>
-        <input type="text" id="folder-new-name" placeholder="New folder name">
+        <input type="text" id="folder-new-name" placeholder="New folder name"
+               onkeydown="if(event.key==='Enter')createFolder()">
         <select id="folder-new-parent"></select>
         <button class="btn btn-ghost" onclick="createFolder()">Add folder</button>
       </div>
