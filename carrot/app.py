@@ -4637,6 +4637,131 @@ def _work_preview(doc_format, body):
     return body[:220]
 
 
+# How many shapes a tile is worth. A canvas can hold hundreds; past a couple
+# of dozen at tile size they stop being distinguishable shapes and become
+# grey noise, and every one costs bytes in a listing that draws the whole
+# drive. The count of what was dropped is kept so the tile can say so.
+_THUMB_MAX_SHAPES = 18
+# Text long enough to recognise a slide by, short enough not to ship the deck.
+_THUMB_TEXT_CHARS = 60
+
+
+def _thumb_shapes(elements, box_keys, limit=_THUMB_MAX_SHAPES, frame=None):
+    """Elements as unit-square geometry, or None if there is nothing to draw.
+
+    A canvas has no edges, so it is normalised against the bounding box of
+    everything on it: a canvas whose boxes sit at x=2400 then looks like its
+    own arrangement rather than an empty tile with a speck in the corner.
+
+    A slide does have edges, and `frame` is them. Normalising a slide against
+    its contents would mean a decoration hanging off the left edge — the
+    template ships one at x=-228 — dragging the title inward and reporting a
+    layout the slide does not have. Anything outside the frame lands outside
+    the unit square and is clipped when drawn, which is what the slide does.
+    """
+    wk, hk = box_keys
+    boxed = []
+    for el in elements:
+        try:
+            x, y = float(el.get("x", 0)), float(el.get("y", 0))
+            w, h = float(el.get(wk) or 0), float(el.get(hk) or 0)
+        except (TypeError, ValueError):
+            continue
+        # Zero-area elements have no position to speak of, and negative extents
+        # come from shapes dragged right-to-left.
+        if w < 0:
+            x, w = x + w, -w
+        if h < 0:
+            y, h = y + h, -h
+        boxed.append((x, y, w, h, el))
+    if not boxed:
+        return None
+
+    if frame:
+        left, top = 0.0, 0.0
+        span_x = float(frame[0]) or 1.0
+        span_y = float(frame[1]) or 1.0
+    else:
+        left = min(b[0] for b in boxed)
+        top = min(b[1] for b in boxed)
+        span_x = max(b[0] + b[2] for b in boxed) - left or 1.0
+        span_y = max(b[1] + b[3] for b in boxed) - top or 1.0
+
+    shapes = []
+    for x, y, w, h, el in boxed[:limit]:
+        kind = (el.get("type") or "").lower()
+        shape = {
+            "t": "text" if kind == "text" else ("line" if kind in ("arrow", "line") else "box"),
+            "x": round((x - left) / span_x, 4),
+            "y": round((y - top) / span_y, 4),
+            "w": round(w / span_x, 4),
+            "h": round(h / span_y, 4),
+        }
+        text = el.get("text")
+        if shape["t"] == "text" and isinstance(text, str) and text.strip():
+            # First line only: a tile shows a label, not a paragraph.
+            shape["s"] = text.strip().splitlines()[0][:_THUMB_TEXT_CHARS]
+            # The type size, normalised like everything else.
+            #
+            # Not derivable from the box: a text element's height is the frame
+            # it may grow into, so a 56pt title in a short box and a 20pt
+            # subtitle in a tall one come out with the subtitle set larger —
+            # which is the deck template exactly, and it rendered upside down.
+            try:
+                size = float(el.get("size") or 0)
+            except (TypeError, ValueError):
+                size = 0
+            if size > 0:
+                shape["fs"] = round(size / span_y, 4)
+            if el.get("bold"):
+                shape["b"] = 1
+        shapes.append(shape)
+    return {"shapes": shapes, "more": max(0, len(boxed) - limit)}
+
+
+def _work_thumb(doc_format, body):
+    """What the document looks like, small enough to send for every tile.
+
+    `_work_preview` deliberately gives a canvas nothing, because its body is
+    JSON and a tile of `{"type":"excalidraw"…` previews nothing. The answer is
+    not to ship the body — a listing that draws the whole drive would then
+    weigh what the vault weighs — it is to ship the *arrangement*: a couple of
+    dozen rectangles in unit coordinates, which is what makes one canvas
+    recognisable from another at a glance and costs a few hundred bytes.
+
+    Decks get their first slide rather than every slide's words concatenated.
+    A deck is recognised by its title slide, the way a document is recognised
+    by its opening; the rest of the words in a list are not a picture of
+    anything.
+    """
+    body = body or ""
+    if doc_format not in (notes_mod.FORMAT_CANVAS, notes_mod.FORMAT_SLIDES):
+        return None
+    try:
+        parsed = json.loads(body)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+
+    if doc_format == notes_mod.FORMAT_CANVAS:
+        found = _thumb_shapes(parsed.get("elements") or [], ("width", "height"))
+        return dict(found, kind="canvas") if found else {"kind": "canvas", "shapes": [], "more": 0}
+
+    slides = parsed.get("slides") or []
+    if not slides:
+        return {"kind": "slides", "shapes": [], "more": 0, "count": 0}
+    size = parsed.get("size") if isinstance(parsed.get("size"), dict) else {}
+    frame = (size.get("w") or 1280, size.get("h") or 720)
+    found = _thumb_shapes(slides[0].get("elements") or [], ("w", "h"), frame=frame)
+    return {
+        "kind": "slides",
+        "count": len(slides),
+        "shapes": (found or {}).get("shapes", []),
+        "more": (found or {}).get("more", 0),
+    }
+
+
 def _work_haystack(doc_format, body):
     """Everything a search should look at, which is not what a tile shows.
 
@@ -4689,6 +4814,10 @@ def _work_document_items(homes, names):
             "updated": note.get("created_at") or 0,
             "path": note.get("path") or "",
             "preview": _work_preview(doc_format, body),
+            # Geometry for the formats whose body is JSON, so their tiles show
+            # the document rather than a stock glyph. None for prose, which is
+            # already recognisable from `preview`.
+            "thumb": _work_thumb(doc_format, body),
             # Stripped before the response goes out: it is the whole document,
             # and sending every body to draw a grid of tiles would make the
             # listing weigh what the vault weighs.

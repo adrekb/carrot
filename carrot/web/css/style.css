@@ -8525,6 +8525,53 @@ body.nav-collapsed .nav-job-pulse { left: 6px; }
 }
 .thumb-glyph { display: flex; align-items: center; justify-content: center; height: 100%; }
 .thumb-glyph svg { width: 54%; height: 54%; }
+
+/* ----- Tiles that show the document -----
+   A canvas minimap and a deck's first slide, drawn from the geometry the
+   listing sends. Both replaced a fixed glyph that was identical on every
+   tile, which made a grid of canvases a grid of the same picture. */
+.thumb-mini {
+  display: block; height: 100%; width: 100%;
+  padding: var(--s-4);
+}
+.thumb-mini svg { width: 100%; height: 100%; display: block; }
+.thumb-mini-box {
+  fill: none;
+  stroke: var(--faint);
+  stroke-width: 1.2;
+  vector-effect: non-scaling-stroke;   /* or the aspect stretch thickens edges */
+  opacity: 0.75;
+}
+/* Writing, as a mark rather than as characters — see canvasThumb. */
+.thumb-mini-text { fill: var(--accent); opacity: 0.5; stroke: none; }
+
+.thumb-slide {
+  position: relative;
+  display: flex; align-items: center; justify-content: center;
+  height: 100%; width: 100%;
+  padding: var(--s-3);
+}
+.thumb-slide svg {
+  width: 100%;
+  background: var(--card2);
+  border-radius: var(--r-xs);
+}
+.thumb-slide-text {
+  fill: var(--text);
+  font-family: var(--sans);
+  /* The tile is a picture of a slide, not a control — a caret dragged across
+     it while picking tiles should not select half the deck's words. */
+  user-select: none;
+}
+.thumb-slide-count {
+  position: absolute;
+  right: var(--s-3); bottom: var(--s-3);
+  padding: 1px 5px;
+  border-radius: var(--r-xs);
+  background: var(--card3);
+  font-size: var(--text-2xs);
+  color: var(--muted);
+}
 .thumb-empty {
   display: flex; align-items: center; justify-content: center; height: 100%;
   font-size: var(--text-xs); color: var(--faint);

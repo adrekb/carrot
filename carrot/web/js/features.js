@@ -4112,26 +4112,98 @@ function driveMatches(item, q) {
 // So the thumbnail is rendered: markdown becomes HTML at a size nobody reads,
 // a deck shows its slides laid out, a canvas shows its shapes. Scaled down
 // rather than re-implemented small — it is the same markup the editor uses.
+// ===== What the document actually looks like =====
+//
+// Every canvas used to draw the same three hard-coded shapes, and every deck
+// the same list of all its words, so a grid of them was a grid of identical
+// tiles — you could read the badge and the filename and nothing else. The
+// server now sends the arrangement itself (see `_work_thumb` for why it is
+// geometry rather than the body), and these draw it.
+//
+// Two different treatments because the two surfaces are different. A canvas
+// has no edges and its text is a caption on a box, which at tile size is a
+// smudge — so it is drawn as a minimap: the boxes, where they actually are.
+// A slide has edges and its text is the point, and a title set at a sixth of
+// the slide's height is still legible in a tile, so a deck is drawn as its
+// first slide with the words in it.
+
+// Unit coordinates come from the server. `vh` is the viewBox height the caller
+// draws into — 100 for the square canvas minimap, 56.25 for a 16:9 slide —
+// because scaling y by 100 into a 56.25-tall box puts the lower half of every
+// slide outside its own frame.
+function thumbGeometry(shapes, vh = 100) {
+    return shapes.map(s => ({
+        t: s.t, x: s.x * 100, y: s.y * vh,
+        w: Math.max(s.w * 100, 0.6), h: Math.max(s.h * vh, 0.6), s: s.s || '',
+        fs: s.fs ? s.fs * vh : 0, bold: !!s.b,
+    }));
+}
+
+function canvasThumb(thumb) {
+    const shapes = thumb && thumb.shapes ? thumbGeometry(thumb.shapes) : [];
+    if (!shapes.length) return '<span class="thumb-empty">Empty canvas</span>';
+    const parts = shapes.map(s => {
+        if (s.t === 'line') {
+            return `<line x1="${s.x}" y1="${s.y}" x2="${s.x + s.w}" y2="${s.y + s.h}"`
+                 + ' class="wc-faint-stroke"/>';
+        }
+        // Text is a bar rather than characters: at this size a caption renders
+        // as two illegible pixels, and a bar at least says "writing, here".
+        const cls = s.t === 'text' ? 'thumb-mini-text' : 'thumb-mini-box';
+        return `<rect x="${s.x}" y="${s.y}" width="${s.w}" height="${s.h}" rx="1.5" class="${cls}"/>`;
+    });
+    // preserveAspectRatio="none" on purpose: the tile is showing where things
+    // are relative to each other, and letterboxing a wide canvas into a square
+    // tile would waste most of the tile to preserve a ratio nobody is reading.
+    return '<span class="thumb-mini"><svg viewBox="0 0 100 100" preserveAspectRatio="none"'
+        + ' aria-hidden="true">' + parts.join('') + '</svg></span>';
+}
+
+function slidesThumb(thumb, preview) {
+    if (!thumb || !thumb.shapes || !thumb.shapes.length) {
+        // A deck whose body would not parse still has its words.
+        const words = (preview || '').split(' · ').filter(Boolean).slice(0, 4);
+        return words.length
+            ? '<span class="thumb-deck">'
+              + words.map(p => '<span>' + escHtml(p.slice(0, 60)) + '</span>').join('') + '</span>'
+            : '<span class="thumb-empty">Empty deck</span>';
+    }
+    const SLIDE_VH = 56.25;   // 16:9
+    const shapes = thumbGeometry(thumb.shapes, SLIDE_VH);
+    const parts = shapes.map(s => {
+        if (s.t === 'text' && s.s) {
+            // The element's declared type size, which is what makes a title
+            // read as a title. Its box height is the frame it may grow into,
+            // and sizing from that set the subtitle larger than the heading.
+            // Floored so a footnote is still a mark rather than a hairline;
+            // capped so a title cannot overrun the slide.
+            const size = Math.max(Math.min(s.fs || s.h * 0.5, 11), 2.6);
+            return `<text x="${s.x}" y="${s.y + size}" font-size="${size}"`
+                 + (s.bold ? ' font-weight="600"' : '')
+                 + ' class="thumb-slide-text">' + escHtml(s.s) + '</text>';
+        }
+        if (s.t === 'line') return '';
+        return `<rect x="${s.x}" y="${s.y}" width="${s.w}" height="${s.h}" rx="1"`
+             + ' class="thumb-mini-box"/>';
+    });
+    const count = thumb.count > 1
+        ? `<span class="thumb-slide-count">1/${thumb.count}</span>` : '';
+    // 16:9. Anything outside the frame — the deck template parks a decoration
+    // at x=-228 — is clipped by the SVG viewport itself, which is what a slide
+    // does with what is off its edge. No clipPath: an id repeated once per
+    // tile across a grid of them is a document full of duplicate ids for a
+    // rectangle the viewport already draws.
+    return '<span class="thumb-slide"><svg viewBox="0 0 100 ' + SLIDE_VH + '"'
+        + ' preserveAspectRatio="xMidYMid meet" aria-hidden="true">'
+        + parts.join('') + '</svg>' + count + '</span>';
+}
+
 function driveThumb(item) {
     if (item.kind === 'file') {
         return '<span class="thumb-file">' + escHtml(item.path || item.name) + '</span>';
     }
-    if (item.format === 'canvas') {
-        return '<span class="thumb-glyph"><svg viewBox="0 0 96 96" aria-hidden="true">'
-            + '<line x1="34" y1="34" x2="60" y2="64" class="wc-faint-stroke"/>'
-            + '<rect x="14" y="20" width="34" height="24" rx="3" class="wc-accent"/>'
-            + '<rect x="52" y="54" width="32" height="24" rx="3" class="wc-ink"/>'
-            + '</svg></span>';
-    }
-    if (item.format === 'slides') {
-        // The words on the slides, in order — which is what the deck is.
-        const parts = (item.preview || '').split(' · ').filter(Boolean).slice(0, 6);
-        return parts.length
-            ? '<span class="thumb-deck">'
-              + parts.map(p => '<span>' + escHtml(p.slice(0, 60)) + '</span>').join('')
-              + '</span>'
-            : '<span class="thumb-empty">Empty deck</span>';
-    }
+    if (item.format === 'canvas') return canvasThumb(item.thumb);
+    if (item.format === 'slides') return slidesThumb(item.thumb, item.preview);
     // Prose and LaTeX: rendered, so headings look like headings.
     const source = (item.preview || '').slice(0, 400);
     if (!source.trim()) return '<span class="thumb-empty">Empty document</span>';
