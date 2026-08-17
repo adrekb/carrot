@@ -367,6 +367,31 @@
   </div>
 </header>
 
+<!-- ===== The palette =====
+     Ctrl+K used to put the cursor in the composer. This replaces that without
+     taking it away: the box is a text field, and typing something and pressing
+     Enter with nothing selected starts a chat with it — so the old muscle
+     memory still ends up asking a question, and the same keystroke now also
+     reaches everything else without a second shortcut to learn. -->
+<div id="palette" class="palette hidden" role="dialog" aria-modal="true"
+     aria-label="Search or run a command">
+  <div class="palette-box">
+    <div class="palette-head">
+      <svg class="ico"><use href="#i-search"/></svg>
+      <input type="text" id="palette-input" autocomplete="off" spellcheck="false"
+             placeholder="Search or start a chat" aria-controls="palette-list">
+      <button class="icon-btn" onclick="closePalette()" aria-label="Close">
+        <svg class="ico"><use href="#i-x"/></svg></button>
+    </div>
+    <div id="palette-list" class="palette-list" role="listbox"></div>
+    <div class="palette-foot">
+      <span><kbd>↑</kbd><kbd>↓</kbd> Select</span>
+      <span><kbd>Enter</kbd> Open</span>
+      <span><kbd>Esc</kbd> Close</span>
+    </div>
+  </div>
+</div>
+
 <!-- ===== App body: left nav + views ===== -->
 <div id="app-body">
 <nav class="app-nav">
@@ -2382,5 +2407,11 @@
      listening at the document, including the ones the scripts above build
      later, so nothing here has to load before it. -->
 <script src="/js/dropdown.js"></script>
+<!-- Last, because it calls into the others: switchTab, newChat, newNote,
+     newDriveWorkspace, openConversation, openDriveItem. It guards every one of
+     them anyway — a palette entry for a pack that is switched off should do
+     nothing rather than throw — but loading it after them means the guards are
+     for genuinely absent features rather than for load order. -->
+<script src="/js/palette.js"></script>
 </body>
 </html>

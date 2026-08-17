@@ -1206,7 +1206,7 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
  * other popover in the app uses — glass, `--radius`, `--shadow-lg`, restated
  * per theme. Rolling its own background and radius is what made this menu
  * read as a foreign widget: a flat panel with square corners, because the
- * radius it asked for (`--r-md`) is not one of the five that exist. Only
+ * radius it asked for (`--r-lg`) is not one of the five that exist. Only
  * position and width belong here. */
 #tool-pop {
   position: absolute;
@@ -1918,7 +1918,7 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   padding: 12px;
   background: var(--card);
   border: 1px solid var(--border-hi);
-  border-radius: var(--r-md, 10px);
+  border-radius: var(--r-lg);
   box-shadow: var(--shadow-lg, 0 12px 32px rgba(0,0,0,0.35));
   z-index: 60;
 }
@@ -8635,4 +8635,123 @@ body.nav-collapsed .brand-sub { display: none; }
   clip: rect(0 0 0 0);
   white-space: nowrap;
   border: 0;
+}
+
+/* ===== The palette =====
+ *
+ * A card near the top of the window rather than centred: the list grows
+ * downward as you type, and a vertically centred box that grows in both
+ * directions moves the row under your eye while you are reading it.
+ */
+.palette {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 10vh 16px 16px;
+  /* A dim, and no `backdrop-filter`. Blur here is forbidden on purpose: one
+     on an ancestor recreates a popover bug that the popover's own rule cannot
+     show you, so the rule is "none anywhere" rather than "none nearby". The
+     dim separates the palette from the page perfectly well without it. */
+  background: rgba(0, 0, 0, 0.5);
+}
+.palette.hidden { display: none; }
+.palette-box {
+  width: 100%;
+  max-width: 640px;
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--card);
+  border: 1px solid var(--border-hi);
+  border-radius: var(--r-lg);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+.palette-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.palette-head .ico { width: 16px; height: 16px; color: var(--faint); flex-shrink: 0; }
+#palette-input {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: var(--text-base);
+}
+#palette-input::placeholder { color: var(--faint); }
+.palette-list { overflow-y: auto; padding: 6px; min-height: 0; }
+/* The section labels. Small and quiet: they are there to be scanned past, not
+   read — what you are looking for is a row, not a heading. */
+.palette-group {
+  padding: 9px 10px 4px;
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.palette-item {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 9px 10px;
+  background: none;
+  border: none;
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+/* One highlight, driven by the cursor, and the mouse moves the cursor rather
+   than painting its own hover — two independent highlights in a list you are
+   arrowing through is the bug where Enter opens something you are not
+   looking at. */
+.palette-item.on { background: var(--accent-soft, var(--card2)); }
+.palette-item .ico { width: 15px; height: 15px; color: var(--faint); flex-shrink: 0; }
+.palette-item.on .ico { color: var(--accent); }
+.palette-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+.palette-hint { font-size: var(--text-2xs); color: var(--faint); flex-shrink: 0; }
+.palette-loading { padding: 14px 10px; font-size: var(--text-xs); color: var(--faint); }
+.palette-foot {
+  display: flex;
+  gap: 14px;
+  padding: 9px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--bg2);
+  font-size: var(--text-2xs);
+  color: var(--faint);
+}
+.palette-foot kbd {
+  display: inline-block;
+  min-width: 16px;
+  padding: 1px 4px;
+  margin-right: 3px;
+  background: var(--card2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  font-family: var(--sans);
+  font-size: var(--text-2xs);
+  text-align: center;
+}
+/* The row's two lines: what it is, and where it came from. */
+.palette-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.palette-text .palette-label { flex: none; }
+.palette-where {
+  font-size: var(--text-2xs);
+  color: var(--faint);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }

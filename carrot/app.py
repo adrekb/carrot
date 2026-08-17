@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
+import asyncio
 import os
 import re
 import json
@@ -5427,16 +5428,28 @@ async def search_index(q: str, limit: int = 10, hybrid_weight: float = 0.5,
 
 @app.get("/api/search/all")
 async def search_everything(q: str, limit: int = 10, workspace: Optional[str] = None):
-    """One query across conversations, documents and memory, in one scope."""
+    """One query across conversations, documents and memory, in one scope.
+
+    Off the event loop. All three searches are synchronous, and each may try to
+    embed the query — a socket call that waits out its timeout when Ollama is
+    not running. Run inline that is seconds of the whole process refusing to
+    answer anything else, which is what made a palette search hang rather than
+    return.
+    """
     scope = workspaces_mod.resolve_scope(workspace)
-    conversations = search.search_conversations(q, limit=limit, workspace_id=scope)
-    return {
-        "query": q,
-        "workspace_id": scope,
-        "conversations": conversations["results"],
-        "documents": indexer_mod.search_documents(q, limit=limit, workspace_id=scope)["results"],
-        "memories": memory_mod.search(q, limit=limit, workspace_id=scope),
-    }
+
+    def gather():
+        return {
+            "query": q,
+            "workspace_id": scope,
+            "conversations": search.search_conversations(
+                q, limit=limit, workspace_id=scope)["results"],
+            "documents": indexer_mod.search_documents(
+                q, limit=limit, workspace_id=scope)["results"],
+            "memories": memory_mod.search(q, limit=limit, workspace_id=scope),
+        }
+
+    return await asyncio.to_thread(gather)
 
 
 # ===== Agent tools =====

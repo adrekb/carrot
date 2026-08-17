@@ -3743,13 +3743,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     // from the first paint rather than only after a visit to Settings.
     if (typeof loadConsensusPanel === 'function') loadConsensusPanel();
 
-    // Ctrl+K focuses the command bar
-    document.addEventListener('keydown', e => {
-        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
-            e.preventDefault();
-            focusCmd();
-        }
-    });
+    // Ctrl+K is the palette now — see palette.js, which owns the binding.
+    //
+    // It used to focus the composer from here. Both handlers listening for the
+    // same chord would have opened the palette and then moved the cursor into
+    // the box behind it, so this one goes rather than being left to fight. The
+    // behaviour survives: the palette's field is a text input, and typing into
+    // it and pressing Enter puts the text in the composer.
 
     // Click outside closes the popovers. The search picker was never in here:
     // its menu only closed by picking a mode or by toggling the same button

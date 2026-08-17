@@ -82,16 +82,49 @@ def _normalize(matrix: np.ndarray) -> np.ndarray:
 
 # ===== Embedding =====
 
+# How long to take "Ollama is not there" for an answer before asking again.
+#
+# Embedding is a socket call, and when nothing is listening it does not fail
+# fast — it waits out the client's timeout. Measured on a machine with Ollama
+# stopped, `memory.search("biscuit")` took 4.13s, all of it one embed attempt
+# that was always going to return None. Every semantic search in the app pays
+# that: recall, document search, memory search, the palette.
+#
+# So a failure is remembered for a few seconds. The cost of being wrong is a
+# few seconds of lexical-only results just after Ollama comes up, which is the
+# same degradation that already happens when it is down. The cost of not
+# caching is every search feeling broken while it is down.
+_EMBED_FAIL_CACHE_SECONDS = 5.0
+_embed_failed_at = 0.0
+
+
 def embed(text: str, model: str = EMBEDDING_MODEL) -> Optional[List[float]]:
-    """Embed text via Ollama. Returns None when the model is unreachable."""
+    """Embed text via Ollama. Returns None when the model is unreachable.
+
+    Returns None *immediately* if a recent attempt already found it
+    unreachable, rather than waiting out the socket timeout again.
+    """
+    global _embed_failed_at
+    import time as _time
+
     from .ollama_client import OllamaClient
 
     if not text or not text.strip():
         return None
-    try:
-        return OllamaClient().get_embedding(text, model=model)
-    except Exception:
+    if _time.monotonic() - _embed_failed_at < _EMBED_FAIL_CACHE_SECONDS:
         return None
+    try:
+        vector = OllamaClient().get_embedding(text, model=model)
+    except Exception:
+        _embed_failed_at = _time.monotonic()
+        return None
+    if vector is None:
+        # The client can report unreachable by returning nothing rather than
+        # raising, and that is the same news.
+        _embed_failed_at = _time.monotonic()
+        return None
+    _embed_failed_at = 0.0
+    return vector
 
 
 def store(namespace: str, ref_id: str, embedding: Sequence[float], model: str = EMBEDDING_MODEL):
