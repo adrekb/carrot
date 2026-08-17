@@ -4202,31 +4202,45 @@ async function fillPrivacyPanel() {
     // Each of these is asked for separately and contained separately: one
     // endpoint being unreachable should grey out its own row, not empty the
     // panel and leave somebody unable to find out anything.
-    const ask = async (path, read) => { try { return read(await api(path)); }
-                                        catch (_) { return null; } };
+    //
+    // A failed read says so. It used to print "Unknown", which is the exact
+    // silence this panel exists to remove — indistinguishable from "off" at a
+    // glance, and on a screen whose whole job is saying what is switched on,
+    // "off" is the reading that matters. The reason goes to the console,
+    // because a row cannot hold a stack trace and somebody debugging needs it.
+    const ask = async (path, read) => {
+        try { return read(await api(path)); }
+        catch (err) {
+            console.warn('privacy panel: could not read ' + path, err);
+            return { on: false, unknown: true,
+                     detail: 'Could not check — see Settings' };
+        }
+    };
 
-    const cal = await ask('/api/calendar/status', (c) => ({
-        on: !!(c.enabled && c.agent_aware && c.url_set),
-        detail: !c.url_set ? 'Not connected'
-              : !c.agent_aware ? 'Connected, not shared with the assistant'
-              : 'The assistant can read your next few days' }));
-    rows.push({ label: 'Calendar', leaves: false, ...(cal || { on: false, detail: 'Unknown' }) });
+    rows.push({ label: 'Calendar', leaves: false,
+                ...await ask('/api/calendar/status', (c) => ({
+                    on: !!(c.enabled && c.agent_aware && c.url_set),
+                    detail: !c.url_set ? 'Not connected'
+                          : !c.agent_aware ? 'Connected, not shared with the assistant'
+                          : 'The assistant can read your next few days' })) });
 
-    const amb = await ask('/api/ambient', (a) => ({
-        on: !!(a.policy || {}).enabled,
-        detail: !(a.policy || {}).enabled ? 'Not recording'
-              : (a.policy || {}).agent_aware ? 'Recording, and the assistant can search it'
-              : 'Recording, not shared with the assistant' }));
     rows.push({ label: 'Screen history', leaves: false,
-                ...(amb || { on: false, detail: 'Unknown' }) });
+                ...await ask('/api/ambient', (a) => ({
+                    on: !!(a.policy || {}).enabled,
+                    detail: !(a.policy || {}).enabled ? 'Not recording'
+                          : (a.policy || {}).agent_aware
+                              ? 'Recording, and the assistant can search it'
+                              : 'Recording, not shared with the assistant' })) });
 
     const webOn = typeof currentSearchMode !== 'undefined' && currentSearchMode !== 'off';
     rows.push({ on: webOn, leaves: webOn, label: 'Web search',
                 detail: webOn ? 'Searches leave this computer' : 'Off' });
 
-    const memOn = await ask('/api/config', (c) => c.memory_enabled !== false);
-    rows.push({ on: memOn !== false, leaves: false, label: 'Memory',
-                detail: memOn === false ? 'Off' : 'Stored on this computer' });
+    rows.push({ label: 'Memory', leaves: false,
+                ...await ask('/api/config', (c) => ({
+                    on: c.memory_enabled !== false,
+                    detail: c.memory_enabled === false ? 'Off'
+                                                       : 'Stored on this computer' })) });
 
     // "Answers and web search leave this computer" — the subject named, and
     // capitalised, because it opens the sentence. Listing what does leave is
@@ -4241,13 +4255,21 @@ async function fillPrivacyPanel() {
     // ("web search"), and agreeing with the length of the *list* gets it wrong
     // the moment one plural thing is going out on its own: "Answers leaves
     // this computer". A label avoids the problem instead of solving it badly.
+    // "Nothing is leaving this computer" is a promise, and it cannot be made
+    // over settings that could not be read. A row that failed to answer is not
+    // evidence of a quiet machine — it is a gap, and the headline says so
+    // rather than reassuring past it.
+    const unchecked = rows.some(r => r.unknown);
     const headline = leaving.length
         ? 'Leaving this computer: ' + named
-        : 'Nothing is leaving this computer';
+        : unchecked
+            ? 'Nothing known to be leaving — some settings could not be checked'
+            : 'Nothing is leaving this computer';
     panel.innerHTML =
         '<div class="privacy-head">' + escHtml(headline) + '</div>'
         + rows.map(r =>
-            '<div class="privacy-row' + (r.leaves ? ' leaves' : '') + '">'
+            '<div class="privacy-row' + (r.leaves ? ' leaves' : '')
+            + (r.unknown ? ' unchecked' : '') + '">'
             + '<span class="privacy-row-dot' + (r.on ? ' on' : '') + '"></span>'
             + '<span class="privacy-row-text"><strong>' + escHtml(r.label) + '</strong>'
             + '<span>' + escHtml(r.detail) + '</span></span></div>').join('')

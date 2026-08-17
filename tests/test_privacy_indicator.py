@@ -23,6 +23,18 @@ def block(name):
     return JS[start:JS.index("\n}", start)]
 
 
+def code(name):
+    """One function's body with its comments removed.
+
+    The comments in these functions quote the wording they replaced — that is
+    what makes them worth reading — so a test grepping the raw source matches
+    its own explanation and passes or fails for the wrong reason.
+    """
+    import re
+
+    return re.sub(r"//[^\n]*", "", block(name))
+
+
 class TestItIsThere:
     def test_the_chip_is_in_the_rail(self):
         assert 'id="privacy-chip"' in HTML
@@ -98,12 +110,49 @@ class TestThePanelIsHonest:
         """Each row is asked for separately and contained separately: a
         service being unreachable should grey out its own line, not leave
         somebody unable to find out anything at all."""
-        body = block("fillPrivacyPanel")
-        assert "catch (_) { return null; }" in body
+        body = code("fillPrivacyPanel")
+        assert "catch (err)" in body
+        assert "return { on: false, unknown: true," in body
+
+    def test_a_setting_it_could_not_read_says_so(self):
+        """It printed "Unknown", which is the exact silence this panel exists
+        to remove: at a glance it is indistinguishable from "off", and on a
+        screen whose whole job is saying what is switched on, "off" is the
+        reading that matters. The reason goes to the console, because a row
+        cannot hold a stack trace and somebody debugging needs it.
+        """
+        body = code("fillPrivacyPanel")
+        assert "Unknown" not in body
+        assert "Could not check" in body
+        assert "console.warn" in body
+
+    def test_it_does_not_promise_quiet_over_a_gap(self):
+        """"Nothing is leaving this computer" is a promise, and it cannot be
+        made over a setting that failed to answer. A row that could not be read
+        is a gap, not evidence of a quiet machine."""
+        body = code("fillPrivacyPanel")
+        assert "unchecked" in body
+        assert "Nothing known to be leaving" in body
+
+    def test_an_unread_row_does_not_look_like_a_no(self):
+        """A hollow ring, not an empty dot: an empty dot reads as "no", and
+        answering "no" to a question you never managed to ask is the one thing
+        this panel must not do."""
+        rule = CSS[CSS.index(".privacy-row.unchecked .privacy-row-dot {"):]
+        rule = rule[:rule.index("}")]
+        assert "background: none" in rule
+        assert "inset" in rule
+
+    def test_the_headline_wraps_rather_than_clips(self):
+        """It grows with however many things are going out, and a truncated
+        privacy claim is worse than a two-line one — "Leaving this computer:
+        answers and web sea" names one of the two."""
+        rule = CSS[CSS.index(".privacy-head {"):]
+        assert "overflow-wrap" in rule[:rule.index("}")]
 
     def test_it_names_what_leaves_rather_than_counting_it(self):
         """Two amber dots tell you something is going out and not what."""
-        body = block("fillPrivacyPanel")
+        body = code("fillPrivacyPanel")
         assert "Leaving this computer: " in body
         assert "Nothing is leaving this computer" in body
 

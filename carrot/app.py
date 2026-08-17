@@ -3758,7 +3758,15 @@ def _post_turn(conversation_id, user_message, assistant_text, message_id,
             except Exception:
                 pass
 
-    threading.Thread(target=work, daemon=True, name="carrot-post-turn").start()
+    # Returned so a caller that needs to know it finished can wait for it.
+    # Nothing in the request path does — that is the entire point of the thread
+    # — but a test asserting this bookkeeping was *skipped* has no other way to
+    # tell "it did not run" from "it has not run yet", and the alternative was
+    # a sleep long enough to be usually right. Usually right, in a suite this
+    # size, means a failure in a different file every few runs.
+    thread = threading.Thread(target=work, daemon=True, name="carrot-post-turn")
+    thread.start()
+    return thread
 
 
 def _open_conversation(req):
