@@ -186,13 +186,43 @@ class TestItDoesNotThrashTheServer:
         assert "paletteRecentsSeq" in JS
 
     def test_the_palette_does_not_wait_on_a_model_call(self):
-        """`/api/search/all` embeds the query, and embedding took 4.1s here
-        against a thirty-second client timeout. A palette that waits for that
-        is a palette that hangs."""
-        assert "PALETTE_SEARCH_TIMEOUT" in JS
-        assert "Promise.race" in block(JS, "searchFromPalette")
+        """`/api/search/all` embeds the query, and embedding is a model call —
+        measured at 9.4s on the machine this was rewritten on. A palette that
+        waits for that is a palette that hangs.
 
-    def test_a_timeout_does_not_wipe_earlier_results(self):
+        This used to assert `Promise.race` and a timeout constant, which is the
+        mechanism rather than the property, and the mechanism was wrong: the
+        race rejected at 1500ms and *threw the response away*, so on any machine
+        slower than the cap the semantic half of the palette was unreachable —
+        results computed, paid for, and dropped on arrival, every keystroke.
+
+        The property was never in danger. Nothing waits on this promise to draw
+        the box: keystrokes render local matches synchronously and the server
+        answer only ever adds to what is already up. So what is asserted now is
+        the property — the box renders without the search — plus the specific
+        regression, below.
+        """
+        assert "api(" not in block(JS, "renderPalette"), "rendering must not fetch"
+        # The keystroke path renders before it schedules the search.
+        typed = JS[JS.index("paletteTimer = setTimeout") - 600:JS.index("paletteTimer = setTimeout")]
+        assert "renderPalette(input.value)" in typed
+
+    def test_the_search_result_is_never_discarded_on_a_deadline(self):
+        """The regression this file exists to prevent a second time.
+
+        A deadline on the *answer* throws away work that has already been done
+        and cannot be made correct by choosing a larger number: there is none
+        both short enough to feel instant and long enough to cover a model call.
+        The deadline belongs on the "Looking…" row instead, which is what
+        PALETTE_SEARCH_HINT_MS is.
+        """
+        body = block(JS, "searchFromPalette")
+        assert "Promise.race" not in body, "a raced search discards results it already paid for"
+        assert "PALETTE_SEARCH_HINT_MS" in JS
+        # The hint timer must only clear the hint, never the response.
+        assert "paletteSearching = false" in body
+
+    def test_a_failed_search_does_not_wipe_earlier_results(self):
         body = block(JS, "searchFromPalette")
         assert "if (found) paletteFound = found;" in body
 

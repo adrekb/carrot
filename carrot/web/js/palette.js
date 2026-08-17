@@ -116,27 +116,58 @@ async function loadPaletteRecents() {
 let paletteFound = null;
 let paletteSearching = false;
 
-// How long the palette will wait for the server before giving up on it.
+// How long the palette will *say* it is searching. Not a deadline on the answer.
 //
 // `/api/search/all` embeds the query to search semantically, and embedding is a
 // model call: measured at 4.1s here, and its client timeout is thirty seconds.
 // A palette that waits for that is a palette that hangs — the box has to answer
 // from what it already has and let the deeper results arrive if they arrive.
-const PALETTE_SEARCH_TIMEOUT = 1500;
+//
+// That last clause was the intent and the code did the opposite. This was a
+// `Promise.race` that rejected at 1500ms and dropped the response, so on any
+// machine where embedding takes longer than the cap — this one — the semantic
+// half of the palette was unreachable: memory and document hits were computed,
+// paid for, and thrown away on arrival, every single time. The fix is not a
+// bigger number, because there is no number that is both short enough to feel
+// instant and long enough to cover a model call.
+//
+// Nothing ever waited on this promise to draw the box. Local matches render
+// synchronously on the keystroke, which is what makes typing feel connected to
+// the screen; the server search only ever *added* to what was already up. So
+// the timer now retires the "Searching…" row on time and the answer is merged
+// whenever it turns up, which is what "if they arrive" was supposed to mean.
+const PALETTE_SEARCH_HINT_MS = 1500;
+
+// Bumped per search, and used only to decide whose "Searching…" row is on
+// screen — deliberately not as the guard on the results themselves; see below
+// for why that one compares the query text instead.
+let paletteSearchSeq = 0;
 
 async function searchFromPalette(query) {
+    const seq = ++paletteSearchSeq;
     paletteSearching = true;
+    // The hint is on a deadline even though the answer is not. A box that says
+    // "Searching…" for four seconds reads as stuck; one that quietly fills in
+    // more results a moment later reads as thorough.
+    const hintTimer = setTimeout(() => {
+        if (seq !== paletteSearchSeq) return;
+        paletteSearching = false;
+        const now = (document.getElementById('palette-input')?.value || '').trim();
+        if (paletteOpen && now === query) renderPalette(now);
+    }, PALETTE_SEARCH_HINT_MS);
+
     let found = null;
     try {
-        found = await Promise.race([
-            api('/api/search/all?limit=6&q=' + encodeURIComponent(query)),
-            new Promise((_, reject) =>
-                setTimeout(() => reject(new Error('search timed out')), PALETTE_SEARCH_TIMEOUT)),
-        ]);
+        found = await api('/api/search/all?limit=6&q=' + encodeURIComponent(query));
     } catch (err) {
         // Local matches are already on screen and stay there. This is a search
         // that did not add anything, not a failure worth telling anybody about.
-        console.warn('palette: search did not return in time', err);
+        console.warn('palette: search did not return', err);
+    } finally {
+        clearTimeout(hintTimer);
+        // Only the newest search owns the hint. An older one finishing must not
+        // clear the row belonging to the search that replaced it.
+        if (seq === paletteSearchSeq) paletteSearching = false;
     }
 
     // Guarded on the query rather than on a counter.
@@ -150,10 +181,9 @@ async function searchFromPalette(query) {
     const current = (document.getElementById('palette-input')?.value || '').trim();
     if (!paletteOpen || current !== query) return;
 
-    // Only replaced when there is something to replace it with: a timed-out
+    // Only replaced when there is something to replace it with: a failed
     // search must not wipe results an earlier, faster one already put up.
     if (found) paletteFound = found;
-    paletteSearching = false;
     renderPalette(current);
 }
 
