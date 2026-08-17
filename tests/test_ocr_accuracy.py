@@ -113,12 +113,18 @@ class TestWhatItCannotRead:
     def test_underscores_in_identifiers_are_lost(self):
         """Windows OCR reads `search_for_agent` as `search for agent`.
 
-        So code on screen is indexed under names that are not the names. Asking
-        `search_screen` about "the search_for_agent error" will not find the
-        frame that had it on screen, and nothing anywhere says why.
+        So code on screen is indexed under names that are not the names. This
+        was written down as "identifiers are therefore unfindable", and that
+        part turned out to be wrong: FTS5 treats `_` as a separator on both
+        sides, so the quoted query becomes a phrase over exactly the words the
+        index holds and matches the frame. Measured, and pinned in
+        test_ambient_capture.py::TestStorage::
+        test_an_underscored_identifier_finds_the_frame_ocr_flattened.
 
-        Asserted as it currently behaves so the day it improves, this fails and
-        somebody deletes it — which is the point of writing it down.
+        What is genuinely lost is the text itself — anything reading a frame
+        back sees the flattened form — which is what this asserts. Asserted as
+        it currently behaves so the day it improves, this fails and somebody
+        deletes it, which is the point of writing it down.
         """
         cases = {c["name"]: c for c in _cases()}
         got = _read(cases["code_punctuation"])

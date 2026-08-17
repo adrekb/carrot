@@ -5,6 +5,8 @@ Produces a real, double-clickable app on all three OSes:
     official Ollama installer is *not* bundled by default — at 1492 MB it was
     83% of the download, and the runtime bootstrap fetches it on first launch
     with a progress bar. ``--bundle-ollama`` puts it back for offline installs.
+    Measured on Windows 11 x64 with the same extras CI installs
+    (``browser,cloud,vectors,speech``): 314,522,935 bytes, 300 MiB.
   - macOS: ``.dmg`` (Apple Silicon or Intel, matching the build machine).
   - Linux: ``.AppImage`` and ``.deb``.
 
@@ -290,6 +292,14 @@ def main():
     # with progress reporting, and already falls back to that when nothing is
     # bundled, so the default costs a download at first launch and saves 1.5 GB
     # at every download.
+    #
+    # Measured rather than inferred: a real build of this file on Windows 11
+    # x64 produces 314,522,935 bytes (300 MiB). Of the payload NSIS compresses,
+    # the frozen backend is 298 MB and Playwright's Chromium 431 MB on disk.
+    # Note that electron-builder only *warns* when `assets/ollama-setup.exe` is
+    # absent ("file source doesn't exist") and packages without it, which is
+    # what makes the unbundled default work at all — gui/package.json lists it
+    # unconditionally under `win.extraResources`.
     #
     # --bundle-ollama is kept for the case that justified it: building an
     # installer for a machine that will never have a network, where the
