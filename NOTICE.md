@@ -19,8 +19,9 @@ Sources and exact versions are pinned in [`webvendor/package.json`](webvendor/pa
 (MIT, Copyright (c) Evan Wallace) but ships no code into the output.
 
 The typefaces in `carrot/web/assets/fonts/` are under the SIL Open Font License,
-each with its full license text alongside it: DM Mono, Plus Jakarta Sans,
-Space Grotesk, Stack Sans Text.
+each with its full license text alongside it: Inter, DM Mono, Plus Jakarta Sans,
+Stack Sans Text. Inter is the interface face and DM Mono is code; the other two
+are unreferenced leftovers from when the app used four faces, and can go.
 
 Runtime Python dependencies are declared in `pyproject.toml` and installed from
 PyPI rather than vendored; their licenses come with them.

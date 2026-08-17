@@ -12,28 +12,33 @@
  * is running text) are ones that weight, size and colour already make, and
  * make more quietly.
  *
- * So the interface is Space Grotesk and nothing else. It is a variable font
- * on a continuous 300–700 axis, which is what makes this work: a light label
- * and a heavy display heading are the same drawing under different tension,
- * and they cost one file between them.
+ * So the interface is Inter and nothing else. It is a variable font on a
+ * continuous 100–900 axis, which is what makes this work: a light label and a
+ * heavy display heading are the same drawing under different tension, and
+ * they cost one file between them.
  *
- * Two things about this face that the rest of the stylesheet has to respect:
+ * It replaced Space Grotesk, which was a display face doing interface work.
+ * Three things change because of that, and the rest of the stylesheet is
+ * written to them:
  *
- * Its axis stops at 700, not the 800 a lot of UI faces offer. Asking for 800
- * does not get a heavier cut, it gets the browser smearing the 700 — so every
- * weight token below is inside the real range, and the top of the hierarchy
- * gets its presence from size and tracking rather than from a weight that
- * does not exist.
+ * The weight axis is real to 900 rather than stopping at 700, so the top of
+ * the hierarchy can be a weight instead of a compensation. Nothing here has
+ * to fear the browser synthesising a bold any more.
  *
- * Its x-height is low (486/1000). That is exactly what gives it presence in a
- * 34px heading and exactly what makes it cramped in an 11px uppercase label,
- * which is why it used to be the display face only. Used everywhere, the
- * small end needs the tracking opened up rather than closed down — the
- * opposite of the usual correction, and the reason the letter-spacing rules
- * here run in both directions instead of just tightening as things grow.
+ * The x-height is high (727/1000 against 486). That inverts the tracking
+ * corrections below: a face with plenty of ink at 10px does not need its
+ * small sizes opened up to stay legible, so the letter-spacing rules run one
+ * way — closing as the type grows — which is simply the standard optical
+ * correction. Inter is drawn for screens at text sizes, so the display end is
+ * where it needs help, not the label end.
  *
- * There is no italic cut, so italics are synthesised. Acceptable: they appear
- * in blockquotes and the odd emphasis, never in running UI text.
+ * It carries an `opsz` axis, which is why `font-optical-sizing: auto` further
+ * down is now doing something: the same family is set from 10px labels to
+ * 34px headings, and optical sizing is what stops the small end reading as
+ * the large end shrunk.
+ *
+ * And there is a real italic cut, bundled, so emphasis is drawn rather than
+ * slanted by the renderer.
  *
  * DM Mono stays, for code, the terminal and the editor only. That is not an
  * exception to the rule so much as a different rule: a proportional font in a
@@ -45,11 +50,24 @@
  * Everything is OFL and bundled rather than fetched — a local-first assistant
  * that phones a font CDN on every launch is not local-first. */
 
+/* Inter, as the variable font rather than a rack of static weights.
+   One 340 KB file covers 100–900 instead of four cuts at ~90 KB each, and it
+   carries the `opsz` axis, which `font-optical-sizing: auto` further down has
+   been asking for all along — the interface sets type from 10px labels to
+   34px headings out of one family, and optical sizing is what stops the small
+   end looking like the large end shrunk. */
 @font-face {
-  font-family: "SpaceGrotesk";
-  src: url("/assets/fonts/SpaceGrotesk.woff2") format("woff2");
-  font-weight: 300 700;
+  font-family: "Inter";
+  src: url("/assets/fonts/Inter.woff2") format("woff2-variations");
+  font-weight: 100 900;
   font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Inter";
+  src: url("/assets/fonts/Inter-Italic.woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-style: italic;
   font-display: swap;
 }
 @font-face {
@@ -120,7 +138,7 @@
 
      The system stack behind it is a genuine fallback, not a design: the woff2
      is bundled, so it is only reached if the file fails to load. */
-  --ui-stack: "SpaceGrotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --ui-stack: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   /* Buttons, labels, menus, table cells — anything you operate. */
   --sans: var(--ui-stack);
   /* Headings, the brand, empty states — anything that announces. */
@@ -131,15 +149,16 @@
   /* The weight axis, which is now the whole typographic system. Named by job
      rather than by number, so a heading that wants more presence gets
      `--w-display` and not a hand-picked 680 that nothing else shares.
-     Every value is inside Space Grotesk's real 300–700 range: past 700 the
-     browser synthesises a bold by smearing the outline, which on a geometric
-     face with tight counters turns `a`, `e` and `g` to mud. */
+     Every value is a real step on Inter's 100–900 axis, so none of these is
+     a synthesised weight. --w-display can now be a genuine 800: under the old
+     face it was pinned at 700 because that was the top of the axis, and the
+     heading had to get its presence from size and tracking instead. */
   --w-thin: 300;      /* oversized display type, where 400 looks heavy */
   --w-body: 400;      /* running text */
   --w-medium: 500;    /* labels, table headers, anything faintly emphatic */
   --w-semi: 600;      /* buttons, active nav, section headings */
   --w-bold: 700;      /* card titles, strong inline emphasis */
-  --w-display: 700;   /* page headings and the brand — the top of the axis */
+  --w-display: 800;   /* page headings and the brand — the top of the axis */
   /* The sidebar's width, as a token because more than one thing needs to
      know it. The command bar is fixed-position and centres itself; with the
      width written only inside `.app-nav`, the bar had no way to know the left
@@ -197,6 +216,15 @@
    * size in the app shrank without a single number here changing, and the
    * bottom three steps — 10, 11 and 12px — went from small to genuinely hard
    * to read. The px values go up to put the *apparent* size back.
+   *
+   * Inter is 546 (measured off the shipped file, not quoted), which is within
+   * 3% of the 560 this scale was drawn for and 12% above the 486 it was
+   * inflated for. So the inflation is now overshooting by about that much:
+   * every size renders ~12% larger than it did under Space Grotesk. Left
+   * standing rather than quietly reverted, because dividing every step in the
+   * app by 1.12 is a change to how the whole interface reads, and that is a
+   * decision to take deliberately rather than as a side effect of swapping a
+   * font file.
    *
    * The gaps still widen going up: a 1px difference is invisible at 30px and
    * obvious at 11px. */
@@ -4516,9 +4544,8 @@ code, pre, .kbd { font-family: var(--mono); }
    Charcoal & cream
    =====================================================================
    An editorial pass, not a hue swap. The type roles are the app's, set
-   once at the top of this file: Space Grotesk announces, Stack Sans Text
-   is read, Plus Jakarta operates, DM Mono is code. This theme changes what
-   they sit on, not which they are.
+   once at the top of this file — one face for the interface, DM Mono for
+   code. This theme changes what they sit on, not which they are.
 
    It used to pair Playfair Display with Vollkorn, and the editorial feel
    was doing real work — but a serif inside a dark tool UI reads as a
@@ -4611,8 +4638,8 @@ code, pre, .kbd { font-family: var(--mono); }
    outranks. So the display sizes take the top of the axis.
 
    The tracking closes up as the type grows, which is the standard optical
-   correction and matters more than usual here: Space Grotesk is drawn wide,
-   and at 34px default tracking it sprawls. */
+   correction. Inter is drawn for text sizes and gets loose at display sizes,
+   so the display end is where it earns its keep. */
 .page-head h1, .page-head h2, .dash-head h1, .splash-card h1, .greeting {
   font-family: var(--display);
   font-weight: var(--w-display);
@@ -4620,11 +4647,11 @@ code, pre, .kbd { font-family: var(--mono); }
   line-height: 1.12;
 }
 
-/* And opens up as it shrinks — the opposite of the usual rule, and the price
-   of using a display face for interface text. A 486/1000 x-height means a
-   10px uppercase label has very little ink and very tight counters; the
-   default -0.006em body tracking closes what is already closed and the label
-   becomes a smudge. These are the sizes where that bites. */
+/* Small text sits at zero rather than at the body's -0.006em.
+   Under the old face this rule was a rescue — a 486/1000 x-height made a 10px
+   label a smudge unless the tracking was opened up. Inter's 727 does not need
+   rescuing, so this is now only the ordinary thing: stop tightening once the
+   type is small, because the correction that helps a heading hurts a label. */
 .nav-label, .card-title, .section-title, .tool-sub, .ctx-label {
   letter-spacing: 0;
 }

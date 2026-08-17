@@ -1255,7 +1255,7 @@ function resolveTokens(css) {
         (style.getPropertyValue(name) || '').trim() || '#888');
 }
 
-// Resolved font stacks contain double quotes — `"SpaceGrotesk", "Segoe UI"` —
+// Resolved font stacks contain double quotes — `"Inter", "Segoe UI"` —
 // and this goes into a `style="…"` attribute, where the first of them ends the
 // attribute and the rest of the declaration becomes stray markup. The export
 // still downloads; it is simply wrong, in a way that only shows up when
