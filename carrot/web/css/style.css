@@ -8295,6 +8295,28 @@ body.nav-collapsed .brand-sub { display: none; }
 .fmt-btn.danger { color: var(--red); }
 .fmt-label { font-size: var(--text-2xs); color: var(--faint); }
 .fmt-gap { flex: 1; }
+
+/* Arrange: one block, so six buttons that do related things read as one
+   control rather than six loose ones in a row of unrelated pickers. */
+.fmt-group { display: flex; gap: 2px; }
+.fmt-group .fmt-btn { border-radius: 0; }
+.fmt-group .fmt-btn:first-child { border-radius: var(--r-xs) 0 0 var(--r-xs); }
+.fmt-group .fmt-btn:last-child { border-radius: 0 var(--r-xs) var(--r-xs) 0; }
+/* Distribute needs three. Dimmed and unclickable rather than removed, so the
+   row does not change width as the selection grows and the buttons stay where
+   the hand learned they were. */
+.fmt-group .fmt-btn:disabled { opacity: 0.35; cursor: default; }
+.fmt-group .fmt-btn:disabled:hover { border-color: var(--border); }
+.fmt-count { font-size: var(--text-2xs); color: var(--faint); }
+
+/* The lines an element has just agreed with. Drawn in stage coordinates and
+   scaled with everything else, so they land exactly on the edge they mean at
+   any zoom. Thin, bright and gone the moment the mouse comes up: a guide that
+   lingers is indistinguishable from something you drew. */
+.slide-guides { position: absolute; inset: 0; pointer-events: none; }
+.slide-guide { position: absolute; background: var(--accent); }
+.slide-guide-v { top: 0; bottom: 0; width: 1px; margin-left: -0.5px; }
+.slide-guide-h { left: 0; right: 0; height: 1px; margin-top: -0.5px; }
 .fmt-swatches { display: flex; gap: 3px; }
 .fmt-swatch {
   width: 18px; height: 18px;
