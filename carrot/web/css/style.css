@@ -3437,6 +3437,20 @@ body.nav-collapsed .privacy-chip { justify-content: center; padding: 8px 0; }
 }
 .hub-search input:focus { outline: none; border-color: var(--accent); }
 .quant-note { color: var(--accent); font-family: var(--mono); font-size: var(--text-xs); }
+/* What the quant costs in answers. Sits under the two numbers that both get
+   better as the bit-rate drops, so it stays plain text rather than competing
+   with the accent-coloured quant line above it. */
+.quality-note { color: var(--muted); margin-top: 2px; }
+
+/* ===== Which engine runs the model ===== */
+.hub-engine { margin-bottom: 14px; }
+.hub-engine-card { display: block; }
+.engine-detail { color: var(--accent-ink); margin-top: 6px; }
+.hub-engine-alts { margin-top: 8px; }
+.hub-engine-alts summary { cursor: pointer; }
+.hub-engine-alt { padding: 10px 2px; border-top: 1px solid var(--border); }
+.hub-engine-alt > .muted { margin-top: 3px; }
+.hub-engine-alt a { display: inline-block; margin-top: 4px; color: var(--accent-ink); }
 
 /* ===== Google Calendar (secret iCal) ===== */
 .cal-howto { margin-bottom: 12px; }
