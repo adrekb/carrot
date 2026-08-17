@@ -47,7 +47,29 @@ class CheckRequest(BaseModel):
 
 @router.get("")
 async def state():
-    return ambient.status()
+    """The rules, and what they say right now.
+
+    Off the event loop: `status()` probes the machine — memory, VRAM, and
+    whether Ollama has a model resident — and those are blocking calls. The
+    Ollama probe is now short and cached, but "short" is still a socket, and a
+    socket on the loop is every other request in the process waiting behind it.
+    """
+    return await asyncio.to_thread(ambient.status)
+
+
+@router.get("/policy")
+async def get_policy():
+    """Just the switches, with nothing probed.
+
+    `GET /api/ambient` answers "what are the rules and what do they say right
+    now", and the second half of that means reading memory, VRAM and Ollama —
+    which on a cold process is seconds, mostly nvidia-smi starting up.
+
+    Anything that only wants to know what is *switched on* should not have to
+    wait for the graphics card. The privacy panel asks this instead, and
+    `policy()` is a config read: no sockets, no subprocesses, no probing.
+    """
+    return {"policy": ambient.policy()}
 
 
 @router.put("/policy")
@@ -89,7 +111,8 @@ async def check(req: CheckRequest):
     trusting the feature with a real day, is the difference between a promise
     and a demonstration.
     """
-    context = {**req.model_dump(), **ambient.probe_resources()}
+    # `probe_resources` reads memory, VRAM and Ollama — all blocking.
+    context = {**req.model_dump(), **(await asyncio.to_thread(ambient.probe_resources))}
     return {
         "decision": ambient.should_capture(context).as_dict(),
         "privacy": ambient.check_privacy(context).as_dict(),
@@ -128,10 +151,15 @@ async def capture_capabilities():
 
 @router.get("/status")
 async def capture_status():
-    return {**ambient_capture.worker.status(),
-            "capabilities": ambient_capture.capabilities(),
-            "policy": ambient.policy(),
-            "stats": ambient_capture.stats()}
+    """Also off the loop: `capabilities()` probes for a screen grabber and an
+    OCR engine by importing them, and `stats()` is a database read."""
+    def gather():
+        return {**ambient_capture.worker.status(),
+                "capabilities": ambient_capture.capabilities(),
+                "policy": ambient.policy(),
+                "stats": ambient_capture.stats()}
+
+    return await asyncio.to_thread(gather)
 
 
 @router.post("/start")

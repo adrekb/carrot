@@ -4224,8 +4224,13 @@ async function fillPrivacyPanel() {
                           : !c.agent_aware ? 'Connected, not shared with the assistant'
                           : 'The assistant can read your next few days' })) });
 
+    // `/api/ambient/policy`, not `/api/ambient`: the latter also probes memory,
+    // VRAM and Ollama, which on a cold process is several seconds — mostly
+    // nvidia-smi starting up. This panel wants to know what is switched on, and
+    // waiting for the graphics card to answer that is how a row ends up saying
+    // "could not check" on a machine where nothing is wrong.
     rows.push({ label: 'Screen history', leaves: false,
-                ...await ask('/api/ambient', (a) => ({
+                ...await ask('/api/ambient/policy', (a) => ({
                     on: !!(a.policy || {}).enabled,
                     detail: !(a.policy || {}).enabled ? 'Not recording'
                           : (a.policy || {}).agent_aware

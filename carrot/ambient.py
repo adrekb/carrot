@@ -426,6 +426,11 @@ def _free_vram_gb() -> Optional[float]:
         return None
 
 
+_BUSY_TIMEOUT = 0.4
+_BUSY_CACHE_SECONDS = 3.0
+_busy_cache: Dict[str, Any] = {"at": 0.0, "value": False}
+
+
 def _model_busy() -> bool:
     """Whether Ollama currently has a model resident in memory.
 
@@ -434,19 +439,42 @@ def _model_busy() -> bool:
     machine stutter. It is not a perfect "is generating right now", but the
     error is in the safe direction — yielding slightly too often costs a few
     seconds of index freshness, and yielding too rarely costs someone's answer.
+
+    Short timeout, and cached.
+
+    With Ollama unreachable this waited the full timeout every single call, and
+    the call sits inside `status()`, which sits inside an `async` request
+    handler — so `GET /api/ambient` blocked the event loop for two seconds and
+    took every other request in the process down with it. On a machine where
+    Ollama is not running, which is the ordinary state before somebody sets it
+    up, that is the whole UI stalling whenever anything asks about ambient.
+
+    Two seconds was also far too generous for a local socket: a reachable
+    Ollama answers /api/ps in single-digit milliseconds, so 400ms separates
+    "busy" from "not there" just as well and fails fast. The cache then keeps a
+    burst of callers — the settings panel, the capture loop, the privacy panel —
+    from each paying for their own probe.
     """
+    import time as _time
+
+    now = _time.monotonic()
+    if now - _busy_cache["at"] < _BUSY_CACHE_SECONDS:
+        return bool(_busy_cache["value"])
+    value = False
     try:
         import requests
 
         from .config import get_config
 
         host = get_config().get("ollama_host", "http://localhost:11434").rstrip("/")
-        response = requests.get(f"{host}/api/ps", timeout=2)
-        if response.status_code != 200:
-            return False
-        return bool((response.json() or {}).get("models"))
+        response = requests.get(f"{host}/api/ps", timeout=_BUSY_TIMEOUT)
+        if response.status_code == 200:
+            value = bool((response.json() or {}).get("models"))
     except Exception:
-        return False
+        value = False
+    _busy_cache["at"] = now
+    _busy_cache["value"] = value
+    return value
 
 
 def status() -> Dict[str, Any]:
