@@ -1854,6 +1854,108 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   gap: 2px;
   overflow-y: auto;
 }
+
+/* ===== The foot of the rail =====
+ *
+ * Pushed down by `margin-top: auto` rather than positioned, so it sits at the
+ * bottom of a short window and still scrolls into reach in a very short one.
+ * The empty space above it is deliberate: four destinations and one fact is
+ * the whole rail, and filling the gap with more links would undo the thing
+ * this layout exists to do.
+ */
+.nav-foot { margin-top: auto; padding-top: 10px; position: relative; }
+.privacy-chip {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 8px 9px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  color: var(--muted);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s var(--ease), border-color 0.15s var(--ease);
+}
+.privacy-chip:hover { background: var(--surface-hover, rgba(255,255,255,0.04));
+  border-color: var(--border); }
+/* Green for "stays here", accent for "goes out". Not red: sending a question
+   to a model you chose is not an error, and colouring it like one would make
+   the honest state look like a fault. */
+.privacy-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--green);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 18%, transparent);
+}
+.privacy-dot.cloud {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.privacy-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+.privacy-where { font-size: var(--text-sm); font-weight: 500; color: var(--text); }
+.privacy-model {
+  font-size: var(--text-2xs);
+  color: var(--faint);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* The detail, one click deeper. "Ollama server 127.0.0.1 unavailable" is not
+   a sentence a normal person can act on; "Local · Ready" is, and the technical
+   name belongs here rather than in the rail. */
+/* `position: fixed`, and placed by script.
+ *
+ * Absolutely positioned inside the rail it was clipped by it: `.app-nav`
+ * scrolls, which makes it a clipping context, so a 268px panel hanging off a
+ * 210px column simply had its right-hand side cut away — the headline read
+ * "Nothing is leaving this compute". Fixed takes it out of that box entirely,
+ * and the left/bottom are set from the chip's own rectangle. */
+.privacy-panel {
+  position: fixed;
+  width: 268px;
+  max-width: calc(100vw - 24px);
+  padding: 12px;
+  background: var(--card);
+  border: 1px solid var(--border-hi);
+  border-radius: var(--r-md, 10px);
+  box-shadow: var(--shadow-lg, 0 12px 32px rgba(0,0,0,0.35));
+  z-index: 60;
+}
+.privacy-head {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 9px;
+}
+.privacy-loading { font-size: var(--text-xs); color: var(--faint); }
+.privacy-row { display: flex; gap: 9px; align-items: flex-start; padding: 6px 0; }
+.privacy-row-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  margin-top: 5px; flex-shrink: 0;
+  background: var(--border-hi);
+}
+.privacy-row-dot.on { background: var(--green); }
+.privacy-row.leaves .privacy-row-dot.on { background: var(--accent); }
+.privacy-row-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.privacy-row-text strong { font-size: var(--text-xs); font-weight: 600; color: var(--text); }
+.privacy-row-text span { font-size: var(--text-2xs); color: var(--faint); }
+.privacy-more {
+  margin-top: 10px;
+  width: 100%;
+  padding: 7px;
+  background: var(--card2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  cursor: pointer;
+}
+.privacy-more:hover { color: var(--text); border-color: var(--border-hi); }
+/* Collapsed rail: the dot survives, the words go. It is still the fastest
+   answer to "is anything leaving", which is the point of it. */
+body.nav-collapsed .privacy-text { display: none; }
+body.nav-collapsed .privacy-chip { justify-content: center; padding: 8px 0; }
 .nav-item {
   display: flex;
   align-items: center;

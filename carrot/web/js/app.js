@@ -4045,15 +4045,21 @@ document.addEventListener('DOMContentLoaded', renderTemporaryState);
 // when it does not. The sentence is still there, behind an i, for the moment
 // somebody wants to know which model and why.
 
+// Under Auto there is no chosen model to name, and the promise holds only if
+// none of the tasks Auto can reach escalates — so the claim is made from what
+// Auto could actually do, not from what the last turn happened to use.
+//
+// One function, because the empty state and the status chip in the rail are
+// two renderings of the same fact and must never be able to disagree about it.
+function answersStayLocal() {
+    return autoModel ? autoIsLocal
+                     : (currentProvider === 'ollama' || currentProvider === null);
+}
+
 function renderEmptyStateLine() {
     const line = document.getElementById('chat-empty-line');
     if (!line) return;
-    // Under Auto there is no chosen model to name, and the promise holds only
-    // if none of the tasks Auto can reach escalates — so the claim is made
-    // from what Auto could actually do, not from what the last turn did.
-    const local = autoModel
-        ? autoIsLocal
-        : (currentProvider === 'ollama' || currentProvider === null);
+    const local = answersStayLocal();
 
     let detail;
     if (local && autoModel) {
@@ -4101,4 +4107,162 @@ function renderEmptyStateLine() {
     };
 
     line.classList.toggle('cloud', !local);
+    renderPrivacyChip();
 }
+
+
+// ===== What is leaving this machine =====
+//
+// The one claim the whole application rests on, in the one place it can be
+// read without going to look for it. A dot, where it runs, and which model —
+// and behind it a list of every capability that could send something
+// somewhere, each saying plainly whether it is on.
+//
+// The list is built from the same state the assistant is told about, not from
+// a second copy of it: the calendar switches, the ambient switches, the search
+// mode, memory. If this panel and the model disagree about what Carrot can
+// see, this panel is the bug — so it reads the same sources.
+
+function renderPrivacyChip() {
+    const chip = document.getElementById('privacy-chip');
+    if (!chip) return;
+    const local = answersStayLocal();
+    const where = document.getElementById('privacy-where');
+    const model = document.getElementById('privacy-model');
+    const dot = document.getElementById('privacy-dot');
+
+    if (where) where.textContent = local ? 'Local' : 'Cloud';
+    if (model) {
+        model.textContent = autoModel
+            ? (local ? 'Auto · on this computer' : 'Auto · may use the internet')
+            : (currentModel || (local ? 'Ollama' : 'a hosted model'));
+    }
+    if (dot) dot.classList.toggle('cloud', !local);
+    chip.classList.toggle('cloud', !local);
+    chip.title = local
+        ? 'Answers are generated on this computer. Click for what else is on.'
+        : 'Answers go over the internet. Click for what else is on.';
+}
+
+function togglePrivacyPanel() {
+    const panel = document.getElementById('privacy-panel');
+    const chip = document.getElementById('privacy-chip');
+    if (!panel) return;
+    const opening = panel.classList.contains('hidden');
+    panel.classList.toggle('hidden', !opening);
+    chip?.setAttribute('aria-expanded', String(opening));
+    if (opening) { placePrivacyPanel(); fillPrivacyPanel(); }
+}
+
+// Put it beside the chip, in viewport coordinates.
+//
+// The panel is `position: fixed` because the rail scrolls and would otherwise
+// clip it — so nothing places it for us. It opens upward from the chip, and
+// only slides down if there is genuinely no room above, which on a rail this
+// tall there almost never is.
+function placePrivacyPanel() {
+    const panel = document.getElementById('privacy-panel');
+    const chip = document.getElementById('privacy-chip');
+    if (!panel || !chip) return;
+    const box = chip.getBoundingClientRect();
+    panel.style.left = Math.round(box.left) + 'px';
+    // Measured after it is laid out, not guessed from a line count — the rows
+    // are as tall as their text wraps.
+    panel.style.bottom = '';
+    panel.style.top = '-9999px';
+    const height = panel.getBoundingClientRect().height || 240;
+    panel.style.top = '';
+    if (box.top - height - 8 >= 8) {
+        panel.style.bottom = Math.round(window.innerHeight - box.top + 8) + 'px';
+    } else {
+        panel.style.bottom = '8px';
+    }
+}
+
+window.addEventListener('resize', () => {
+    const panel = document.getElementById('privacy-panel');
+    if (panel && !panel.classList.contains('hidden')) placePrivacyPanel();
+});
+
+// Every row is a real switch read from the server, never a guess. A panel that
+// claims the screen is not being read while it is would be worse than not
+// having one.
+async function fillPrivacyPanel() {
+    const panel = document.getElementById('privacy-panel');
+    if (!panel) return;
+    panel.innerHTML = '<div class="privacy-loading">Checking…</div>';
+
+    const rows = [];
+    const local = answersStayLocal();
+    rows.push({ on: !local, label: 'Answers',
+                detail: local ? 'On this computer' + (currentModel ? ' · ' + currentModel : '')
+                              : 'Over the internet' + (currentModel ? ' · ' + currentModel : ''),
+                leaves: !local });
+
+    // Each of these is asked for separately and contained separately: one
+    // endpoint being unreachable should grey out its own row, not empty the
+    // panel and leave somebody unable to find out anything.
+    const ask = async (path, read) => { try { return read(await api(path)); }
+                                        catch (_) { return null; } };
+
+    const cal = await ask('/api/calendar/status', (c) => ({
+        on: !!(c.enabled && c.agent_aware && c.url_set),
+        detail: !c.url_set ? 'Not connected'
+              : !c.agent_aware ? 'Connected, not shared with the assistant'
+              : 'The assistant can read your next few days' }));
+    rows.push({ label: 'Calendar', leaves: false, ...(cal || { on: false, detail: 'Unknown' }) });
+
+    const amb = await ask('/api/ambient', (a) => ({
+        on: !!(a.policy || {}).enabled,
+        detail: !(a.policy || {}).enabled ? 'Not recording'
+              : (a.policy || {}).agent_aware ? 'Recording, and the assistant can search it'
+              : 'Recording, not shared with the assistant' }));
+    rows.push({ label: 'Screen history', leaves: false,
+                ...(amb || { on: false, detail: 'Unknown' }) });
+
+    const webOn = typeof currentSearchMode !== 'undefined' && currentSearchMode !== 'off';
+    rows.push({ on: webOn, leaves: webOn, label: 'Web search',
+                detail: webOn ? 'Searches leave this computer' : 'Off' });
+
+    const memOn = await ask('/api/config', (c) => c.memory_enabled !== false);
+    rows.push({ on: memOn !== false, leaves: false, label: 'Memory',
+                detail: memOn === false ? 'Off' : 'Stored on this computer' });
+
+    // "Answers and web search leave this computer" — the subject named, and
+    // capitalised, because it opens the sentence. Listing what does leave is
+    // more use than a count: two amber dots tell you something is going out
+    // and not what.
+    const leaving = rows.filter(r => r.leaves).map(r => r.label.toLowerCase());
+    const named = leaving.length > 1
+        ? leaving.slice(0, -1).join(', ') + ' and ' + leaving[leaving.length - 1]
+        : leaving[0];
+    // Phrased with a colon rather than a verb, because the verb has to agree
+    // with a subject that is sometimes plural ("answers") and sometimes not
+    // ("web search"), and agreeing with the length of the *list* gets it wrong
+    // the moment one plural thing is going out on its own: "Answers leaves
+    // this computer". A label avoids the problem instead of solving it badly.
+    const headline = leaving.length
+        ? 'Leaving this computer: ' + named
+        : 'Nothing is leaving this computer';
+    panel.innerHTML =
+        '<div class="privacy-head">' + escHtml(headline) + '</div>'
+        + rows.map(r =>
+            '<div class="privacy-row' + (r.leaves ? ' leaves' : '') + '">'
+            + '<span class="privacy-row-dot' + (r.on ? ' on' : '') + '"></span>'
+            + '<span class="privacy-row-text"><strong>' + escHtml(r.label) + '</strong>'
+            + '<span>' + escHtml(r.detail) + '</span></span></div>').join('')
+        + '<button class="privacy-more" onclick="togglePrivacyPanel(); switchTab(\'settings\')">'
+        + 'Change any of this in Settings</button>';
+
+    // The rows arrive after the panel was first placed, and they are taller
+    // than the "Checking…" line they replace — so without this it opens in the
+    // right spot and then grows downward off the bottom of the window.
+    placePrivacyPanel();
+}
+
+document.addEventListener('mousedown', (e) => {
+    const panel = document.getElementById('privacy-panel');
+    if (!panel || panel.classList.contains('hidden')) return;
+    if (e.target.closest('#privacy-panel') || e.target.closest('#privacy-chip')) return;
+    togglePrivacyPanel();
+});

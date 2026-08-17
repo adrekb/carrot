@@ -392,6 +392,26 @@
   <button class="nav-item" data-tab="settings" onclick="switchTab('settings')">
     <svg class="ico"><use href="#i-gear"/></svg><span class="nav-label">Settings</span>
   </button>
+
+  <!-- Everything above is where you go. This is what is true.
+
+       It sits at the foot of the rail because it is not a destination — it is
+       the answer to "is any of this leaving my machine", which for an app
+       whose whole argument is that it does not, should be readable without
+       going and looking for it. A dot and two words; the detail is a click
+       away, and the click is where the technical names live. -->
+  <div class="nav-foot">
+    <button id="privacy-chip" class="privacy-chip" onclick="togglePrivacyPanel()"
+            aria-haspopup="dialog" aria-expanded="false">
+      <span id="privacy-dot" class="privacy-dot"></span>
+      <span class="privacy-text">
+        <span id="privacy-where" class="privacy-where">Checking…</span>
+        <span id="privacy-model" class="privacy-model"></span>
+      </span>
+    </button>
+    <div id="privacy-panel" class="privacy-panel hidden" role="dialog"
+         aria-label="Where your data goes"></div>
+  </div>
 </nav>
 
 <!-- ===== Views ===== -->

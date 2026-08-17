@@ -237,7 +237,14 @@ class TestPickerWiring:
     def test_the_privacy_line_asks_the_server_what_auto_can_reach(self):
         # "Everything runs on your machine" under Auto is only true if none of
         # the reachable tasks escalates, and only the server knows that.
-        assert "autoModel\n        ? autoIsLocal" in read_js()
+        #
+        # Asserted on the decision rather than on its indentation: it now lives
+        # in `answersStayLocal`, shared with the status chip in the rail so the
+        # two renderings of this fact cannot disagree.
+        js = read_js()
+        body = js[js.index("function answersStayLocal"):]
+        body = body[:body.index("\n}")]
+        assert "autoModel" in body and "autoIsLocal" in body
 
     def test_the_route_line_explains_an_unchosen_model(self):
         assert "payload.route.auto && payload.route.reason" in read_js()
