@@ -44,7 +44,14 @@ const SLIDE_COLORS = [
 
 let slidesDoc = null;
 let slidesActive = 0;
+// The element the format bar is pointed at. Still a single id, because every
+// control that sets a font or a colour acts on one thing.
 let slidesSelected = null;
+// Everything currently picked, which is the same thing when one is picked and
+// the reason align and distribute can exist when more are. Kept as a set
+// beside `slidesSelected` rather than replacing it, so nothing that already
+// reads the single selection has to change.
+let slidesPicked = new Set();
 let slidesSaveTimer = null;
 let slidesDrag = null;
 let revealInstance = null;
@@ -191,7 +198,7 @@ function applySlidesSnapshot(json) {
     const state = JSON.parse(json);
     slidesDoc.slides = state.slides;
     slidesActive = Math.min(state.active || 0, slidesDoc.slides.length - 1);
-    slidesSelected = null;
+    pickOnly(null);
     renderSlideStage();
     renderSlidesFilm();
     renderSlideFormatBar();
@@ -216,7 +223,7 @@ async function openSlidesDoc(note) {
     slidesDoc = { id: note.id, title: note.title || 'Untitled deck',
                   slides: parseDeck(note.body || '') };
     slidesActive = 0;
-    slidesSelected = null;
+    pickOnly(null);
     slidesPast = [];
     slidesFuture = [];
     showWriteMode('slides');
@@ -370,7 +377,10 @@ function renderSlideStage() {
         + 'transform:scale(' + scale + ');'
         + (slide.background ? 'background:' + slide.background + ';' : '') + '">'
         + slide.elements.map(el => elementHtml(el, {
-            interactive: true, selected: el.id === slidesSelected })).join('')
+            interactive: true, selected: slidesPicked.has(el.id) })).join('')
+        // Above the elements and below nothing: the guides have to be visible
+        // over whatever is being dragged past them.
+        + '<div id="slide-guides" class="slide-guides"></div>'
         + '</div>';
 
     const notes = document.getElementById('slides-notes');
@@ -479,7 +489,7 @@ function moveSlide(from, to) {
 function gotoSlide(index) {
     if (!slidesDoc) return;
     slidesActive = Math.max(0, Math.min(index, slidesDoc.slides.length - 1));
-    slidesSelected = null;
+    pickOnly(null);
     renderSlideStage();
     renderSlidesFilm();
     renderSlideFormatBar();
@@ -491,6 +501,168 @@ function gotoSlide(index) {
 //
 // Shown only with something selected. A row of font and colour controls
 // pointed at nothing is a row of controls that do nothing when you use them.
+// ================================================================
+// Picking more than one
+// ================================================================
+//
+// Everything above works on one element, which is enough to put a thing on a
+// slide and not enough to make the slide tidy. Three boxes that should share
+// an edge get dragged until they look close, and "looks close" is what makes a
+// deck read as homemade — the eye catches a four-pixel disagreement between
+// two headings faster than it reads either of them.
+//
+// So: a set, the operations that only mean anything over a set, and snapping,
+// which is the one that stops the problem being created in the first place.
+
+function pickOnly(id) {
+    slidesPicked = new Set(id ? [id] : []);
+    slidesSelected = id || null;
+}
+
+function togglePicked(id) {
+    if (slidesPicked.has(id) && slidesPicked.size > 1) {
+        slidesPicked.delete(id);
+        // The format bar has to keep pointing at something that is still on.
+        if (slidesSelected === id) slidesSelected = [...slidesPicked][0] || null;
+        return;
+    }
+    slidesPicked.add(id);
+    slidesSelected = id;
+}
+
+function pickedElements() {
+    const slide = currentSlide();
+    if (!slide) return [];
+    // In slide order rather than click order, so "distribute" spaces them the
+    // way they are stacked rather than the way they happened to be selected.
+    return slide.elements.filter(el => slidesPicked.has(el.id));
+}
+
+// Align moves; it never resizes. Stretching a heading to match a box is the
+// version of this that quietly ruins type.
+const SLIDE_ALIGNMENTS = {
+    left:    (els, box) => els.forEach(el => { el.x = box.left; }),
+    centre:  (els, box) => els.forEach(el => { el.x = Math.round(box.cx - el.w / 2); }),
+    right:   (els, box) => els.forEach(el => { el.x = box.right - el.w; }),
+    top:     (els, box) => els.forEach(el => { el.y = box.top; }),
+    middle:  (els, box) => els.forEach(el => { el.y = Math.round(box.cy - el.h / 2); }),
+    bottom:  (els, box) => els.forEach(el => { el.y = box.bottom - el.h; }),
+};
+
+function pickedBounds(els) {
+    const left = Math.min(...els.map(e => e.x));
+    const top = Math.min(...els.map(e => e.y));
+    const right = Math.max(...els.map(e => e.x + e.w));
+    const bottom = Math.max(...els.map(e => e.y + e.h));
+    return { left, top, right, bottom, cx: (left + right) / 2, cy: (top + bottom) / 2 };
+}
+
+// Two or more align to each other; one aligns to the slide.
+//
+// Both readings are what somebody means. With a row of boxes selected they
+// want the row tidy; with one box selected there is nothing to be tidy against
+// except the slide, and refusing would be a button that does nothing.
+function alignPicked(how) {
+    const els = pickedElements();
+    if (!els.length || !SLIDE_ALIGNMENTS[how]) return;
+    pushSlidesHistory();
+    const box = els.length > 1
+        ? pickedBounds(els)
+        : { left: 0, top: 0, right: SLIDE_W, bottom: SLIDE_H, cx: SLIDE_W / 2, cy: SLIDE_H / 2 };
+    SLIDE_ALIGNMENTS[how](els, box);
+    renderSlideStage();
+    renderSlidesFilm();
+    scheduleSlidesSave();
+}
+
+// Equal gaps, not equal centres.
+//
+// Spacing centres evenly is the easier sum and the wrong one: with a wide box
+// between two narrow ones it leaves visibly different gaps. The ends stay put
+// and the free space is shared between the elements in the middle.
+function distributePicked(axis) {
+    const els = pickedElements();
+    if (els.length < 3) return;
+    const horizontal = axis === 'x';
+    const size = (el) => (horizontal ? el.w : el.h);
+    const pos = (el) => (horizontal ? el.x : el.y);
+
+    const order = [...els].sort((a, b) => pos(a) - pos(b));
+    const first = order[0], last = order[order.length - 1];
+    const span = (pos(last) + size(last)) - pos(first);
+    const used = order.reduce((sum, el) => sum + size(el), 0);
+    const gap = (span - used) / (order.length - 1);
+
+    pushSlidesHistory();
+    let cursor = pos(first);
+    for (const el of order) {
+        if (horizontal) el.x = Math.round(cursor); else el.y = Math.round(cursor);
+        cursor += size(el) + gap;
+    }
+    renderSlideStage();
+    renderSlidesFilm();
+    scheduleSlidesSave();
+}
+
+// ================================================================
+// Snapping
+// ================================================================
+//
+// The lines a dragged element is allowed to agree with: the slide's own edges
+// and centre, and every edge and centre of everything not being dragged. The
+// centre of the slide matters most — a title that is nearly centred is the
+// single most common way a deck looks wrong.
+
+const SNAP_DISTANCE = 7;
+
+function snapTargets(moving) {
+    const ignore = new Set(moving.map(el => el.id));
+    const x = [0, SLIDE_W / 2, SLIDE_W];
+    const y = [0, SLIDE_H / 2, SLIDE_H];
+    for (const el of (currentSlide()?.elements || [])) {
+        if (ignore.has(el.id)) continue;
+        x.push(el.x, el.x + el.w / 2, el.x + el.w);
+        y.push(el.y, el.y + el.h / 2, el.y + el.h);
+    }
+    return { x, y };
+}
+
+// Returns the correction to apply, and the lines to draw for it. The offer is
+// made from all three of an element's own edges — left, centre, right — so a
+// box snaps by whichever of its sides is nearest something, not only by the
+// corner being dragged.
+function snapOffset(box, targets, scale) {
+    // Constant on screen rather than in stage units: at 40% zoom a 7px stage
+    // threshold is 3 real pixels, which is not a snap anyone can feel.
+    const reach = SNAP_DISTANCE / (scale || 1);
+    const best = { dx: 0, dy: 0, gx: null, gy: null, bestX: reach, bestY: reach };
+    for (const [mine, axis] of [[box.left, 'x'], [box.cx, 'x'], [box.right, 'x'],
+                                [box.top, 'y'], [box.cy, 'y'], [box.bottom, 'y']]) {
+        for (const target of targets[axis]) {
+            const delta = target - mine;
+            if (axis === 'x' && Math.abs(delta) < best.bestX) {
+                best.bestX = Math.abs(delta); best.dx = delta; best.gx = target;
+            } else if (axis === 'y' && Math.abs(delta) < best.bestY) {
+                best.bestY = Math.abs(delta); best.dy = delta; best.gy = target;
+            }
+        }
+    }
+    return best;
+}
+
+function renderSnapGuides(gx, gy) {
+    const layer = document.getElementById('slide-guides');
+    if (!layer) return;
+    let html = '';
+    if (gx !== null && gx !== undefined) {
+        html += '<span class="slide-guide slide-guide-v" style="left:' + gx + 'px"></span>';
+    }
+    if (gy !== null && gy !== undefined) {
+        html += '<span class="slide-guide slide-guide-h" style="top:' + gy + 'px"></span>';
+    }
+    layer.innerHTML = html;
+}
+
 function selectedElement() {
     const slide = currentSlide();
     return slide && slide.elements.find(e => e.id === slidesSelected);
@@ -506,6 +678,36 @@ function renderSlideFormatBar() {
     if (!el) return;
 
     let html = '';
+
+    // Arrange comes first, because with several things picked it is the only
+    // row that applies to all of them — every control after this one sets a
+    // font or a colour on the single element the bar is aimed at.
+    const picked = pickedElements();
+    html += '<div class="fmt-group fmt-arrange">'
+        + [['left', '⭰', picked.length > 1 ? 'Align left edges' : 'Align to the left of the slide'],
+           ['centre', '⭼', picked.length > 1 ? 'Align centres' : 'Centre on the slide'],
+           ['right', '⭲', picked.length > 1 ? 'Align right edges' : 'Align to the right of the slide'],
+           ['top', '⭱', picked.length > 1 ? 'Align tops' : 'Align to the top of the slide'],
+           ['middle', '⭶', picked.length > 1 ? 'Align middles' : 'Centre vertically on the slide'],
+           ['bottom', '⭳', picked.length > 1 ? 'Align bottoms' : 'Align to the bottom of the slide']]
+            .map(([how, glyph, title]) =>
+                '<button class="fmt-btn" title="' + title + '"'
+                + ' onclick="alignPicked(\'' + how + '\')">' + glyph + '</button>').join('')
+        // Distribute needs three: with two there is one gap, and one gap is
+        // already even. Shown disabled rather than hidden, so the row does not
+        // change width as the selection grows.
+        + ['x', 'y'].map(axis =>
+            '<button class="fmt-btn" title="Space evenly ' + (axis === 'x' ? 'across' : 'down')
+            + (picked.length < 3 ? ' (needs three or more)' : '') + '"'
+            + (picked.length < 3 ? ' disabled' : '')
+            + ' onclick="distributePicked(\'' + axis + '\')">'
+            + (axis === 'x' ? '⇹' : '⇳') + '</button>').join('')
+        + '</div>';
+
+    if (picked.length > 1) {
+        html += '<span class="fmt-count">' + picked.length + ' selected</span>';
+    }
+
     if (el.type === 'text') {
         html += '<select class="fmt-select" onchange="setSlideProp(\'font\', this.value)">'
             + SLIDE_FONTS.map(([v, n]) => '<option value="' + v + '"'
@@ -761,7 +963,7 @@ function addSlideElement(type) {
         el.stroke = 2;
     }
     slide.elements.push(el);
-    slidesSelected = el.id;
+    pickOnly(el.id);
     renderSlideStage();
     renderSlidesFilm();
     renderSlideFormatBar();
@@ -788,7 +990,7 @@ function addSlideImage(file) {
         const el = makeElement('image', { x: 200, y: 160, w: 560, h: 360 });
         el.src = reader.result;
         slide.elements.push(el);
-        slidesSelected = el.id;
+        pickOnly(el.id);
         renderSlideStage();
         renderSlidesFilm();
         scheduleSlidesSave();
@@ -802,7 +1004,7 @@ function duplicateSlideElement() {
     pushSlidesHistory();
     const copy = { ...el, id: newId('e'), x: el.x + 24, y: el.y + 24 };
     currentSlide().elements.push(copy);
-    slidesSelected = copy.id;
+    pickOnly(copy.id);
     renderSlideStage();
     renderSlidesFilm();
     scheduleSlidesSave();
@@ -810,10 +1012,12 @@ function duplicateSlideElement() {
 
 function deleteSlideElement() {
     const slide = currentSlide();
-    if (!slide || !slidesSelected) return;
+    if (!slide || !slidesPicked.size) return;
     pushSlidesHistory();
-    slide.elements = slide.elements.filter(e => e.id !== slidesSelected);
-    slidesSelected = null;
+    // All of them. Pressing Delete with four boxes ticked and losing one is
+    // the kind of half-obeyed instruction you have to undo and redo by hand.
+    slide.elements = slide.elements.filter(e => !slidesPicked.has(e.id));
+    pickOnly(null);
     renderSlideStage();
     renderSlidesFilm();
     renderSlideFormatBar();
@@ -827,19 +1031,41 @@ function bindSlidesEvents() {
 
     host.addEventListener('mousedown', (e) => {
         const box = e.target.closest('.slide-el');
-        if (!box) { slidesSelected = null; renderSlideStage(); renderSlideFormatBar(); return; }
+        if (!box) { pickOnly(null); renderSlideStage(); renderSlideFormatBar(); return; }
         const el = currentSlide().elements.find(x => x.id === box.dataset.id);
         if (!el) return;
-        const changed = slidesSelected !== el.id;
-        slidesSelected = el.id;
+
+        // Shift or the platform's own modifier adds to the selection, which is
+        // what every editor with a canvas in it does.
+        const adding = e.shiftKey || e.metaKey || e.ctrlKey;
+        const changed = adding || !slidesPicked.has(el.id);
+        // Pressing on something already in the group keeps the group, because
+        // that is how you pick a row up by one of its members. But if the
+        // press turns out to be a click and not a drag, it meant "just this
+        // one" — settled on mouseup, when which of the two it was is known.
+        let collapseTo = null;
+        if (adding) togglePicked(el.id);
+        else if (!slidesPicked.has(el.id)) pickOnly(el.id);
+        else { slidesSelected = el.id; collapseTo = slidesPicked.size > 1 ? el.id : null; }
+
         if (e.target.isContentEditable) {
             if (changed) { renderSlideStage(); renderSlideFormatBar(); }
             return;
         }
+        // Resize stays a one-element operation. Scaling a mixed selection by a
+        // corner needs a decision per element about text size and aspect that
+        // nothing here can make well, and guessing it wrong ruins the slide.
+        const resizing = e.target.classList.contains('slide-el-resize');
+        const moving = resizing ? [el] : pickedElements();
         slidesDrag = {
-            kind: e.target.classList.contains('slide-el-resize') ? 'resize' : 'move',
-            el, scale: slideScale(), startX: e.clientX, startY: e.clientY,
+            kind: resizing ? 'resize' : 'move',
+            el, moving,
+            // Where each of them started, so the whole group tracks one pointer.
+            origins: moving.map(m => ({ el: m, x0: m.x, y0: m.y })),
+            targets: snapTargets(moving),
+            scale: slideScale(), startX: e.clientX, startY: e.clientY,
             x0: el.x, y0: el.y, w0: el.w, h0: el.h,
+            moved: false, collapseTo,
         };
         e.preventDefault();
         renderSlideStage();
@@ -850,23 +1076,63 @@ function bindSlidesEvents() {
         if (!slidesDrag) return;
         // Divided by the stage scale, so a box tracks the pointer whatever
         // size the slide is being shown at.
-        const dx = (e.clientX - slidesDrag.startX) / slidesDrag.scale;
-        const dy = (e.clientY - slidesDrag.startY) / slidesDrag.scale;
+        let dx = (e.clientX - slidesDrag.startX) / slidesDrag.scale;
+        let dy = (e.clientY - slidesDrag.startY) / slidesDrag.scale;
         const el = slidesDrag.el;
+        slidesDrag.moved = true;
+
         if (slidesDrag.kind === 'move') {
-            el.x = Math.round(slidesDrag.x0 + dx);
-            el.y = Math.round(slidesDrag.y0 + dy);
+            // Snap the group as a whole, from where it would land — so the
+            // outer edges of a multiple selection are what agree with the
+            // slide, and the elements keep their spacing relative to each
+            // other while it happens.
+            const at = slidesDrag.origins.map(o => ({
+                x: o.x0 + dx, y: o.y0 + dy, w: o.el.w, h: o.el.h }));
+            const left = Math.min(...at.map(p => p.x));
+            const top = Math.min(...at.map(p => p.y));
+            const right = Math.max(...at.map(p => p.x + p.w));
+            const bottom = Math.max(...at.map(p => p.y + p.h));
+            const snap = snapOffset(
+                { left, top, right, bottom, cx: (left + right) / 2, cy: (top + bottom) / 2 },
+                slidesDrag.targets, slidesDrag.scale);
+            // Held down, the pointer wins: a snap you cannot escape is worse
+            // than no snap when the thing you want is deliberately off-grid.
+            if (!e.altKey) { dx += snap.dx; dy += snap.dy; }
+            renderSnapGuides(e.altKey ? null : snap.gx, e.altKey ? null : snap.gy);
+
+            for (const origin of slidesDrag.origins) {
+                origin.el.x = Math.round(origin.x0 + dx);
+                origin.el.y = Math.round(origin.y0 + dy);
+            }
         } else {
             el.w = Math.max(40, Math.round(slidesDrag.w0 + dx));
             el.h = Math.max(el.type === 'line' ? 0 : 30, Math.round(slidesDrag.h0 + dy));
         }
-        const node = document.querySelector('.slide-el[data-id="' + el.id + '"]');
-        if (node) node.setAttribute('style', elementStyle(el));
+
+        for (const moved of (slidesDrag.kind === 'move' ? slidesDrag.moving : [el])) {
+            const node = document.querySelector('.slide-el[data-id="' + moved.id + '"]');
+            if (node) node.setAttribute('style', elementStyle(moved));
+        }
     });
 
     window.addEventListener('mouseup', () => {
         if (!slidesDrag) return;
+        const { moved, collapseTo } = slidesDrag;
         slidesDrag = null;
+        renderSnapGuides(null, null);
+        if (!moved) {
+            // A press on a member of the group that never became a drag: it
+            // meant that one, so drop the rest. Without this there is no way
+            // back to a single element except clicking empty space first.
+            if (collapseTo) {
+                pickOnly(collapseTo);
+                renderSlideStage();
+                renderSlideFormatBar();
+            }
+            // Selecting is not a change; filing it as one puts an empty step
+            // in the undo history.
+            return;
+        }
         renderSlidesFilm();
         scheduleSlidesSave();
     });
@@ -894,8 +1160,21 @@ function bindSlidesEvents() {
         if (!slidesDoc || !isWriteMode('slides')) return;
         if (e.target.isContentEditable || e.target.tagName === 'INPUT'
             || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
-        if ((e.key === 'Delete' || e.key === 'Backspace') && slidesSelected) {
+        if ((e.key === 'Delete' || e.key === 'Backspace') && slidesPicked.size) {
             e.preventDefault(); deleteSlideElement();
+        } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+            // Everything on this slide, which is what makes "align these" one
+            // gesture on a slide somebody else laid out.
+            e.preventDefault();
+            const slide = currentSlide();
+            if (!slide) return;
+            slidesPicked = new Set(slide.elements.map(el => el.id));
+            slidesSelected = slide.elements.length
+                ? slide.elements[slide.elements.length - 1].id : null;
+            renderSlideStage();
+            renderSlideFormatBar();
+        } else if (e.key === 'Escape' && slidesPicked.size) {
+            pickOnly(null); renderSlideStage(); renderSlideFormatBar();
         } else if (e.key === 'ArrowRight') gotoSlide(slidesActive + 1);
         else if (e.key === 'ArrowLeft') gotoSlide(slidesActive - 1);
     });

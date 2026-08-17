@@ -1,0 +1,27 @@
+[
+  {
+    "name": "prose_light",
+    "file": "prose_light.png",
+    "text": "The pelican is a genus of large water birds.\nThey are characterised by a long beak and a large\nthroat pouch used for catching prey and draining\nwater from the scooped-up contents before\nswallowing."
+  },
+  {
+    "name": "prose_dark",
+    "file": "prose_dark.png",
+    "text": "Dark mode is the same text on the other polarity.\nAn engine that reads one and not the other will\nquietly index half of somebody's day."
+  },
+  {
+    "name": "ui_labels",
+    "file": "ui_labels.png",
+    "text": "File  Edit  View  Insert  Format  Slide  Arrange\nUntitled presentation\nClick to add title\nClick to add subtitle\nShare      Present      Templates"
+  },
+  {
+    "name": "code_punctuation",
+    "file": "code_punctuation.png",
+    "text": "def search_for_agent(query, limit=6):\n    if not agent_may_search():\n        return {\"state\": \"off\", \"episodes\": []}\n    rows = recall(query, limit=max(limit * 6, 40))\n    return {'state': 'ok'}"
+  },
+  {
+    "name": "small_text",
+    "file": "small_text.png",
+    "text": "Screenshots are never written to disk, only the text on them.\nLast indexed 16 August 2026 at 23:32. 1,911 characters read."
+  }
+]

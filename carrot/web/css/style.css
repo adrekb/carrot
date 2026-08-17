@@ -5922,12 +5922,31 @@ body #cmdbar:focus-within {
   transition: border-color 0.15s, background 0.15s;
 }
 .ctx-choice:hover { border-color: var(--accent-line); }
+
 .ctx-choice.on { border-color: var(--accent); background: var(--accent-fill, var(--accent));
-  color: var(--on-accent);
+  color: #fff;
 }
 .ctx-label { font-weight: 600; font-size: var(--text-md); }
 .ctx-tokens { font-family: var(--mono); font-size: var(--text-xs); color: var(--muted); }
 .ctx-hint { font-size: var(--text-xs); color: var(--faint); }
+
+/* White, and said explicitly for the children.
+ *
+ * `.ctx-hint` and `.ctx-tokens` set their own colour, so they win on
+ * specificity over whatever the button switches to — which is how the hint
+ * ended up still wearing the grey that was picked to sit quietly on a dark
+ * card, now on a saturated fill. Measured against its own background it ran
+ * 1.10–1.94 across the six accents; on teal, 1.10. The recommendation under
+ * the option you had chosen was the least readable sentence on the screen.
+ *
+ * White on the filled accent measures, per accent: indigo 6.17, orchid 6.06,
+ * ember 4.36, carrot 3.55, teal 3.49, amber 2.57. So this fixes the unreadable
+ * case — teal goes 1.10 to 3.49 — without clearing 4.5 on the four lighter
+ * accents. What would clear it is darkening `--accent-fill` for those, which
+ * is a change to the palette rather than to this rule, and is where to go if
+ * the small print still reads thin on amber. */
+.ctx-choice.on .ctx-hint,
+.ctx-choice.on .ctx-tokens { color: #fff; }
 
 /* ===== Waiting, without saying "Loading…" =====
  *
@@ -7680,6 +7699,39 @@ select.dd-open { border-color: var(--accent-line); }
   color: var(--faint);
   text-align: center;
   max-width: 34rem;
+  /* A row of marks now rather than a line of prose, so it centres as a group
+     and the two glyphs sit on one baseline. */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.where-mark { display: inline-flex; }
+/* Where the answer comes from, at the size of a status light. The cloud is
+   tinted because leaving the machine is the case worth noticing; the computer
+   stays quiet, because that is the one nobody needs telling about. */
+.where-mark .ico { width: 17px; height: 17px; }
+.chat-empty-note.cloud .where-mark { color: var(--accent); }
+.where-why {
+  display: inline-flex;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  opacity: 0.55;
+  cursor: pointer;
+  transition: opacity 0.15s var(--ease);
+}
+.where-why:hover, .where-why:focus-visible { opacity: 1; }
+.where-why .ico { width: 15px; height: 15px; }
+/* The sentence, once asked for. Its own line under the marks rather than
+   beside them, so it does not shove the glyphs off centre. */
+.where-said {
+  flex-basis: 100%;
+  margin-top: 2px;
+  font-size: var(--text-xs);
+  line-height: 1.5;
 }
 
 /* With nothing said yet, the heading and the composer meet at the middle of
@@ -8243,6 +8295,28 @@ body.nav-collapsed .brand-sub { display: none; }
 .fmt-btn.danger { color: var(--red); }
 .fmt-label { font-size: var(--text-2xs); color: var(--faint); }
 .fmt-gap { flex: 1; }
+
+/* Arrange: one block, so six buttons that do related things read as one
+   control rather than six loose ones in a row of unrelated pickers. */
+.fmt-group { display: flex; gap: 2px; }
+.fmt-group .fmt-btn { border-radius: 0; }
+.fmt-group .fmt-btn:first-child { border-radius: var(--r-xs) 0 0 var(--r-xs); }
+.fmt-group .fmt-btn:last-child { border-radius: 0 var(--r-xs) var(--r-xs) 0; }
+/* Distribute needs three. Dimmed and unclickable rather than removed, so the
+   row does not change width as the selection grows and the buttons stay where
+   the hand learned they were. */
+.fmt-group .fmt-btn:disabled { opacity: 0.35; cursor: default; }
+.fmt-group .fmt-btn:disabled:hover { border-color: var(--border); }
+.fmt-count { font-size: var(--text-2xs); color: var(--faint); }
+
+/* The lines an element has just agreed with. Drawn in stage coordinates and
+   scaled with everything else, so they land exactly on the edge they mean at
+   any zoom. Thin, bright and gone the moment the mouse comes up: a guide that
+   lingers is indistinguishable from something you drew. */
+.slide-guides { position: absolute; inset: 0; pointer-events: none; }
+.slide-guide { position: absolute; background: var(--accent); }
+.slide-guide-v { top: 0; bottom: 0; width: 1px; margin-left: -0.5px; }
+.slide-guide-h { left: 0; right: 0; height: 1px; margin-top: -0.5px; }
 .fmt-swatches { display: flex; gap: 3px; }
 .fmt-swatch {
   width: 18px; height: 18px;

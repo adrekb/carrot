@@ -4031,11 +4031,19 @@ function renderTemporaryState() {
 // A new chat inherits the mode you are in, so the banner has to follow it.
 document.addEventListener('DOMContentLoaded', renderTemporaryState);
 
-// ===== "Everything runs on your machine" — only when it does =====
+// ===== Where the answer comes from — a mark, not a sentence =====
 //
-// The empty state used to say that unconditionally. With a hosted model
-// selected it was simply false, and a privacy claim that is false in the one
-// place people read it is worse than no claim at all.
+// The empty state used to say "everything runs on your machine"
+// unconditionally. With a hosted model selected that was simply false, and a
+// privacy claim that is false in the one place people read it is worse than
+// no claim at all. So it became accurate, and then it became a line of prose
+// under a five-word heading — "Answers come from ministral-14b-latest over the
+// internet" is a model id and a caveat in the first thing you see.
+//
+// Which is the wrong weight for it. Local or not local is a *state*, and a
+// state is a glyph: a cloud when the answer leaves the machine, a computer
+// when it does not. The sentence is still there, behind an i, for the moment
+// somebody wants to know which model and why.
 
 function renderEmptyStateLine() {
     const line = document.getElementById('chat-empty-line');
@@ -4046,15 +4054,51 @@ function renderEmptyStateLine() {
     const local = autoModel
         ? autoIsLocal
         : (currentProvider === 'ollama' || currentProvider === null);
-    let text;
-    if (local) {
-        text = 'Everything runs on your machine.';
+
+    let detail;
+    if (local && autoModel) {
+        detail = 'Carrot picks a model for each message, and every one it can '
+               + 'reach runs on this computer. Nothing is sent anywhere.';
+    } else if (local) {
+        detail = `Answers come from ${currentModel || 'a local model'}, running on this `
+               + 'computer. Nothing is sent anywhere.';
     } else if (autoModel) {
-        text = 'Carrot picks a model for each message, and some go over '
-             + 'the internet.';
+        // Wrapped between sentences rather than mid-phrase: "over the internet"
+        // is the claim, and split across a concatenation it stops being
+        // findable in the source by anything checking that the claim is made.
+        detail = 'Carrot picks a model for each message. Some of them run '
+               + 'over the internet, not on this computer.';
     } else {
-        text = `Answers come from ${currentModel || 'a hosted model'} over the internet.`;
+        detail = `Answers come from ${currentModel || 'a hosted model'}. `
+               + 'It runs over the internet, not on this computer.';
     }
-    line.textContent = text;
+
+    // `title` on the row as well as the button: the glyph is the thing people
+    // point at, and a tooltip only on the i would mean hovering the icon that
+    // raised the question tells you nothing.
+    // Named whole rather than assembled from a prefix and a word: an icon id
+    // that only exists once the strings are joined cannot be grepped for, so
+    // nothing tells you it broke when the symbol is renamed.
+    const glyph = local ? '#i-computer' : '#i-cloud';
+    line.innerHTML =
+        '<span class="where-mark" title="' + escHtml(detail) + '">'
+        + '<svg class="ico"><use href="' + glyph + '"/></svg>'
+        + '<span class="sr-only">' + escHtml(detail) + '</span>'
+        + '</span>'
+        + '<button type="button" class="where-why" aria-label="Where answers come from"'
+        + ' title="' + escHtml(detail) + '">'
+        + '<svg class="ico"><use href="#i-info"/></svg></button>';
+
+    // Clicking says it out loud, for touch, and for anyone who does not know a
+    // tooltip is there to be waited for.
+    line.querySelector('.where-why').onclick = () => {
+        const said = line.querySelector('.where-said');
+        if (said) { said.remove(); return; }
+        const note = document.createElement('span');
+        note.className = 'where-said';
+        note.textContent = detail;
+        line.appendChild(note);
+    };
+
     line.classList.toggle('cloud', !local);
 }
