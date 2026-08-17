@@ -159,6 +159,55 @@ class TestWhereTheAnswerComesFrom:
             assert cls in CSS, f"{cls} is built by renderEmptyStateLine but never styled"
 
 
+class TestTextOnColour:
+    """A sweep of 4682 rendered text nodes across six accents and both themes
+    found eighteen selectors under the contrast they needed. Almost all were
+    one of three mistakes, and these are the guards for those three.
+
+    The measuring itself cannot live here — it needs a browser — so what is
+    pinned is the shape of the fixes, which is what regresses.
+    """
+
+    def test_the_palette_carries_ink_for_each_kind_of_surface(self):
+        """Three, because they are three different backgrounds and one answer
+        cannot serve them: `--on-accent` for the fill, `--on-accent-bright` for
+        the bright end of the ramp, `--accent-ink` for the accent as words on
+        the page. Orchid needs white on one and near-black on another."""
+        for token in ("--on-accent:", "--on-accent-bright:", "--accent-ink:"):
+            assert token in CSS, f"{token} is missing from the palette"
+
+    def test_status_colours_are_themed(self):
+        """One value for both themes meant the dark-theme green and yellow
+        measured 1.87 and 1.64 on a light background — very nearly invisible."""
+        light = CSS[CSS.rindex(':root[data-theme="light"] {'):]
+        light = light[:light.index("\n}")]
+        for token in ("--green:", "--yellow:", "--red:"):
+            assert token in light, f"{token} has no light-theme value"
+
+    def test_no_status_colour_is_hardcoded_past_the_palette(self):
+        """The badges wrote `rgb(126, 200, 128)` inline, so a themed `--green`
+        could never have reached them."""
+        for literal in ("rgb(126, 200, 128)", "rgb(233, 176, 74)"):
+            assert literal not in CSS, (
+                f"{literal} is a status colour written past the tokens")
+
+    def test_the_primary_button_does_not_write_white_on_the_bright_accent(self):
+        """`--accent` is the end of the ramp meant to be noticed rather than
+        read against: white on it measured 3.55 on orchid."""
+        rule = CSS[CSS.rindex(".btn-primary {"):]
+        rule = rule[:rule.index("}")]
+        assert "#fff" not in rule
+        assert "--on-accent" in rule
+
+    def test_faint_is_calibrated_against_its_worst_background(self):
+        """It was measured on `--card`, the lightest surface in the theme, and
+        then used on the darker ones where the same colour lands at 4.33."""
+        light = CSS[CSS.rindex(':root[data-theme="light"] {'):]
+        light = light[:light.index("\n}")]
+        assert "--card2" in light[:light.index("--faint:")], (
+            "the --faint comment should name the surface it was measured against")
+
+
 def test_the_small_print_on_a_chosen_option_is_not_left_grey():
     """`.ctx-hint` and `.ctx-tokens` set their own colour.
 

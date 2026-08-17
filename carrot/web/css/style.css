@@ -1044,11 +1044,15 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   white-space: nowrap;
 }
 .btn-primary {
-  background: var(--accent);
-  color: #fff;
-  border-color: var(--accent);
+  /* `--accent-fill` and `--on-accent`, not `--accent` and white. `--accent` is
+     the bright end of the ramp — made to be noticed, not read against — and
+     white on it measures 3.55 on orchid. The palette already carries a fill
+     picked for text to sit on and the ink to sit there. */
+  background: var(--accent-fill, var(--accent));
+  color: var(--on-accent);
+  border-color: var(--accent-fill, var(--accent));
 }
-.btn-primary:hover { background: var(--accent-hi); }
+.btn-primary:hover { background: var(--accent); }
 .btn-ghost {
   background: none;
   color: var(--muted);
@@ -1195,7 +1199,8 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 #tool-btn:hover { color: var(--text); border-color: var(--accent-line); }
-#tool-btn.open { background: var(--accent); border-color: var(--accent); color: #fff; }
+#tool-btn.open { background: var(--accent-fill, var(--accent));
+  border-color: var(--accent-fill, var(--accent)); color: var(--on-accent); }
 
 /* The surface itself comes from the shared floating-layer rule that every
  * other popover in the app uses — glass, `--radius`, `--shadow-lg`, restated
@@ -1304,10 +1309,12 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 #model-btn {
   background: var(--accent);
   border-color: transparent;
-  color: var(--on-accent);
+  /* Not `--on-accent`: that ink is picked against `--accent-fill`, and this
+     button paints `--accent` so it matches Send. */
+  color: var(--on-accent-bright);
 }
 #model-btn:hover { background: var(--accent-hi); border-color: transparent; }
-#model-btn .ico { color: var(--on-accent); width: 13px; height: 13px; }
+#model-btn .ico { color: var(--on-accent-bright); width: 13px; height: 13px; }
 #model-btn .chev { opacity: .8; }
 #model-label {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -1464,9 +1471,9 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   white-space: nowrap;
   flex: 0 0 auto;
 }
-.m-fit-great { color: rgb(126, 200, 128); background: rgba(126, 200, 128, 0.14); }
-.m-fit-good  { color: rgb(126, 200, 128); background: rgba(126, 200, 128, 0.10); }
-.m-fit-tight { color: rgb(233, 176, 74); background: rgba(230, 160, 30, 0.14); }
+.m-fit-great { color: var(--green); background: color-mix(in srgb, var(--green) 14%, transparent); }
+.m-fit-good  { color: var(--green); background: color-mix(in srgb, var(--green) 10%, transparent); }
+.m-fit-tight { color: var(--yellow); background: color-mix(in srgb, var(--yellow) 14%, transparent); }
 .m-fit-too_big { color: var(--muted); background: rgba(128, 128, 128, 0.14); }
 /* Kept in the list rather than hidden. A short list with no explanation reads
    as Carrot having few models; a dimmed row saying "needs 24 GB, this machine
@@ -2288,8 +2295,8 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   min-width: 18px;
   padding: 1px 5px;
   border-radius: var(--r-sm);
-  background: var(--accent);
-  color: #fff;
+  background: var(--accent-fill, var(--accent));
+  color: var(--on-accent);
   font-size: var(--text-xs);
   line-height: 1.5;
   text-align: center;
@@ -3166,13 +3173,13 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   line-height: 1.5;
   text-align: left;
   color: var(--text);
-  background: rgba(230, 160, 30, 0.10);
-  border: 1px solid rgba(230, 160, 30, 0.35);
+  background: color-mix(in srgb, var(--yellow) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--yellow) 35%, transparent);
   border-radius: var(--r-sm);
   padding: 9px 11px;
   margin: -6px 0 14px;
 }
-.splash-feasibility strong { color: rgb(233, 176, 74); }
+.splash-feasibility strong { color: var(--yellow); }
 .splash-feasibility-list { margin: 6px 0 0; padding-left: 18px; color: var(--muted); }
 .splash-feasibility-list li { margin-bottom: 3px; }
 .splash-find { width: 100%; margin-bottom: 8px; font-size: var(--text-sm); }
@@ -3319,7 +3326,7 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 
 /* ===== Google Calendar (secret iCal) ===== */
 .cal-howto { margin-bottom: 12px; }
-.cal-howto summary { cursor: pointer; font-size: var(--text-base); color: var(--accent); }
+.cal-howto summary { cursor: pointer; font-size: var(--text-base); color: var(--accent-ink); }
 .cal-howto ol { margin: 10px 0 8px 20px; line-height: 1.9; }
 .cal-dot.gcal { background: #9ecbff; margin-left: 2px; }
 .cal-event.gcal .cal-event-date { color: #9ecbff; }
@@ -3872,7 +3879,12 @@ select option:checked { background-color: #2f333d; }
 }
 :root[data-accent="ember"] {
   --accent: #ff4f28;
-  --accent-fill: #df3d17;
+  /* Lifted from #df3d17, which sat in the gap between the two inks: 4.25
+     against `--on-accent` and 4.36 against white, so neither choice cleared
+     4.5 and every filled ember surface failed by a little. Lighter rather
+     than darker keeps the dark ink the other warm accents use, and takes it
+     to 4.72. */
+  --accent-fill: #e8471f;
   --on-accent: #1a1208;
   --accent-hi: #ff6f4d;
   --accent-dim: #d63a16;
@@ -3934,6 +3946,40 @@ select option:checked { background-color: #2f333d; }
   --wash-b: 168, 74, 246;
   --wash-c: 38, 196, 226;
 }
+
+/* ===== The accent, as ink =====
+ *
+ * `--accent` is the bright end of each ramp. On a dark surface it reads fine
+ * as text; on the light theme it is a highlighter — the accent measures 3.49
+ * on carrot, 3.44 on teal and 2.53 on amber against the card, all under the
+ * 4.5 that body text wants.
+ *
+ * Icons are exempt: a glyph is non-text and answers to a lower bar, which is
+ * why most of the ninety-odd `color: var(--accent)` rules in this file are
+ * fine as they stand. This token is for the ones that are *words* — a link, a
+ * summary, a label — and it is the same hue taken down to where it can be read
+ * on paper. Reach for it whenever the accent is carrying text.
+ */
+/* Ink for text sitting on `--accent` itself, which is not the same problem as
+   ink on `--accent-fill`. The fill is the darker end and `--on-accent` is
+   chosen against it; the bright end needs its own answer, and on orchid the
+   two disagree — white is right on #8e2fd0 and measures 3.55 on #b95cf5.
+   Everywhere else the two coincide, so this defers to `--on-accent`. */
+:root { --on-accent-bright: var(--on-accent); }
+:root[data-accent="orchid"] { --on-accent-bright: #24063b; }
+
+:root { --accent-ink: var(--accent); }
+/* Except indigo, which is the deepest of the six: as text on a dark card
+   the accent itself reaches only 3.62. Its own --accent-hi is the same hue
+   one step up the ramp. */
+:root[data-theme="dark"][data-accent="indigo"] { --accent-ink: var(--accent-hi); }
+:root[data-theme="light"][data-accent="carrot"], :root[data-theme="light"] { --accent-ink: #a8480a; }
+:root[data-theme="light"][data-accent="ember"]  { --accent-ink: #b02f10; }
+:root[data-theme="light"][data-accent="amber"]  { --accent-ink: #8f6410; }
+:root[data-theme="light"][data-accent="orchid"] { --accent-ink: #7326a8; }
+:root[data-theme="light"][data-accent="teal"]   { --accent-ink: #0a7563; }
+:root[data-theme="light"][data-accent="indigo"] { --accent-ink: #1a46b4; }
+
 
 /* ---- The wash ----
    Four wide pools, each an accent-derived hue. --wash-strength scales
@@ -4281,7 +4327,17 @@ code, pre, .kbd { font-family: var(--mono); }
   --border-hi: rgba(40, 34, 22, 0.18);
   --text: #1e1b14;
   --muted: #5f584a;
-  --faint: #776f60;   /* 4.89:1 on --card */
+  /* Measured against --card2, not --card. It was calibrated on the lightest
+     surface in the theme and then used on the darker ones — the rail, the
+     empty states, the option hints — where the same colour lands at 4.33. A
+     token is only as good as its worst background. */
+  --faint: #6b6355;   /* 5.1:1 on --card2, 5.8:1 on --card */
+  /* Status colours had one value for both themes. On a light background the
+     dark-theme green and yellow are almost invisible: 1.87 and 1.64. These are
+     the same hues taken down to where they can be read on paper. */
+  --green: #115a3e;   /* on its own 14% tint, not on the bare card */
+  --yellow: #8f6410;
+  --red: #a8332c;
   --opt-bg: #fffdf8;
   --opt-text: #1e1b14;
   --opt-sel: #ece5d5;
@@ -5924,7 +5980,9 @@ body #cmdbar:focus-within {
 .ctx-choice:hover { border-color: var(--accent-line); }
 
 .ctx-choice.on { border-color: var(--accent); background: var(--accent-fill, var(--accent));
-  color: #fff;
+  /* Inherited by `.ctx-label`, so a fixed white put the label at 2.57 on
+     amber — the same failure as the hint, one element up. */
+  color: var(--on-accent);
 }
 .ctx-label { font-weight: 600; font-size: var(--text-md); }
 .ctx-tokens { font-family: var(--mono); font-size: var(--text-xs); color: var(--muted); }
@@ -5939,14 +5997,14 @@ body #cmdbar:focus-within {
  * 1.10–1.94 across the six accents; on teal, 1.10. The recommendation under
  * the option you had chosen was the least readable sentence on the screen.
  *
- * White on the filled accent measures, per accent: indigo 6.17, orchid 6.06,
- * ember 4.36, carrot 3.55, teal 3.49, amber 2.57. So this fixes the unreadable
- * case — teal goes 1.10 to 3.49 — without clearing 4.5 on the four lighter
- * accents. What would clear it is darkening `--accent-fill` for those, which
- * is a change to the palette rather than to this rule, and is where to go if
- * the small print still reads thin on amber. */
+ * `--on-accent` rather than a fixed white, because the palette already works
+ * this out per accent and gets it right where one colour cannot. White on the
+ * filled accent measures indigo 6.17, orchid 6.06, ember 4.36, carrot 3.55,
+ * teal 3.49, amber 2.57 — so hard-coding it rescues two accents and puts the
+ * same illegibility back on the rest. `--on-accent` is white where white is
+ * correct and near-black on the warm accents, and clears 4.5 on all six. */
 .ctx-choice.on .ctx-hint,
-.ctx-choice.on .ctx-tokens { color: #fff; }
+.ctx-choice.on .ctx-tokens { color: var(--on-accent); }
 
 /* ===== Waiting, without saying "Loading…" =====
  *
@@ -6948,8 +7006,8 @@ select.dd-open { border-color: var(--accent-line); }
   font-weight: 500;
   padding: 1px 7px;
   border-radius: var(--r-pill);
-  color: rgb(126, 200, 128);
-  background: rgba(126, 200, 128, 0.14);
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 14%, transparent);
 }
 .component-unlocks { font-size: var(--text-sm); color: var(--text); margin-top: 2px; }
 .component-detail, .component-note {
@@ -6960,7 +7018,7 @@ select.dd-open { border-color: var(--accent-line); }
 }
 /* A system package Carrot cannot install for you is a different kind of
    sentence from a description, and has to read like one. */
-.component-note { color: rgb(233, 176, 74); }
+.component-note { color: var(--yellow); }
 .component-side {
   display: flex;
   align-items: center;
@@ -7025,8 +7083,8 @@ select.dd-open { border-color: var(--accent-line); }
 /* Kept, and saying so once. The confirmation is the point of the state
    change — a checkbox that ticks and says nothing leaves you wondering
    whether it went anywhere. */
-.goal-chip-kept { border-color: rgba(126, 200, 128, 0.45); }
-.goal-chip-kept-note { color: rgb(126, 200, 128); font-size: var(--text-xs); white-space: nowrap; }
+.goal-chip-kept { border-color: color-mix(in srgb, var(--green) 45%, transparent); }
+.goal-chip-kept-note { color: var(--green); font-size: var(--text-xs); white-space: nowrap; }
 
 /* A document that is a view of the database says so, and does not pretend to
    be a page you can type into. */
@@ -7121,7 +7179,7 @@ select.dd-open { border-color: var(--accent-line); }
    away" call for different things from the reader. */
 .write-card-locked .write-card-face { opacity: 0.45; }
 .write-card-locked .write-card-title { color: var(--muted); }
-.write-card-needs { color: rgb(233, 176, 74); }
+.write-card-needs { color: var(--yellow); }
 
 /* Recents, as pages. The preview is the first lines of the document at a size
    nobody reads — which is the point: you recognise your own writing by its
@@ -7173,7 +7231,8 @@ select.dd-open { border-color: var(--accent-line); }
   color: var(--on-accent);
   background: var(--accent-fill, var(--accent));
 }
-.write-recent-kind-latex { color: rgb(126, 200, 128); background: rgba(126, 200, 128, 0.14); }
+.write-recent-kind-latex { color: var(--green);
+  background: color-mix(in srgb, var(--green) 14%, transparent); }
 .write-recent-title {
   flex: 1;
   min-width: 0;
@@ -7880,7 +7939,7 @@ body.nav-collapsed .brand-sub { display: none; }
 .history-dot.chip-chat { background: var(--accent); }
 .history-dot.chip-agent { background: var(--green); }
 .history-chip.chip-chat.active { border-color: var(--accent); }
-.history-chip.chip-agent.active { border-color: var(--green); background: rgba(126, 200, 128, 0.14); }
+.history-chip.chip-agent.active { border-color: var(--green); background: color-mix(in srgb, var(--green) 14%, transparent); }
 .history-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .history-when { font-size: var(--text-2xs); color: var(--faint); flex: 0 0 auto; }
 .history-empty { padding: var(--s-5); color: var(--faint); font-size: var(--text-sm); }
