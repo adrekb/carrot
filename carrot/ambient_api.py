@@ -12,6 +12,7 @@ hand one back.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -162,8 +163,14 @@ async def capture_now():
     relevant — and never the privacy or resource ones. A button that captures
     a password field on request is the same bug as one that does it
     automatically.
+
+    Off the event loop, because a screen grab plus an OCR pass is most of a
+    second on a good machine and several on a busy one. Run inline it holds
+    every other request in the process for that long — the UI freezing is the
+    visible half; the SSE stream stalling is the half people report as the
+    model having stopped.
     """
-    return ambient_capture.capture_once(force=True)
+    return await asyncio.to_thread(ambient_capture.capture_once, True)
 
 
 @router.post("/recall")

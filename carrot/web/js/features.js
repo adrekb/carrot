@@ -240,8 +240,7 @@ function renderNotesList() {
     if (typeof isWriteMode === 'function' && !isWriteMode('start')) return;
     renderWriteStartRecents();
 }
-
-function filterNotesList() { renderWriteStartRecents(); }
+// filterNotesList lives with the drive, below, alongside the query it reads.
 
 async function newNote() {
     // The sidebar + makes a markdown document without asking, which is what a
@@ -2362,8 +2361,11 @@ async function loadWorktrees() {
 
 async function pickWorktree(value) {
     if (value === NEW_WORKTREE) {
-        const branch = await inlineTextPrompt(
-            'Branch name for the new worktree', 'try/refactor');
+        const branch = await inlineTextPrompt({
+            title: 'Branch name for the new worktree',
+            placeholder: 'try/refactor',
+            action: 'Create',
+        });
         // Cancelled: put the picker back on where we actually are, or it
         // sits there naming a worktree that was never made.
         if (!branch) { loadWorktrees(); return; }
@@ -2450,9 +2452,11 @@ async function scheduleCurrentTask() {
         agentBubble('agent', 'Type what you want done first, then schedule it.');
         return;
     }
-    const when = await inlineTextPrompt(
-        'When should this run? "hourly", "daily 09:00", or "weekly monday 09:00"',
-        'daily 09:00');
+    const when = await inlineTextPrompt({
+        title: 'When should this run? "hourly", "daily 09:00", or "weekly monday 09:00"',
+        placeholder: 'daily 09:00',
+        action: 'Schedule',
+    });
     if (when === null) return;
 
     const parts = String(when).trim().toLowerCase().split(/\s+/);
@@ -3757,6 +3761,7 @@ async function showWriteStart() {
         catch (_) { writeStartCards = [{ id: 'blank', title: 'Blank document', format: 'markdown', available: true }]; }
     }
     renderWriteStartCards();
+    renderDrivePlaces();
     renderWriteStartRecents();
 }
 
@@ -3910,12 +3915,32 @@ function explainLockedCard(card) {
     alert(detail);
 }
 
-// What each format is called on a document's badge.
-const DOC_KIND_LABEL = { latex: 'TeX', canvas: 'Canvas', slides: 'Deck', markdown: 'Doc' };
+// What each format is called on its badge.
+const DOC_KIND_LABEL = {
+    latex: 'TeX', canvas: 'Canvas', slides: 'Deck', markdown: 'Doc', file: 'File',
+};
 
-// The filters, read off the controls. Empty means "no opinion", which is the
-// default for all three — the screen opens showing everything, most recent
-// first, and narrows only when asked.
+// ================================================================
+// Work — the drive
+// ================================================================
+//
+// Documents, files and workspaces were three destinations. Here they are one
+// surface: a rail of places, and everything you have in the middle. The
+// merging and the sorting happen on the server, over the whole set — two lists
+// that are each sorted interleave wrongly when the browser joins them.
+
+let drivePlace = 'all';
+let driveView = 'grid';
+let driveItems = [];
+// The last unsearched listing, which is what the workspace dropdown is built
+// from — see renderWorkspaceFilter.
+let driveAllItems = [];
+// Which fetch is the current one. Typing used to fire a request per keystroke
+// with no way to tell a stale reply from a fresh one, so a slow early response
+// could land last and put the wrong result on screen.
+let driveFetchSeq = 0;
+let driveFilterTimer = null;
+
 function writeBrowseQuery() {
     const val = (id) => (document.getElementById(id)?.value || '').trim();
     return {
@@ -3926,80 +3951,470 @@ function writeBrowseQuery() {
     };
 }
 
-function writeBrowseMatches(note, q) {
-    if (q.format && (note.format || 'markdown') !== q.format) return false;
-    if (q.workspace && (note.workspace || '') !== q.workspace) return false;
-    if (q.days) {
-        const age = (Date.now() / 1000 - (note.created_at || 0)) / 86400;
-        if (age > q.days) return false;
+function setDrivePlace(place) {
+    // Maps is a way of reading these same things, so it takes the middle of the
+    // screen rather than being somewhere else to go — and because it is a view
+    // and not a place, it does not become the place you are in. It used to:
+    // `drivePlace` was left on 'maps', which no filter understands, so closing
+    // the graph put you back on a listing that believed it was filtered, with
+    // the item count where the heading goes and no way back to Everything.
+    if (place === 'maps') { toggleGraphPane(); return; }
+
+    drivePlace = place;
+    for (const el of document.querySelectorAll('.drive-place')) {
+        el.classList.toggle('active', el.dataset.place === place);
     }
-    if (q.text) {
-        const hay = ((note.title || '') + ' ' + (note.body || '')).toLowerCase();
-        if (!hay.includes(q.text)) return false;
-    }
-    return true;
+    renderWriteStartRecents();
 }
 
-// The workspace filter is built from the documents themselves rather than from
-// the workspace list: offering a workspace with nothing in it is a filter that
-// can only ever return nothing.
+function toggleDriveView() {
+    driveView = driveView === 'grid' ? 'list' : 'grid';
+    document.getElementById('write-start-recents')
+        ?.classList.toggle('drive-list', driveView === 'list');
+}
+
+function toggleDriveNew() {
+    const pop = document.getElementById('drive-new-pop');
+    if (!pop) return;
+    if (pop.classList.contains('hidden')) {
+        pop.innerHTML = (writeStartCards || []).map(card =>
+            '<button class="drive-new-item' + (card.available ? '' : ' locked')
+            + '" data-card="' + escHtml(card.id) + '">'
+            + '<span>' + escHtml(card.title) + '</span>'
+            + '<span class="drive-new-sub">'
+            + escHtml(card.available ? (card.subtitle || '')
+                : 'Needs the ' + ((card.requires || {}).label || 'pack'))
+            + '</span></button>').join('');
+        // A workspace, a map and a folder of files are things you make here
+        // too, and none of them is a document format, so none comes from the
+        // cards. The workspace is first of the three because it is the only
+        // one that makes somewhere to put things — the rail lists workspaces
+        // and had no way to add one, so the only route to a new one was a
+        // different tab.
+        pop.innerHTML +=
+            '<button class="drive-new-item" data-card="__workspace">'
+            + '<span>Workspace</span>'
+            + '<span class="drive-new-sub">somewhere to keep a project together</span></button>'
+            + '<button class="drive-new-item" data-card="__map">'
+            + '<span>Map</span><span class="drive-new-sub">see how your documents link</span></button>'
+            + '<button class="drive-new-item" data-card="__file">'
+            + '<span>Add a folder of files</span>'
+            + '<span class="drive-new-sub">point Carrot at files you already have</span></button>';
+        for (const el of pop.querySelectorAll('.drive-new-item')) {
+            const card = (writeStartCards || []).find(c => c.id === el.dataset.card);
+            el.onclick = () => {
+                pop.classList.add('hidden');
+                if (el.dataset.card === '__workspace') { newDriveWorkspace(); return; }
+                if (el.dataset.card === '__map') { setDrivePlace('maps'); return; }
+                if (el.dataset.card === '__file') { switchTab('files'); return; }
+                if (card.available) startNewDocument(card); else explainLockedCard(card);
+            };
+        }
+    }
+    pop.classList.toggle('hidden');
+}
+
+// Make one from here, and land in it.
+//
+// Not window.prompt: Electron disables it, so it returns null without showing
+// anything and the menu item becomes a button that does nothing.
+async function newDriveWorkspace() {
+    const name = await inlineTextPrompt({
+        title: 'Name the workspace',
+        placeholder: 'Thesis, Home, Michaelmas term…',
+        action: 'Create',
+    });
+    if (name === null) return;
+    const title = (name || '').trim();
+    if (!title) return;
+    try {
+        const made = await api('/api/workspaces', {
+            method: 'POST', body: JSON.stringify({ name: title, folder_id: null }),
+        });
+        // The rail has to know about it before anything can select it.
+        await renderDrivePlaces();
+        if (typeof loadWorkspaces === 'function') loadWorkspaces();
+        // Somewhere empty that you were just told you made is a screen that
+        // looks like nothing happened, so go and stand in it — the heading
+        // names it, and the next thing filed goes here.
+        if (made && made.id) setDriveWorkspace(made.id);
+    } catch (e) {
+        alert('Could not make that workspace: ' + e.message);
+    }
+}
+
+// The rail's workspace list, with what is in each.
+async function renderDrivePlaces() {
+    const host = document.getElementById('drive-workspaces');
+    if (!host) return;
+    let spaces = [];
+    try { spaces = (await api('/api/work/places')).workspaces || []; } catch (_) { spaces = []; }
+    host.innerHTML = spaces.length
+        ? spaces.map(w =>
+            '<button class="drive-place" data-place="ws:' + escHtml(w.id) + '"'
+            + ' onclick="setDriveWorkspace(\'' + escHtml(w.id) + '\')">'
+            + '<svg class="ico"><use href="#i-folder"/></svg>'
+            + '<span>' + escHtml(w.name) + '</span>'
+            + '<span class="drive-count">' + (w.count || '') + '</span></button>').join('')
+        : '<div class="drive-rail-empty">No workspaces yet.</div>';
+}
+
+function setDriveWorkspace(id) {
+    const sel = document.getElementById('write-filter-workspace');
+    if (sel) sel.value = id;
+    setDrivePlace('ws:' + id);
+}
+
+// The workspace dropdown, built from what actually has something in it —
+// offering a workspace with nothing in it is a filter that can only ever
+// return nothing.
 function renderWorkspaceFilter() {
     const sel = document.getElementById('write-filter-workspace');
     if (!sel) return;
     const seen = new Map();
-    for (const note of notesCache || []) {
-        if (note.workspace) seen.set(note.workspace, note.workspace_name || note.workspace);
+    for (const item of driveAllItems) {
+        if (item.workspace) seen.set(item.workspace, item.workspace_name || item.workspace);
     }
     const keep = sel.value;
     sel.innerHTML = '<option value="">Any workspace</option>'
         + [...seen.entries()].sort((a, b) => a[1].localeCompare(b[1]))
-            .map(([id, name]) => `<option value="${escHtml(id)}">${escHtml(name)}</option>`).join('');
+            .map(([id, name]) => '<option value="' + escHtml(id) + '">'
+                 + escHtml(name) + '</option>').join('');
     if ([...sel.options].some(o => o.value === keep)) sel.value = keep;
-    // Nothing is filed anywhere on a fresh install, so the control would be a
-    // dropdown with one entry that does nothing.
     sel.classList.toggle('hidden', seen.size === 0);
 }
 
-function renderWriteStartRecents() {
+function driveMatches(item, q) {
+    if (drivePlace === 'documents' && item.kind !== 'document') return false;
+    if (drivePlace === 'file' && item.kind !== 'file') return false;
+    if (drivePlace.startsWith('ws:') && (item.workspace || '') !== drivePlace.slice(3)) return false;
+    if (q.format) {
+        if (q.format === 'file' ? item.kind !== 'file' : item.format !== q.format) return false;
+    }
+    if (q.workspace && (item.workspace || '') !== q.workspace) return false;
+    if (q.days) {
+        const age = (Date.now() / 1000 - (item.updated || 0)) / 86400;
+        if (age > q.days) return false;
+    }
+    // No text check: the server matched on the whole body, and re-testing the
+    // preview here would throw away every result whose match is past the 220th
+    // character — which is most of them.
+    return true;
+}
+
+// A tile shows the document, not its source.
+//
+// Google Docs shows you a page. Carrot showed the first 220 characters of the
+// file, which for a canvas is `{"type":"excalidraw","version":2,…` and for a
+// note is its markdown with the hashes and asterisks still in it. You cannot
+// recognise your own work from its syntax.
+//
+// So the thumbnail is rendered: markdown becomes HTML at a size nobody reads,
+// a deck shows its slides laid out, a canvas shows its shapes. Scaled down
+// rather than re-implemented small — it is the same markup the editor uses.
+function driveThumb(item) {
+    if (item.kind === 'file') {
+        return '<span class="thumb-file">' + escHtml(item.path || item.name) + '</span>';
+    }
+    if (item.format === 'canvas') {
+        return '<span class="thumb-glyph"><svg viewBox="0 0 96 96" aria-hidden="true">'
+            + '<line x1="34" y1="34" x2="60" y2="64" class="wc-faint-stroke"/>'
+            + '<rect x="14" y="20" width="34" height="24" rx="3" class="wc-accent"/>'
+            + '<rect x="52" y="54" width="32" height="24" rx="3" class="wc-ink"/>'
+            + '</svg></span>';
+    }
+    if (item.format === 'slides') {
+        // The words on the slides, in order — which is what the deck is.
+        const parts = (item.preview || '').split(' · ').filter(Boolean).slice(0, 6);
+        return parts.length
+            ? '<span class="thumb-deck">'
+              + parts.map(p => '<span>' + escHtml(p.slice(0, 60)) + '</span>').join('')
+              + '</span>'
+            : '<span class="thumb-empty">Empty deck</span>';
+    }
+    // Prose and LaTeX: rendered, so headings look like headings.
+    const source = (item.preview || '').slice(0, 400);
+    if (!source.trim()) return '<span class="thumb-empty">Empty document</span>';
+    if (item.format === 'latex') {
+        return '<span class="thumb-page thumb-tex">' + escHtml(source) + '</span>';
+    }
+    let html;
+    try {
+        html = window.marked ? marked.parse(source) : escHtml(source);
+    } catch (_) {
+        html = escHtml(source);
+    }
+    return '<span class="thumb-page md">' + html + '</span>';
+}
+
+// Which tiles are ticked. Cleared whenever the listing is rebuilt under a
+// different filter, because "delete the 12 selected" must never mean twelve
+// things you can no longer see.
+let driveSelection = new Set();
+
+function driveSelectionChanged() {
+    const bar = document.getElementById('drive-selection');
+    if (!bar) return;
+    const n = driveSelection.size;
+    bar.classList.toggle('hidden', n === 0);
+    const label = document.getElementById('drive-selection-count');
+    if (label) label.textContent = n + ' selected';
+    for (const el of document.querySelectorAll('.write-recent')) {
+        el.classList.toggle('picked', driveSelection.has(el.dataset.id));
+    }
+}
+
+function toggleDriveSelect(id, on) {
+    if (on) driveSelection.add(id); else driveSelection.delete(id);
+    driveSelectionChanged();
+}
+
+function clearDriveSelection() {
+    driveSelection.clear();
+    for (const box of document.querySelectorAll('.tile-pick input')) box.checked = false;
+    driveSelectionChanged();
+}
+
+// Everything currently listed, which is not the same as everything there is —
+// with a filter on, this ticks the result, which is the point.
+function selectAllShown() {
+    for (const el of document.querySelectorAll('.write-recent')) {
+        if (el.dataset.kind !== 'document') continue;
+        driveSelection.add(el.dataset.id);
+        const box = el.querySelector('.tile-pick input');
+        if (box) box.checked = true;
+    }
+    driveSelectionChanged();
+}
+
+// The per-tile menu. A real menu rather than a prompt(): Open / Rename /
+// Delete are three things you pick, not three words you type correctly.
+function openTileMenu(event, id, name) {
+    closeTileMenu();
+    const pop = document.createElement('div');
+    pop.id = 'tile-pop';
+    pop.className = 'tile-pop';
+    pop.innerHTML =
+        '<button data-do="open">Open</button>'
+        + '<button data-do="rename">Rename</button>'
+        + '<button data-do="delete" class="danger">Delete</button>';
+    document.body.appendChild(pop);
+    const box = event.currentTarget.getBoundingClientRect();
+    // Flipped up when there is no room below, so a tile on the last row does
+    // not open its menu off the bottom of the window.
+    const below = window.innerHeight - box.bottom > 120;
+    pop.style.left = Math.min(box.left, window.innerWidth - 160) + 'px';
+    pop.style.top = (below ? box.bottom + 4 : box.top - pop.offsetHeight - 4) + 'px';
+    pop.onclick = (e) => {
+        const act = e.target.dataset.do;
+        closeTileMenu();
+        if (act === 'open') openDriveItem('document', id);
+        else if (act === 'rename') renameDocument(id, name);
+        else if (act === 'delete') deleteOneDocument(id);
+    };
+}
+
+function closeTileMenu() {
+    document.getElementById('tile-pop')?.remove();
+}
+
+document.addEventListener('mousedown', (e) => {
+    if (!e.target.closest('#tile-pop') && !e.target.closest('.tile-menu')) closeTileMenu();
+});
+
+async function deleteSelectedDocuments() {
+    const ids = [...driveSelection];
+    if (!ids.length) return;
+    if (!confirm(ids.length === 1
+        ? 'Delete this document?'
+        : 'Delete these ' + ids.length + ' documents? This cannot be undone.')) return;
+    try {
+        const res = await api('/api/work/delete', {
+            method: 'POST', body: JSON.stringify({ ids }),
+        });
+        driveSelection.clear();
+        await renderWriteStartRecents();
+        if (res.skipped) {
+            alert(res.deleted + ' deleted. ' + res.skipped + ' could not be — '
+                + 'documents Carrot keeps for you, like Goals, are not yours to delete here.');
+        }
+    } catch (e) {
+        alert('Could not delete: ' + e.message);
+    }
+}
+
+async function deleteOneDocument(id) {
+    if (!confirm('Delete this document?')) return;
+    try {
+        await api('/api/notes/' + id, { method: 'DELETE' });
+        driveSelection.delete(id);
+        await renderWriteStartRecents();
+    } catch (e) {
+        alert('Could not delete: ' + e.message);
+    }
+}
+
+async function renameDocument(id, current) {
+    // Not window.prompt: Electron disables it, so it returns null without
+    // showing anything and the menu item becomes a button that does nothing.
+    const next = await inlineTextPrompt({
+        title: 'Rename document', value: current || '', action: 'Rename',
+    });
+    if (next === null) return;
+    const title = (next || '').trim();
+    if (!title || title === current) return;
+    try {
+        const note = await api('/api/notes/' + id);
+        await api('/api/notes/' + id, {
+            method: 'PUT', body: JSON.stringify({ content: note.body || '', title }),
+        });
+        await renderWriteStartRecents();
+    } catch (e) {
+        alert('Could not rename: ' + e.message);
+    }
+}
+
+const DRIVE_PLACE_NAME = { all: 'Everything', documents: 'Documents', file: 'Files' };
+
+// What the heading calls where you are. A workspace is named after itself,
+// read off the rail rather than kept in a second place that can disagree with
+// it — and a workspace with nothing in it yet still has a name, which is the
+// case that made this necessary: standing in one you had just created, the
+// heading said "0 items".
+function drivePlaceName() {
+    if (drivePlace.startsWith('ws:')) {
+        const button = document.querySelector(
+            '.drive-place[data-place="' + CSS.escape(drivePlace) + '"] span');
+        return button ? button.textContent : 'Workspace';
+    }
+    return DRIVE_PLACE_NAME[drivePlace] || 'Everything';
+}
+
+async function renderWriteStartRecents() {
     const host = document.getElementById('write-start-recents');
     const empty = document.getElementById('write-browse-empty');
     const label = document.getElementById('write-browse-label');
     if (!host) return;
-    renderWorkspaceFilter();
 
     const q = writeBrowseQuery();
-    const filtering = !!(q.text || q.format || q.days || q.workspace);
-    let items = [...(notesCache || [])]
-        .filter(n => writeBrowseMatches(n, q))
-        .sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+    // The text goes to the server; the rest is applied here.
+    //
+    // Searching in the browser would mean shipping every document body to draw
+    // a grid of tiles, so the tile carries a 220-character preview — which is
+    // the wrong thing to search, because it makes a document findable by its
+    // first paragraph and invisible by its fourth. The server has the whole
+    // body and does the matching there.
+    const seq = ++driveFetchSeq;
+    let body;
+    try {
+        body = await api('/api/work/items' + (q.text ? '?q=' + encodeURIComponent(q.text) : ''));
+    } catch (_) {
+        body = { items: [] };
+    }
+    // A slower earlier request must not land on top of a newer one and show a
+    // result for a query that is no longer in the box.
+    if (seq !== driveFetchSeq) return;
+    driveItems = body.items || [];
+    // The dropdown is built from an unsearched listing. Building it from the
+    // current one would empty it as you type: searching for a word that only
+    // appears in one workspace would leave a workspace filter offering that
+    // one workspace, and clearing the box would not obviously bring the rest
+    // back.
+    if (!q.text) driveAllItems = driveItems;
+    renderWorkspaceFilter();
 
-    // Unfiltered, this is a recents shelf and a dozen is the point. Filtered,
-    // it is a search result and truncating one would be a lie.
-    if (label) label.textContent = filtering
-        ? `${items.length} document${items.length === 1 ? '' : 's'}` : 'Recent documents';
-    if (!filtering) items = items.slice(0, 18);
+    const notice = document.getElementById('drive-partial');
+    if (notice) {
+        notice.textContent = body.partial || '';
+        notice.classList.toggle('hidden', !body.partial);
+    }
+    const filtering = !!(q.text || q.format || q.days || q.workspace) || drivePlace !== 'all';
+    let items = driveItems.filter(i => driveMatches(i, q));
+    // "Delete the 12 selected" must never mean twelve things you cannot see.
+    const shown = new Set(items.map(i => String(i.id)));
+    for (const id of [...driveSelection]) if (!shown.has(id)) driveSelection.delete(id);
 
-    host.innerHTML = items.map(note => {
-        const preview = (note.body || '').replace(/[#*`>\-]/g, '').trim().slice(0, 220);
-        const kind = note.system ? '★' : (DOC_KIND_LABEL[note.format] || 'Doc');
-        return `<button type="button" class="write-recent" data-id="${escHtml(note.id)}">
-            <span class="write-recent-page">${escHtml(preview)}</span>
-            <span class="write-recent-foot">
-              <span class="write-recent-kind write-recent-kind-${escHtml(note.format || 'markdown')}">${escHtml(kind)}</span>
-              <span class="write-recent-title">${escHtml(note.title || note.id)}</span>
-              <span class="write-recent-when">${escHtml(writeWhen(note.created_at))}</span>
-            </span></button>`;
+    // Unfiltered this is a shelf of what you were last in, and a screenful is
+    // the point. Filtered it is a result, and truncating one would misreport
+    // how much there is.
+    // A place is named; a search is counted. Standing in a workspace is being
+    // somewhere, not narrowing something, so it keeps its name — the count is
+    // for when you typed or picked a filter.
+    const searching = !!(q.text || q.format || q.days || q.workspace);
+    if (label) {
+        label.textContent = searching
+            ? items.length + ' item' + (items.length === 1 ? '' : 's')
+            : drivePlaceName();
+    }
+    if (!filtering) items = items.slice(0, 24);
+
+    host.innerHTML = items.map(item => {
+        const kind = DOC_KIND_LABEL[item.kind === 'file' ? 'file' : item.format] || 'Doc';
+        const doc = item.kind === 'document';
+        return '<div class="write-recent" data-kind="' + escHtml(item.kind) + '"'
+            + ' data-id="' + escHtml(String(item.id)) + '"'
+            + ' data-name="' + escHtml(item.name) + '"'
+            + ' title="' + escHtml(item.path || item.name) + '">'
+            + '<span class="write-recent-page">' + driveThumb(item) + '</span>'
+            + (doc ? '<label class="tile-pick"><input type="checkbox"></label>'
+                   + '<button class="tile-menu" title="More">⋮</button>' : '')
+            + '<span class="write-recent-foot">'
+            + '<span class="write-recent-kind write-recent-kind-'
+            + escHtml(item.format || 'markdown') + '">' + escHtml(kind) + '</span>'
+            + '<span class="write-recent-title">' + escHtml(item.name) + '</span>'
+            + '<span class="write-recent-when">' + escHtml(writeWhen(item.updated)) + '</span>'
+            + '</span></div>';
     }).join('');
     for (const el of host.querySelectorAll('.write-recent')) {
-        el.onclick = () => { hideWriteStart(); openNote(el.dataset.id); };
+        const id = el.dataset.id, name = el.dataset.name;
+        el.onclick = (e) => {
+            // The tick and the menu sit on top of the tile, so they must not
+            // also open it.
+            if (e.target.closest('.tile-pick') || e.target.closest('.tile-menu')) return;
+            openDriveItem(el.dataset.kind, id);
+        };
+        const box = el.querySelector('.tile-pick input');
+        if (box) {
+            box.checked = driveSelection.has(id);
+            box.onchange = () => toggleDriveSelect(id, box.checked);
+        }
+        const menu = el.querySelector('.tile-menu');
+        if (menu) menu.onclick = (e) => openTileMenu(e, id, name);
     }
+    driveSelectionChanged();
 
     if (empty) {
-        empty.textContent = !(notesCache || []).length
-            ? 'Nothing written yet.'
-            : (items.length ? '' : 'No document matches those filters.');
+        // An empty vault and an empty search result are different sentences.
+        // `driveItems` is now the searched listing, so a search that matches
+        // nothing would otherwise report that you have never written anything.
+        // And an empty workspace is a third sentence: you have just made
+        // somewhere to put things, and "nothing matches those filters" reads
+        // as though it went wrong.
+        empty.textContent = !driveAllItems.length
+            ? 'Nothing here yet.'
+            : items.length ? ''
+            : (!searching && drivePlace.startsWith('ws:'))
+                ? 'Nothing filed in ' + drivePlaceName() + ' yet.'
+                : 'Nothing matches those filters.';
         empty.classList.toggle('hidden', !!items.length);
     }
+}
+
+// A document opens in its editor. A file is not ours to edit here — it is
+// something on disk that Carrot has read — so it opens where files are read.
+function openDriveItem(kind, id) {
+    if (kind === 'file') { switchTab('files'); return; }
+    hideWriteStart();
+    openNote(id);
+}
+
+// Typing is not one request per letter. "lecture" was eight round trips, seven
+// of which were answers to a question nobody finished asking; the dropdowns are
+// a single deliberate choice, so those go straight through.
+function filterNotesList(immediate) {
+    clearTimeout(driveFilterTimer);
+    if (immediate) { renderWriteStartRecents(); return; }
+    driveFilterTimer = setTimeout(renderWriteStartRecents, 180);
 }
 
 // Accepts epoch seconds or an ISO string.

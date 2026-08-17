@@ -66,6 +66,7 @@
   <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 3.4l2.7 5.5 6 .9-4.35 4.24 1.03 6-5.38-2.83-5.38 2.83 1.03-6L3.3 9.8l6-.9z"/></symbol>
   <symbol id="i-folder" viewBox="0 0 24 24"><path d="M20.8 18.6a2.4 2.4 0 0 1-2.4 2.4H5.6a2.4 2.4 0 0 1-2.4-2.4V5.4A2.4 2.4 0 0 1 5.6 3h3.9l2.1 3h6.8a2.4 2.4 0 0 1 2.4 2.4z"/></symbol>
   <symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3.4" y="5" width="17.2" height="16" rx="3"/><path d="M16 2.8v4.4M8 2.8v4.4M3.4 10.6h17.2"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18z"/></symbol>
   <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M17.6 19.4H7a4.8 4.8 0 0 1-.7-9.55A6.4 6.4 0 0 1 18.5 11a4.2 4.2 0 0 1-.9 8.4z"/></symbol>
   <symbol id="i-note" viewBox="0 0 24 24"><path d="M13.4 2.8H7a2.6 2.6 0 0 0-2.6 2.6v13.2A2.6 2.6 0 0 0 7 21.2h10a2.6 2.6 0 0 0 2.6-2.6V9z"/><path d="M13.4 2.8V9h6.2M8.6 13.2h6.8M8.6 16.8h4.6"/></symbol>
   <symbol id="i-edit" viewBox="0 0 24 24"><path d="M11.6 4.6H5.8A2.6 2.6 0 0 0 3.2 7.2v11a2.6 2.6 0 0 0 2.6 2.6h11a2.6 2.6 0 0 0 2.6-2.6v-5.8"/><path d="M17.4 3a2.1 2.1 0 0 1 3 3L12.8 13.6l-3.9.9.9-3.9z"/></symbol>
@@ -432,7 +433,7 @@
              places. Agent was its own tab, which made "ask about this" and "go
              and do this" feel like different applications rather than the same
              one with the leash on or off. -->
-        <details id="agent-settings" class="agent-settings">
+        <details id="agent-settings" class="agent-settings hidden">
         <summary class="agent-settings-summary">
           <svg class="ico"><use href="#i-shield"/></svg>
           <span>Agent settings</span>
@@ -518,17 +519,17 @@
           <h1 class="chat-empty-title">Where should we begin?</h1>
           <p id="chat-empty-line" class="chat-empty-note"></p>
         </div>
-        <!-- The agent's work, in the conversation. It had its own page with
-             its own task box; ChatGPT's does not, and that is right — you ask
-             in the same place you ask for everything else and watch it happen
-             in the thread. These keep their ids so every function that fills
-             them still does. -->
+      </div>
+      <!-- The agent's work, under the transcript.
+           It was *inside* #chat-messages, which newChat() and openConversation()
+           both clear with innerHTML — so starting a new chat deleted these
+           nodes and the next agent run had nothing to render into. A sibling
+           reads the same on screen and survives the transcript being replaced. -->
         <div id="agent-availability" class="notice hidden"></div>
         <div id="agent-plan" class="agent-plan hidden"></div>
         <div id="agent-steps" class="agent-steps"></div>
         <div id="agent-result" class="agent-result hidden"></div>
         <div id="agent-runs" class="hidden"></div>
-      </div>
       <!-- Collapsed to start. A terminal open by default takes 190px off the
            conversation for a tool most turns never touch, and it made the
            whole workspace read as a developer console. One click away. -->
@@ -633,21 +634,53 @@
         <div id="slides-pane" class="slides-pane hidden">
           <div class="editor-toolbar">
             <button class="icon-btn write-back" title="All documents" onclick="showWriteStart()">
-            <svg class="ico"><use href="#i-grid"/></svg></button>
-          <input type="text" id="slides-title" class="title-input" placeholder="Untitled deck"
+              <svg class="ico"><use href="#i-grid"/></svg></button>
+            <input type="text" id="slides-title" class="title-input" placeholder="Untitled deck"
                    oninput="scheduleSlidesSave()">
             <span id="slides-status" class="editor-status"></span>
             <span id="slides-count" class="editor-words"></span>
-            <button class="btn btn-ghost" onclick="addSlide()">Add slide</button>
+            <span class="spacer"></span>
+            <button class="btn btn-ghost" onclick="addSlideElement(&quot;text&quot;)" title="Text box">Text</button>
+            <div id="slides-shapes" class="slides-shapes">
+              <button class="btn btn-ghost" onclick="toggleShapeMenu()" title="Insert a shape">Shape ▾</button>
+              <div id="slides-shape-pop" class="slides-shape-pop hidden"></div>
+            </div>
+            <input type="file" id="slides-image-input" accept="image/*" hidden
+                   onchange="addSlideImage(this.files[0]); this.value=''">
+            <button class="btn btn-ghost" onclick="pickSlideImage()" title="Insert an image">Image</button>
+            <span class="spacer"></span>
+            <div id="slides-export" class="slides-export">
+              <button class="btn btn-ghost" onclick="toggleSlidesExport()">Export</button>
+              <div id="slides-export-pop" class="slides-export-pop hidden">
+                <button onclick="exportDeckHtml(false); toggleSlidesExport()">
+                  <span>Web page</span><span class="export-sub">one file, images included</span></button>
+                <button onclick="exportDeckHtml(true); toggleSlidesExport()">
+                  <span>PDF</span><span class="export-sub">opens your print dialogue</span></button>
+              </div>
+            </div>
             <button class="btn btn-primary" onclick="presentDeck()">Present</button>
-            <button class="btn btn-ghost" onclick="deleteCurrentNote()">Delete</button>
           </div>
+
+          <!-- Only with something selected: a row of font and colour controls
+               pointed at nothing does nothing when you use it. -->
+          <div id="slides-format" class="slides-format hidden"></div>
+
           <div class="slides-body">
-            <textarea id="slides-source" class="slides-source" spellcheck="false"
-                      placeholder="# Title&#10;&#10;---&#10;&#10;## Next slide"></textarea>
-            <div id="slides-preview" class="slides-preview"></div>
+            <!-- Slides down the left, as a deck is a sequence you scan. -->
+            <aside class="slides-rail">
+              <div id="slides-film" class="slides-film"></div>
+              <div class="slides-rail-foot">
+                <button class="btn btn-ghost" onclick="addSlide()">Add</button>
+                <button class="btn btn-ghost" onclick="duplicateSlide()">Copy</button>
+                <button class="btn btn-ghost" onclick="deleteSlide()">Delete</button>
+              </div>
+            </aside>
+            <div class="slides-centre">
+              <div id="slides-preview" class="slides-preview"></div>
+              <textarea id="slides-notes" class="slides-notes-box"
+                        placeholder="Speaker notes — only you see these"></textarea>
+            </div>
           </div>
-          <div id="slides-film" class="slides-film"></div>
         </div>
         <!-- LaTeX. Was its own tab, which meant opening a paper from the
              document list threw you somewhere with no document list. It is a
@@ -713,66 +746,98 @@
         <!-- The start screen. Not an empty-state sentence telling you to pick
              something from a list: the things you can start are the first
              thing on the page, and what you were working on is under them. -->
+        <!-- Work, as a place rather than a start screen.
+             Documents, files and workspaces were three destinations; here they
+             are one surface with a rail of places down the left and everything
+             you have in the middle, which is what a drive is. -->
         <div id="write-start" class="write-start hidden">
-          <div class="write-start-head">Start a new document</div>
-          <div id="write-start-cards" class="write-start-cards"></div>
+          <div class="drive">
+            <aside class="drive-rail">
+              <button class="drive-new" onclick="toggleDriveNew()">
+                <svg class="ico"><use href="#i-plus"/></svg><span>New</span>
+              </button>
+              <div id="drive-new-pop" class="drive-new-pop hidden"></div>
 
-          <!-- The rest of Work. Files, workspaces and the things you owe are
-               not documents you start, so they are not cards above — but they
-               are the other half of what this tab is for, and with the sidebar
-               gone this is the only way in to any of them. -->
-          <div class="work-shortcuts">
-            <button class="work-shortcut" onclick="switchTab('files')">
-              <svg class="ico"><use href="#i-archive"/></svg><span>Files</span></button>
-            <button class="work-shortcut" onclick="switchTab('workspaces')">
-              <svg class="ico"><use href="#i-folder"/></svg><span>Workspaces</span></button>
-            <button class="work-shortcut" onclick="toggleGraphPane()">
-              <svg class="ico"><use href="#i-branch"/></svg><span>Maps</span></button>
-            <button class="work-shortcut" onclick="switchTab('inbox')">
-              <svg class="ico"><use href="#i-inbox"/></svg><span>Inbox</span></button>
-            <button class="work-shortcut" onclick="switchTab('goals')">
-              <svg class="ico"><use href="#i-target"/></svg><span>Goals</span></button>
-            <button class="work-shortcut" onclick="switchTab('reminders')">
-              <svg class="ico"><use href="#i-bell"/></svg><span>Reminders</span></button>
-            <button class="work-shortcut" onclick="switchTab('assignments')">
-              <svg class="ico"><use href="#i-clipboard"/></svg><span>Assignments</span></button>
-            <!-- Hidden with its pack, like the tab it replaced. -->
-            <button class="work-shortcut" data-tab="planner" onclick="switchTab('planner')">
-              <svg class="ico"><use href="#i-cap"/></svg><span>Planner</span></button>
-          </div>
+              <div class="drive-rail-group">Places</div>
+              <button class="drive-place active" data-place="all" onclick="setDrivePlace('all')">
+                <svg class="ico"><use href="#i-archive"/></svg><span>Everything</span></button>
+              <button class="drive-place" data-place="documents" onclick="setDrivePlace('documents')">
+                <svg class="ico"><use href="#i-note"/></svg><span>Documents</span></button>
+              <button class="drive-place" data-place="file" onclick="setDrivePlace('file')">
+                <svg class="ico"><use href="#i-folder"/></svg><span>Files</span></button>
+              <button class="drive-place" data-place="maps" onclick="setDrivePlace('maps')">
+                <svg class="ico"><use href="#i-branch"/></svg><span>Maps</span></button>
 
-          <div class="write-start-head write-start-recents-head">
-            <span id="write-browse-label">Recent documents</span>
-            <div class="write-browse-tools">
-              <input type="text" id="notes-filter" class="write-search"
-                     placeholder="Search documents" oninput="filterNotesList()">
-              <select id="write-filter-type" class="write-filter" onchange="filterNotesList()"
-                      title="Kind of document">
-                <option value="">Any kind</option>
-                <option value="markdown">Document</option>
-                <option value="latex">LaTeX</option>
-                <option value="canvas">Canvas</option>
-                <option value="slides">Slides</option>
-              </select>
-              <select id="write-filter-date" class="write-filter" onchange="filterNotesList()"
-                      title="When it was last touched">
-                <option value="">Any time</option>
-                <option value="1">Today</option>
-                <option value="7">Last 7 days</option>
-                <option value="30">Last 30 days</option>
-                <option value="365">Last year</option>
-              </select>
-              <select id="write-filter-workspace" class="write-filter" onchange="filterNotesList()"
-                      title="Which workspace it belongs to"></select>
-              <!-- The graph is the same documents arranged by their links, so
-                   it is a way of viewing this list rather than a place of its
-                   own — the same relationship grid and list have in Docs. -->
-              <button class="icon-btn" id="graph-toggle" title="See how these documents link to each other"
-                      onclick="toggleGraphPane()"><svg class="ico"><use href="#i-branch"/></svg></button>
+              <div class="drive-rail-group">Workspaces</div>
+              <div id="drive-workspaces"></div>
+
+              <div class="drive-rail-group">Also</div>
+              <button class="drive-place" onclick="switchTab('inbox')">
+                <svg class="ico"><use href="#i-inbox"/></svg><span>Inbox</span></button>
+              <button class="drive-place" onclick="switchTab('goals')">
+                <svg class="ico"><use href="#i-target"/></svg><span>Goals</span></button>
+              <button class="drive-place" onclick="switchTab('reminders')">
+                <svg class="ico"><use href="#i-bell"/></svg><span>Reminders</span></button>
+              <button class="drive-place" onclick="switchTab('assignments')">
+                <svg class="ico"><use href="#i-clipboard"/></svg><span>Assignments</span></button>
+              <button class="drive-place" data-tab="planner" onclick="switchTab('planner')">
+                <svg class="ico"><use href="#i-cap"/></svg><span>Planner</span></button>
+            </aside>
+
+            <div class="drive-main">
+              <div class="drive-bar">
+                <span id="write-browse-label" class="drive-where">Everything</span>
+                <div class="write-browse-tools">
+                  <input type="text" id="notes-filter" class="write-search"
+                         placeholder="Search your work" oninput="filterNotesList()">
+                  <select id="write-filter-type" class="write-filter" onchange="filterNotesList(true)"
+                          title="Kind of thing">
+                    <option value="">Any kind</option>
+                    <option value="markdown">Document</option>
+                    <option value="latex">LaTeX</option>
+                    <option value="canvas">Canvas</option>
+                    <option value="slides">Slides</option>
+                    <option value="file">File</option>
+                  </select>
+                  <select id="write-filter-date" class="write-filter" onchange="filterNotesList(true)"
+                          title="When it was last touched">
+                    <option value="">Any time</option>
+                    <option value="1">Today</option>
+                    <option value="7">Last 7 days</option>
+                    <option value="30">Last 30 days</option>
+                    <option value="365">Last year</option>
+                  </select>
+                  <select id="write-filter-workspace" class="write-filter" onchange="filterNotesList(true)"
+                          title="Which workspace it belongs to"></select>
+                  <button class="icon-btn" id="drive-view-toggle" title="Grid or list"
+                          onclick="toggleDriveView()"><svg class="ico"><use href="#i-grid"/></svg></button>
+                </div>
+              </div>
+
+              <!-- Appears only when something is ticked. A delete button that
+                   is always there, pointed at nothing, is the one people click
+                   by accident. -->
+              <div id="drive-selection" class="drive-selection hidden">
+                <span id="drive-selection-count">0 selected</span>
+                <button class="btn btn-ghost" onclick="selectAllShown()">Select all shown</button>
+                <button class="btn btn-ghost" onclick="clearDriveSelection()">Clear</button>
+                <button class="btn btn-danger" onclick="deleteSelectedDocuments()">Delete</button>
+              </div>
+
+              <!-- Starting something is the first thing on the page, as it was.
+                   It is a row rather than the whole screen now, because the
+                   screen also has to be where you find what you already made. -->
+              <div id="write-start-cards" class="write-start-cards"></div>
+
+              <!-- Only when part of the listing could not be read. A grid that
+                   silently drops every file looks exactly like a grid with no
+                   files in it. -->
+              <div id="drive-partial" class="notice hidden"></div>
+
+              <div id="write-start-recents" class="write-start-recents"></div>
+              <div id="write-browse-empty" class="write-browse-empty hidden"></div>
             </div>
           </div>
-          <div id="write-start-recents" class="write-start-recents"></div>
-          <div id="write-browse-empty" class="write-browse-empty hidden"></div>
         </div>
         <div id="note-empty" class="editor-empty hidden">Select a document on the left, or create a new one.</div>
       </div>
@@ -1912,6 +1977,34 @@
         <div id="ambient-try-result" class="muted small"></div>
       </div>
 
+      <!-- Recording the screen and letting the assistant read the recording
+           are two permissions, so they are two switches. Wanting a searchable
+           history that does not turn up in conversation is a coherent thing to
+           want, and one checkbox cannot say it.
+
+           It lives here rather than on the Ambient screen because this is
+           where the other privacy decisions are, and because recall belongs in
+           chat: there is no third place to visit. -->
+      <div class="settings-card">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-eye"/></svg>
+          <h3>Asking about what you saw</h3>
+        </div>
+        <p class="muted small">
+          With this on you can ask in chat — "that paper I was reading yesterday",
+          "the error about a certificate" — and Carrot searches the text it read off
+          your screen. With it off the assistant is told it cannot see any of this, so
+          it says so and points you back here rather than inventing an answer.
+          Capture has to be running for there to be anything to search.
+        </p>
+        <label class="settings-row" for="ambient-agent-aware">
+          <input type="checkbox" id="ambient-agent-aware"
+                 onchange="ambientSetAgentAware(this.checked)">
+          <span>Let the assistant search my screen history</span>
+        </label>
+        <div id="ambient-agent-aware-note" class="muted small"></div>
+      </div>
+
       <div class="settings-card">
         <div class="settings-head">
           <svg class="ico"><use href="#i-pulse"/></svg>
@@ -2168,8 +2261,11 @@
     </button>
     <div id="search-picker">
       <button id="search-btn" onclick="toggleSearchPop()" title="How much Carrot may search the web">
-        <svg class="ico"><use href="#i-search"/></svg>
-        <span id="search-label">Search</span>
+        <svg class="ico"><use href="#i-globe"/></svg>
+        <!-- Kept, and hidden: renderSearchModes writes the current mode here,
+             and it is what the button announces to a screen reader. A tooltip
+             is not a label. -->
+        <span id="search-label" class="sr-only">Search</span>
         <svg class="ico chev"><use href="#i-chevron"/></svg>
       </button>
       <div id="search-pop" class="hidden">

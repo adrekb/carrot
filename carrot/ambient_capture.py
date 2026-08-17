@@ -27,6 +27,7 @@ rather than failing quietly every eight seconds forever.
 
 from __future__ import annotations
 
+import concurrent.futures
 import ctypes
 import logging
 import platform
@@ -317,7 +318,22 @@ def _ocr_windows(image) -> str:
         result = await engine.recognize_async(bitmap)
         return result.text or ""
 
-    return asyncio.run(run())
+    # `asyncio.run` refuses to start a loop inside a thread that already has
+    # one, and raises rather than returning nothing — which the caller catches
+    # and treats as "this engine did not work", falling through to Tesseract
+    # and, on a machine without it, to no text at all.
+    #
+    # The background worker never hit this because it runs in its own thread.
+    # Anything reached from a request handler does: `Capture now` was a button
+    # that grabbed the screen, OCR'd nothing, and reported "nothing readable on
+    # screen" on a screen that was full of words.
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(run())
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(lambda: asyncio.run(run())).result()
 
 
 def capabilities() -> Dict[str, Any]:
@@ -693,6 +709,109 @@ def _snippet(text: str, query: str) -> str:
     return body[:_SNIPPET_CHARS] + ("…" if len(body) > _SNIPPET_CHARS else "")
 
 
+# ===== What the assistant is allowed to see =====
+#
+# The store already answers "what was on screen". Nothing could ask it: recall()
+# was reachable from the Ambient UI and from nowhere else, so a question typed
+# into chat — "that paper I was reading yesterday" — had no path to the frames
+# that hold the answer.
+#
+# What follows is that path. It is deliberately thin: the retrieval, the
+# ranking and the snippets are recall()'s, and this adds only the three things
+# an assistant needs that a UI does not — permission, episodes instead of
+# frames, and an honest answer when there is nothing to search.
+
+
+def agent_may_search() -> bool:
+    """Both switches, because they mean different things.
+
+    Recording the screen and letting the assistant read the recording are two
+    permissions. Someone who wants a searchable history but does not want it in
+    conversation is asking for something coherent, and one flag cannot say it.
+    """
+    from . import ambient
+
+    rules = ambient.policy()
+    return bool(rules.get("enabled")) and bool(rules.get("agent_aware"))
+
+
+def _as_episodes(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Consecutive frames of the same thing, as one result.
+
+    store_frame() already merges a screen that has not changed, but a paper
+    read over twenty minutes is dozens of rows: you scroll, the text changes,
+    the dedupe correctly says it is a new frame. To a search those are one
+    answer — the same document, at a range of times — and returning them
+    separately would spend the whole reply on one PDF and crowd out the rest.
+    """
+    episodes: Dict[tuple, Dict[str, Any]] = {}
+    for row in rows:
+        key = (row.get("app") or "", row.get("title") or "", row.get("url") or "")
+        found = episodes.get(key)
+        if not found:
+            episodes[key] = {
+                "app": row.get("app") or "",
+                "title": row.get("title") or "",
+                "url": row.get("url") or "",
+                "started_at": row.get("captured_at") or "",
+                "ended_at": row.get("ended_at") or row.get("captured_at") or "",
+                "frames": 1,
+                # The best-ranked frame's snippet, because rows arrive ranked
+                # and the first one to land here is the closest match.
+                "snippet": row.get("snippet") or "",
+                "frame_id": row.get("id") or "",
+            }
+            continue
+        found["frames"] += 1
+        found["started_at"] = min(found["started_at"], row.get("captured_at") or "")
+        found["ended_at"] = max(found["ended_at"],
+                                row.get("ended_at") or row.get("captured_at") or "")
+    return list(episodes.values())
+
+
+def search_for_agent(query: str, limit: int = 6, since: str = "",
+                     app: str = "") -> Dict[str, Any]:
+    """Episodes matching a question, with why they matched.
+
+    Returns a state as well as results, because "I searched and found nothing"
+    and "I cannot see your screen" are different answers and only one of them
+    should send the user to Settings.
+    """
+    if not agent_may_search():
+        from . import ambient
+
+        return {"state": "off" if not ambient.policy().get("enabled") else "not_allowed",
+                "episodes": []}
+    # Over-fetch: several frames collapse into one episode, so asking for six
+    # frames would routinely yield two answers.
+    rows = recall(query, limit=max(limit * 6, 40), since=since, app=app)
+    if not rows:
+        return {"state": "empty", "episodes": []}
+    return {"state": "ok", "episodes": _as_episodes(rows)[:limit]}
+
+
+def agent_roster_line() -> str:
+    """One line, every turn, saying whether this can be searched at all.
+
+    Not a tool the model has to remember to call. A small model asked "am I
+    free Friday" does not reliably think to check whether it has a calendar,
+    and the same model asked "what was I reading" will invent a paper rather
+    than notice it has no screen history. Silence is not a fact; the cost of
+    saying so is one line.
+    """
+    from . import ambient
+
+    rules = ambient.policy()
+    if not rules.get("enabled"):
+        return ("Screen history: not recording (Settings → Ambient). You cannot see "
+                "what was on their screen; say so rather than guessing.")
+    if not rules.get("agent_aware"):
+        return ("Screen history: recorded, but not shared with you (Settings → Ambient, "
+                "\"Let the assistant search my screen history\"). Say so rather than guessing.")
+    return ("Screen history: available — use search_screen to find what was on "
+            "their screen. An empty result means nothing matched, not that it is off.")
+
+
 def timeline(limit: int = 100, since: str = "", app: str = "") -> List[Dict[str, Any]]:
     """Recent frames, newest first — what the last hour looked like."""
     sql = ["SELECT id, captured_at, ended_at, app, title, url, seen, engine,",
@@ -746,6 +865,41 @@ def stats() -> Dict[str, Any]:
 # As prominent as capture, and deliberately so. Anything that records has to
 # make deletion at least as easy, or the record is not something the user
 # controls — it is something that happens to them.
+#
+# Which has to include the embedding. Every stored frame is queued for one, and
+# deleting the row left it behind: a vector of what was on screen, in a table
+# the user was just told they had emptied. It is not recoverable as text, but
+# "not readable" is not "deleted", and a forget button that half-forgets is
+# worse than none — it is the one people believe.
+
+
+def _forget_vectors(frame_ids: List[str]) -> None:
+    """Contained: a vector store that is unavailable must not stop a deletion.
+
+    If this fails the row is still gone, which is the part the user can see and
+    the part that matters most. Logged rather than raised so the failure is
+    findable instead of silent.
+    """
+    if not frame_ids:
+        return
+    try:
+        from . import vectors
+
+        for frame_id in frame_ids:
+            vectors.delete("ambient", frame_id)
+    except Exception:
+        LOG.warning("could not delete ambient embeddings for %d frame(s)",
+                    len(frame_ids), exc_info=True)
+
+
+def _frame_ids(where: str = "", params: Optional[List[Any]] = None) -> List[str]:
+    conn = get_db()
+    try:
+        sql = "SELECT id FROM ambient_frames" + (f" WHERE {where}" if where else "")
+        return [r["id"] for r in conn.execute(sql, params or []).fetchall()]
+    finally:
+        conn.close()
+
 
 def forget(frame_id: str) -> bool:
     conn = get_db()
@@ -753,6 +907,8 @@ def forget(frame_id: str) -> bool:
     conn.commit()
     deleted = cursor.rowcount > 0
     conn.close()
+    if deleted:
+        _forget_vectors([frame_id])
     return deleted
 
 
@@ -760,22 +916,30 @@ def forget_range(since: str = "", until: str = "", app: str = "") -> int:
     """Delete a span, an app, or both. Refuses to delete everything by accident."""
     if not (since or until or app):
         raise ValueError("say what to forget — a time range, an app, or both")
-    sql = ["DELETE FROM ambient_frames WHERE 1=1"]
+    # Built once and used for both statements, so the rows whose embeddings are
+    # dropped are exactly the rows that were deleted.
+    where = ["1=1"]
     params: List[Any] = []
     if since:
-        sql.append("AND captured_at >= ?")
+        where.append("AND captured_at >= ?")
         params.append(since)
     if until:
-        sql.append("AND captured_at <= ?")
+        where.append("AND captured_at <= ?")
         params.append(until)
     if app:
-        sql.append("AND lower(app) LIKE ?")
+        where.append("AND lower(app) LIKE ?")
         params.append(f"%{app.lower()}%")
+    clause = " ".join(where)
+
+    # Read first: after the DELETE there is nothing left to ask which
+    # embeddings belonged to it.
+    doomed = _frame_ids(clause, params)
     conn = get_db()
-    cursor = conn.execute(" ".join(sql), params)
+    cursor = conn.execute(f"DELETE FROM ambient_frames WHERE {clause}", params)
     conn.commit()
     count = cursor.rowcount
     conn.close()
+    _forget_vectors(doomed)
     return count
 
 
@@ -785,6 +949,15 @@ def forget_all() -> int:
     conn.commit()
     count = cursor.rowcount
     conn.close()
+    # The whole namespace, rather than id by id: this is the button that says
+    # everything, and it should not leave a residue proportional to how many
+    # embeddings happened to be queued when it was pressed.
+    try:
+        from . import vectors
+
+        vectors.delete_namespace("ambient")
+    except Exception:
+        LOG.warning("could not clear ambient embeddings", exc_info=True)
     return count
 
 
@@ -793,9 +966,11 @@ def prune(days: int) -> int:
     from datetime import timedelta
 
     cutoff = (datetime.now(timezone.utc) - timedelta(days=max(1, int(days)))).isoformat()
+    doomed = _frame_ids("captured_at < ?", [cutoff])
     conn = get_db()
     cursor = conn.execute("DELETE FROM ambient_frames WHERE captured_at < ?", (cutoff,))
     conn.commit()
     count = cursor.rowcount
     conn.close()
+    _forget_vectors(doomed)
     return count

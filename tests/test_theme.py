@@ -114,3 +114,14 @@ def test_inline_prompt_has_styling():
     an unpositioned block at the bottom of the page."""
     for cls in (".path-prompt", ".path-prompt-card", ".path-prompt-title"):
         assert cls in CSS, f"{cls} is used by inlineTextPrompt() but never styled"
+
+
+def test_the_stylesheet_has_no_control_characters():
+    """A regex rewrite once left `background\x01:` in 58 rules.
+
+    The property is invalid, so every browser silently dropped it and the
+    backgrounds simply did not apply — no error anywhere, and nothing to see
+    unless you happened to look at the one rule you were editing.
+    """
+    bad = [i for i, ch in enumerate(CSS) if ord(ch) < 32 and ch not in "\n\r\t"]
+    assert not bad, f"control characters in style.css at offsets {bad[:5]}"
