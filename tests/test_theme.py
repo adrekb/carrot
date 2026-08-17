@@ -159,6 +159,23 @@ class TestWhereTheAnswerComesFrom:
             assert cls in CSS, f"{cls} is built by renderEmptyStateLine but never styled"
 
 
+def test_the_blank_chat_reaches_the_bottom_of_the_window():
+    """The composer is `position: fixed`, so the view reserves space at its
+    foot to stop it sitting on the terminal. With nothing said yet the composer
+    moves to the middle of the page — and the reservation stayed, holding a
+    place nothing was going to stand in, so the panel stopped 172px short and
+    the empty state sat above a band of nothing.
+
+    The reservation still has to come back the moment there are messages, which
+    is why this is scoped to `.chat-blank` rather than removed.
+    """
+    assert "body.chat-blank #view-workspace" in CSS
+    reserve = CSS[CSS.index("#view-workspace {"):]
+    reserve = reserve[:reserve.index("}")]
+    assert "--composer-h" in reserve, (
+        "the normal reservation must still track the composer's real height")
+
+
 class TestTextOnColour:
     """A sweep of 4682 rendered text nodes across six accents and both themes
     found eighteen selectors under the contrast they needed. Almost all were

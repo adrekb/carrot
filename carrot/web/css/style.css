@@ -7800,6 +7800,11 @@ select.dd-open { border-color: var(--accent-line); }
    and the composer grows downward into empty space as the question gets
    longer. */
 body.chat-blank #cmdbar { top: 50%; bottom: auto; }
+/* And with the composer at the middle of the page rather than the foot of it,
+   the space reserved for it at the bottom is holding a place nothing is going
+   to stand in. Left as it was, the panel stops about 120px short of the window
+   and the empty state sits above a band of nothing. */
+body.chat-blank #view-workspace { padding-bottom: 12px; }
 body.chat-blank .chat-empty {
   position: fixed;
   left: var(--nav-w);
