@@ -6,6 +6,7 @@ and every API route — a page fetched by a prompt-injected turn could read all
 of it. Most of what follows is about that boundary rather than the feature.
 """
 import base64
+import json
 import re
 
 import pytest
@@ -261,3 +262,78 @@ class TestFrontendContract:
         code = "\n".join(line.split("//", 1)[0] for line in self.js.splitlines())
         assert "'allow-scripts'" in code
         assert "allow-same-origin" not in code
+
+
+class TestChartsAreDataNotMarkup:
+    """The other visual kinds are markup the model wrote, which is why they are
+    sandboxed. A chart is numbers, so it renders inline — and that only holds
+    if nothing markup-shaped survives validation as something drawable.
+
+    It is also the only version of this that works on the hardware Carrot
+    targets: asking a 4B for correct SVG axis geometry fails silently and looks
+    like a chart, while asking it for labels and values is something it can get
+    right.
+    """
+
+    SPEC = {"type": "bar", "title": "Revenue", "y_label": "£m",
+            "labels": ["Q1", "Q2", "Q3"],
+            "series": [{"name": "2025", "values": [3, 5, 4]}]}
+
+    def test_a_valid_spec_is_stored_canonicalised(self):
+        art = artifacts.create("chart", json.dumps(self.SPEC))
+        stored = json.loads(art["content"])
+        assert stored["type"] == "bar"
+        assert stored["labels"] == ["Q1", "Q2", "Q3"]
+        assert stored["series"][0]["values"] == [3.0, 5.0, 4.0]
+
+    def test_a_bar_chart_starts_at_zero_unless_told_otherwise(self):
+        """A truncated baseline is the most common way a chart lies, so it is
+        opt-in and the caller has to say so."""
+        stored = json.loads(artifacts.create("chart", json.dumps(self.SPEC))["content"])
+        assert stored["zero_baseline"] is True
+        line = dict(self.SPEC, type="line")
+        assert json.loads(artifacts.create("chart", json.dumps(line))["content"])["zero_baseline"] is False
+
+    def test_a_bare_list_of_numbers_is_one_series(self):
+        spec = {"labels": ["a", "b"], "series": [1, 2]}
+        stored = json.loads(artifacts.create("chart", json.dumps(spec))["content"])
+        assert stored["series"] == [{"name": "", "values": [1.0, 2.0]}]
+
+    def test_a_gap_stays_a_gap(self):
+        spec = {"labels": ["a", "b", "c"], "series": [{"name": "s", "values": [1, None, 3]}]}
+        stored = json.loads(artifacts.create("chart", json.dumps(spec))["content"])
+        assert stored["series"][0]["values"] == [1.0, None, 3.0]
+
+    @pytest.mark.parametrize("spec, expected", [
+        ({"labels": ["a"], "series": [{"values": [1, 2]}]}, "one value per label"),
+        ({"labels": ["a"], "series": [{"values": ["x"]}]}, "non-numeric"),
+        ({"labels": [], "series": [{"values": []}]}, "labels"),
+        ({"labels": ["a"], "series": []}, "series"),
+        ({"type": "pie", "labels": ["a"], "series": [{"values": [1]}]}, "not one of"),
+        ({"labels": ["a"], "series": [{"values": [None]}]}, "nothing to draw"),
+    ])
+    def test_a_bad_spec_says_what_to_fix(self, spec, expected):
+        """Read by a model that has to correct itself from the message alone."""
+        with pytest.raises(artifacts.ArtifactError) as exc:
+            artifacts.create("chart", json.dumps(spec))
+        assert expected in str(exc.value)
+
+    def test_more_series_than_colours_is_refused_not_recycled(self):
+        """A seventh series would need a generated hue, which is where a
+        categorical palette stops being distinguishable. Better to say so than
+        to draw two series the same colour."""
+        spec = {"labels": ["a"], "series": [{"name": str(i), "values": [i]} for i in range(7)]}
+        with pytest.raises(artifacts.ArtifactError) as exc:
+            artifacts.create("chart", json.dumps(spec))
+        assert "at most 6 series" in str(exc.value)
+
+    def test_infinities_are_refused(self):
+        """A scale computed with one in it is silently meaningless."""
+        with pytest.raises(artifacts.ArtifactError):
+            artifacts.normalize_chart('{"labels": ["a"], "series": [{"values": [1e999]}]}')
+
+    def test_a_non_json_body_is_refused_at_creation(self):
+        """Not at render time: a spec that cannot be drawn should fail while
+        the model still holds the numbers, not become a blank card in chat."""
+        with pytest.raises(artifacts.ArtifactError):
+            artifacts.create("chart", "<svg>nope</svg>")

@@ -1971,13 +1971,23 @@ TOOLS: Dict[str, Dict[str, Any]] = {
         "description": (
             "Show something visual in the chat: a chart, diagram, table, image or "
             "small interactive page. Use it whenever the answer is better looked "
-            "at than read. kind=html for a self-contained page (inline any CSS and "
-            "JS; it cannot load anything from the network), kind=svg for a drawn "
-            "figure, kind=mermaid for a flowchart or sequence diagram, "
-            "kind=markdown for a rich table, kind=code to display a file. "
-            "For a matplotlib or similar plot: write a script that saves a PNG into "
-            "the workspace, run it with run_command, then call this with "
-            "kind=image and path set to the file you wrote. "
+            "at than read. "
+            "kind=chart is the one to reach for with numbers — pass `content` as "
+            'JSON: {\"type\": \"bar\"|\"hbar\"|\"line\"|\"area\", \"title\": \"…\", '
+            '\"y_label\": \"units\", \"labels\": [\"Jan\", \"Feb\"], '
+            '\"series\": [{\"name\": \"Revenue\", \"values\": [12, 15]}]}. '
+            "Carrot draws it — axes, scale, colours and legend — so do not write "
+            "SVG or HTML for a chart yourself and do not shell out to matplotlib "
+            "for one. At most 6 series, one value per label, null for a gap. "
+            "kind=html for a self-contained page or an interactive explanation "
+            "(inline any CSS and JS; it cannot load anything from the network), "
+            "kind=svg for a drawn figure, kind=mermaid for a flowchart or sequence "
+            "diagram, kind=markdown for a report or a rich table, kind=code to "
+            "display a file. "
+            "For a plot that kind=chart genuinely cannot express — a heatmap, a "
+            "3D surface — write a script that saves a PNG into the workspace, run "
+            "it with run_command, then call this with kind=image and path set to "
+            "the file you wrote. "
             "When a computed answer came from code, pass that code as `code`. It "
             "is kept with the figure and shown behind a \"Show code\" toggle, so "
             "the reader sees the result first and the working when they want it. "
@@ -1989,7 +1999,7 @@ TOOLS: Dict[str, Dict[str, Any]] = {
             "properties": {
                 "kind": {
                     "type": "string",
-                    "enum": ["html", "svg", "markdown", "mermaid", "image", "code"],
+                    "enum": ["chart", "html", "svg", "markdown", "mermaid", "image", "code"],
                 },
                 "content": {"type": "string", "description": "The markup, source or data URI"},
                 "path": {"type": "string",

@@ -1553,6 +1553,15 @@ async function renderArtifact(id, host) {
         body.className = 'artifact-body md';
         body.innerHTML = mdToHtml(artifact.content);
         card.appendChild(body);
+    } else if (artifact.kind === 'chart') {
+        // Inline, not sandboxed, and that is the point of the kind: a chart
+        // artifact carries numbers rather than markup, so there is no
+        // model-authored script to isolate. Every string out of the spec goes
+        // through escHtml on the way into the SVG.
+        const body = document.createElement('div');
+        body.className = 'artifact-body artifact-chart';
+        body.innerHTML = renderChart(artifact.content);
+        card.appendChild(body);
     } else if (artifact.kind === 'mermaid') {
         const body = document.createElement('pre');
         body.className = 'artifact-body artifact-mermaid';
@@ -1564,6 +1573,171 @@ async function renderArtifact(id, host) {
     const source = artifactCode(artifact);
     if (source) card.appendChild(source);
     host.appendChild(card);
+}
+
+// ===== Charts =====
+//
+// The model sends numbers; this draws them. Nothing here interprets markup
+// from the spec — every label and series name is escaped into text — which is
+// why a chart is the one visual kind that does not need the sandbox.
+//
+// Colours come from --series-1..6, which are fixed and validated for
+// colour-blind separation against both themes (see the token block in
+// style.css). They are assigned in order and never cycled: a seventh series
+// would need a generated hue, so the server refuses one instead.
+
+const CHART_PAD = { top: 16, right: 16, bottom: 34, left: 46 };
+const CHART_W = 720, CHART_H = 300;
+
+function chartTicks(lo, hi, count = 4) {
+    // Round steps, so the axis reads 0/25/50/75 rather than 0/23.7/47.4.
+    const span = hi - lo || 1;
+    const raw = span / count;
+    const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => s >= raw) || mag * 10;
+    const start = Math.floor(lo / step) * step;
+    const out = [];
+    for (let v = start; v <= hi + step / 2; v += step) out.push(v);
+    return out;
+}
+
+function chartNumber(v) {
+    const a = Math.abs(v);
+    if (a >= 1e9) return (v / 1e9).toFixed(1).replace(/\.0$/, '') + 'B';
+    if (a >= 1e6) return (v / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+    if (a >= 1e4) return (v / 1e3).toFixed(0) + 'k';
+    if (Number.isInteger(v)) return String(v);
+    return String(Math.round(v * 100) / 100);
+}
+
+function renderChart(source) {
+    let spec;
+    try {
+        spec = typeof source === 'string' ? JSON.parse(source) : source;
+    } catch (e) {
+        return `<div class="empty">This chart could not be read.</div>`;
+    }
+    const series = spec.series || [];
+    const labels = spec.labels || [];
+    const flat = series.flatMap(s => s.values).filter(v => v !== null && v !== undefined);
+    if (!flat.length) return `<div class="empty">Nothing to draw.</div>`;
+
+    let lo = Math.min(...flat), hi = Math.max(...flat);
+    if (spec.zero_baseline) { lo = Math.min(lo, 0); hi = Math.max(hi, 0); }
+    if (lo === hi) { hi = lo + 1; }        // a flat series still needs a scale
+    const ticks = chartTicks(lo, hi);
+    lo = Math.min(lo, ticks[0]); hi = Math.max(hi, ticks[ticks.length - 1]);
+
+    const horizontal = spec.type === 'hbar';
+    const pad = { ...CHART_PAD, left: horizontal ? 96 : CHART_PAD.left };
+    const plotW = CHART_W - pad.left - pad.right;
+    const plotH = CHART_H - pad.top - pad.bottom;
+    const xOf = v => pad.left + ((v - lo) / (hi - lo)) * plotW;
+    const yOf = v => pad.top + plotH - ((v - lo) / (hi - lo)) * plotH;
+    const colour = i => `var(--series-${(i % 6) + 1})`;
+
+    const parts = [];
+
+    // Grid and axis. Recessive on purpose — it is scaffolding, not data.
+    if (horizontal) {
+        for (const t of ticks) {
+            parts.push(`<line x1="${xOf(t)}" y1="${pad.top}" x2="${xOf(t)}" y2="${pad.top + plotH}" class="chart-grid"/>`);
+            parts.push(`<text x="${xOf(t)}" y="${pad.top + plotH + 16}" class="chart-tick" text-anchor="middle">${escHtml(chartNumber(t))}</text>`);
+        }
+    } else {
+        for (const t of ticks) {
+            parts.push(`<line x1="${pad.left}" y1="${yOf(t)}" x2="${pad.left + plotW}" y2="${yOf(t)}" class="chart-grid"/>`);
+            parts.push(`<text x="${pad.left - 8}" y="${yOf(t) + 4}" class="chart-tick" text-anchor="end">${escHtml(chartNumber(t))}</text>`);
+        }
+    }
+
+    if (spec.type === 'bar' || horizontal) {
+        const slots = labels.length;
+        const band = (horizontal ? plotH : plotW) / slots;
+        // 2px of surface between adjacent fills, so bars read as separate
+        // marks rather than as one striped block.
+        const barGap = 2;
+        const groupW = Math.max(band * 0.72, 3);
+        const each = Math.max((groupW - barGap * (series.length - 1)) / series.length, 1);
+        labels.forEach((label, li) => {
+            series.forEach((s, si) => {
+                const v = s.values[li];
+                if (v === null || v === undefined) return;
+                const off = li * band + (band - groupW) / 2 + si * (each + barGap);
+                if (horizontal) {
+                    const x0 = xOf(Math.min(0, lo)), x1 = xOf(v);
+                    parts.push(`<rect x="${Math.min(x0, x1)}" y="${pad.top + off}" `
+                        + `width="${Math.abs(x1 - x0)}" height="${each}" rx="2" `
+                        + `fill="${colour(si)}"><title>${escHtml(`${label} · ${s.name || ''} ${chartNumber(v)}`)}</title></rect>`);
+                } else {
+                    const y0 = yOf(Math.min(0, lo)), y1 = yOf(v);
+                    parts.push(`<rect x="${pad.left + off}" y="${Math.min(y0, y1)}" `
+                        + `width="${each}" height="${Math.abs(y1 - y0)}" rx="2" `
+                        + `fill="${colour(si)}"><title>${escHtml(`${label} · ${s.name || ''} ${chartNumber(v)}`)}</title></rect>`);
+                }
+            });
+        });
+        // Category labels, thinned rather than overlapped.
+        const every = Math.ceil(labels.length / (horizontal ? 14 : 12));
+        labels.forEach((label, li) => {
+            if (li % every) return;
+            const mid = li * band + band / 2;
+            if (horizontal) {
+                parts.push(`<text x="${pad.left - 8}" y="${pad.top + mid + 4}" class="chart-tick" text-anchor="end">${escHtml(String(label).slice(0, 16))}</text>`);
+            } else {
+                parts.push(`<text x="${pad.left + mid}" y="${pad.top + plotH + 18}" class="chart-tick" text-anchor="middle">${escHtml(String(label).slice(0, 12))}</text>`);
+            }
+        });
+    } else {
+        const step = labels.length > 1 ? plotW / (labels.length - 1) : 0;
+        series.forEach((s, si) => {
+            // Nulls break the line rather than being drawn through: a gap in
+            // the data is a gap, and interpolating across it invents readings.
+            let d = '', open = false;
+            s.values.forEach((v, i) => {
+                if (v === null || v === undefined) { open = false; return; }
+                const x = pad.left + i * step, y = yOf(v);
+                d += (open ? 'L' : 'M') + x.toFixed(1) + ' ' + y.toFixed(1) + ' ';
+                open = true;
+            });
+            if (spec.type === 'area' && d) {
+                const first = s.values.findIndex(v => v !== null && v !== undefined);
+                const last = s.values.length - 1 - [...s.values].reverse()
+                    .findIndex(v => v !== null && v !== undefined);
+                const base = yOf(Math.max(lo, 0));
+                parts.push(`<path d="${d}L${(pad.left + last * step).toFixed(1)} ${base} `
+                    + `L${(pad.left + first * step).toFixed(1)} ${base} Z" fill="${colour(si)}" opacity="0.16"/>`);
+            }
+            parts.push(`<path d="${d}" fill="none" stroke="${colour(si)}" stroke-width="2" `
+                + `stroke-linejoin="round" stroke-linecap="round"/>`);
+        });
+        const every = Math.ceil(labels.length / 8);
+        labels.forEach((label, li) => {
+            if (li % every) return;
+            parts.push(`<text x="${pad.left + li * step}" y="${pad.top + plotH + 18}" class="chart-tick" text-anchor="middle">${escHtml(String(label).slice(0, 12))}</text>`);
+        });
+    }
+
+    // Axis labels and the legend. A legend is present whenever there is more
+    // than one series, so identity is never carried by colour alone; one
+    // series needs none, because the title already names it.
+    if (spec.y_label) {
+        parts.push(`<text x="${pad.left}" y="${pad.top - 5}" class="chart-axis-label">${escHtml(spec.y_label)}</text>`);
+    }
+    if (spec.x_label) {
+        parts.push(`<text x="${pad.left + plotW}" y="${CHART_H - 4}" class="chart-axis-label" text-anchor="end">${escHtml(spec.x_label)}</text>`);
+    }
+
+    const legend = series.length > 1
+        ? '<div class="chart-legend">' + series.map((s, i) =>
+            `<span class="chart-key"><span class="chart-swatch" style="background:${colour(i)}"></span>`
+            + `${escHtml(s.name || 'Series ' + (i + 1))}</span>`).join('') + '</div>'
+        : '';
+
+    return (spec.title ? `<div class="chart-title">${escHtml(spec.title)}</div>` : '')
+        + `<svg viewBox="0 0 ${CHART_W} ${CHART_H}" class="chart-svg" role="img"`
+        + ` aria-label="${escHtml(spec.title || 'chart')}">${parts.join('')}</svg>`
+        + legend;
 }
 
 // The working, under the answer.

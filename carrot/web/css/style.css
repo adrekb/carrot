@@ -4080,6 +4080,25 @@ select option:checked { background-color: #2f333d; }
   --opt-text: #eceef4;
   --opt-sel: #2f333d;
 
+  /* ----- Chart series -----
+     Fixed, and deliberately not derived from --accent: a chart's colours say
+     which series is which, so they cannot change when somebody picks a
+     different accent, and six accents would mean six unvalidated palettes.
+     Assigned in this order and never cycled.
+
+     Both sets were checked with the dataviz validator rather than chosen by
+     eye — lightness band, chroma floor, adjacent-pair separation under
+     deuteranopia and protanopia, and contrast against the card they sit on.
+     The dark steps are their own selection against #22201a, not the light
+     ones lightened, because that is what the check is against. Re-run it
+     before touching any of these twelve values. */
+  --series-1: #cf7730;
+  --series-2: #5c93de;
+  --series-3: #46a06f;
+  --series-4: #a878d4;
+  --series-5: #dd6a58;
+  --series-6: #2f9db5;
+
   /* The dropdown arrow. A token because `appearance: none` means this is the
      only arrow a <select> has, and it must be swappable per theme without
      anybody re-declaring `background-image` on its own — an override that
@@ -4127,6 +4146,16 @@ select option:checked { background-color: #2f333d; }
   --opt-bg: #ffffff;
   --opt-text: #1c1a18;
   --opt-sel: #eee9e2;
+
+  /* Series steps for paper. Validated against #ffffff, the card a chart sits
+     on in this theme — see the dark set for why these are chosen rather than
+     darkened. */
+  --series-1: #c9640f;
+  --series-2: #3a7fd9;
+  --series-3: #2f8a58;
+  --series-4: #9457c9;
+  --series-5: #c8402f;
+  --series-6: #0f8ea8;
 
   /* Same chevron, drawn in the light theme's ink. A token rather than a
      `background-image` override on `select`, because an override that restores
@@ -9071,3 +9100,34 @@ body.nav-collapsed .nav-job-pulse { left: 6px; }
 /* Dotted underline, not a pointer: there is more detail on hover — the model,
    the seconds spent generating, the prompt rate — and nothing to click. */
 .msg-meta-tps { border-bottom: 1px dotted var(--border-hi); cursor: help; }
+
+/* ===== Chart artifacts =====
+   Drawn by renderChart() from a spec the model sent. Text wears text tokens,
+   never a series colour — the swatch beside a name carries identity, the name
+   itself stays legible ink. */
+.artifact-chart { padding: var(--s-4) var(--s-4) var(--s-3); }
+.chart-title {
+  font-size: var(--text-sm);
+  font-weight: var(--w-medium);
+  color: var(--text);
+  margin-bottom: var(--s-2);
+}
+.chart-svg { width: 100%; height: auto; display: block; }
+/* Scaffolding, not data. */
+.chart-grid { stroke: var(--border); stroke-width: 1; }
+.chart-tick { fill: var(--faint); font-size: var(--text-2xs); font-family: var(--sans); }
+.chart-axis-label {
+  fill: var(--muted); font-size: var(--text-2xs); font-family: var(--sans);
+  letter-spacing: 0.02em;
+}
+.chart-legend {
+  display: flex; flex-wrap: wrap; gap: var(--s-3) var(--s-4);
+  margin-top: var(--s-2);
+}
+.chart-key {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: var(--text-xs); color: var(--muted);
+}
+.chart-swatch {
+  width: 9px; height: 9px; border-radius: var(--r-xs); flex: none;
+}
