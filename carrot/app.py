@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import asyncio
 import os
+import time
 import re
 import json
 import uuid
@@ -3891,6 +3892,9 @@ def _chat_stream_response(req, conv, history, skill, resolved, prelude=None,
     turn_id = uuid.uuid4().hex[:12]
 
     def _body():
+        # Before the model runs, so the rate recorded below belongs to this
+        # turn rather than to whatever ran last.
+        turn_started = time.perf_counter()
         final_text = ""
         # Set if the turn ended by asking rather than answering.
         pending_questions: Optional[Dict[str, Any]] = None
@@ -3950,6 +3954,11 @@ def _chat_stream_response(req, conv, history, skill, resolved, prelude=None,
                 # the form rather than a paragraph that stops mid-thought.
                 meta["questions"] = pending_questions["questions"]
                 meta["awaiting_answers"] = bool(pending_questions.get("blocking"))
+            # What the turn cost, for the line under the answer. Merged rather
+            # than assigned: `meta` may already carry the questions a turn
+            # ended on, and losing those would turn a form back into a
+            # paragraph that stops mid-thought.
+            meta.update(_turn_metrics(turn_started))
             stored = conv_mod.add_message(
                 req.conversation_id, "assistant", final_text,
                 metadata=meta or None)
@@ -4054,6 +4063,9 @@ async def chat(req: ChatRequest):
     # not search, could not read a page, and had none of the never-answer-with-
     # nothing guarantees the streaming path has. It runs the same loop now and
     # collects the result, so the two doors into chat behave the same.
+    # Noted before the model runs, so the rate attached below is this turn's
+    # and not the previous one's.
+    turn_started = time.perf_counter()
     parts, tools_used, route_info = [], [], resolved.as_dict()
     final = ""
     for event in _agentic_chat_events(history, resolved, skill, req.conversation_id, mode,
@@ -4065,7 +4077,8 @@ async def chat(req: ChatRequest):
         elif "tool" in event:
             tools_used.append(event["tool"].get("name", ""))
     response = final or "".join(parts)
-    stored = conv_mod.add_message(req.conversation_id, "assistant", response)
+    stored = conv_mod.add_message(req.conversation_id, "assistant", response,
+                                  metadata=_turn_metrics(turn_started))
     _post_turn(
         req.conversation_id, req.message, response,
         stored.get("id") if isinstance(stored, dict) else None,
@@ -5424,6 +5437,48 @@ async def search_index(q: str, limit: int = 10, hybrid_weight: float = 0.5,
         q, limit=limit, hybrid_weight=hybrid_weight,
         workspace_id=workspaces_mod.resolve_scope(workspace),
     )
+
+
+def _turn_metrics(turn_started: float) -> Dict[str, Any]:
+    """What this turn cost, for the line under the answer.
+
+    Read from Ollama's own counters rather than timed from outside: an external
+    stopwatch includes the queue, the tool calls and the socket, and reports a
+    figure well below what the model actually produced.
+
+    Empty when the model did not run — a hosted model, a cached answer, a reply
+    that was entirely tool output. A blank footer is correct there; borrowing
+    the previous turn's rate would be a number that looks measured and is not.
+    """
+    try:
+        sample = sysmon_mod.throughput.since(turn_started)
+    except Exception:
+        return {}
+    if not sample:
+        return {}
+    metrics = {"tps": sample.get("tps"), "tokens": sample.get("tokens"),
+               "seconds": sample.get("seconds"), "model": sample.get("model") or ""}
+    # Prompt processing is a separate bottleneck from generation: a long
+    # context is slow to ingest even when output is fast, and one number hides
+    # which of the two somebody is waiting on.
+    if sample.get("prompt_tokens"):
+        metrics["prompt_tokens"] = sample["prompt_tokens"]
+        metrics["prompt_tps"] = sample.get("prompt_tps")
+    return {"metrics": metrics}
+
+
+@app.delete("/api/conversations/{conv_id}/messages/{message_id}")
+async def delete_message(conv_id: str, message_id: int):
+    """Remove one message from a conversation.
+
+    Scoped by conversation as well as id: a bare message id is a guessable
+    integer, and deleting by it alone would let a wrong id in one conversation
+    remove a message from another.
+    """
+    removed = conv_mod.delete_message(conv_id, message_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail="no such message in that conversation")
+    return {"deleted": message_id}
 
 
 @app.get("/api/search/all")

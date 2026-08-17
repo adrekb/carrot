@@ -8755,3 +8755,25 @@ body.nav-collapsed .brand-sub { display: none; }
   color: var(--faint);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+
+/* ===== Under a message: when, and what it cost =====
+ *
+ * Reference rather than content. You read it when you are wondering why
+ * something took a while; the rest of the time it should stay out of the way
+ * of the answer, which is why it is the quietest text on the row and does not
+ * brighten on hover the way the actions above it do.
+ */
+.msg-meta {
+  display: flex;
+  gap: var(--s-3);
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 4px;
+  font-size: var(--text-2xs);
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+.message.user .msg-meta { justify-content: flex-end; }
+/* Dotted underline, not a pointer: there is more detail on hover — the model,
+   the seconds spent generating, the prompt rate — and nothing to click. */
+.msg-meta-tps { border-bottom: 1px dotted var(--border-hi); cursor: help; }

@@ -184,6 +184,16 @@ class _Throughput:
             "seconds": round(nanos / 1e9, 3),
             "tps": round(tokens / (nanos / 1e9), 1),
             "at": time.time(),
+            # A high-resolution stamp beside the wall-clock one, for "did this
+            # happen after that".
+            #
+            # `time.time()` steps in ~15ms on Windows, and so does
+            # `time.monotonic()` — both are coarse enough that a turn which
+            # started and finished inside one tick compares equal to its own
+            # start, so its sample either looks like it predates the turn or
+            # gets handed to the next one. `perf_counter()` is sub-microsecond
+            # and monotonic, which is what this comparison actually needs.
+            "at_mono": time.perf_counter(),
         }
         # Prompt processing is a separate rate and a separate bottleneck: a
         # long context is slow to *ingest* even when generation is fast, and
@@ -218,6 +228,24 @@ class _Throughput:
                 for model, v in by_model.items()
             },
         }
+
+    def since(self, after: float) -> Optional[Dict[str, Any]]:
+        """The newest sample recorded after ``after`` (a `time.perf_counter()`), or None.
+
+        For attaching a rate to the message it belongs to. The plain latest
+        sample is the wrong thing: on a turn the model never ran — a cached
+        answer, a tool-only reply, a hosted model, a failure — it is whatever
+        the *previous* turn produced, and labelling this message with the last
+        one's speed is worse than saying nothing, because it looks measured.
+        """
+        with self._lock:
+            for sample in reversed(self._samples):
+                # Strictly after, which only works because the stamp is a
+                # perf_counter: with a 15ms clock the previous turn's sample
+                # compares equal to this turn's start and gets handed to it.
+                if sample.get("at_mono", 0) > after:
+                    return dict(sample)
+        return None
 
     def clear(self):
         with self._lock:

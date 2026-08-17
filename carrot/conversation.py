@@ -255,6 +255,24 @@ def update_conversation_meta(conv_id: str, folder_id=None, starred=None, title=N
     }
 
 
+def delete_message(conv_id: str, message_id: int) -> bool:
+    """Delete one message from one conversation.
+
+    Both ids in the WHERE clause, not just the message's. A message id is a
+    bare autoincrement integer, so scoping by it alone would let a stale or
+    mistyped id delete a message out of somebody else's thread — and the caller
+    always knows which conversation it is looking at.
+    """
+    conn = get_db()
+    cur = conn.execute(
+        "DELETE FROM messages WHERE id = ? AND conversation_id = ?",
+        (message_id, conv_id),
+    )
+    conn.commit()
+    conn.close()
+    return cur.rowcount > 0
+
+
 def delete_conversation(conv_id: str) -> bool:
     """Delete a conversation. Messages are removed via ON DELETE CASCADE."""
     conn = get_db()

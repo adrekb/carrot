@@ -1378,7 +1378,7 @@ function showSources(assistantEl, contentEl, sources) {
     }
 }
 
-function appendMessage(role, content, messageId) {
+function appendMessage(role, content, messageId, extra = {}) {
     clearChatEmpty();
     const messagesEl = document.getElementById('chat-messages');
     const div = document.createElement('div');
@@ -1388,6 +1388,9 @@ function appendMessage(role, content, messageId) {
     // flattened out of it, so the source is kept on the element.
     div.dataset.raw = content || '';
     if (messageId != null) div.dataset.messageId = String(messageId);
+    // When it was said and what it cost, for the line under it.
+    if (extra.at) div.dataset.at = extra.at;
+    if (extra.metrics) div.dataset.metrics = JSON.stringify(extra.metrics);
     const body = role === 'assistant' && content
         ? `<div class="content md">${mdToHtml(content)}</div>`
         : `<div class="content">${escHtml(content)}</div>`;
@@ -1492,8 +1495,80 @@ function attachMessageActions(div) {
             row.appendChild(messageAction('Rerun', 'i-refresh', () => rerunMessage(div)));
         }
         row.appendChild(messageAction('Branch', 'i-branch', () => branchFromMessage(div)));
+        row.appendChild(messageAction('Delete', 'i-trash', () => deleteMessage(div)));
     }
     div.appendChild(row);
+    renderMessageMeta(div);
+}
+
+
+// ===== The line under a message =====
+//
+// When it was said, and what it cost. Both were known and neither was shown:
+// the timestamp was in the database, and the rate was recorded from Ollama's
+// own counters into a throughput meter that only the dashboard read.
+//
+// Quiet by default, because it is reference rather than content — you look at
+// it when you are wondering why something took a while, and the rest of the
+// time it should stay out of the way of the answer.
+
+function renderMessageMeta(div) {
+    if (div.querySelector('.msg-meta')) return;
+    const row = document.createElement('div');
+    row.className = 'msg-meta';
+
+    const bits = [];
+    const when = div.dataset.at;
+    if (when) {
+        const at = new Date(when);
+        if (!isNaN(at)) {
+            bits.push('<span class="msg-meta-when" title="' + escHtml(at.toString()) + '">'
+                + escHtml(at.toLocaleString(undefined, { month: 'short', day: 'numeric',
+                    year: 'numeric', hour: 'numeric', minute: '2-digit' })) + '</span>');
+        }
+    }
+
+    // Only when the model actually ran this turn. A hosted model, a cached
+    // answer or a reply that was entirely tool output has no rate, and
+    // inventing one from the previous turn would be a number that looks
+    // measured and is not.
+    let metrics = null;
+    try { metrics = div.dataset.metrics ? JSON.parse(div.dataset.metrics) : null; } catch (_) {}
+    if (metrics && metrics.tps) {
+        // Generation and prompt processing are separate bottlenecks: a long
+        // context is slow to ingest even when output is fast, and one number
+        // hides which of the two you were waiting on. The prompt rate goes in
+        // the tooltip rather than the line, because most turns it is not the
+        // interesting half.
+        const detail = [metrics.model && ('Model: ' + metrics.model),
+                        metrics.seconds && (metrics.seconds + 's generating'),
+                        metrics.prompt_tokens
+                            && (metrics.prompt_tokens + ' prompt tokens at '
+                                + metrics.prompt_tps + '/sec')]
+            .filter(Boolean).join(' · ');
+        bits.push('<span class="msg-meta-tps" title="' + escHtml(detail) + '">'
+            + escHtml(metrics.tps + ' tokens/sec')
+            + (metrics.tokens ? escHtml(' (' + metrics.tokens + ' tokens)') : '')
+            + '</span>');
+    }
+
+    if (!bits.length) return;
+    row.innerHTML = bits.join('');
+    div.appendChild(row);
+}
+
+async function deleteMessage(div) {
+    const id = div.dataset.messageId;
+    if (!id || !currentConversationId) return;
+    if (!confirm('Delete this message? This cannot be undone.')) return;
+    try {
+        await api('/api/conversations/' + currentConversationId + '/messages/' + id,
+                  { method: 'DELETE' });
+        div.remove();
+        syncChatBlank();
+    } catch (e) {
+        alert('Could not delete that message: ' + e.message);
+    }
 }
 
 function messageAction(label, icon, onClick) {
@@ -2567,7 +2642,8 @@ async function openConversation(convId) {
     messagesEl.innerHTML = '';
     document.getElementById('chat-title').textContent = conv.title || 'Untitled';
     const rendered = conv.messages.map(m => {
-        const el = appendMessage(m.role, m.content, m.id);
+        const el = appendMessage(m.role, m.content, m.id, {
+            at: m.timestamp, metrics: (m.metadata || {}).metrics });
         // What the turn actually did. Rendered live and then lost on every
         // reload — reopening a chat gave you the prose and none of the
         // evidence, which is the half you cannot reconstruct by reading.
