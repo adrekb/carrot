@@ -2605,7 +2605,9 @@ body.nav-collapsed .privacy-chip { justify-content: center; padding: 8px 0; }
   width: 100%;
   min-width: 120px;
   padding: 5px 7px;
-  background: var(--card);
+  /* background-color: the selector reaches a <select>, and the shorthand also
+     clears the chevron the `select` rule draws. */
+  background-color: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   color: var(--text);
@@ -2665,7 +2667,9 @@ body.nav-collapsed .privacy-chip { justify-content: center; padding: 8px 0; }
 .provider-add select,
 .provider-add input {
   padding: 7px 10px;
-  background: var(--card);
+  /* background-color: the selector reaches a <select>, and the shorthand also
+     clears the chevron the `select` rule draws. */
+  background-color: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   color: var(--text);
@@ -3948,11 +3952,22 @@ body::before {
    The option list is drawn by the OS, not the page. Without explicit
    colours Windows renders white-on-white against a dark control. These
    two properties are the only ones that reach that popup. */
+/* `appearance: none` removes the native arrow, so this image *is* the control's
+   only affordance — and it was drawn in two places, the image here and a
+   light-theme override further down that set the image and nothing else.
+   Splitting it that way is what let `.write-filter` break it: a `background:`
+   shorthand on a classed select resets image, repeat and position together, so
+   in dark the chevron vanished outright, and in light the higher-specificity
+   theme rule put the image back while leaving repeat at `repeat` and position
+   at `0 0` — a control tiled edge to edge with chevrons.
+
+   One rule now owns all three properties and the theme only swaps a token, so
+   there is no longer a place to restore the image without its geometry. */
 select {
   color-scheme: dark;
   appearance: none;
   -webkit-appearance: none;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2399a0ae' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9l6 6 6-6'/></svg>");
+  background-image: var(--select-chevron);
   background-repeat: no-repeat;
   background-position: right 10px center;
   padding-right: 30px;
@@ -4020,6 +4035,12 @@ select option:checked { background-color: #2f333d; }
   --opt-text: #eceef4;
   --opt-sel: #2f333d;
 
+  /* The dropdown arrow. A token because `appearance: none` means this is the
+     only arrow a <select> has, and it must be swappable per theme without
+     anybody re-declaring `background-image` on its own — an override that
+     restores the image without its repeat and position is what tiled it. */
+  --select-chevron: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2399a0ae' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9l6 6 6-6'/></svg>");
+
   --wash-sat: 125%;
   --wash-strength: 1;
 }
@@ -4061,6 +4082,11 @@ select option:checked { background-color: #2f333d; }
   --opt-bg: #ffffff;
   --opt-text: #1c1a18;
   --opt-sel: #eee9e2;
+
+  /* Same chevron, drawn in the light theme's ink. A token rather than a
+     `background-image` override on `select`, because an override that restores
+     the image without its repeat and position is what tiled the thing. */
+  --select-chevron: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%235f5a54' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9l6 6 6-6'/></svg>");
 
   --wash-sat: 150%;
   --wash-strength: 0.62;   /* the same glow over white would be garish */
@@ -5961,7 +5987,9 @@ td, th, .si-sub, .small, .editor-status {
  * the attach button and the send button — but present, because "which model
  * is doing this" was previously unanswerable from the agent panel. */
 .agent-model-picker {
-  background: var(--card2);
+  /* background-color: this is a <select>, and the shorthand also clears the
+     chevron the `select` rule draws. */
+  background-color: var(--card2);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   color: var(--text);
@@ -7010,7 +7038,8 @@ select.dd-open { border-color: var(--accent-line); }
    to prevent is committing an experiment to main, which is made by not
    knowing the answer. */
 .worktree-picker {
-  background: var(--card2);
+  /* background-color: see .agent-model-picker. */
+  background-color: var(--card2);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   color: var(--text);
@@ -7932,7 +7961,9 @@ select.dd-open { border-color: var(--accent-line); }
 .write-search:focus { border-color: var(--accent-line); }
 .write-filter {
   padding: var(--s-3) var(--s-4);
-  background: var(--card);
+  /* background-color, not background: these are <select>s, and the shorthand
+     also resets the chevron's image, repeat and position. */
+  background-color: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   color: var(--text);
