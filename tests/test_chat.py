@@ -1,6 +1,8 @@
 """Tests for chat endpoints (streaming and non-streaming) and conversations."""
 import json
 
+import pytest
+
 
 def test_health(client):
     resp = client.get("/api/health")
@@ -138,13 +140,31 @@ class TestHowAnswersAreWritten:
     setting with a default rather than a rule.
     """
 
-    def setup_method(self):
-        from carrot import config
-        for key in ("answer_style", "answer_structure", "answer_custom"):
-            config.set_config(key, "")
+    KEYS = ("answer_style", "answer_structure", "answer_custom")
 
-    def teardown_method(self):
-        self.setup_method()
+    @pytest.fixture(autouse=True)
+    def _start_from_the_defaults(self, isolated_db):
+        """A fixture, because `setup_method` cannot be ordered after one.
+
+        pytest runs setup_method *before* function-scoped fixtures, so writing
+        the config there hit whichever database the previous test left
+        configured — after an isolated_db teardown, a temp path that had
+        already been removed. `no such table: config`, from a test that never
+        touched the table.
+
+        Which test drew the short straw depended on collection order, so the
+        suite failed in a different place each run and passed on a rerun,
+        which is the shape of flake that gets ignored until it hides something
+        real. Taking `isolated_db` as an argument is the whole fix: it now runs
+        after the database exists.
+        """
+        from carrot import config
+
+        for key in self.KEYS:
+            config.set_config(key, "")
+        yield
+        for key in self.KEYS:
+            config.set_config(key, "")
 
     def test_each_style_says_something_different(self, isolated_db):
         from carrot import app, config

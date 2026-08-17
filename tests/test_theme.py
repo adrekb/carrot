@@ -116,6 +116,66 @@ def test_inline_prompt_has_styling():
         assert cls in CSS, f"{cls} is used by inlineTextPrompt() but never styled"
 
 
+class TestWhereTheAnswerComesFrom:
+    """A mark, not a sentence.
+
+    The empty state said "everything runs on your machine" unconditionally,
+    which was false with a hosted model selected — a privacy claim that is
+    wrong in the one place people read it is worse than none. Made accurate, it
+    became prose: "Answers come from ministral-14b-latest over the internet", a
+    model id and a caveat directly under a five-word heading. Local or not is a
+    state, and a state is a glyph.
+    """
+
+    JS = (WEB / "js" / "app.js").read_text(encoding="utf-8")
+
+    def _block(self):
+        start = self.JS.index("function renderEmptyStateLine")
+        return self.JS[start:self.JS.index("\n}", start)]
+
+    def test_both_glyphs_exist_to_point_at(self):
+        html = (WEB / "index.html").read_text(encoding="utf-8")
+        for icon in ('id="i-cloud"', 'id="i-computer"', 'id="i-info"'):
+            assert icon in html, f"{icon} is used by the empty state but never defined"
+
+    def test_it_picks_the_glyph_off_the_state(self):
+        block = self._block()
+        assert "i-computer" in block and "i-cloud" in block
+
+    def test_the_sentence_is_still_reachable(self):
+        """Hidden, not deleted. Which model and why is a fair question; it just
+        should not be the first thing on the screen."""
+        block = self._block()
+        assert "title=" in block, "the glyph needs to say what it means on hover"
+        assert "where-why" in block, "and there should be something to press"
+
+    def test_a_screen_reader_still_gets_words(self):
+        """A glyph with no text is a decoration to anything that cannot see
+        it, and this one is carrying a privacy claim."""
+        assert "sr-only" in self._block()
+
+    def test_the_marks_are_styled(self):
+        for cls in (".where-mark", ".where-why", ".where-said"):
+            assert cls in CSS, f"{cls} is built by renderEmptyStateLine but never styled"
+
+
+def test_the_small_print_on_a_chosen_option_is_not_left_grey():
+    """`.ctx-hint` and `.ctx-tokens` set their own colour.
+
+    So they win on specificity over whatever `.ctx-choice.on` switches the
+    button to, and the hint stayed the grey chosen to sit quietly on a dark
+    card — now on a saturated accent fill. Measured against its own background
+    it ran 1.10–1.94 across the six accents; on teal, 1.10. The recommendation
+    under the option you had picked was the least readable sentence on screen.
+
+    The fix has to name the children, because setting the colour on the parent
+    is exactly what did not work.
+    """
+    assert re.search(
+        r"\.ctx-choice\.on\s+\.ctx-hint\s*,\s*\.ctx-choice\.on\s+\.ctx-tokens\s*\{[^}]*color:", CSS
+    ), "the hint and tokens need their own colour when the card is selected"
+
+
 def test_the_stylesheet_has_no_control_characters():
     """A regex rewrite once left `background\x01:` in 58 rules.
 
