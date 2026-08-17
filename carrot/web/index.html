@@ -418,6 +418,17 @@
     <svg class="ico"><use href="#i-gear"/></svg><span class="nav-label">Settings</span>
   </button>
 
+  <!-- Everything above is where you go. This is what is happening.
+
+       The rail was four buttons and six hundred pixels of nothing, which is a
+       gap rather than restraint: work started here outlives the screen that
+       started it, and once you navigate away nothing anywhere says an agent or
+       a research run is still going. Two unequal halves — running work is
+       worth interrupting someone for and sits at the top; recents are a thing
+       you go looking for, so they stay collapsed until asked for. Both are
+       drawn by js/activity.js from one /api/activity call. -->
+  <div id="nav-activity" class="nav-activity"></div>
+
   <!-- Everything above is where you go. This is what is true.
 
        It sits at the foot of the rail because it is not a destination — it is
@@ -2414,5 +2425,8 @@
      nothing rather than throw — but loading it after them means the guards are
      for genuinely absent features rather than for load order. -->
 <script src="/js/palette.js"></script>
+<!-- After app.js and agents.js: the rail's rows open conversations and runs
+     through the same functions the history menu uses. -->
+<script src="/js/activity.js"></script>
 </body>
 </html>

@@ -41,6 +41,7 @@ from carrot import (
     leaderboard as lb_mod,
     bootstrap as bootstrap_mod,
     hub as hub_mod,
+    activity as activity_mod,
     calfeed as calfeed_mod,
     ambient_capture as ambient_capture_mod,
     attachments as attach_mod,
@@ -5560,6 +5561,17 @@ async def revert_journal(entry_id: str):
 
 
 # ===== Workspaces and folders =====
+
+@app.get("/api/activity")
+async def activity_overview(limit: int = activity_mod.RECENT_LIMIT):
+    """What is running and what you were last doing — the nav rail's whole state.
+
+    Polled, so it is one request rather than the three separate job lists it
+    aggregates, and `activity.overview` swallows its own failures: a rail that
+    500s is a strip of UI that disappears mid-session over a job list.
+    """
+    return activity_mod.overview(limit=limit)
+
 
 @app.get("/api/workspaces")
 async def workspace_tree(include_archived: bool = False):

@@ -1863,6 +1863,89 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
  * the whole rail, and filling the gap with more links would undo the thing
  * this layout exists to do.
  */
+/* ===== The rail's living half =====
+   Running work, then recents. Sits directly under the four destinations and
+   above the privacy chip, which keeps its own `margin-top: auto`, so this
+   grows downward from the nav and the chip stays pinned to the floor. */
+.nav-activity { margin-top: 14px; min-height: 0; overflow-y: auto; }
+.nav-sec-head {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--faint);
+  padding: 0 8px 6px;
+}
+.nav-running { margin-bottom: 12px; }
+
+/* A live job. Full weight — this is the half of the rail allowed to ask for
+   attention, and the row is a button because every one of them opens the
+   thing it describes. */
+.nav-job, .nav-recent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  position: relative;
+}
+.nav-job:hover, .nav-recent:hover { background: var(--surface-hover); }
+.nav-job .ico, .nav-recent .ico { flex-shrink: 0; opacity: 0.75; }
+.nav-job-text { min-width: 0; display: flex; flex-direction: column; }
+.nav-job-label, .nav-recent-label {
+  font-size: var(--text-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.nav-job-sub { font-size: var(--text-xs); color: var(--faint); }
+
+/* The dot that says this one is moving. Colour alone would not carry it for a
+   colourblind reader and would not carry it at a glance either; the motion is
+   what reads as "still going". */
+.nav-job-pulse {
+  position: absolute;
+  left: 2px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: nav-job-pulse 1.6s ease-in-out infinite;
+}
+@keyframes nav-job-pulse { 50% { opacity: 0.25; } }
+
+/* Started, then the process died under it. Not hidden — a research run that
+   vanished is something the user is owed — but not dressed up as live work. */
+.nav-job.stalled { opacity: 0.6; }
+.nav-job.stalled .nav-job-sub { color: var(--yellow); }
+
+/* Recessed, as asked for: present, closed, and quiet until opened. */
+.nav-recents > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 4px 8px 6px;
+}
+.nav-recents > summary::-webkit-details-marker { display: none; }
+.nav-recents > summary::after {
+  content: "›";
+  margin-left: 6px;
+  display: inline-block;
+  transition: transform var(--dur-2) var(--ease);
+}
+.nav-recents[open] > summary::after { transform: rotate(90deg); }
+.nav-recents > summary:hover { color: var(--text); }
+.nav-recent-label { color: var(--muted); }
+.nav-recent:hover .nav-recent-label { color: var(--text); }
+
+/* Reduced motion is handled in one place near the end of this file, so it can
+   apply after every animation it has to override. */
+
 .nav-foot { margin-top: auto; padding-top: 10px; position: relative; }
 .privacy-chip {
   display: flex;
@@ -8018,6 +8101,22 @@ body.nav-collapsed .app-nav .nav-item {
 }
 body.nav-collapsed .brand-name,
 body.nav-collapsed .brand-sub { display: none; }
+
+/* The activity section in 60px.
+   Running jobs survive as icons — "something is still going" is exactly the
+   right amount of information for a rail this wide, and each row keeps its
+   title attribute, so hovering still says which job and how far along.
+   Recents do not survive: six identical chat glyphs in a column is a list
+   that cannot be read, and they are already in Ctrl+K and the history menu. */
+body.nav-collapsed .nav-sec-head,
+body.nav-collapsed .nav-job-text,
+body.nav-collapsed .nav-recents { display: none; }
+body.nav-collapsed .nav-job {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+}
+body.nav-collapsed .nav-job-pulse { left: 6px; }
 
 /* ===== History ===== */
 #history-menu { position: relative; flex: 0 0 auto; }
