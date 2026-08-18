@@ -186,3 +186,95 @@ class TestTheRailNamesItsSections:
         row = re.search(r"function activityWorkspaceRow\(workspace\)\s*\{(.*?)\n\}",
                         activity, re.DOTALL)
         assert "setActiveWorkspace" in row.group(1)
+
+def _luminance(rgb):
+    def channel(value):
+        value /= 255
+        return value / 12.92 if value <= 0.03928 else ((value + 0.055) / 1.055) ** 2.4
+    r, g, b = (channel(c) for c in rgb)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def _hex(value):
+    value = value.lstrip("#")
+    return tuple(int(value[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def contrast(fg, bg):
+    a, b = _luminance(_hex(fg)), _luminance(_hex(bg))
+    return (max(a, b) + 0.05) / (min(a, b) + 0.05)
+
+
+class TestTheActiveWorkspaceRowIsReadable:
+    """"0 items" on the active row was `--faint` on `--accent-fill`: a mid grey
+    picked to be quiet on a dark card, sitting on orange. **1.11:1** — not dim,
+    invisible. The row sets `--on-accent` for exactly this reason and the meta
+    line was hard-setting a colour straight over it."""
+
+    def test_the_meta_takes_the_rows_ink(self):
+        css = read("css", "style.css")
+        assert ".ws-row.active .ws-row-meta { color: var(--on-accent); }" in css
+
+    def test_it_is_not_dimmed(self):
+        """The obvious move — full ink at reduced alpha — fails, and only
+        measuring shows it. Every `--accent-fill`/`--on-accent` pair here is
+        tuned to *just* clear AA, so there is no headroom to spend: ember is
+        4.72:1, and 0.9 alpha takes it to 4.29."""
+        css = read("css", "style.css")
+        rule = re.search(r"\.ws-row\.active \.ws-row-meta \{([^}]*)\}", css)
+        assert rule, "rule not found"
+        assert "opacity" not in rule.group(1)
+
+    @pytest.mark.parametrize("fill,ink", [
+        ("#e0620f", "#1a1208"),   # carrot
+        ("#e8471f", "#1a1208"),   # ember — the tightest pair, and the one that decides it
+        ("#e09000", "#1a1208"),   # amber
+        ("#8e2fd0", "#ffffff"),   # orchid
+        ("#0a9b80", "#0a1a16"),   # teal
+        ("#1f55dd", "#ffffff"),   # indigo
+    ])
+    def test_every_accent_clears_aa_at_full_ink(self, fill, ink):
+        assert contrast(ink, fill) >= 4.5
+
+    @pytest.mark.parametrize("fill,ink", [("#e8471f", "#1a1208")])
+    def test_dimming_ember_would_not(self, fill, ink):
+        """The measurement this rule exists because of, kept so that anyone
+        re-adding an opacity has to delete an assertion that says why not."""
+        blended = tuple(round(i * 0.9 + f * 0.1)
+                        for i, f in zip(_hex(ink), _hex(fill)))
+        faded = "#%02x%02x%02x" % blended
+        assert contrast(faded, fill) < 4.5
+
+    def test_the_old_value_was_the_bug(self):
+        """`--faint`, the value that was there, on the fill it was there over."""
+        assert contrast("#96907f", "#e0620f") < 1.5
+
+
+class TestTheRailDoesNotLoseRecents:
+    """/api/workspaces is one small table and /api/activity is four queries, so
+    the workspaces fetch usually wins the race. Redrawing on the way past
+    rebuilt the rail from an activityData that had not arrived — a workspaces
+    section and nothing else, which reads exactly like recents being removed,
+    and stays that way if the activity call then fails."""
+
+    def test_the_workspace_fetch_waits_for_activity(self):
+        activity = read("js", "activity.js")
+        loader = re.search(r"async function loadActivityWorkspaces\(\)\s*\{(.*?)\n\}",
+                           activity, re.DOTALL)
+        assert loader, "loadActivityWorkspaces not found"
+        assert "if (activityLoaded) renderActivity();" in loader.group(1)
+
+    def test_loaded_is_distinct_from_empty(self):
+        """An empty rail and an unloaded one look the same and mean opposite
+        things, so the flag cannot be `recent.length`."""
+        activity = read("js", "activity.js")
+        assert "let activityLoaded = false;" in activity
+        assert "activityLoaded = true;" in activity
+
+    def test_recents_still_render_after_workspaces(self):
+        """Order matters and so does the early return: the workspaces block has
+        to be appended before `if (!recent.length) return;`, or a rail with no
+        recents loses the section that does have something in it."""
+        activity = read("js", "activity.js")
+        assert (activity.index("activityWorkspaceRow(workspace)")
+                < activity.index("if (!recent.length) return;"))

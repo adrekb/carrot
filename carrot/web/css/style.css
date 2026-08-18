@@ -3426,6 +3426,30 @@ body.nav-collapsed .privacy-chip { justify-content: center; padding: 8px 0; }
 .ws-row-main { flex: 1; cursor: pointer; display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .ws-row-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ws-row-meta { color: var(--faint); font-size: var(--text-xs); font-family: var(--mono); flex: none; }
+/* "0 items" on the active row was unreadable, and measurably so: `--faint` on
+   `--accent-fill` is **1.11:1**. The row sets `--on-accent` for the orange
+   fill and the line above hard-sets a mid grey picked to be quiet on a dark
+   card, which on orange is neither quiet nor legible.
+
+   Full ink, with no opacity — and that is the measured answer rather than the
+   obvious one. Dimming it looked right, but every `--accent-fill`/`--on-accent`
+   pair in this file is tuned to *just* clear AA: ember is 4.72:1, so 0.9 alpha
+   takes it to 4.29 and under. There is no headroom to spend on quietness.
+   Carrot 5.22 → 4.68 at 0.9, teal 5.13 → 4.54; ember is the one that decides
+   it. The meta is already smaller and monospaced, which is the distinction it
+   needed anyway.
+
+   The buttons come along for the same reason: `.btn-ghost` sets its own
+   `--muted`, and both of them sit on the fill too. */
+.ws-row.active .ws-row-meta { color: var(--on-accent); }
+.ws-row.active .btn-ghost {
+  color: var(--on-accent);
+  border-color: color-mix(in srgb, var(--on-accent) 28%, transparent);
+  background: color-mix(in srgb, var(--on-accent) 10%, transparent);
+}
+.ws-row.active .btn-ghost:hover {
+  background: color-mix(in srgb, var(--on-accent) 18%, transparent);
+}
 
 .ws-detail-head { border-bottom: 1px solid var(--border); padding-bottom: 8px; margin-bottom: 4px; }
 .ws-detail-head h3 { margin: 0 0 3px; font-size: var(--text-md); }

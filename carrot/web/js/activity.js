@@ -20,6 +20,9 @@ let activityRecentsOpen = false;
 // database round trip a minute for a list that is almost always identical.
 let activityWorkspaces = null;
 let activityWorkspacesOpen = false;
+// Whether /api/activity has ever answered. Distinct from "has any activity":
+// an empty rail and an unloaded one look the same and mean opposite things.
+let activityLoaded = false;
 
 // Polling, tuned to what is actually changing.
 //
@@ -66,6 +69,7 @@ const ACTIVITY_OPEN = {
 async function loadActivity() {
     try {
         activityData = await api('/api/activity');
+        activityLoaded = true;
     } catch (e) {
         // The rail is decoration around the app, not the app. A failed poll
         // leaves the last good answer on screen rather than blanking it.
@@ -189,7 +193,14 @@ async function loadActivityWorkspaces() {
     } catch (_) {
         activityWorkspaces = [];
     }
-    renderActivity();
+    // Only redraw once there is something to draw *around*. This fetch races
+    // the first activity poll, and it usually wins — /api/workspaces is one
+    // small table and /api/activity is four queries. Redrawing on the way past
+    // rebuilds the rail from an activityData that is still empty, so for the
+    // gap between the two the rail is a workspaces section and nothing else —
+    // and if the activity call then fails, it stays that way, which reads
+    // exactly like recents having been removed.
+    if (activityLoaded) renderActivity();
 }
 
 function activityRecentRow(item) {
