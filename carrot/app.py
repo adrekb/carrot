@@ -3683,6 +3683,64 @@ def _remember_trace(trace: List[Dict[str, Any]], event: Dict[str, Any]):
     trace.append({kind: kept})
 
 
+def _persist_turn(req, trace, final_text, pending_questions, turn_started,
+                  origin, complete: bool):
+    """Write down what the turn produced, however it ended.
+
+    Called from a `finally`, including the GeneratorExit path where the browser
+    has already gone. Never raises and never yields: the caller is unwinding,
+    and the only thing worse than losing the turn is losing it and logging a
+    RuntimeError about a yield inside a finally.
+
+    ``complete`` says whether the turn reached an end of its own. It does not
+    decide whether to *store* — a half answer and the searches behind it are
+    exactly what somebody who pressed stop wants back, and dropping them is
+    what made a cancelled run look like it had never happened. It decides
+    whether to run the bookkeeping: the memory extractor reads conclusions out
+    of a turn, and a turn that was cut off halfway has none, so filing what it
+    was mid-way through saying as something now known about the user is how a
+    stopped sentence becomes a durable belief.
+    """
+    try:
+        # An empty turn is still worth a row when there is a trace: the
+        # searches happened, the pages were read, and a conversation that
+        # shows the question and nothing else is a conversation that lost
+        # them. With neither text nor trace there is nothing to keep.
+        if not (final_text or trace):
+            return
+        meta = {"trace": trace} if trace else {}
+        if pending_questions:
+            # Recorded on the row, so reopening the conversation restores
+            # the form rather than a paragraph that stops mid-thought.
+            meta["questions"] = pending_questions["questions"]
+            meta["awaiting_answers"] = bool(pending_questions.get("blocking"))
+        if not complete:
+            # So the transcript can say so on reopening, rather than showing a
+            # sentence that stops for no visible reason.
+            meta["interrupted"] = True
+        # What the turn cost, for the line under the answer. Merged rather
+        # than assigned: `meta` may already carry the questions a turn
+        # ended on, and losing those would turn a form back into a
+        # paragraph that stops mid-thought.
+        meta.update(_turn_metrics(turn_started))
+        stored = conv_mod.add_message(
+            req.conversation_id, "assistant", final_text,
+            metadata=meta or None)
+        # A turn that ended in a question has not concluded anything either,
+        # and letting the extractor run files the guesses the model was asking
+        # about as things now known about the user — the exact failure the gate
+        # exists to prevent, made durable.
+        if complete and not (pending_questions and pending_questions.get("blocking")):
+            _post_turn(
+                req.conversation_id, req.message, final_text,
+                stored.get("id") if isinstance(stored, dict) else None,
+                origin=_memory_origin(req, origin),
+            )
+    except Exception:
+        # Bookkeeping must never cost the user the answer they can see.
+        LOG.exception("could not store the assistant turn")
+
+
 def _memory_origin(req, override=None) -> str:
     """Which part of Carrot produced this turn, for the memory's provenance.
 
@@ -3917,6 +3975,11 @@ def _chat_stream_response(req, conv, history, skill, resolved, prelude=None,
         # The browser sees a stream that ended, has no text, and prints
         # "(no response)". Whatever breaks, the user gets told what broke, the
         # turn is saved, and `done` is sent.
+        # Set once the turn reaches an end of its own — the loop finishing, or
+        # the handler below writing an error. It stays False when GeneratorExit
+        # unwinds through a yield, which is how the `finally` tells "the turn
+        # concluded" from "the listener left".
+        finished = False
         try:
             for event in _agentic_chat_events(
                     history, resolved, skill, req.conversation_id, mode,
@@ -3940,6 +4003,7 @@ def _chat_stream_response(req, conv, history, skill, resolved, prelude=None,
                     outstanding.discard(event["approval_resolved"]["id"])
                 _remember_trace(trace, event)
                 yield f"data: {json.dumps(event)}\n\n"
+            finished = True
         except Exception as exc:
             LOG.exception("chat turn failed")
             final_text = final_text or (
@@ -3948,35 +4012,26 @@ def _chat_stream_response(req, conv, history, skill, resolved, prelude=None,
                 "asked. The trace above shows how far it got."
             )
             yield f"data: {json.dumps({'chunk': final_text})}\n\n"
-        try:
-            meta = {"trace": trace} if trace else {}
-            if pending_questions:
-                # Recorded on the row, so reopening the conversation restores
-                # the form rather than a paragraph that stops mid-thought.
-                meta["questions"] = pending_questions["questions"]
-                meta["awaiting_answers"] = bool(pending_questions.get("blocking"))
-            # What the turn cost, for the line under the answer. Merged rather
-            # than assigned: `meta` may already carry the questions a turn
-            # ended on, and losing those would turn a form back into a
-            # paragraph that stops mid-thought.
-            meta.update(_turn_metrics(turn_started))
-            stored = conv_mod.add_message(
-                req.conversation_id, "assistant", final_text,
-                metadata=meta or None)
-            # A turn that ended in a question has not concluded anything, and
-            # the memory extractor works by reading conclusions out of a turn.
-            # Letting it run here files the guesses the model was asking about
-            # as things now known about the user — the exact failure the gate
-            # exists to prevent, made durable.
-            if not (pending_questions and pending_questions.get("blocking")):
-                _post_turn(
-                    req.conversation_id, req.message, final_text,
-                    stored.get("id") if isinstance(stored, dict) else None,
-                    origin=_memory_origin(req, origin),
-                )
-        except Exception:
-            # Bookkeeping must never cost the user the answer they can see.
-            LOG.exception("could not store the assistant turn")
+            finished = True
+        finally:
+            # In a `finally`, so that a turn nobody is listening to any more is
+            # still written down.
+            #
+            # This used to sit after the loop. When the browser goes away —
+            # the user pressing stop with no clean stop to fall back on, a
+            # reload, a backend restart — Starlette closes this generator and
+            # GeneratorExit is raised at the `yield` above. GeneratorExit is a
+            # BaseException, so the `except Exception` did not catch it *and*
+            # nothing after the loop ran: no message, no trace, no metrics.
+            # The conversation kept the question and lost the answer, along
+            # with every search and every page the turn had already read.
+            #
+            # Nothing in here may yield. A `yield` inside a finally during
+            # GeneratorExit is a RuntimeError, which would trade a lost turn
+            # for a lost turn plus a traceback — the `done` frame is sent after
+            # the block instead, where there is still a client to receive it.
+            _persist_turn(req, trace, final_text, pending_questions,
+                          turn_started, origin, complete=finished)
         yield f"data: {json.dumps({'done': True, 'conversation_id': req.conversation_id})}\n\n"
 
     def stream():
@@ -4069,6 +4124,7 @@ async def chat(req: ChatRequest):
     turn_started = time.perf_counter()
     parts, tools_used, route_info = [], [], resolved.as_dict()
     final = ""
+    pending_questions = None
     for event in _agentic_chat_events(history, resolved, skill, req.conversation_id, mode,
                                       coder=bool(getattr(req, "coder", False))):
         if "_final_text" in event:
@@ -4077,14 +4133,28 @@ async def chat(req: ChatRequest):
             parts.append(event["chunk"])
         elif "tool" in event:
             tools_used.append(event["tool"].get("name", ""))
+        elif "questions" in event:
+            # This door ran the same loop as the streaming one and then threw
+            # the questions away: they were not recorded on the row, so a
+            # reopened conversation showed a paragraph that stops mid-thought,
+            # and the extractor below ran on a turn that had concluded
+            # nothing — filing the guesses the model was *asking about* as
+            # things now known about the user. The streaming path has guarded
+            # against exactly that since it was written.
+            pending_questions = event
     response = final or "".join(parts)
+    meta = _turn_metrics(turn_started)
+    if pending_questions:
+        meta["questions"] = pending_questions["questions"]
+        meta["awaiting_answers"] = bool(pending_questions.get("blocking"))
     stored = conv_mod.add_message(req.conversation_id, "assistant", response,
-                                  metadata=_turn_metrics(turn_started))
-    _post_turn(
-        req.conversation_id, req.message, response,
-        stored.get("id") if isinstance(stored, dict) else None,
-        origin=_memory_origin(req),
-    )
+                                  metadata=meta)
+    if not (pending_questions and pending_questions.get("blocking")):
+        _post_turn(
+            req.conversation_id, req.message, response,
+            stored.get("id") if isinstance(stored, dict) else None,
+            origin=_memory_origin(req),
+        )
     return {
         "conversation_id": req.conversation_id,
         "response": response,

@@ -682,11 +682,17 @@ class TestTheQuestionFormIsWiredUp:
         durable.
         """
         server = Path(A.__file__).read_text(encoding="utf-8")
-        # The call site in the SSE body, not the `def` — searching for the bare
-        # name finds the definition first and would pass against anything.
-        at = server.index("                _post_turn(")
-        window = server[max(0, at - 400):at]
-        assert "pending_questions" in window and "blocking" in window
+        # The call site, not the `def` — searching for the bare name finds the
+        # definition first and would pass against anything. Found by "indented
+        # and not a def" rather than by an exact indent: the call moved out of
+        # the SSE body into `_persist_turn` when a cancelled turn stopped being
+        # thrown away, which changed its indentation and nothing else.
+        sites = [m.start() for m in re.finditer(r"\n\s+_post_turn\(", server)
+                 if "def _post_turn" not in server[m.start():m.start() + 40]]
+        assert sites, "the memory extractor is never called"
+        for at in sites:
+            window = server[max(0, at - 400):at]
+            assert "pending_questions" in window and "blocking" in window
 
 
 class TestTheCodingAgentCanLookThingsUp:
