@@ -90,8 +90,11 @@ function renderActivity() {
     if (running.length) {
         const box = document.createElement('div');
         box.className = 'nav-running';
+        // "Unfinished" described the row rather than addressing the reader,
+        // and a stopped run is not a category of work — it is something that
+        // wants a decision. Say what it wants.
         box.innerHTML = `<div class="nav-sec-head">${
-            running.some(j => j.status === 'running') ? 'Running now' : 'Unfinished'}</div>`;
+            running.some(j => j.status === 'running') ? 'Running now' : 'Needs a look'}</div>`;
         for (const job of running) box.appendChild(activityJobRow(job));
         host.appendChild(box);
     }

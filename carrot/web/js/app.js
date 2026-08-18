@@ -4310,15 +4310,26 @@ function renderEmptyStateLine() {
     // Named whole rather than assembled from a prefix and a word: an icon id
     // that only exists once the strings are joined cannot be grepped for, so
     // nothing tells you it broke when the symbol is renamed.
-    const glyph = local ? '#i-computer' : '#i-cloud';
+    // Both glyphs, always, with the live one lit.
+    //
+    // One glyph said where this answer comes from and nothing about what the
+    // alternative was — a cloud on its own is a fact with no scale against it.
+    // "On this computer" is the other half of the sentence and the half a
+    // local-first app is actually claiming, so the pair reads as a state:
+    // one of these two is where your words go.
+    //
+    // The question mark lives inside the mark rather than beside it, and is
+    // taken out of the flow in CSS, so the pair centres on the heading's axis
+    // instead of being shoved off it by a button nobody is looking at.
     line.innerHTML =
         '<span class="where-mark" title="' + escHtml(detail) + '">'
-        + '<svg class="ico"><use href="' + glyph + '"/></svg>'
+        + '<svg class="ico where-glyph"><use href="'
+        + (local ? '#i-computer' : '#i-cloud') + '"/></svg>'
         + '<span class="sr-only">' + escHtml(detail) + '</span>'
-        + '</span>'
         + '<button type="button" class="where-why" aria-label="Where answers come from"'
         + ' title="' + escHtml(detail) + '">'
-        + '<svg class="ico"><use href="#i-info"/></svg></button>';
+        + '<svg class="ico"><use href="#i-info"/></svg></button>'
+        + '</span>';
 
     // Clicking says it out loud, for touch, and for anyone who does not know a
     // tooltip is there to be waited for.
