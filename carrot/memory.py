@@ -68,6 +68,19 @@ ORIGIN_FILTER_LABELS = {
     ORIGIN_MANUAL: "Written by you",
 }
 
+# How close a memory has to be to a query that shares no words with it before
+# it is offered as a result. Only ever consulted on the semantic-only path —
+# anything the FTS index matched is returned on the strength of the match.
+#
+# Not calibrated on the machine this was written on, because embedding was
+# unavailable there and a number tuned against no data would be worse than an
+# honest one: cosine similarity for sentence embeddings puts unrelated text
+# well under half, and related-but-differently-worded text comfortably above
+# it. Worth re-measuring against a populated vector store before trusting the
+# exact value; the structural guard above — no ranker, no whole-corpus
+# results — is what actually fixed the reported bug.
+SEMANTIC_FLOOR = 0.55
+
 STATUS_ACTIVE = "active"
 STATUS_SUPERSEDED = "superseded"
 STATUS_REJECTED = "rejected"
@@ -324,13 +337,28 @@ def history(subject: str, kind: Optional[str] = None) -> List[Dict[str, Any]]:
 # ===== Search & recall =====
 
 def search(query: str, limit: int = 10, include_superseded: bool = False,
-           workspace_id: str = "") -> List[Dict[str, Any]]:
+           workspace_id: str = "", fallback: bool = False) -> List[Dict[str, Any]]:
     """Hybrid memory search: FTS candidates reranked by embedding similarity.
 
     Scoped to a workspace, this is what stops a question about your thesis from
     recalling what you decided about a side project in March.
+
+    ``fallback`` is the difference between the two things that call this, and
+    they want opposite behaviour. A *search* — the command palette, the memory
+    page, the agent's search_memory tool — is a question with an answer, and
+    "nothing matched" is a valid one; offering the least unrelated memory on
+    file instead reads as the search being broken. *Recall*, which builds the
+    prompt for a turn, is not a question: it is one of several sources of
+    context and it would rather be roughly right than empty, so it opts in.
+
+    It used to be on for both, which is how searching "f35" answered with a dog
+    called Biscuit.
     """
     candidates = _fts_candidates(query, limit * 4, include_superseded, workspace_id)
+    # Whether anything actually matched the words. This is the difference
+    # between the two halves of the search, and it decides what is allowed to
+    # be returned unranked below.
+    keyword_hit = bool(candidates)
     if not candidates:
         candidates = {
             m["id"]: m
@@ -342,13 +370,30 @@ def search(query: str, limit: int = 10, include_superseded: bool = False,
 
     ranked = vectors.search_text(vectors.NS_MEMORY, query, limit=limit, candidates=list(candidates))
     if not ranked:
-        return list(candidates.values())[:limit]
+        # Nothing ranked these. A keyword hit is still evidence of relevance
+        # and stands on its own; the whole-memory fallback is not evidence of
+        # anything, and returning it unranked is how searching for "f35"
+        # answered with a dog called Biscuit and three unrelated projects.
+        #
+        # That path was invisible until the palette stopped discarding its own
+        # results on a 1500ms timeout. It is reachable whenever embedding is
+        # unavailable — on the machine this was found on, `vectors.count` for
+        # memories was 0 and `embed` returned nothing, so *every* semantic
+        # result the box had ever shown was this list.
+        return list(candidates.values())[:limit] if (keyword_hit or fallback) else []
 
     results = []
     for ref_id, score in ranked:
         memory = candidates.get(ref_id)
-        if memory:
-            results.append({**memory, "score": round(score, 4)})
+        if not memory:
+            continue
+        # A nearest neighbour is not a match. With no keyword to vouch for it,
+        # the whole corpus is in the running and the top of that list is
+        # simply the least unrelated thing on file, which reads as the search
+        # returning nonsense rather than nothing.
+        if not keyword_hit and score < SEMANTIC_FLOOR:
+            continue
+        results.append({**memory, "score": round(score, 4)})
     return results
 
 
@@ -425,7 +470,9 @@ def recall(query: str, limit: int = 8, workspace_id: str = "") -> List[Dict[str,
             m for m in pinned
             if workspaces_mod.workspace_of(workspaces_mod.KIND_MEMORY, m["id"]) in (workspace_id, None)
         ]
-    relevant = search(query, limit=limit, workspace_id=workspace_id)
+    # Opted in: see `search`. A prompt is better for a loosely related memory
+    # than for none, and the pinned ones above are already unconditional.
+    relevant = search(query, limit=limit, workspace_id=workspace_id, fallback=True)
     combined: Dict[str, Dict[str, Any]] = {m["id"]: m for m in pinned}
     for memory in relevant:
         combined.setdefault(memory["id"], memory)

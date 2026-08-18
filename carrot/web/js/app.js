@@ -456,6 +456,46 @@ async function setAnswerCustom(text) {
     } catch (_) { /* ignore */ }
 }
 
+// ===== Writing on paper =====
+//
+// A dark interface is right for a tool you operate and wrong for a page you
+// write on: a document is the one surface in the app that is trying to be a
+// piece of paper, and reading a dark theme as paper takes a leap the writer
+// has to make every time they look at it. This decouples the two — the app
+// stays in whatever theme you set, the document goes white.
+//
+// Scoped by a class rather than by a second theme, so there is one palette in
+// the stylesheet with two selectors on it (see `.paper`), not two palettes.
+let docPaper = false;
+
+function applyDocPaper() {
+    // The editor column, not the whole view: the file list, toolbar and
+    // backlinks belong to the app and should keep the app's theme, or the
+    // setting stops being "the page is paper" and becomes "the tab is light".
+    // The editor surface only. `.split-main` took the browse grid, the
+    // filters and the whole left column with it, which is not "the document
+    // is paper", it is "the tab is light" — and it is what the setting
+    // visibly did on first try.
+    for (const el of document.querySelectorAll('#note-editor-host, #note-fallback')) {
+        el.classList.toggle('paper', docPaper);
+    }
+}
+
+async function setDocPaper(enabled) {
+    docPaper = !!enabled;
+    applyDocPaper();
+    try {
+        await api('/api/config/doc_paper', {
+            method: 'PUT', body: JSON.stringify(docPaper),
+        });
+    } catch (_) {
+        const box = document.getElementById('doc-paper-toggle');
+        if (box) box.checked = !docPaper;
+        docPaper = !docPaper;
+        applyDocPaper();
+    }
+}
+
 // How much a local model may hold in mind at once.
 //
 // Presented as three choices rather than a token count, because "num_ctx" is
@@ -605,9 +645,70 @@ async function setReaderFallback(enabled) {
     }
 }
 
+// ===== Which search answers first =====
+
+const SEARCH_PROVIDER_LABELS = {
+    auto: 'Exa, then DuckDuckGo',
+    exa: 'Exa',
+    duckduckgo: 'DuckDuckGo',
+};
+
+async function setSearchProvider(value) {
+    try {
+        await api('/api/config/search_provider', {
+            method: 'PUT', body: JSON.stringify(String(value || 'auto')),
+        });
+    } catch (_) { /* the select still shows what they picked; the next load corrects it */ }
+}
+
+async function setExaKey(value) {
+    // Its own endpoint: the generic config PUT refuses secrets outright, and
+    // the first version of this posted there, took the 400 into an empty catch
+    // and left the field looking like it had saved.
+    const field = document.getElementById('exa-api-key');
+    try {
+        const result = await api('/api/search/key', {
+            method: 'PUT', body: JSON.stringify({ api_key: String(value || '').trim() }),
+        });
+        if (field) {
+            field.value = '';
+            field.placeholder = result.stored ? 'a key is saved — type to replace it'
+                                              : 'optional — only to go past the free limit';
+        }
+    } catch (e) {
+        if (field) field.placeholder = 'could not save that key: ' + e.message;
+    }
+}
+
+function renderSearchProvider(cfg) {
+    const select = document.getElementById('search-provider');
+    if (select) {
+        const chosen = (cfg || {}).search_provider || 'auto';
+        select.innerHTML = Object.entries(SEARCH_PROVIDER_LABELS).map(([id, label]) =>
+            `<option value="${escHtml(id)}"${id === chosen ? ' selected' : ''}>`
+            + `${escHtml(label)}</option>`).join('');
+    }
+    // The key comes back as a boolean, never the value — so the field says
+    // whether one is set rather than pretending to show it.
+    const key = document.getElementById('exa-api-key');
+    if (key) {
+        const held = !!(cfg || {}).exa_api_key;
+        key.value = '';
+        key.placeholder = held ? 'a key is saved — type to replace it'
+                               : 'optional — only to go past the free limit';
+    }
+}
+
 function renderReaderFallback(cfg) {
     const box = document.getElementById('reader-fallback-toggle');
     if (box) box.checked = !!(cfg || {}).reader_fallback;
+    // Restored from the same payload rather than its own request: it is an
+    // appearance setting, and the editor should already be paper by the time
+    // the user first looks at it.
+    docPaper = !!(cfg || {}).doc_paper;
+    const paper = document.getElementById('doc-paper-toggle');
+    if (paper) paper.checked = docPaper;
+    applyDocPaper();
 }
 
 async function loadRecapConfig() {
@@ -619,6 +720,7 @@ async function loadRecapConfig() {
         // Same fetch, so the rail's server copy costs nothing extra.
         syncRailFromServer(cfg);
         renderReaderFallback(cfg);
+        renderSearchProvider(cfg);
         renderAnswerStyle(cfg);
         _pendingCtxCfg = cfg;
         renderContextChoices(cfg, _lastModels || {});
@@ -1378,7 +1480,7 @@ function showSources(assistantEl, contentEl, sources) {
     }
 }
 
-function appendMessage(role, content, messageId) {
+function appendMessage(role, content, messageId, extra = {}) {
     clearChatEmpty();
     const messagesEl = document.getElementById('chat-messages');
     const div = document.createElement('div');
@@ -1388,6 +1490,9 @@ function appendMessage(role, content, messageId) {
     // flattened out of it, so the source is kept on the element.
     div.dataset.raw = content || '';
     if (messageId != null) div.dataset.messageId = String(messageId);
+    // When it was said and what it cost, for the line under it.
+    if (extra.at) div.dataset.at = extra.at;
+    if (extra.metrics) div.dataset.metrics = JSON.stringify(extra.metrics);
     const body = role === 'assistant' && content
         ? `<div class="content md">${mdToHtml(content)}</div>`
         : `<div class="content">${escHtml(content)}</div>`;
@@ -1492,8 +1597,80 @@ function attachMessageActions(div) {
             row.appendChild(messageAction('Rerun', 'i-refresh', () => rerunMessage(div)));
         }
         row.appendChild(messageAction('Branch', 'i-branch', () => branchFromMessage(div)));
+        row.appendChild(messageAction('Delete', 'i-trash', () => deleteMessage(div)));
     }
     div.appendChild(row);
+    renderMessageMeta(div);
+}
+
+
+// ===== The line under a message =====
+//
+// When it was said, and what it cost. Both were known and neither was shown:
+// the timestamp was in the database, and the rate was recorded from Ollama's
+// own counters into a throughput meter that only the dashboard read.
+//
+// Quiet by default, because it is reference rather than content — you look at
+// it when you are wondering why something took a while, and the rest of the
+// time it should stay out of the way of the answer.
+
+function renderMessageMeta(div) {
+    if (div.querySelector('.msg-meta')) return;
+    const row = document.createElement('div');
+    row.className = 'msg-meta';
+
+    const bits = [];
+    const when = div.dataset.at;
+    if (when) {
+        const at = new Date(when);
+        if (!isNaN(at)) {
+            bits.push('<span class="msg-meta-when" title="' + escHtml(at.toString()) + '">'
+                + escHtml(at.toLocaleString(undefined, { month: 'short', day: 'numeric',
+                    year: 'numeric', hour: 'numeric', minute: '2-digit' })) + '</span>');
+        }
+    }
+
+    // Only when the model actually ran this turn. A hosted model, a cached
+    // answer or a reply that was entirely tool output has no rate, and
+    // inventing one from the previous turn would be a number that looks
+    // measured and is not.
+    let metrics = null;
+    try { metrics = div.dataset.metrics ? JSON.parse(div.dataset.metrics) : null; } catch (_) {}
+    if (metrics && metrics.tps) {
+        // Generation and prompt processing are separate bottlenecks: a long
+        // context is slow to ingest even when output is fast, and one number
+        // hides which of the two you were waiting on. The prompt rate goes in
+        // the tooltip rather than the line, because most turns it is not the
+        // interesting half.
+        const detail = [metrics.model && ('Model: ' + metrics.model),
+                        metrics.seconds && (metrics.seconds + 's generating'),
+                        metrics.prompt_tokens
+                            && (metrics.prompt_tokens + ' prompt tokens at '
+                                + metrics.prompt_tps + '/sec')]
+            .filter(Boolean).join(' · ');
+        bits.push('<span class="msg-meta-tps" title="' + escHtml(detail) + '">'
+            + escHtml(metrics.tps + ' tokens/sec')
+            + (metrics.tokens ? escHtml(' (' + metrics.tokens + ' tokens)') : '')
+            + '</span>');
+    }
+
+    if (!bits.length) return;
+    row.innerHTML = bits.join('');
+    div.appendChild(row);
+}
+
+async function deleteMessage(div) {
+    const id = div.dataset.messageId;
+    if (!id || !currentConversationId) return;
+    if (!confirm('Delete this message? This cannot be undone.')) return;
+    try {
+        await api('/api/conversations/' + currentConversationId + '/messages/' + id,
+                  { method: 'DELETE' });
+        div.remove();
+        syncChatBlank();
+    } catch (e) {
+        alert('Could not delete that message: ' + e.message);
+    }
 }
 
 function messageAction(label, icon, onClick) {
@@ -1921,18 +2098,42 @@ async function streamTurn(url, payload, skill) {
     contentEl.innerHTML = '<span class="caret">&nbsp;</span>';
 
     // Lazily created tool-call trace box (terminal-style, above the answer).
-    let toolEl = null;
+    //
+    // A <details>, because on a multi-turn search this is the tallest thing in
+    // the conversation — a dozen tool calls and their results, pushing the
+    // answer the user asked for off the bottom of the screen. Open while it
+    // runs, because watching it is the point; folded when the turn lands, with
+    // a count, because by then the answer is the point and the path is
+    // something you go back to.
+    let toolEl = null, toolLines = null;
+    const toolCounts = newTraceCounts();
     function toolLine(text, cls) {
         if (!toolEl) {
-            toolEl = document.createElement('div');
+            toolEl = document.createElement('details');
             toolEl.className = 'trace tool-trace';
+            toolEl.open = true;
+            toolEl.innerHTML = '<summary class="trace-summary">Tool path'
+                + '<span class="trace-count"></span></summary>'
+                + '<div class="trace-lines"></div>';
+            toolLines = toolEl.querySelector('.trace-lines');
+            toolEl.addEventListener('toggle', () => { toolEl.dataset.touched = '1'; });
             assistantEl.insertBefore(toolEl, contentEl);
         }
         const div = document.createElement('div');
         div.className = 'trace-line' + (cls ? ' ' + cls : '');
         div.textContent = text;
-        toolEl.appendChild(div);
-        toolEl.scrollTop = toolEl.scrollHeight;
+        toolLines.appendChild(div);
+        toolCounts.lines += 1;
+        toolLines.scrollTop = toolLines.scrollHeight;
+    }
+    // Folded, not discarded — and left alone if the reader has already opened
+    // or closed it themselves, since a box that reopens under the cursor when
+    // the turn ends is the app arguing with them.
+    function finishTrace() {
+        if (!toolEl) return;
+        const count = toolEl.querySelector('.trace-count');
+        if (count) count.textContent = summariseTrace(toolCounts);
+        if (!toolEl.dataset.touched) toolEl.open = false;
     }
     if (skill) toolLine('skill: ' + skill.name, 'intent');
 
@@ -2036,6 +2237,7 @@ async function streamTurn(url, payload, skill) {
                         toolLine(warning, 'error');
                     }
                 }
+                countTraceEvent(toolCounts, payload);
                 if (payload.tool) {
                     // A rejected call used to print exactly like a real one and
                     // then show no result — four of those in a row is what a
@@ -2118,6 +2320,7 @@ async function streamTurn(url, payload, skill) {
             }
         }
         finishThink();
+        finishTrace();
         contentEl.classList.add('md');
         // "(no response)" told the user nothing. The backend now guarantees
         // text on every path, so reaching here means the connection itself
@@ -2174,12 +2377,19 @@ async function streamTurn(url, payload, skill) {
         // red is telling them their own action went wrong. It only gets here
         // when the server-side stop did not take and the fetch was cut.
         if (e.name === 'AbortError') {
+            // The path the turn took is what the user was watching when they
+            // pressed stop, and it is the only record of how far it got —
+            // fold it, never drop it.
+            finishThink();
+            finishTrace();
             contentEl.classList.add('md');
             const note = document.createElement('div');
             note.className = 'stopped-note';
             note.textContent = 'Stopped.';
             contentEl.appendChild(note);
         } else {
+            finishThink();
+            finishTrace();
             contentEl.textContent = e.message;
             contentEl.classList.add('error');
         }
@@ -2567,7 +2777,8 @@ async function openConversation(convId) {
     messagesEl.innerHTML = '';
     document.getElementById('chat-title').textContent = conv.title || 'Untitled';
     const rendered = conv.messages.map(m => {
-        const el = appendMessage(m.role, m.content, m.id);
+        const el = appendMessage(m.role, m.content, m.id, {
+            at: m.timestamp, metrics: (m.metadata || {}).metrics });
         // What the turn actually did. Rendered live and then lost on every
         // reload — reopening a chat gave you the prose and none of the
         // evidence, which is the half you cannot reconstruct by reading.
@@ -2606,6 +2817,72 @@ async function openConversation(convId) {
     switchTab('workspace');
 }
 
+// ===== What the turn actually did =====
+//
+// The fold used to say "17 steps", which is true and tells you nothing: the
+// number counts lines of developer output, and a reader deciding whether to
+// open it wants to know what kind of work happened, not how much text there
+// is. "Searched the web · Read 4 pages · Checked 5 claims" is the same trace
+// described in the reader's terms; the raw lines are still one click away for
+// anyone who wants to audit them.
+//
+// Counted by what the tools *are* rather than by their names alone, so a tool
+// added later lands in "Ran N tools" instead of silently going missing.
+const TRACE_KINDS = [
+    // [test on the tool name, singular, plural(n)]
+    [/search/i, 'Searched the web', n => `Searched the web ${n}×`],
+    [/read_url|fetch|browse/i, n => 'Read a page', n => `Read ${n} pages`],
+    [/memory/i, n => 'Checked memory', n => `Checked memory ${n}×`],
+    [/file|write|edit|read_file/i, n => 'Touched a file', n => `Touched ${n} files`],
+    [/command|shell|terminal/i, n => 'Ran a command', n => `Ran ${n} commands`],
+];
+
+function summariseTrace(counts) {
+    const parts = [];
+    if (counts.thinking) parts.push('Thought it through');
+    for (const [, one, many] of TRACE_KINDS) {
+        const n = counts.kinds[one.toString()] || 0;
+        if (n) parts.push(n === 1 ? (typeof one === 'function' ? one(1) : one) : many(n));
+    }
+    if (counts.other) {
+        parts.push(counts.other === 1 ? 'Ran a tool' : `Ran ${counts.other} tools`);
+    }
+    if (counts.findings) {
+        parts.push(counts.findings === 1 ? 'Checked a claim'
+                                         : `Checked ${counts.findings} claims`);
+    }
+    if (counts.errors) parts.push(counts.errors === 1 ? '1 failed' : `${counts.errors} failed`);
+    // Nothing recognisable happened, so fall back to the honest count rather
+    // than inventing a description of it.
+    if (!parts.length) {
+        const n = counts.lines || 0;
+        return n ? `${n} step${n === 1 ? '' : 's'}` : '';
+    }
+    return parts.join(' · ');
+}
+
+function newTraceCounts() {
+    return { kinds: {}, other: 0, thinking: 0, findings: 0, errors: 0, lines: 0 };
+}
+
+function countTraceEvent(counts, event) {
+    if (event.thinking) { counts.thinking += 1; return; }
+    if (event.error || event.provider_error) { counts.errors += 1; return; }
+    if (event.finding || event.verdict) { counts.findings += 1; return; }
+    if (!event.tool) return;
+    counts.lines += 1;
+    if (event.tool.rejected) { counts.errors += 1; return; }
+    const name = String(event.tool.name || '');
+    for (const [test, one] of TRACE_KINDS) {
+        if (test.test(name)) {
+            const key = one.toString();
+            counts.kinds[key] = (counts.kinds[key] || 0) + 1;
+            return;
+        }
+    }
+    counts.other += 1;
+}
+
 // Rebuild a stored trace above a message that has already been rendered.
 //
 // The same shapes the live stream draws, from the same event names, so a
@@ -2616,9 +2893,12 @@ async function openConversation(convId) {
 function replayTrace(messageEl, trace) {
     if (!messageEl || !Array.isArray(trace) || !trace.length) return;
     const content = messageEl.querySelector('.content');
-    const box = document.createElement('div');
-    box.className = 'trace tool-trace';
-    messageEl.insertBefore(box, content || null);
+    const shell = document.createElement('details');
+    shell.className = 'trace tool-trace';
+    shell.innerHTML = '<summary class="trace-summary">Tool path'
+        + '<span class="trace-count"></span></summary><div class="trace-lines"></div>';
+    const box = shell.querySelector('.trace-lines');
+    messageEl.insertBefore(shell, content || null);
 
     const line = (text, cls) => {
         const div = document.createElement('div');
@@ -2667,7 +2947,14 @@ function replayTrace(messageEl, trace) {
         if (event.error) line('error: ' + event.error, 'error');
     }
     if (plan && plan.goals) renderPlan(messageEl, plan);
-    if (!box.childElementCount) box.remove();
+    // Nothing to show: take the whole shell, not just its body, or a reopened
+    // turn grows an empty "Tool path" fold above every answer.
+    if (!box.childElementCount) { shell.remove(); return; }
+    const counts = newTraceCounts();
+    for (const event of trace) countTraceEvent(counts, event);
+    counts.lines = counts.lines || box.childElementCount;
+    const count = shell.querySelector('.trace-count');
+    if (count) count.textContent = summariseTrace(counts);
 }
 
 // ===== Which panels the conversation page shows =====
@@ -3743,13 +4030,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     // from the first paint rather than only after a visit to Settings.
     if (typeof loadConsensusPanel === 'function') loadConsensusPanel();
 
-    // Ctrl+K focuses the command bar
-    document.addEventListener('keydown', e => {
-        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
-            e.preventDefault();
-            focusCmd();
-        }
-    });
+    // Ctrl+K is the palette now — see palette.js, which owns the binding.
+    //
+    // It used to focus the composer from here. Both handlers listening for the
+    // same chord would have opened the palette and then moved the cursor into
+    // the box behind it, so this one goes rather than being left to fight. The
+    // behaviour survives: the palette's field is a text input, and typing into
+    // it and pressing Enter puts the text in the composer.
 
     // Click outside closes the popovers. The search picker was never in here:
     // its menu only closed by picking a mode or by toggling the same button
@@ -4045,15 +4332,21 @@ document.addEventListener('DOMContentLoaded', renderTemporaryState);
 // when it does not. The sentence is still there, behind an i, for the moment
 // somebody wants to know which model and why.
 
+// Under Auto there is no chosen model to name, and the promise holds only if
+// none of the tasks Auto can reach escalates — so the claim is made from what
+// Auto could actually do, not from what the last turn happened to use.
+//
+// One function, because the empty state and the status chip in the rail are
+// two renderings of the same fact and must never be able to disagree about it.
+function answersStayLocal() {
+    return autoModel ? autoIsLocal
+                     : (currentProvider === 'ollama' || currentProvider === null);
+}
+
 function renderEmptyStateLine() {
     const line = document.getElementById('chat-empty-line');
     if (!line) return;
-    // Under Auto there is no chosen model to name, and the promise holds only
-    // if none of the tasks Auto can reach escalates — so the claim is made
-    // from what Auto could actually do, not from what the last turn did.
-    const local = autoModel
-        ? autoIsLocal
-        : (currentProvider === 'ollama' || currentProvider === null);
+    const local = answersStayLocal();
 
     let detail;
     if (local && autoModel) {
@@ -4079,15 +4372,26 @@ function renderEmptyStateLine() {
     // Named whole rather than assembled from a prefix and a word: an icon id
     // that only exists once the strings are joined cannot be grepped for, so
     // nothing tells you it broke when the symbol is renamed.
-    const glyph = local ? '#i-computer' : '#i-cloud';
+    // Both glyphs, always, with the live one lit.
+    //
+    // One glyph said where this answer comes from and nothing about what the
+    // alternative was — a cloud on its own is a fact with no scale against it.
+    // "On this computer" is the other half of the sentence and the half a
+    // local-first app is actually claiming, so the pair reads as a state:
+    // one of these two is where your words go.
+    //
+    // The question mark lives inside the mark rather than beside it, and is
+    // taken out of the flow in CSS, so the pair centres on the heading's axis
+    // instead of being shoved off it by a button nobody is looking at.
     line.innerHTML =
         '<span class="where-mark" title="' + escHtml(detail) + '">'
-        + '<svg class="ico"><use href="' + glyph + '"/></svg>'
+        + '<svg class="ico where-glyph"><use href="'
+        + (local ? '#i-computer' : '#i-cloud') + '"/></svg>'
         + '<span class="sr-only">' + escHtml(detail) + '</span>'
-        + '</span>'
         + '<button type="button" class="where-why" aria-label="Where answers come from"'
         + ' title="' + escHtml(detail) + '">'
-        + '<svg class="ico"><use href="#i-info"/></svg></button>';
+        + '<svg class="ico"><use href="#i-info"/></svg></button>'
+        + '</span>';
 
     // Clicking says it out loud, for touch, and for anyone who does not know a
     // tooltip is there to be waited for.
@@ -4101,4 +4405,210 @@ function renderEmptyStateLine() {
     };
 
     line.classList.toggle('cloud', !local);
+    renderPrivacyChip();
 }
+
+
+// ===== What is leaving this machine =====
+//
+// The one claim the whole application rests on, in the one place it can be
+// read without going to look for it. A dot, where it runs, and which model —
+// and behind it a list of every capability that could send something
+// somewhere, each saying plainly whether it is on.
+//
+// The list is built from the same state the assistant is told about, not from
+// a second copy of it: the calendar switches, the ambient switches, the search
+// mode, memory. If this panel and the model disagree about what Carrot can
+// see, this panel is the bug — so it reads the same sources.
+
+function renderPrivacyChip() {
+    const chip = document.getElementById('privacy-chip');
+    if (!chip) return;
+    const local = answersStayLocal();
+    const where = document.getElementById('privacy-where');
+    const model = document.getElementById('privacy-model');
+    const dot = document.getElementById('privacy-dot');
+
+    if (where) where.textContent = local ? 'Local' : 'Cloud';
+    if (model) {
+        model.textContent = autoModel
+            ? (local ? 'Auto · on this computer' : 'Auto · may use the internet')
+            : (currentModel || (local ? 'Ollama' : 'a hosted model'));
+    }
+    if (dot) dot.classList.toggle('cloud', !local);
+    chip.classList.toggle('cloud', !local);
+    chip.title = local
+        ? 'Answers are generated on this computer. Click for what else is on.'
+        : 'Answers go over the internet. Click for what else is on.';
+}
+
+function togglePrivacyPanel() {
+    const panel = document.getElementById('privacy-panel');
+    const chip = document.getElementById('privacy-chip');
+    if (!panel) return;
+    const opening = panel.classList.contains('hidden');
+    panel.classList.toggle('hidden', !opening);
+    chip?.setAttribute('aria-expanded', String(opening));
+    if (opening) { placePrivacyPanel(); fillPrivacyPanel(); }
+}
+
+// Put it beside the chip, in viewport coordinates.
+//
+// The panel is `position: fixed` because the rail scrolls and would otherwise
+// clip it — so nothing places it for us. It opens upward from the chip, and
+// only slides down if there is genuinely no room above, which on a rail this
+// tall there almost never is.
+function placePrivacyPanel() {
+    const panel = document.getElementById('privacy-panel');
+    const chip = document.getElementById('privacy-chip');
+    if (!panel || !chip) return;
+    const box = chip.getBoundingClientRect();
+    panel.style.left = Math.round(box.left) + 'px';
+    // Measured after it is laid out, not guessed from a line count — the rows
+    // are as tall as their text wraps.
+    panel.style.bottom = '';
+    panel.style.top = '-9999px';
+    const height = panel.getBoundingClientRect().height || 240;
+    panel.style.top = '';
+    if (box.top - height - 8 >= 8) {
+        panel.style.bottom = Math.round(window.innerHeight - box.top + 8) + 'px';
+    } else {
+        panel.style.bottom = '8px';
+    }
+}
+
+window.addEventListener('resize', () => {
+    const panel = document.getElementById('privacy-panel');
+    if (panel && !panel.classList.contains('hidden')) placePrivacyPanel();
+});
+
+// Every row is a real switch read from the server, never a guess. A panel that
+// claims the screen is not being read while it is would be worse than not
+// having one.
+async function fillPrivacyPanel() {
+    const panel = document.getElementById('privacy-panel');
+    if (!panel) return;
+    panel.innerHTML = '<div class="privacy-loading">Checking…</div>';
+
+    const rows = [];
+    const local = answersStayLocal();
+    rows.push({ on: !local, label: 'Answers',
+                detail: local ? 'On this computer' + (currentModel ? ' · ' + currentModel : '')
+                              : 'Over the internet' + (currentModel ? ' · ' + currentModel : ''),
+                leaves: !local });
+
+    // Each of these is asked for separately and contained separately: one
+    // endpoint being unreachable should grey out its own row, not empty the
+    // panel and leave somebody unable to find out anything.
+    //
+    // A failed read says so. It used to print "Unknown", which is the exact
+    // silence this panel exists to remove — indistinguishable from "off" at a
+    // glance, and on a screen whose whole job is saying what is switched on,
+    // "off" is the reading that matters. The reason goes to the console,
+    // because a row cannot hold a stack trace and somebody debugging needs it.
+    const ask = async (path, read) => {
+        try { return read(await api(path)); }
+        catch (err) {
+            console.warn('privacy panel: could not read ' + path, err);
+            return { on: false, unknown: true,
+                     detail: 'Could not check — see Settings' };
+        }
+    };
+
+    rows.push({ label: 'Calendar', leaves: false,
+                ...await ask('/api/calendar/status', (c) => ({
+                    on: !!(c.enabled && c.agent_aware && c.url_set),
+                    detail: !c.url_set ? 'Not connected'
+                          : !c.agent_aware ? 'Connected, not shared with the assistant'
+                          : 'The assistant can read your next few days' })) });
+
+    // `/api/ambient/policy`, not `/api/ambient`: the latter also probes memory,
+    // VRAM and Ollama, which on a cold process is several seconds — mostly
+    // nvidia-smi starting up. This panel wants to know what is switched on, and
+    // waiting for the graphics card to answer that is how a row ends up saying
+    // "could not check" on a machine where nothing is wrong.
+    rows.push({ label: 'Screen history', leaves: false,
+                ...await ask('/api/ambient/policy', (a) => ({
+                    on: !!(a.policy || {}).enabled,
+                    detail: !(a.policy || {}).enabled ? 'Not recording'
+                          : (a.policy || {}).agent_aware
+                              ? 'Recording, and the assistant can search it'
+                              : 'Recording, not shared with the assistant' })) });
+
+    const webOn = typeof currentSearchMode !== 'undefined' && currentSearchMode !== 'off';
+    rows.push({ on: webOn, leaves: webOn, label: 'Web search',
+                detail: webOn ? 'Searches leave this computer' : 'Off' });
+
+    rows.push({ label: 'Memory', leaves: false,
+                ...await ask('/api/config', (c) => ({
+                    on: c.memory_enabled !== false,
+                    detail: c.memory_enabled === false ? 'Off'
+                                                       : 'Stored on this computer' })) });
+
+    // "Answers and web search leave this computer" — the subject named, and
+    // capitalised, because it opens the sentence. Listing what does leave is
+    // more use than a count: two amber dots tell you something is going out
+    // and not what.
+    const leaving = rows.filter(r => r.leaves).map(r => r.label.toLowerCase());
+    const named = leaving.length > 1
+        ? leaving.slice(0, -1).join(', ') + ' and ' + leaving[leaving.length - 1]
+        : leaving[0];
+    // Phrased with a colon rather than a verb, because the verb has to agree
+    // with a subject that is sometimes plural ("answers") and sometimes not
+    // ("web search"), and agreeing with the length of the *list* gets it wrong
+    // the moment one plural thing is going out on its own: "Answers leaves
+    // this computer". A label avoids the problem instead of solving it badly.
+    // "Nothing is leaving this computer" is a promise, and it cannot be made
+    // over settings that could not be read. A row that failed to answer is not
+    // evidence of a quiet machine — it is a gap, and the headline says so
+    // rather than reassuring past it.
+    const unchecked = rows.some(r => r.unknown);
+    const headline = leaving.length
+        ? 'Leaving this computer: ' + named
+        : unchecked
+            ? 'Nothing known to be leaving — some settings could not be checked'
+            : 'Nothing is leaving this computer';
+    panel.innerHTML =
+        '<div class="privacy-head">' + escHtml(headline) + '</div>'
+        + rows.map(r =>
+            '<div class="privacy-row' + (r.leaves ? ' leaves' : '')
+            + (r.unknown ? ' unchecked' : '') + '">'
+            + '<span class="privacy-row-dot' + (r.on ? ' on' : '') + '"></span>'
+            + '<span class="privacy-row-text"><strong>' + escHtml(r.label) + '</strong>'
+            + '<span>' + escHtml(r.detail) + '</span></span></div>').join('')
+        + '<button class="privacy-more" onclick="togglePrivacyPanel(); switchTab(\'settings\')">'
+        + 'Change any of this in Settings</button>';
+
+    // The rows arrive after the panel was first placed, and they are taller
+    // than the "Checking…" line they replace — so without this it opens in the
+    // right spot and then grows downward off the bottom of the window.
+    placePrivacyPanel();
+}
+
+document.addEventListener('mousedown', (e) => {
+    const panel = document.getElementById('privacy-panel');
+    if (!panel || panel.classList.contains('hidden')) return;
+    if (e.target.closest('#privacy-panel') || e.target.closest('#privacy-chip')) return;
+    togglePrivacyPanel();
+});
+
+// Escape closes it too.
+//
+// Clicking outside and clicking the chip again were the only two ways out, and
+// both are aimed clicks at a strip a few pixels wide down the edge of the
+// window — the panel opens upward from the very bottom of the rail, so on a
+// short window it lands over most of what you would otherwise click, and with
+// the rail collapsed the chip it toggles is a 60px target with a dot in it.
+// Reported as not being able to make it go away, which is exactly right.
+//
+// Bound in the capture phase so it runs before the composer's own Escape
+// handling: with a panel open over the page, dismissing the panel is what
+// Escape means, and it should not also clear what somebody was typing.
+document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const panel = document.getElementById('privacy-panel');
+    if (!panel || panel.classList.contains('hidden')) return;
+    e.stopPropagation();
+    togglePrivacyPanel();
+    document.getElementById('privacy-chip')?.focus();
+}, true);

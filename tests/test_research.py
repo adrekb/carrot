@@ -577,7 +577,10 @@ def test_raw_search_prefers_the_maintained_client(monkeypatch):
             return [{"title": "ok", "href": "https://example.com", "body": "body"}]
 
     monkeypatch.setitem(sys.modules, "ddgs", types.SimpleNamespace(DDGS=FakeDDGS))
-    websearch_mod._raw_search("q", 3, "wt-wt")
+    # `_ddg_search`, not `_raw_search`: the latter is the provider chain now
+    # and asks Exa first, so calling it here both missed the thing under test
+    # and put a live network call into the suite.
+    websearch_mod._ddg_search("q", 3, "wt-wt")
     assert used == ["ddgs"]
 
 

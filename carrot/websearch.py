@@ -20,6 +20,7 @@ transport level.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from typing import Any, Dict, List
@@ -144,7 +145,160 @@ def is_content_url(url: str) -> bool:
     return True
 
 
-def _raw_search(query: str, max_results: int, region: str) -> List[Dict[str, Any]]:
+# ===== Where results come from =====
+#
+# Exa first, DuckDuckGo underneath it, and the fall-through is the design
+# rather than a safety net: Exa's public endpoint is capped per IP per day, so
+# a machine that searches a lot *will* hit the end of it, and the only sensible
+# behaviour when it does is to keep working with something that has no cap.
+#
+# Exa is first because it is a neural search built to answer a described page
+# rather than match keywords, and because it returns the page's text with the
+# result — the difference between handing a model a list of places an answer
+# might be and handing it the answer.
+#
+# The public endpoint takes no key and identifies a user by IP, which is a good
+# fit here for a reason specific to this app: Carrot runs on the user's own
+# machine, so every install is its own IP with its own allowance, rather than
+# one shared server-side quota divided between everybody.
+# Longer than a page fetch and shorter than a research run's patience: Exa
+# reads the pages it returns, so a query is a few seconds rather than the
+# sub-second a keyword index takes.
+SEARCH_TIMEOUT = 25.0
+
+EXA_MCP_URL = "https://mcp.exa.ai/mcp"
+# The keyed API, for a user who has an account and wants past the free cap.
+EXA_API_URL = "https://api.exa.ai/search"
+
+PROVIDER_AUTO = "auto"
+PROVIDER_EXA = "exa"
+PROVIDER_DDG = "duckduckgo"
+PROVIDERS = (PROVIDER_AUTO, PROVIDER_EXA, PROVIDER_DDG)
+
+PROVIDER_LABELS = {
+    PROVIDER_AUTO: "Exa, then DuckDuckGo",
+    PROVIDER_EXA: "Exa",
+    PROVIDER_DDG: "DuckDuckGo",
+}
+
+
+def _exa_key() -> str:
+    try:
+        from .config import get_config
+
+        return (get_config().get("exa_api_key") or "").strip()
+    except Exception:
+        return ""
+
+
+def search_provider() -> str:
+    try:
+        from .config import get_config
+
+        choice = (get_config().get("search_provider") or "").strip().lower()
+    except Exception:
+        choice = ""
+    return choice if choice in PROVIDERS else PROVIDER_AUTO
+
+
+def _parse_exa_block(text: str) -> List[Dict[str, Any]]:
+    """Exa's MCP tool returns prose, not JSON.
+
+    Each result is a `Title: / URL: / Published: / Author: / Highlights:` block
+    separated by a `---` rule. Parsed rather than eval'd of course, and parsed
+    leniently: a field that moves or disappears costs that one field, not the
+    whole search.
+    """
+    results = []
+    for chunk in re.split(r"\n-{3,}\n", text or ""):
+        fields: Dict[str, Any] = {}
+        highlights: List[str] = []
+        in_highlights = False
+        for line in chunk.splitlines():
+            match = re.match(r"^(Title|URL|Published|Author|Highlights):\s*(.*)$", line)
+            if match:
+                name, value = match.group(1), match.group(2).strip()
+                in_highlights = name == "Highlights"
+                if in_highlights:
+                    if value:
+                        highlights.append(value)
+                else:
+                    fields[name] = value
+                continue
+            if in_highlights and line.strip():
+                highlights.append(line.strip())
+        url = fields.get("URL", "")
+        if not url:
+            continue
+        results.append({
+            "title": fields.get("Title", ""),
+            "href": url,
+            # The snippet the rest of this module expects. Exa's highlights are
+            # the passages it matched on, which is a better summary than the
+            # first paragraph of a page.
+            "body": " ".join(highlights)[:1200],
+            "published": fields.get("Published", ""),
+        })
+    return results
+
+
+def _exa_search(query: str, max_results: int) -> List[Dict[str, Any]]:
+    """Search Exa: the keyed API if a key is set, the free endpoint if not.
+
+    Raises on failure so the caller can downgrade. A daily cap is reached as an
+    HTTP error like any other, which is the whole reason the caller has a
+    second provider to fall through to.
+    """
+    key = _exa_key()
+    if key:
+        # Verified only as far as the endpoint and header being right: a bad
+        # key comes back as a clean 401 INVALID_API_KEY. The success path has
+        # not been run here, because doing so needs somebody's real key and
+        # spends their quota.
+        response = httpx.post(
+            EXA_API_URL,
+            json={"query": query, "numResults": max_results},
+            headers={"x-api-key": key, "Content-Type": "application/json"},
+            timeout=SEARCH_TIMEOUT,
+        )
+        response.raise_for_status()
+        out = []
+        for item in (response.json().get("results") or []):
+            if item.get("url"):
+                out.append({"title": item.get("title") or "", "href": item["url"],
+                            "body": (item.get("text") or item.get("snippet") or "")[:1200],
+                            "published": item.get("publishedDate") or ""})
+        return out
+
+    response = httpx.post(
+        EXA_MCP_URL,
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+              "params": {"name": "web_search_exa",
+                         "arguments": {"query": query, "numResults": max_results}}},
+        # It answers as an event stream even for a single reply, so both types
+        # are accepted and the frames are read out below.
+        headers={"Content-Type": "application/json",
+                 "Accept": "application/json, text/event-stream"},
+        timeout=SEARCH_TIMEOUT,
+    )
+    response.raise_for_status()
+    payload = None
+    for line in response.text.splitlines():
+        if line.startswith("data:"):
+            try:
+                payload = json.loads(line[5:].strip())
+            except ValueError:
+                continue
+    if not payload:
+        raise RuntimeError("Exa returned no readable frame")
+    if payload.get("error"):
+        raise RuntimeError(str(payload["error"])[:200])
+    content = (payload.get("result") or {}).get("content") or []
+    text = "".join(part.get("text", "") for part in content if isinstance(part, dict))
+    return _parse_exa_block(text)
+
+
+def _ddg_search(query: str, max_results: int, region: str) -> List[Dict[str, Any]]:
     """Query DDG through whichever client library is installed.
 
     ``duckduckgo_search`` was renamed to ``ddgs``; the abandoned package
@@ -173,6 +327,45 @@ def _raw_search(query: str, max_results: int, region: str) -> List[Dict[str, Any
     if last_error is not None:
         raise last_error
     raise RuntimeError("no DuckDuckGo client installed — pip install ddgs")
+
+
+def _raw_search(query: str, max_results: int, region: str) -> List[Dict[str, Any]]:
+    """Ask the providers in order and take the first that answers.
+
+    The fall-through is the design, not a safety net. Exa's public endpoint is
+    capped per IP per day, so a machine that searches a lot will reach the end
+    of it, and the only sensible thing to do then is keep working. A provider
+    that raises *or* returns nothing is passed over — an empty answer from a
+    search that is out of quota looks exactly like an empty answer from a
+    search that found nothing, and both want the next one tried.
+
+    The setting chooses which goes first, not which is the only one, because
+    "my search stopped working today" is a worse outcome than "some of these
+    results came from the other engine".
+    """
+    order = [PROVIDER_EXA, PROVIDER_DDG]
+    if search_provider() == PROVIDER_DDG:
+        order.reverse()
+
+    errors = []
+    for provider in order:
+        try:
+            if provider == PROVIDER_EXA:
+                results = _exa_search(query, max_results)
+            else:
+                results = _ddg_search(query, max_results, region)
+            if results:
+                if provider != order[0]:
+                    LOG.info("web search: %s answered after %s did not",
+                             provider, order[0])
+                return results
+            errors.append(f"{provider}: no results")
+        except Exception as exc:
+            # One line, not a traceback: a provider being out of quota is an
+            # expected state of the world, not a fault to investigate.
+            LOG.info("web search: %s unavailable (%s)", provider, str(exc)[:120])
+            errors.append(f"{provider}: {str(exc)[:120]}")
+    raise RuntimeError("; ".join(errors) or "no search provider answered")
 
 
 def search(query: str, max_results: int = 6, region: str = "wt-wt") -> List[Dict[str, str]]:

@@ -164,10 +164,33 @@ function renderFolderSelects() {
 
 // ---------- Mutations ----------
 
+// A button that did nothing and said nothing.
+//
+// Both creators returned silently on an empty name. The Workspaces page opens
+// with the cursor nowhere and the list empty, so the first thing anyone does is
+// click Add workspace — and an empty-name click was indistinguishable from the
+// feature being broken. It was reported as exactly that.
+//
+// The name is still required. What changes is that the page admits the click
+// landed and puts the cursor where the answer goes. Not an alert(): a modal for
+// "you have not typed anything yet" is a bigger interruption than the mistake,
+// and the placeholder already says what the field wants.
+function nameRequired(input) {
+    input.focus();
+    input.setAttribute('aria-invalid', 'true');
+    input.classList.remove('needs-value');
+    void input.offsetWidth;   // restart on a second click rather than ignore it
+    input.classList.add('needs-value');
+    setTimeout(() => {
+        input.classList.remove('needs-value');
+        input.removeAttribute('aria-invalid');
+    }, 1200);
+}
+
 async function createWorkspace() {
     const input = document.getElementById('ws-new-name');
     const name = input.value.trim();
-    if (!name) return;
+    if (!name) return nameRequired(input);
     try {
         await api('/api/workspaces', {
             method: 'POST',
@@ -185,7 +208,7 @@ async function createWorkspace() {
 async function createFolder() {
     const input = document.getElementById('folder-new-name');
     const name = input.value.trim();
-    if (!name) return;
+    if (!name) return nameRequired(input);
     try {
         await api('/api/folders', {
             method: 'POST',

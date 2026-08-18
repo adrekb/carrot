@@ -42,9 +42,11 @@ class TestNothingIsRemembered:
 
         with patch.object(A.memory_mod, "extract_from_turn") as extract, \
              patch.object(A.summarize_mod, "maybe_summarize") as summarize:
-            A._post_turn(conv["id"], "my bank pin is 1234", "noted", 1)
-            import time
-            time.sleep(0.2)   # the work runs on a thread
+            # Joined, not slept on. `_post_turn` hands back its thread, so
+            # this waits for the exact work it is asserting about — a 0.2s
+            # sleep was usually long enough, and "usually" in a suite this
+            # size meant a failure in a different file every few runs.
+            A._post_turn(conv["id"], "my bank pin is 1234", "noted", 1).join(timeout=5)
         assert not extract.called, "a temporary chat was mined for memories"
         assert not summarize.called
 
@@ -53,9 +55,7 @@ class TestNothingIsRemembered:
         conv_mod.add_message(conv["id"], "user", "I live in Boston")
 
         with patch.object(A.memory_mod, "extract_from_turn") as extract:
-            A._post_turn(conv["id"], "I live in Boston", "noted", 1)
-            import time
-            time.sleep(0.2)
+            A._post_turn(conv["id"], "I live in Boston", "noted", 1).join(timeout=5)
         assert extract.called
 
     def test_a_temporary_chat_is_filed_nowhere(self, isolated_db):

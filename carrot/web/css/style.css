@@ -12,28 +12,33 @@
  * is running text) are ones that weight, size and colour already make, and
  * make more quietly.
  *
- * So the interface is Space Grotesk and nothing else. It is a variable font
- * on a continuous 300–700 axis, which is what makes this work: a light label
- * and a heavy display heading are the same drawing under different tension,
- * and they cost one file between them.
+ * So the interface is Inter and nothing else. It is a variable font on a
+ * continuous 100–900 axis, which is what makes this work: a light label and a
+ * heavy display heading are the same drawing under different tension, and
+ * they cost one file between them.
  *
- * Two things about this face that the rest of the stylesheet has to respect:
+ * It replaced Space Grotesk, which was a display face doing interface work.
+ * Three things change because of that, and the rest of the stylesheet is
+ * written to them:
  *
- * Its axis stops at 700, not the 800 a lot of UI faces offer. Asking for 800
- * does not get a heavier cut, it gets the browser smearing the 700 — so every
- * weight token below is inside the real range, and the top of the hierarchy
- * gets its presence from size and tracking rather than from a weight that
- * does not exist.
+ * The weight axis is real to 900 rather than stopping at 700, so the top of
+ * the hierarchy can be a weight instead of a compensation. Nothing here has
+ * to fear the browser synthesising a bold any more.
  *
- * Its x-height is low (486/1000). That is exactly what gives it presence in a
- * 34px heading and exactly what makes it cramped in an 11px uppercase label,
- * which is why it used to be the display face only. Used everywhere, the
- * small end needs the tracking opened up rather than closed down — the
- * opposite of the usual correction, and the reason the letter-spacing rules
- * here run in both directions instead of just tightening as things grow.
+ * The x-height is high (727/1000 against 486). That inverts the tracking
+ * corrections below: a face with plenty of ink at 10px does not need its
+ * small sizes opened up to stay legible, so the letter-spacing rules run one
+ * way — closing as the type grows — which is simply the standard optical
+ * correction. Inter is drawn for screens at text sizes, so the display end is
+ * where it needs help, not the label end.
  *
- * There is no italic cut, so italics are synthesised. Acceptable: they appear
- * in blockquotes and the odd emphasis, never in running UI text.
+ * It carries an `opsz` axis, which is why `font-optical-sizing: auto` further
+ * down is now doing something: the same family is set from 10px labels to
+ * 34px headings, and optical sizing is what stops the small end reading as
+ * the large end shrunk.
+ *
+ * And there is a real italic cut, bundled, so emphasis is drawn rather than
+ * slanted by the renderer.
  *
  * DM Mono stays, for code, the terminal and the editor only. That is not an
  * exception to the rule so much as a different rule: a proportional font in a
@@ -45,11 +50,24 @@
  * Everything is OFL and bundled rather than fetched — a local-first assistant
  * that phones a font CDN on every launch is not local-first. */
 
+/* Inter, as the variable font rather than a rack of static weights.
+   One 340 KB file covers 100–900 instead of four cuts at ~90 KB each, and it
+   carries the `opsz` axis, which `font-optical-sizing: auto` further down has
+   been asking for all along — the interface sets type from 10px labels to
+   34px headings out of one family, and optical sizing is what stops the small
+   end looking like the large end shrunk. */
 @font-face {
-  font-family: "SpaceGrotesk";
-  src: url("/assets/fonts/SpaceGrotesk.woff2") format("woff2");
-  font-weight: 300 700;
+  font-family: "Inter";
+  src: url("/assets/fonts/Inter.woff2") format("woff2-variations");
+  font-weight: 100 900;
   font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Inter";
+  src: url("/assets/fonts/Inter-Italic.woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-style: italic;
   font-display: swap;
 }
 @font-face {
@@ -120,7 +138,7 @@
 
      The system stack behind it is a genuine fallback, not a design: the woff2
      is bundled, so it is only reached if the file fails to load. */
-  --ui-stack: "SpaceGrotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --ui-stack: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   /* Buttons, labels, menus, table cells — anything you operate. */
   --sans: var(--ui-stack);
   /* Headings, the brand, empty states — anything that announces. */
@@ -131,15 +149,16 @@
   /* The weight axis, which is now the whole typographic system. Named by job
      rather than by number, so a heading that wants more presence gets
      `--w-display` and not a hand-picked 680 that nothing else shares.
-     Every value is inside Space Grotesk's real 300–700 range: past 700 the
-     browser synthesises a bold by smearing the outline, which on a geometric
-     face with tight counters turns `a`, `e` and `g` to mud. */
+     Every value is a real step on Inter's 100–900 axis, so none of these is
+     a synthesised weight. --w-display can now be a genuine 800: under the old
+     face it was pinned at 700 because that was the top of the axis, and the
+     heading had to get its presence from size and tracking instead. */
   --w-thin: 300;      /* oversized display type, where 400 looks heavy */
   --w-body: 400;      /* running text */
   --w-medium: 500;    /* labels, table headers, anything faintly emphatic */
   --w-semi: 600;      /* buttons, active nav, section headings */
   --w-bold: 700;      /* card titles, strong inline emphasis */
-  --w-display: 700;   /* page headings and the brand — the top of the axis */
+  --w-display: 800;   /* page headings and the brand — the top of the axis */
   /* The sidebar's width, as a token because more than one thing needs to
      know it. The command bar is fixed-position and centres itself; with the
      width written only inside `.app-nav`, the bar had no way to know the left
@@ -151,7 +170,26 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.22);
   --shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
   --shadow-lg: 0 24px 64px rgba(0, 0, 0, 0.46);
+  /* The house curve: fast out of the gate, long settle. Interface motion
+     should look like something coming to rest, not like something being
+     eased at both ends — the browser default `ease` is symmetric, which is
+     why untimed transitions read as floaty next to the ones using this.
+     It was declared here and then used on eight rules out of eighty-two. */
   --ease: cubic-bezier(0.32, 0.72, 0, 1);
+
+  /* Three durations, because there were eleven.
+     0.1s, 0.12s, 120ms, 0.15s, 0.16s, 0.2s, 0.25s, 0.28s, 0.3s, 0.4s and 0.5s
+     were all in use, and the differences inside each band were not decisions —
+     0.15s and 0.16s are the same instruction typed twice. Naming the bands is
+     what stops the twelfth from being added.
+
+     1 — state feedback under the cursor: hover, background, small colour moves.
+         Fast enough to feel like a property of the button rather than an event.
+     2 — the standard. Anything that moves or changes shape a little.
+     3 — a panel, a disclosure, anything crossing a real distance. */
+  --dur-1: 0.12s;
+  --dur-2: 0.16s;
+  --dur-3: 0.3s;
 
   /* ===== Scales =====
    *
@@ -178,6 +216,15 @@
    * size in the app shrank without a single number here changing, and the
    * bottom three steps — 10, 11 and 12px — went from small to genuinely hard
    * to read. The px values go up to put the *apparent* size back.
+   *
+   * Inter is 546 (measured off the shipped file, not quoted), which is within
+   * 3% of the 560 this scale was drawn for and 12% above the 486 it was
+   * inflated for. So the inflation is now overshooting by about that much:
+   * every size renders ~12% larger than it did under Space Grotesk. Left
+   * standing rather than quietly reverted, because dividing every step in the
+   * app by 1.12 is a change to how the whole interface reads, and that is a
+   * decision to take deliberately rather than as a side effect of swapping a
+   * font file.
    *
    * The gaps still widen going up: a 1px difference is invisible at 30px and
    * obvious at 11px. */
@@ -253,9 +300,7 @@ p.muted { max-width: 78ch; }   /* long explanations stay readable */
 /* ===== Controls ===== */
 .btn, input, select, textarea {
   border-radius: var(--radius-sm);
-  transition: background 0.16s var(--ease), border-color 0.16s var(--ease),
-              box-shadow 0.16s var(--ease), transform 0.12s var(--ease),
-              color 0.16s var(--ease);
+  transition: background var(--dur-2) var(--ease), border-color var(--dur-2) var(--ease), box-shadow var(--dur-2) var(--ease), transform var(--dur-1) var(--ease), color var(--dur-2) var(--ease);
 }
 .btn {
   font-weight: 500;              /* 600 read as heavy next to serif titles */
@@ -442,7 +487,7 @@ body {
   border-radius: var(--r-sm);
   cursor: pointer;
   white-space: nowrap;
-  transition: color 0.15s, background 0.15s;
+  transition: color var(--dur-2) var(--ease), background var(--dur-2) var(--ease);
 }
 .tab:hover { color: var(--text); background: rgba(255, 255, 255, 0.04); }
 .tab.active { color: var(--text); background: rgba(255, 255, 255, 0.06); }
@@ -470,7 +515,7 @@ body {
   width: 32px; height: 32px; border-radius: var(--r-sm);
   display: flex; align-items: center; justify-content: center;
   cursor: pointer;
-  transition: color 0.15s, background 0.15s;
+  transition: color var(--dur-2) var(--ease), background var(--dur-2) var(--ease);
 }
 .icon-btn:hover { color: var(--text); background: rgba(255, 255, 255, 0.05); }
 .icon-btn.recording { color: var(--red); animation: pulse-rec 1.2s ease-in-out infinite; }
@@ -577,7 +622,7 @@ body {
 .kbar-head { display: flex; justify-content: space-between; font-size: var(--text-base); margin-bottom: 5px; }
 .kbar-head .val { color: var(--muted); font-family: var(--mono); font-size: var(--text-sm); }
 .kbar { height: 4px; background: var(--card2); border-radius: var(--r-xs); overflow: hidden; }
-.kbar > div { height: 100%; background: var(--accent); border-radius: var(--r-xs); transition: width 0.4s; }
+.kbar > div { height: 100%; background: var(--accent); border-radius: var(--r-xs); transition: width 0.4s var(--ease); }
 
 .engine-row {
   display: flex; align-items: center; gap: 8px;
@@ -721,7 +766,7 @@ body {
   gap: 2px;
   margin-top: 4px;
   opacity: 0;
-  transition: opacity 0.12s;
+  transition: opacity var(--dur-1) var(--ease);
 }
 .message:hover .msg-actions,
 .msg-actions:focus-within { opacity: 1; }
@@ -743,7 +788,7 @@ body {
   font-size: var(--text-xs);
   font-family: inherit;
   cursor: pointer;
-  transition: color 0.12s, background 0.12s;
+  transition: color var(--dur-1) var(--ease), background var(--dur-1) var(--ease);
 }
 .msg-action:hover { color: var(--text); background: rgba(255, 255, 255, 0.06); }
 .msg-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -900,6 +945,48 @@ body {
   overflow-y: auto;
   margin-bottom: 8px;
 }
+/* The tool path folds. It is the tallest thing in a multi-turn search — a
+   dozen calls and their results — and once the answer has landed it is a
+   record rather than something to read. The scroll moves to the body so the
+   summary stays put while the lines run under it. */
+details.trace {
+  max-height: none;
+  overflow: visible;
+  /* There is a second `.trace` rule further down this file with
+     `min-height: 120px`, from when a trace was always an open box with room
+     to scroll in. Left alone it holds a *folded* trace open at 120px of
+     nothing — the summary, then an empty panel, which is worse than not
+     folding it. A fold has to be allowed to be the height of its summary. */
+  min-height: 0;
+}
+details.trace .trace-lines {
+  max-height: 130px;
+  overflow-y: auto;
+}
+.trace-summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  color: var(--faint);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 2px 0;
+}
+.trace-summary::-webkit-details-marker { display: none; }
+.trace-summary::before {
+  content: "›";
+  display: inline-block;
+  transition: transform var(--dur-1) var(--ease);
+}
+details.trace[open] > .trace-summary::before { transform: rotate(90deg); }
+.trace-summary:hover { color: var(--muted); }
+.trace-count { margin-left: auto; font-variant-numeric: tabular-nums; }
+
+@media (prefers-reduced-motion: reduce) {
+  .trace-summary::before { transition: none; }
+}
 .trace-line::before { content: '> '; color: var(--accent); }
 .trace-line.err { color: var(--red); }
 .trace-think {
@@ -938,7 +1025,7 @@ body {
 #term-head:hover { color: var(--text); }
 #term-head .ico { width: 13px; height: 13px; }
 .term-title { font-family: var(--mono); font-size: var(--text-sm); flex: 1; }
-.term-chev { transition: transform 0.2s; }
+.term-chev { transition: transform var(--dur-2) var(--ease); }
 #terminal-panel.collapsed .term-chev { transform: rotate(180deg); }
 #terminal-panel.collapsed #term-body { display: none; }
 
@@ -996,7 +1083,7 @@ body {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 13px 15px;
-  transition: border-color 0.15s, background 0.15s;
+  transition: border-color var(--dur-2) var(--ease), background var(--dur-2) var(--ease);
 }
 .list-item.clickable { cursor: pointer; }
 .list-item.clickable:hover { border-color: var(--border-hi); background: var(--card2); }
@@ -1027,7 +1114,7 @@ input[type="datetime-local"], textarea, select {
   font-size: var(--text-base);
   padding: 9px 12px;
   outline: none;
-  transition: border-color 0.15s;
+  transition: border-color var(--dur-2) var(--ease);
 }
 input:focus, textarea:focus, select:focus { border-color: rgba(255, 92, 31, 0.5); }
 input::placeholder, textarea::placeholder { color: var(--faint); }
@@ -1040,15 +1127,19 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   border-radius: var(--r-sm);
   cursor: pointer;
   border: 1px solid transparent;
-  transition: background 0.15s, border-color 0.15s;
+  transition: background var(--dur-2) var(--ease), border-color var(--dur-2) var(--ease);
   white-space: nowrap;
 }
 .btn-primary {
-  background: var(--accent);
-  color: #fff;
-  border-color: var(--accent);
+  /* `--accent-fill` and `--on-accent`, not `--accent` and white. `--accent` is
+     the bright end of the ramp — made to be noticed, not read against — and
+     white on it measures 3.55 on orchid. The palette already carries a fill
+     picked for text to sit on and the ink to sit there. */
+  background: var(--accent-fill, var(--accent));
+  color: var(--on-accent);
+  border-color: var(--accent-fill, var(--accent));
 }
-.btn-primary:hover { background: var(--accent-hi); }
+.btn-primary:hover { background: var(--accent); }
 .btn-ghost {
   background: none;
   color: var(--muted);
@@ -1192,16 +1283,17 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   background: var(--card2);
   color: var(--muted);
   cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  transition: background var(--dur-2) var(--ease), color var(--dur-2) var(--ease), border-color var(--dur-2) var(--ease);
 }
 #tool-btn:hover { color: var(--text); border-color: var(--accent-line); }
-#tool-btn.open { background: var(--accent); border-color: var(--accent); color: #fff; }
+#tool-btn.open { background: var(--accent-fill, var(--accent));
+  border-color: var(--accent-fill, var(--accent)); color: var(--on-accent); }
 
 /* The surface itself comes from the shared floating-layer rule that every
  * other popover in the app uses — glass, `--radius`, `--shadow-lg`, restated
  * per theme. Rolling its own background and radius is what made this menu
  * read as a foreign widget: a flat panel with square corners, because the
- * radius it asked for (`--r-md`) is not one of the five that exist. Only
+ * radius it asked for (`--r-lg`) is not one of the five that exist. Only
  * position and width belong here. */
 #tool-pop {
   position: absolute;
@@ -1271,7 +1363,7 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   color: #fff;
   display: flex; align-items: center; justify-content: center;
   cursor: pointer;
-  transition: background 0.15s, transform 0.1s;
+  transition: background var(--dur-2) var(--ease), transform var(--dur-1) var(--ease);
 }
 #send-btn:hover { background: var(--accent-hi); }
 #send-btn:active { transform: scale(0.94); }
@@ -1290,7 +1382,7 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   padding: 8px 11px;
   cursor: pointer;
   max-width: 210px;
-  transition: border-color 0.15s;
+  transition: border-color var(--dur-2) var(--ease);
 }
 /* Which model is answering is the one piece of live state on this row that
    changes what you get back, so it carries the accent rather than sitting in
@@ -1304,10 +1396,12 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 #model-btn {
   background: var(--accent);
   border-color: transparent;
-  color: var(--on-accent);
+  /* Not `--on-accent`: that ink is picked against `--accent-fill`, and this
+     button paints `--accent` so it matches Send. */
+  color: var(--on-accent-bright);
 }
 #model-btn:hover { background: var(--accent-hi); border-color: transparent; }
-#model-btn .ico { color: var(--on-accent); width: 13px; height: 13px; }
+#model-btn .ico { color: var(--on-accent-bright); width: 13px; height: 13px; }
 #model-btn .chev { opacity: .8; }
 #model-label {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -1358,7 +1452,7 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   padding: 8px 9px;
   border-radius: var(--r-sm);
   cursor: pointer;
-  transition: background 0.12s;
+  transition: background var(--dur-1) var(--ease);
 }
 .model-row:hover { background: rgba(255, 255, 255, 0.04); }
 .model-row .m-name { font-family: var(--mono); font-size: var(--text-sm); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1464,9 +1558,9 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   white-space: nowrap;
   flex: 0 0 auto;
 }
-.m-fit-great { color: rgb(126, 200, 128); background: rgba(126, 200, 128, 0.14); }
-.m-fit-good  { color: rgb(126, 200, 128); background: rgba(126, 200, 128, 0.10); }
-.m-fit-tight { color: rgb(233, 176, 74); background: rgba(230, 160, 30, 0.14); }
+.m-fit-great { color: var(--green); background: color-mix(in srgb, var(--green) 14%, transparent); }
+.m-fit-good  { color: var(--green); background: color-mix(in srgb, var(--green) 10%, transparent); }
+.m-fit-tight { color: var(--yellow); background: color-mix(in srgb, var(--yellow) 14%, transparent); }
 .m-fit-too_big { color: var(--muted); background: rgba(128, 128, 128, 0.14); }
 /* Kept in the list rather than hidden. A short list with no explanation reads
    as Carrot having few models; a dimmed row saying "needs 24 GB, this machine
@@ -1503,7 +1597,7 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 #pull-progress { padding: 10px 10px 8px; }
 .pull-label { font-family: var(--mono); font-size: var(--text-xs); color: var(--muted); margin-bottom: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pull-track { height: 4px; background: var(--card2); border-radius: var(--r-xs); overflow: hidden; }
-.pull-bar { height: 100%; width: 0; background: var(--accent); border-radius: var(--r-xs); transition: width 0.3s; }
+.pull-bar { height: 100%; width: 0; background: var(--accent); border-radius: var(--r-xs); transition: width var(--dur-3) var(--ease); }
 
 /* ===== Splash ===== */
 #splash {
@@ -1562,7 +1656,7 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   height: 100%; width: 0;
   background: var(--accent);
   border-radius: var(--r-xs);
-  transition: width 0.5s;
+  transition: width 0.5s var(--ease);
 }
 
 /* ===== Split layout (Notes / Code) ===== */
@@ -1642,6 +1736,15 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   text-align: center;
   pointer-events: none;
 }
+
+/* Paper mode paints its own ground. Without this the subtree has light tokens
+   but no surface of its own, so the app's dark background still shows through
+   between the blocks and the "paper" reads as a light patch on a dark page. */
+.milkdown-host.paper, textarea.note-fallback.paper {
+  background: var(--bg2);
+  color: var(--text);
+}
+.milkdown-host.paper .ProseMirror { background: var(--bg2); color: var(--text); }
 
 .milkdown-host { flex: 1; overflow-y: auto; }
 .milkdown-host .milkdown { background: transparent; color: var(--text); }
@@ -1762,7 +1865,7 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   padding: 8px 9px;
   border-radius: var(--r-sm);
   cursor: pointer;
-  transition: background 0.12s;
+  transition: background var(--dur-1) var(--ease);
 }
 .skill-opt:hover, .skill-opt.active { background: var(--accent-fill, var(--accent));
   color: var(--on-accent);
@@ -1847,6 +1950,210 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   gap: 2px;
   overflow-y: auto;
 }
+
+/* ===== The foot of the rail =====
+ *
+ * Pushed down by `margin-top: auto` rather than positioned, so it sits at the
+ * bottom of a short window and still scrolls into reach in a very short one.
+ * The empty space above it is deliberate: four destinations and one fact is
+ * the whole rail, and filling the gap with more links would undo the thing
+ * this layout exists to do.
+ */
+/* ===== The rail's living half =====
+   Running work, then recents. Sits directly under the four destinations and
+   above the privacy chip, which keeps its own `margin-top: auto`, so this
+   grows downward from the nav and the chip stays pinned to the floor. */
+.nav-activity { margin-top: 14px; min-height: 0; overflow-y: auto; }
+.nav-sec-head {
+  font-size: var(--text-xs);
+  font-weight: var(--w-semi);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  padding: 0 8px 6px;
+}
+.nav-running { margin-bottom: 12px; }
+
+/* A live job. Full weight — this is the half of the rail allowed to ask for
+   attention, and the row is a button because every one of them opens the
+   thing it describes. */
+.nav-job, .nav-recent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  position: relative;
+}
+.nav-job:hover, .nav-recent:hover { background: var(--surface-hover); }
+.nav-job .ico, .nav-recent .ico { flex-shrink: 0; opacity: 0.75; }
+.nav-job-text { min-width: 0; display: flex; flex-direction: column; }
+.nav-job-label, .nav-recent-label {
+  font-size: var(--text-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.nav-job-sub { font-size: var(--text-xs); color: var(--faint); }
+
+/* The dot that says this one is moving. Colour alone would not carry it for a
+   colourblind reader and would not carry it at a glance either; the motion is
+   what reads as "still going". */
+.nav-job-pulse {
+  position: absolute;
+  left: 2px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: nav-job-pulse 1.6s ease-in-out infinite;
+}
+@keyframes nav-job-pulse { 50% { opacity: 0.25; } }
+
+/* Started, then the process died under it. Not hidden — a research run that
+   vanished is something the user is owed — but not dressed up as live work. */
+.nav-job.stalled { opacity: 0.6; }
+.nav-job.stalled .nav-job-sub { color: var(--yellow); }
+
+/* Recessed, as asked for: present, closed, and quiet until opened. */
+.nav-recents > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 4px 8px 6px;
+}
+.nav-recents > summary::-webkit-details-marker { display: none; }
+.nav-recents > summary::after {
+  content: "›";
+  margin-left: 6px;
+  display: inline-block;
+  transition: transform var(--dur-2) var(--ease);
+}
+.nav-recents[open] > summary::after { transform: rotate(90deg); }
+.nav-recents > summary:hover { color: var(--text); }
+.nav-recent-label { color: var(--muted); }
+.nav-recent:hover .nav-recent-label { color: var(--text); }
+
+/* Reduced motion is handled in one place near the end of this file, so it can
+   apply after every animation it has to override. */
+
+.nav-foot { margin-top: auto; padding-top: 10px; position: relative; }
+.privacy-chip {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 8px 9px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  color: var(--muted);
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--dur-2) var(--ease), border-color var(--dur-2) var(--ease);
+}
+.privacy-chip:hover { background: var(--surface-hover, rgba(255,255,255,0.04));
+  border-color: var(--border); }
+/* Green for "stays here", accent for "goes out". Not red: sending a question
+   to a model you chose is not an error, and colouring it like one would make
+   the honest state look like a fault. */
+.privacy-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--green);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 18%, transparent);
+}
+.privacy-dot.cloud {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.privacy-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+.privacy-where { font-size: var(--text-sm); font-weight: 500; color: var(--text); }
+/* The model's name, and it is a name — the one word on this chip that changes
+   and the one people are actually looking for. It was set in --faint at the
+   smallest size in the file, which is the treatment for a caption, and it read
+   as one. Weight rather than size does the promoting, so the two lines still
+   sit inside the chip. */
+.privacy-model {
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* The detail, one click deeper. "Ollama server 127.0.0.1 unavailable" is not
+   a sentence a normal person can act on; "Local · Ready" is, and the technical
+   name belongs here rather than in the rail. */
+/* `position: fixed`, and placed by script.
+ *
+ * Absolutely positioned inside the rail it was clipped by it: `.app-nav`
+ * scrolls, which makes it a clipping context, so a 268px panel hanging off a
+ * 210px column simply had its right-hand side cut away — the headline read
+ * "Nothing is leaving this compute". Fixed takes it out of that box entirely,
+ * and the left/bottom are set from the chip's own rectangle. */
+.privacy-panel {
+  position: fixed;
+  width: 268px;
+  max-width: calc(100vw - 24px);
+  padding: 12px;
+  background: var(--card);
+  border: 1px solid var(--border-hi);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lg, 0 12px 32px rgba(0,0,0,0.35));
+  z-index: 60;
+}
+.privacy-head {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 9px;
+  /* Wraps rather than clips. The headline grows with however many things are
+     going out, and a truncated privacy claim is worse than a two-line one —
+     "Leaving this computer: answers and web sea" names one of the two. */
+  overflow-wrap: anywhere;
+}
+.privacy-loading { font-size: var(--text-xs); color: var(--faint); }
+.privacy-row { display: flex; gap: 9px; align-items: flex-start; padding: 6px 0; }
+.privacy-row-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  margin-top: 5px; flex-shrink: 0;
+  background: var(--border-hi);
+}
+.privacy-row-dot.on { background: var(--green); }
+.privacy-row.leaves .privacy-row-dot.on { background: var(--accent); }
+/* Could not be read, which is not the same as off. A hollow ring rather than a
+   filled dot: an empty dot reads as "no", and answering "no" to a question you
+   did not manage to ask is the one thing this panel must not do. */
+.privacy-row.unchecked .privacy-row-dot {
+  background: none;
+  box-shadow: inset 0 0 0 1.5px var(--yellow);
+}
+.privacy-row.unchecked .privacy-row-text span { color: var(--yellow); }
+.privacy-row-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.privacy-row-text strong { font-size: var(--text-xs); font-weight: 600; color: var(--text); }
+.privacy-row-text span { font-size: var(--text-2xs); color: var(--faint); }
+.privacy-more {
+  margin-top: 10px;
+  width: 100%;
+  padding: 7px;
+  background: var(--card2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  cursor: pointer;
+}
+.privacy-more:hover { color: var(--text); border-color: var(--border-hi); }
+/* Collapsed rail: the dot survives, the words go. It is still the fastest
+   answer to "is anything leaving", which is the point of it. */
+body.nav-collapsed .privacy-text { display: none; }
+body.nav-collapsed .privacy-chip { justify-content: center; padding: 8px 0; }
 .nav-item {
   display: flex;
   align-items: center;
@@ -1872,7 +2179,7 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   border-radius: var(--r-pill);
   cursor: pointer;
   text-align: left;
-  transition: color 0.15s, background 0.15s;
+  transition: color var(--dur-2) var(--ease), background var(--dur-2) var(--ease);
 }
 .nav-item:hover { color: var(--text); background: rgba(255, 255, 255, 0.04); }
 .nav-item.active {
@@ -1893,7 +2200,7 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   text-transform: uppercase; padding: 8px 12px; cursor: pointer;
 }
 .nav-more:hover { color: var(--muted); }
-.nav-more-chev { margin-left: auto; width: 13px; height: 13px; transition: transform 0.15s; }
+.nav-more-chev { margin-left: auto; width: 13px; height: 13px; transition: transform var(--dur-2) var(--ease); }
 .nav-more.open .nav-more-chev { transform: rotate(180deg); }
 .nav-more-list { display: flex; flex-direction: column; gap: 2px; }
 
@@ -1965,7 +2272,7 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   font-family: var(--sans); font-weight: 600; font-size: var(--text-base);
   padding: 11px 16px; border-radius: var(--r-sm); cursor: pointer;
   box-shadow: 0 6px 20px rgba(255, 92, 31, 0.35);
-  transition: background 0.15s, transform 0.1s;
+  transition: background var(--dur-2) var(--ease), transform var(--dur-1) var(--ease);
 }
 .fab:hover { background: var(--accent-hi); }
 .fab:active { transform: translateY(1px); }
@@ -2163,7 +2470,7 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   padding: 6px 8px; border-radius: var(--r-sm); cursor: pointer; user-select: none;
 }
 .chat-section-head:hover { background: rgba(255, 255, 255, 0.04); }
-.chat-chev { width: 13px; height: 13px; color: var(--faint); transform: rotate(-90deg); transition: transform 0.15s; }
+.chat-chev { width: 13px; height: 13px; color: var(--faint); transform: rotate(-90deg); transition: transform var(--dur-2) var(--ease); }
 .chat-chev.open { transform: rotate(0deg); }
 .chat-section-ico { width: 15px; height: 15px; color: var(--accent); }
 .chat-section-name { font-size: var(--text-xs); letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
@@ -2288,8 +2595,8 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   min-width: 18px;
   padding: 1px 5px;
   border-radius: var(--r-sm);
-  background: var(--accent);
-  color: #fff;
+  background: var(--accent-fill, var(--accent));
+  color: var(--on-accent);
   font-size: var(--text-xs);
   line-height: 1.5;
   text-align: center;
@@ -2395,7 +2702,9 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   width: 100%;
   min-width: 120px;
   padding: 5px 7px;
-  background: var(--card);
+  /* background-color: the selector reaches a <select>, and the shorthand also
+     clears the chevron the `select` rule draws. */
+  background-color: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   color: var(--text);
@@ -2455,7 +2764,9 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 .provider-add select,
 .provider-add input {
   padding: 7px 10px;
-  background: var(--card);
+  /* background-color: the selector reaches a <select>, and the shorthand also
+     clears the chevron the `select` rule draws. */
+  background-color: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   color: var(--text);
@@ -2837,7 +3148,7 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   padding: 8px 9px;
   cursor: pointer;
   white-space: nowrap;
-  transition: border-color 0.15s;
+  transition: border-color var(--dur-2) var(--ease);
 }
 #search-btn:hover { border-color: var(--border-hi); }
 #search-btn .ico { color: var(--accent); width: 13px; height: 13px; }
@@ -2868,7 +3179,7 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   cursor: pointer;
   color: var(--text);
   font-family: var(--sans);
-  transition: background 0.12s;
+  transition: background var(--dur-1) var(--ease);
 }
 .pop-item:hover { background: rgba(255, 255, 255, 0.04); }
 /* The chosen one is marked, not highlighted. A filled row was the loudest
@@ -2983,7 +3294,7 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   padding: 6px 10px;
   cursor: pointer;
   max-width: 220px;
-  transition: border-color 0.15s;
+  transition: border-color var(--dur-2) var(--ease);
 }
 #ws-btn:hover { border-color: var(--border-hi); }
 #ws-btn .ico { width: 13px; height: 13px; }
@@ -3076,7 +3387,7 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 .tutorial-head h3 { margin: 0; font-size: var(--text-md); }
 .tutorial-progress { display: flex; align-items: center; gap: 10px; flex: 1; max-width: 320px; }
 .tutorial-track { flex: 1; height: 5px; background: var(--border); border-radius: var(--r-xs); overflow: hidden; }
-.tutorial-bar { height: 100%; width: 0; background: var(--accent); transition: width 0.3s; }
+.tutorial-bar { height: 100%; width: 0; background: var(--accent); transition: width var(--dur-3) var(--ease); }
 
 .tut-step {
   display: flex; gap: 12px;
@@ -3166,13 +3477,13 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   line-height: 1.5;
   text-align: left;
   color: var(--text);
-  background: rgba(230, 160, 30, 0.10);
-  border: 1px solid rgba(230, 160, 30, 0.35);
+  background: color-mix(in srgb, var(--yellow) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--yellow) 35%, transparent);
   border-radius: var(--r-sm);
   padding: 9px 11px;
   margin: -6px 0 14px;
 }
-.splash-feasibility strong { color: rgb(233, 176, 74); }
+.splash-feasibility strong { color: var(--yellow); }
 .splash-feasibility-list { margin: 6px 0 0; padding-left: 18px; color: var(--muted); }
 .splash-feasibility-list li { margin-bottom: 3px; }
 .splash-find { width: 100%; margin-bottom: 8px; font-size: var(--text-sm); }
@@ -3195,7 +3506,7 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   display: flex;
   flex-direction: column;
   gap: 2px;
-  transition: border-color 0.15s, background 0.15s;
+  transition: border-color var(--dur-2) var(--ease), background var(--dur-2) var(--ease);
 }
 .splash-pick:hover { border-color: var(--border-hi); }
 .splash-pick.selected {
@@ -3297,7 +3608,7 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   background: var(--accent);
   border-radius: var(--r-xs);
   margin-bottom: 4px;
-  transition: width 0.4s;
+  transition: width 0.4s var(--ease);
 }
 #hub-btn { display: inline-flex; align-items: center; gap: 6px; }
 .chip-row .mod-chip { text-transform: capitalize; }
@@ -3316,10 +3627,24 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 }
 .hub-search input:focus { outline: none; border-color: var(--accent); }
 .quant-note { color: var(--accent); font-family: var(--mono); font-size: var(--text-xs); }
+/* What the quant costs in answers. Sits under the two numbers that both get
+   better as the bit-rate drops, so it stays plain text rather than competing
+   with the accent-coloured quant line above it. */
+.quality-note { color: var(--muted); margin-top: 2px; }
+
+/* ===== Which engine runs the model ===== */
+.hub-engine { margin-bottom: 14px; }
+.hub-engine-card { display: block; }
+.engine-detail { color: var(--accent-ink); margin-top: 6px; }
+.hub-engine-alts { margin-top: 8px; }
+.hub-engine-alts summary { cursor: pointer; }
+.hub-engine-alt { padding: 10px 2px; border-top: 1px solid var(--border); }
+.hub-engine-alt > .muted { margin-top: 3px; }
+.hub-engine-alt a { display: inline-block; margin-top: 4px; color: var(--accent-ink); }
 
 /* ===== Google Calendar (secret iCal) ===== */
 .cal-howto { margin-bottom: 12px; }
-.cal-howto summary { cursor: pointer; font-size: var(--text-base); color: var(--accent); }
+.cal-howto summary { cursor: pointer; font-size: var(--text-base); color: var(--accent-ink); }
 .cal-howto ol { margin: 10px 0 8px 20px; line-height: 1.9; }
 .cal-dot.gcal { background: #9ecbff; margin-left: 2px; }
 .cal-event.gcal .cal-event-date { color: #9ecbff; }
@@ -3351,7 +3676,7 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   min-height: 16px;
   margin: -12px 0 12px;
 }
-.splash-bar { transition: width 0.25s linear; }
+.splash-bar { transition: width var(--dur-3) linear; }
 .splash-catalog {
   max-height: 260px;
   overflow-y: auto;
@@ -3724,11 +4049,22 @@ body::before {
    The option list is drawn by the OS, not the page. Without explicit
    colours Windows renders white-on-white against a dark control. These
    two properties are the only ones that reach that popup. */
+/* `appearance: none` removes the native arrow, so this image *is* the control's
+   only affordance — and it was drawn in two places, the image here and a
+   light-theme override further down that set the image and nothing else.
+   Splitting it that way is what let `.write-filter` break it: a `background:`
+   shorthand on a classed select resets image, repeat and position together, so
+   in dark the chevron vanished outright, and in light the higher-specificity
+   theme rule put the image back while leaving repeat at `repeat` and position
+   at `0 0` — a control tiled edge to edge with chevrons.
+
+   One rule now owns all three properties and the theme only swaps a token, so
+   there is no longer a place to restore the image without its geometry. */
 select {
   color-scheme: dark;
   appearance: none;
   -webkit-appearance: none;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2399a0ae' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9l6 6 6-6'/></svg>");
+  background-image: var(--select-chevron);
   background-repeat: no-repeat;
   background-position: right 10px center;
   padding-right: 30px;
@@ -3796,6 +4132,31 @@ select option:checked { background-color: #2f333d; }
   --opt-text: #eceef4;
   --opt-sel: #2f333d;
 
+  /* ----- Chart series -----
+     Fixed, and deliberately not derived from --accent: a chart's colours say
+     which series is which, so they cannot change when somebody picks a
+     different accent, and six accents would mean six unvalidated palettes.
+     Assigned in this order and never cycled.
+
+     Both sets were checked with the dataviz validator rather than chosen by
+     eye — lightness band, chroma floor, adjacent-pair separation under
+     deuteranopia and protanopia, and contrast against the card they sit on.
+     The dark steps are their own selection against #22201a, not the light
+     ones lightened, because that is what the check is against. Re-run it
+     before touching any of these twelve values. */
+  --series-1: #cf7730;
+  --series-2: #5c93de;
+  --series-3: #46a06f;
+  --series-4: #a878d4;
+  --series-5: #dd6a58;
+  --series-6: #2f9db5;
+
+  /* The dropdown arrow. A token because `appearance: none` means this is the
+     only arrow a <select> has, and it must be swappable per theme without
+     anybody re-declaring `background-image` on its own — an override that
+     restores the image without its repeat and position is what tiled it. */
+  --select-chevron: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2399a0ae' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9l6 6 6-6'/></svg>");
+
   --wash-sat: 125%;
   --wash-strength: 1;
 }
@@ -3803,7 +4164,13 @@ select option:checked { background-color: #2f333d; }
 /* ---- Light ----
    Not the dark palette inverted: a warm paper ground, and the glass
    goes to white-over-colour so the ambient wash still reads through. */
-:root[data-theme="light"] {
+/* Paper. The same light tokens, scoped to a subtree rather than the whole
+   document, so a document can be white while the app around it stays dark.
+   Written as an extra selector on the existing blocks rather than a copy of
+   the values, because two copies of a palette drift and only one of them
+   ever gets audited. See the `doc_paper` setting. */
+:root[data-theme="light"],
+.paper {
   --scheme: light;
   --bg: #f6f4f1;
   --bg2: #fbfaf8;
@@ -3837,6 +4204,21 @@ select option:checked { background-color: #2f333d; }
   --opt-bg: #ffffff;
   --opt-text: #1c1a18;
   --opt-sel: #eee9e2;
+
+  /* Series steps for paper. Validated against #ffffff, the card a chart sits
+     on in this theme — see the dark set for why these are chosen rather than
+     darkened. */
+  --series-1: #c9640f;
+  --series-2: #3a7fd9;
+  --series-3: #2f8a58;
+  --series-4: #9457c9;
+  --series-5: #c8402f;
+  --series-6: #0f8ea8;
+
+  /* Same chevron, drawn in the light theme's ink. A token rather than a
+     `background-image` override on `select`, because an override that restores
+     the image without its repeat and position is what tiled the thing. */
+  --select-chevron: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%235f5a54' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9l6 6 6-6'/></svg>");
 
   --wash-sat: 150%;
   --wash-strength: 0.62;   /* the same glow over white would be garish */
@@ -3872,7 +4254,12 @@ select option:checked { background-color: #2f333d; }
 }
 :root[data-accent="ember"] {
   --accent: #ff4f28;
-  --accent-fill: #df3d17;
+  /* Lifted from #df3d17, which sat in the gap between the two inks: 4.25
+     against `--on-accent` and 4.36 against white, so neither choice cleared
+     4.5 and every filled ember surface failed by a little. Lighter rather
+     than darker keeps the dark ink the other warm accents use, and takes it
+     to 4.72. */
+  --accent-fill: #e8471f;
   --on-accent: #1a1208;
   --accent-hi: #ff6f4d;
   --accent-dim: #d63a16;
@@ -3934,6 +4321,41 @@ select option:checked { background-color: #2f333d; }
   --wash-b: 168, 74, 246;
   --wash-c: 38, 196, 226;
 }
+
+/* ===== The accent, as ink =====
+ *
+ * `--accent` is the bright end of each ramp. On a dark surface it reads fine
+ * as text; on the light theme it is a highlighter — the accent measures 3.49
+ * on carrot, 3.44 on teal and 2.53 on amber against the card, all under the
+ * 4.5 that body text wants.
+ *
+ * Icons are exempt: a glyph is non-text and answers to a lower bar, which is
+ * why most of the ninety-odd `color: var(--accent)` rules in this file are
+ * fine as they stand. This token is for the ones that are *words* — a link, a
+ * summary, a label — and it is the same hue taken down to where it can be read
+ * on paper. Reach for it whenever the accent is carrying text.
+ */
+/* Ink for text sitting on `--accent` itself, which is not the same problem as
+   ink on `--accent-fill`. The fill is the darker end and `--on-accent` is
+   chosen against it; the bright end needs its own answer, and on orchid the
+   two disagree — white is right on #8e2fd0 and measures 3.55 on #b95cf5.
+   Everywhere else the two coincide, so this defers to `--on-accent`. */
+:root { --on-accent-bright: var(--on-accent); }
+:root[data-accent="orchid"] { --on-accent-bright: #24063b; }
+
+:root { --accent-ink: var(--accent); }
+/* Except indigo, which is the deepest of the six: as text on a dark card
+   the accent itself reaches only 3.62. Its own --accent-hi is the same hue
+   one step up the ramp. */
+:root[data-theme="dark"][data-accent="indigo"] { --accent-ink: var(--accent-hi); }
+:root[data-theme="light"][data-accent="carrot"], :root[data-theme="light"],
+.paper { --accent-ink: #a8480a; }
+:root[data-theme="light"][data-accent="ember"]  { --accent-ink: #b02f10; }
+:root[data-theme="light"][data-accent="amber"]  { --accent-ink: #8f6410; }
+:root[data-theme="light"][data-accent="orchid"] { --accent-ink: #7326a8; }
+:root[data-theme="light"][data-accent="teal"]   { --accent-ink: #0a7563; }
+:root[data-theme="light"][data-accent="indigo"] { --accent-ink: #1a46b4; }
+
 
 /* ---- The wash ----
    Four wide pools, each an accent-derived hue. --wash-strength scales
@@ -4001,16 +4423,12 @@ html, body { color-scheme: var(--scheme); }
   box-shadow: 0 1px 2px rgba(38, 30, 22, 0.05), 0 6px 18px rgba(38, 30, 22, 0.05);
 }
 :root[data-theme="light"] .btn-primary { box-shadow: 0 1px 2px rgba(38, 30, 22, 0.14); }
-:root[data-theme="light"] select {
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%235f5a54' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9l6 6 6-6'/></svg>");
-}
 .btn-primary { color: var(--on-accent); }
 
 /* Switching themes should feel like a dimmer, not a page reload — but
    only for the ground, or every hover on the page inherits the delay. */
 body, #menubar, .app-nav, .settings-card, .hub-card, #cmdbar {
-  transition: background-color 0.28s var(--ease), border-color 0.28s var(--ease),
-              color 0.28s var(--ease);
+  transition: background-color var(--dur-3) var(--ease), border-color var(--dur-3) var(--ease), color var(--dur-3) var(--ease);
 }
 
 /* =====================================================================
@@ -4061,7 +4479,7 @@ code, pre, .kbd { font-family: var(--mono); }
   filter: blur(22px) saturate(140%);
   opacity: calc(0.75 * var(--wash-strength));
   pointer-events: none;
-  transition: opacity 0.3s var(--ease);
+  transition: opacity var(--dur-3) var(--ease);
 }
 #cmdbar:focus-within::before { opacity: calc(1.15 * var(--wash-strength)); }
 
@@ -4114,8 +4532,7 @@ code, pre, .kbd { font-family: var(--mono); }
   cursor: pointer;
   font-size: var(--text-sm);
   color: var(--muted);
-  transition: border-color 0.16s var(--ease), background 0.16s var(--ease),
-              color 0.16s var(--ease);
+  transition: border-color var(--dur-2) var(--ease), background var(--dur-2) var(--ease), color var(--dur-2) var(--ease);
 }
 .theme-swatch:hover { border-color: var(--border-hi); color: var(--text); }
 .theme-swatch[aria-pressed="true"] {
@@ -4215,9 +4632,8 @@ code, pre, .kbd { font-family: var(--mono); }
    Charcoal & cream
    =====================================================================
    An editorial pass, not a hue swap. The type roles are the app's, set
-   once at the top of this file: Space Grotesk announces, Stack Sans Text
-   is read, Plus Jakarta operates, DM Mono is code. This theme changes what
-   they sit on, not which they are.
+   once at the top of this file — one face for the interface, DM Mono for
+   code. This theme changes what they sit on, not which they are.
 
    It used to pair Playfair Display with Vollkorn, and the editorial feel
    was doing real work — but a serif inside a dark tool UI reads as a
@@ -4271,7 +4687,8 @@ code, pre, .kbd { font-family: var(--mono); }
 
 /* Cream ground, charcoal ink — the same relationship inverted, so light
    mode reads as paper rather than as a switched-off screen. */
-:root[data-theme="light"] {
+:root[data-theme="light"],
+.paper {
   --bg: #f4efe4;
   --bg2: #faf6ed;
   --card: #fffdf8;
@@ -4281,7 +4698,17 @@ code, pre, .kbd { font-family: var(--mono); }
   --border-hi: rgba(40, 34, 22, 0.18);
   --text: #1e1b14;
   --muted: #5f584a;
-  --faint: #776f60;   /* 4.89:1 on --card */
+  /* Measured against --card2, not --card. It was calibrated on the lightest
+     surface in the theme and then used on the darker ones — the rail, the
+     empty states, the option hints — where the same colour lands at 4.33. A
+     token is only as good as its worst background. */
+  --faint: #6b6355;   /* 5.1:1 on --card2, 5.8:1 on --card */
+  /* Status colours had one value for both themes. On a light background the
+     dark-theme green and yellow are almost invisible: 1.87 and 1.64. These are
+     the same hues taken down to where they can be read on paper. */
+  --green: #115a3e;   /* on its own 14% tint, not on the bare card */
+  --yellow: #8f6410;
+  --red: #a8332c;
   --opt-bg: #fffdf8;
   --opt-text: #1e1b14;
   --opt-sel: #ece5d5;
@@ -4300,8 +4727,8 @@ code, pre, .kbd { font-family: var(--mono); }
    outranks. So the display sizes take the top of the axis.
 
    The tracking closes up as the type grows, which is the standard optical
-   correction and matters more than usual here: Space Grotesk is drawn wide,
-   and at 34px default tracking it sprawls. */
+   correction. Inter is drawn for text sizes and gets loose at display sizes,
+   so the display end is where it earns its keep. */
 .page-head h1, .page-head h2, .dash-head h1, .splash-card h1, .greeting {
   font-family: var(--display);
   font-weight: var(--w-display);
@@ -4309,11 +4736,11 @@ code, pre, .kbd { font-family: var(--mono); }
   line-height: 1.12;
 }
 
-/* And opens up as it shrinks — the opposite of the usual rule, and the price
-   of using a display face for interface text. A 486/1000 x-height means a
-   10px uppercase label has very little ink and very tight counters; the
-   default -0.006em body tracking closes what is already closed and the label
-   becomes a smudge. These are the sizes where that bites. */
+/* Small text sits at zero rather than at the body's -0.006em.
+   Under the old face this rule was a rescue — a 486/1000 x-height made a 10px
+   label a smudge unless the tracking was opened up. Inter's 727 does not need
+   rescuing, so this is now only the ordinary thing: stop tightening once the
+   type is small, because the correction that helps a heading hurts a label. */
 .nav-label, .card-title, .section-title, .tool-sub, .ctx-label {
   letter-spacing: 0;
 }
@@ -4397,7 +4824,7 @@ td, th, .si-sub, .small, .editor-status {
   border-left: 5px solid currentColor;
   border-top: 4px solid transparent;
   border-bottom: 4px solid transparent;
-  transition: transform 120ms ease;
+  transition: transform var(--dur-1) var(--ease);
   flex: 0 0 auto;
 }
 .artifact-code[open] > summary::before { transform: rotate(90deg); }
@@ -4642,7 +5069,7 @@ td, th, .si-sub, .small, .editor-status {
   color: var(--text);
   font: inherit;
   cursor: pointer;
-  transition: border-color 0.16s var(--ease), background 0.16s var(--ease);
+  transition: border-color var(--dur-2) var(--ease), background var(--dur-2) var(--ease);
 }
 .onboard-choice:hover { border-color: var(--accent-line); background: var(--card3); }
 .oc-title {
@@ -4757,7 +5184,7 @@ td, th, .si-sub, .small, .editor-status {
   color: var(--muted);
   border: none;
   cursor: pointer;
-  transition: background 120ms ease, color 120ms ease;
+  transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
 }
 .mode-opt:hover { color: var(--text); }
 /* The selected half, unmistakably. `#16120e` was a near-black chosen for the
@@ -5503,7 +5930,7 @@ td, th, .si-sub, .small, .editor-status {
   font-family: var(--sans);
   font-size: var(--text-sm);
   cursor: pointer;
-  transition: color 120ms ease, border-color 120ms ease;
+  transition: color var(--dur-1) var(--ease), border-color var(--dur-1) var(--ease);
 }
 .composer-chip:hover { color: var(--text); border-color: var(--accent-line); }
 .composer-chip.hidden { display: none; }
@@ -5662,7 +6089,7 @@ td, th, .si-sub, .small, .editor-status {
   font-size: var(--text-sm);
   cursor: pointer;
   text-align: left;
-  transition: color 0.15s, border-color 0.15s;
+  transition: color var(--dur-2) var(--ease), border-color var(--dur-2) var(--ease);
 }
 .agent-mode-status:hover { color: var(--text); border-color: var(--border); }
 .agent-mode-status.is-act { color: var(--accent); }
@@ -5688,7 +6115,9 @@ td, th, .si-sub, .small, .editor-status {
  * the attach button and the send button — but present, because "which model
  * is doing this" was previously unanswerable from the agent panel. */
 .agent-model-picker {
-  background: var(--card2);
+  /* background-color: this is a <select>, and the shorthand also clears the
+     chevron the `select` rule draws. */
+  background-color: var(--card2);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   color: var(--text);
@@ -5749,7 +6178,7 @@ td, th, .si-sub, .small, .editor-status {
   color: var(--faint);
   font-size: var(--text-xs);
   cursor: pointer;
-  transition: color 0.15s, background 0.15s;
+  transition: color var(--dur-2) var(--ease), background var(--dur-2) var(--ease);
 }
 #rail-btn:hover { color: var(--text); background: var(--card2); }
 #rail-btn .ico { width: 13px; height: 13px; }
@@ -5919,12 +6348,14 @@ body #cmdbar:focus-within {
   color: var(--text);
   text-align: left;
   cursor: pointer;
-  transition: border-color 0.15s, background 0.15s;
+  transition: border-color var(--dur-2) var(--ease), background var(--dur-2) var(--ease);
 }
 .ctx-choice:hover { border-color: var(--accent-line); }
 
 .ctx-choice.on { border-color: var(--accent); background: var(--accent-fill, var(--accent));
-  color: #fff;
+  /* Inherited by `.ctx-label`, so a fixed white put the label at 2.57 on
+     amber — the same failure as the hint, one element up. */
+  color: var(--on-accent);
 }
 .ctx-label { font-weight: 600; font-size: var(--text-md); }
 .ctx-tokens { font-family: var(--mono); font-size: var(--text-xs); color: var(--muted); }
@@ -5939,14 +6370,14 @@ body #cmdbar:focus-within {
  * 1.10–1.94 across the six accents; on teal, 1.10. The recommendation under
  * the option you had chosen was the least readable sentence on the screen.
  *
- * White on the filled accent measures, per accent: indigo 6.17, orchid 6.06,
- * ember 4.36, carrot 3.55, teal 3.49, amber 2.57. So this fixes the unreadable
- * case — teal goes 1.10 to 3.49 — without clearing 4.5 on the four lighter
- * accents. What would clear it is darkening `--accent-fill` for those, which
- * is a change to the palette rather than to this rule, and is where to go if
- * the small print still reads thin on amber. */
+ * `--on-accent` rather than a fixed white, because the palette already works
+ * this out per accent and gets it right where one colour cannot. White on the
+ * filled accent measures indigo 6.17, orchid 6.06, ember 4.36, carrot 3.55,
+ * teal 3.49, amber 2.57 — so hard-coding it rescues two accents and puts the
+ * same illegibility back on the rest. `--on-accent` is white where white is
+ * correct and near-black on the warm accents, and clears 4.5 on all six. */
 .ctx-choice.on .ctx-hint,
-.ctx-choice.on .ctx-tokens { color: #fff; }
+.ctx-choice.on .ctx-tokens { color: var(--on-accent); }
 
 /* ===== Waiting, without saying "Loading…" =====
  *
@@ -5976,8 +6407,66 @@ body #cmdbar:focus-within {
 }
 
 /* Someone who has asked not to see motion gets the shape without the sweep. */
+/* A required field submitted empty. Outlined rather than coloured alone, and
+   it fades by itself — a persistent error state for "you have not typed
+   anything yet" nags about a mistake the user is already fixing. */
+.needs-value { animation: needs-value 1.2s ease-out; }
+@keyframes needs-value {
+  0%, 100% { border-color: var(--border); box-shadow: none; }
+  15%, 60% {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+  }
+}
+
+/* ===== Reduced motion =====
+ *
+ * This used to be four hand-picked selectors, which meant somebody who has
+ * asked their operating system to stop animating things still got the sweeping
+ * skeleton gradient, the mode flash, the prompt slide and every one of the
+ * eighty-odd transitions. A per-rule opt-out only ever covers the rules
+ * somebody remembered, and the eighty-first is written by the next person.
+ *
+ * So the default is inverted: everything stops, and the exceptions are named.
+ * Not `animation: none`, which cancels the animation and drops whatever state
+ * its final keyframe was holding — a near-zero duration runs it to completion
+ * instantly instead, which is the difference between "the panel appears" and
+ * "the panel never appears".
+ */
 @media (prefers-reduced-motion: reduce) {
-  .skeleton-row { animation: none; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* The exceptions, and why each one earns its motion back.
+   *
+   * All three are opacity, in place, on something a few pixels across.
+   * Vestibular triggers are movement, scaling and parallax — a dot changing
+   * brightness is none of those, and each of these dots is the only thing on
+   * screen saying that something is still happening. Freezing them does not
+   * calm the interface down, it makes a live indicator indistinguishable from
+   * a dead one. Slowed, because there is no reason for them to be brisk. */
+  .nav-job-pulse, .icon-btn.recording {
+    animation-duration: 2.4s !important;
+    animation-iteration-count: infinite !important;
+  }
+  /* A frozen spinner is the shape of a hang. It rotates, which is movement,
+     but it is 9px across and it is load-bearing: it is how a running subagent
+     is told apart from a stalled one. */
+  .subagent-spin {
+    animation-duration: 2s !important;
+    animation-iteration-count: infinite !important;
+  }
+  /* And the ones that must not come back. The skeleton's sweep is a gradient
+     travelling across the row — real movement, and the grey block alone
+     already reads as "not loaded yet". */
+  .skeleton-row { animation: none !important; }
+  /* Its whole job was to flash, so it needs to say the same thing standing
+     still: the field that was submitted empty keeps its outline. */
+  .needs-value { animation: none !important; border-color: var(--accent); }
 }
 
 /* ===== Inline citations =====
@@ -6006,7 +6495,7 @@ body #cmdbar:focus-within {
   text-decoration: none;
   white-space: nowrap;
   vertical-align: baseline;
-  transition: color 0.15s, border-color 0.15s, background 0.15s;
+  transition: color var(--dur-2) var(--ease), border-color var(--dur-2) var(--ease), background var(--dur-2) var(--ease);
 }
 .md a.cite-chip::before {
   /* A dot, not a favicon. Fetching one asks every cited domain for an image
@@ -6723,7 +7212,7 @@ select.dd-open { border-color: var(--accent-line); }
   height: 11px;
   border-radius: 50%;
   background: var(--faint);
-  transition: transform 0.15s var(--ease), background 0.15s var(--ease);
+  transition: transform var(--dur-2) var(--ease), background var(--dur-2) var(--ease);
 }
 .sched-toggle.on { background: var(--accent-fill, var(--accent)); border-color: var(--accent-line);
   color: var(--on-accent);
@@ -6735,7 +7224,8 @@ select.dd-open { border-color: var(--accent-line); }
    to prevent is committing an experiment to main, which is made by not
    knowing the answer. */
 .worktree-picker {
-  background: var(--card2);
+  /* background-color: see .agent-model-picker. */
+  background-color: var(--card2);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   color: var(--text);
@@ -6798,7 +7288,7 @@ select.dd-open { border-color: var(--accent-line); }
   height: 100%;
   width: 0;
   background: var(--accent);
-  transition: width 0.3s var(--ease);
+  transition: width var(--dur-3) var(--ease);
 }
 .ctx-text { flex: none; font-size: var(--text-2xs); color: var(--faint); font-family: var(--mono); }
 /* Amber, then red. The colour is the only part of this anybody reads at a
@@ -6948,8 +7438,8 @@ select.dd-open { border-color: var(--accent-line); }
   font-weight: 500;
   padding: 1px 7px;
   border-radius: var(--r-pill);
-  color: rgb(126, 200, 128);
-  background: rgba(126, 200, 128, 0.14);
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 14%, transparent);
 }
 .component-unlocks { font-size: var(--text-sm); color: var(--text); margin-top: 2px; }
 .component-detail, .component-note {
@@ -6960,7 +7450,7 @@ select.dd-open { border-color: var(--accent-line); }
 }
 /* A system package Carrot cannot install for you is a different kind of
    sentence from a description, and has to read like one. */
-.component-note { color: rgb(233, 176, 74); }
+.component-note { color: var(--yellow); }
 .component-side {
   display: flex;
   align-items: center;
@@ -7025,8 +7515,8 @@ select.dd-open { border-color: var(--accent-line); }
 /* Kept, and saying so once. The confirmation is the point of the state
    change — a checkbox that ticks and says nothing leaves you wondering
    whether it went anywhere. */
-.goal-chip-kept { border-color: rgba(126, 200, 128, 0.45); }
-.goal-chip-kept-note { color: rgb(126, 200, 128); font-size: var(--text-xs); white-space: nowrap; }
+.goal-chip-kept { border-color: color-mix(in srgb, var(--green) 45%, transparent); }
+.goal-chip-kept-note { color: var(--green); font-size: var(--text-xs); white-space: nowrap; }
 
 /* A document that is a view of the database says so, and does not pretend to
    be a page you can type into. */
@@ -7078,10 +7568,14 @@ select.dd-open { border-color: var(--accent-line); }
   aspect-ratio: 8 / 10;
   border: 1px solid var(--border-hi);
   border-radius: var(--r-sm);
-  background: var(--card2);
+  /* Paper, like the document tiles below it — this face is a picture of the
+     page you would get, and a dark one sells a blank document as a dark
+     document. The class is added in JS so the face carries the light tokens
+     its artwork is drawn from. */
+  background: var(--bg2);
   margin-bottom: 8px;
   overflow: hidden;
-  transition: border-color 120ms ease, box-shadow 120ms ease;
+  transition: border-color var(--dur-1) var(--ease), box-shadow var(--dur-1) var(--ease);
 }
 .write-card-face svg { width: 100%; height: 100%; display: block; }
 .write-card:hover .write-card-face {
@@ -7121,7 +7615,7 @@ select.dd-open { border-color: var(--accent-line); }
    away" call for different things from the reader. */
 .write-card-locked .write-card-face { opacity: 0.45; }
 .write-card-locked .write-card-title { color: var(--muted); }
-.write-card-needs { color: rgb(233, 176, 74); }
+.write-card-needs { color: var(--yellow); }
 
 /* Recents, as pages. The preview is the first lines of the document at a size
    nobody reads — which is the point: you recognise your own writing by its
@@ -7137,13 +7631,22 @@ select.dd-open { border-color: var(--accent-line); }
   display: flex;
   flex-direction: column;
 }
+/* A page, and pages are white.
+   These were `--card2`, so in the dark theme a grid of documents was a grid of
+   dark rectangles — the one thing on the screen that is a picture of a piece
+   of paper, rendered as another panel. Word, Docs and Canva all keep their
+   chrome dark and their pages white for the same reason: the thumbnail is not
+   part of the interface, it is a small photograph of the document.
+
+   `.paper` gives the tile the light theme's tokens, so the thumbnail's own
+   text and marks come out as ink on paper without a second palette. */
 .write-recent-page {
   height: 196px;
   padding: 12px 11px;
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--r-sm) var(--r-sm) 0 0;
-  background: var(--card2);
+  background: var(--bg2);
   color: var(--muted);
   /* Relative on purpose, and not a new step on the scale: this is the
      document shrunk, not a label. You recognise your own writing by its
@@ -7151,7 +7654,7 @@ select.dd-open { border-color: var(--accent-line); }
   font-size: 0.55em;
   line-height: 1.75;
   word-break: break-word;
-  transition: border-color 120ms ease;
+  transition: border-color var(--dur-1) var(--ease);
 }
 .write-recent:hover .write-recent-page { border-color: var(--accent); }
 .write-recent-foot {
@@ -7173,7 +7676,8 @@ select.dd-open { border-color: var(--accent-line); }
   color: var(--on-accent);
   background: var(--accent-fill, var(--accent));
 }
-.write-recent-kind-latex { color: rgb(126, 200, 128); background: rgba(126, 200, 128, 0.14); }
+.write-recent-kind-latex { color: var(--green);
+  background: color-mix(in srgb, var(--green) 14%, transparent); }
 .write-recent-title {
   flex: 1;
   min-width: 0;
@@ -7656,7 +8160,9 @@ select.dd-open { border-color: var(--accent-line); }
 .write-search:focus { border-color: var(--accent-line); }
 .write-filter {
   padding: var(--s-3) var(--s-4);
-  background: var(--card);
+  /* background-color, not background: these are <select>s, and the shorthand
+     also resets the chevron's image, repeat and position. */
+  background-color: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   color: var(--text);
@@ -7707,12 +8213,26 @@ select.dd-open { border-color: var(--accent-line); }
   gap: 6px;
   flex-wrap: wrap;
 }
-.where-mark { display: inline-flex; }
-/* Where the answer comes from, at the size of a status light. The cloud is
-   tinted because leaving the machine is the case worth noticing; the computer
-   stays quiet, because that is the one nobody needs telling about. */
-.where-mark .ico { width: 17px; height: 17px; }
-.chat-empty-note.cloud .where-mark { color: var(--accent); }
+/* Where the answer comes from, beside the question rather than under it.
+   The heading and this mark are one line: at 17px below 36px display type it
+   read as a footnote about the machine, when it is the one thing on the
+   screen saying whether your words leave it. Sized to the cap-height of the
+   heading so the two carry the same weight. */
+.chat-empty-head {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-4);
+}
+.chat-empty-head .chat-empty-note { margin: 0; }
+.where-mark {
+  display: inline-flex;
+  align-items: center;
+  position: relative;
+}
+.where-mark .where-glyph { width: 30px; height: 30px; }
+.chat-empty-note.cloud .where-glyph { color: var(--accent); }
+.chat-empty-note:not(.cloud) .where-glyph { color: var(--green); }
 .where-why {
   display: inline-flex;
   padding: 0;
@@ -7721,10 +8241,19 @@ select.dd-open { border-color: var(--accent-line); }
   color: inherit;
   opacity: 0.55;
   cursor: pointer;
-  transition: opacity 0.15s var(--ease);
+  transition: opacity var(--dur-2) var(--ease);
 }
 .where-why:hover, .where-why:focus-visible { opacity: 1; }
 .where-why .ico { width: 15px; height: 15px; }
+/* Out of the flow. In it, the button's own width pushed the two glyphs left
+   of the heading's centre by half of itself, which is the misalignment you
+   see before you can name it. */
+.where-why {
+  position: absolute;
+  left: calc(100% + var(--s-3));
+  top: 50%;
+  transform: translateY(-50%);
+}
 /* The sentence, once asked for. Its own line under the marks rather than
    beside them, so it does not shove the glyphs off centre. */
 .where-said {
@@ -7741,6 +8270,11 @@ select.dd-open { border-color: var(--accent-line); }
    and the composer grows downward into empty space as the question gets
    longer. */
 body.chat-blank #cmdbar { top: 50%; bottom: auto; }
+/* And with the composer at the middle of the page rather than the foot of it,
+   the space reserved for it at the bottom is holding a place nothing is going
+   to stand in. Left as it was, the panel stops about 120px short of the window
+   and the empty state sits above a band of nothing. */
+body.chat-blank #view-workspace { padding-bottom: 12px; }
 body.chat-blank .chat-empty {
   position: fixed;
   left: var(--nav-w);
@@ -7827,6 +8361,22 @@ body.nav-collapsed .app-nav .nav-item {
 body.nav-collapsed .brand-name,
 body.nav-collapsed .brand-sub { display: none; }
 
+/* The activity section in 60px.
+   Running jobs survive as icons — "something is still going" is exactly the
+   right amount of information for a rail this wide, and each row keeps its
+   title attribute, so hovering still says which job and how far along.
+   Recents do not survive: six identical chat glyphs in a column is a list
+   that cannot be read, and they are already in Ctrl+K and the history menu. */
+body.nav-collapsed .nav-sec-head,
+body.nav-collapsed .nav-job-text,
+body.nav-collapsed .nav-recents { display: none; }
+body.nav-collapsed .nav-job {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+}
+body.nav-collapsed .nav-job-pulse { left: 6px; }
+
 /* ===== History ===== */
 #history-menu { position: relative; flex: 0 0 auto; }
 #history-btn {
@@ -7880,7 +8430,7 @@ body.nav-collapsed .brand-sub { display: none; }
 .history-dot.chip-chat { background: var(--accent); }
 .history-dot.chip-agent { background: var(--green); }
 .history-chip.chip-chat.active { border-color: var(--accent); }
-.history-chip.chip-agent.active { border-color: var(--green); background: rgba(126, 200, 128, 0.14); }
+.history-chip.chip-agent.active { border-color: var(--green); background: color-mix(in srgb, var(--green) 14%, transparent); }
 .history-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .history-when { font-size: var(--text-2xs); color: var(--faint); flex: 0 0 auto; }
 .history-empty { padding: var(--s-5); color: var(--faint); font-size: var(--text-sm); }
@@ -8127,6 +8677,53 @@ body.nav-collapsed .brand-sub { display: none; }
 }
 .thumb-glyph { display: flex; align-items: center; justify-content: center; height: 100%; }
 .thumb-glyph svg { width: 54%; height: 54%; }
+
+/* ----- Tiles that show the document -----
+   A canvas minimap and a deck's first slide, drawn from the geometry the
+   listing sends. Both replaced a fixed glyph that was identical on every
+   tile, which made a grid of canvases a grid of the same picture. */
+.thumb-mini {
+  display: block; height: 100%; width: 100%;
+  padding: var(--s-4);
+}
+.thumb-mini svg { width: 100%; height: 100%; display: block; }
+.thumb-mini-box {
+  fill: none;
+  stroke: var(--faint);
+  stroke-width: 1.2;
+  vector-effect: non-scaling-stroke;   /* or the aspect stretch thickens edges */
+  opacity: 0.75;
+}
+/* Writing, as a mark rather than as characters — see canvasThumb. */
+.thumb-mini-text { fill: var(--accent); opacity: 0.5; stroke: none; }
+
+.thumb-slide {
+  position: relative;
+  display: flex; align-items: center; justify-content: center;
+  height: 100%; width: 100%;
+  padding: var(--s-3);
+}
+.thumb-slide svg {
+  width: 100%;
+  background: var(--card2);
+  border-radius: var(--r-xs);
+}
+.thumb-slide-text {
+  fill: var(--text);
+  font-family: var(--sans);
+  /* The tile is a picture of a slide, not a control — a caret dragged across
+     it while picking tiles should not select half the deck's words. */
+  user-select: none;
+}
+.thumb-slide-count {
+  position: absolute;
+  right: var(--s-3); bottom: var(--s-3);
+  padding: 1px 5px;
+  border-radius: var(--r-xs);
+  background: var(--card3);
+  font-size: var(--text-2xs);
+  color: var(--muted);
+}
 .thumb-empty {
   display: flex; align-items: center; justify-content: center; height: 100%;
   font-size: var(--text-xs); color: var(--faint);
@@ -8137,7 +8734,7 @@ body.nav-collapsed .brand-sub { display: none; }
   position: absolute;
   top: var(--s-3);
   opacity: 0;
-  transition: opacity 120ms ease;
+  transition: opacity var(--dur-1) var(--ease);
   z-index: 2;
 }
 .tile-pick { left: var(--s-3); }
@@ -8170,6 +8767,24 @@ body.nav-collapsed .brand-sub { display: none; }
   color: var(--on-accent);
 }
 #drive-selection-count { margin-right: auto; }
+/* The bar sets --on-accent for its own text, but the buttons inside it are
+   ghost buttons drawn for the app's background — so "Select all shown" and
+   "Clear" arrived as muted grey ink on a saturated accent fill and were
+   reported as hard to read. Anything sitting on the fill takes the colour the
+   fill was measured against.
+
+   Not a hard-coded white: --on-accent is per accent, and the last time this
+   was fixed with #fff it reintroduced the same illegibility on a lighter
+   one. */
+.drive-selection .btn-ghost {
+  color: var(--on-accent);
+  border-color: color-mix(in srgb, var(--on-accent) 38%, transparent);
+  background: color-mix(in srgb, var(--on-accent) 10%, transparent);
+}
+.drive-selection .btn-ghost:hover {
+  background: color-mix(in srgb, var(--on-accent) 20%, transparent);
+  border-color: color-mix(in srgb, var(--on-accent) 55%, transparent);
+}
 
 /* ===== Slides: a stage you point at =====
  *
@@ -8457,4 +9072,176 @@ body.nav-collapsed .brand-sub { display: none; }
   clip: rect(0 0 0 0);
   white-space: nowrap;
   border: 0;
+}
+
+/* ===== The palette =====
+ *
+ * A card near the top of the window rather than centred: the list grows
+ * downward as you type, and a vertically centred box that grows in both
+ * directions moves the row under your eye while you are reading it.
+ */
+.palette {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 10vh 16px 16px;
+  /* A dim, and no `backdrop-filter`. Blur here is forbidden on purpose: one
+     on an ancestor recreates a popover bug that the popover's own rule cannot
+     show you, so the rule is "none anywhere" rather than "none nearby". The
+     dim separates the palette from the page perfectly well without it. */
+  background: rgba(0, 0, 0, 0.5);
+}
+.palette.hidden { display: none; }
+.palette-box {
+  width: 100%;
+  max-width: 640px;
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--card);
+  border: 1px solid var(--border-hi);
+  border-radius: var(--r-lg);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+.palette-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.palette-head .ico { width: 16px; height: 16px; color: var(--faint); flex-shrink: 0; }
+#palette-input {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: var(--text-base);
+}
+#palette-input::placeholder { color: var(--faint); }
+.palette-list { overflow-y: auto; padding: 6px; min-height: 0; }
+/* The section labels. Small and quiet: they are there to be scanned past, not
+   read — what you are looking for is a row, not a heading. */
+.palette-group {
+  padding: 9px 10px 4px;
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.palette-item {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 9px 10px;
+  background: none;
+  border: none;
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+/* One highlight, driven by the cursor, and the mouse moves the cursor rather
+   than painting its own hover — two independent highlights in a list you are
+   arrowing through is the bug where Enter opens something you are not
+   looking at. */
+.palette-item.on { background: var(--accent-soft, var(--card2)); }
+.palette-item .ico { width: 15px; height: 15px; color: var(--faint); flex-shrink: 0; }
+.palette-item.on .ico { color: var(--accent); }
+.palette-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+.palette-hint { font-size: var(--text-2xs); color: var(--faint); flex-shrink: 0; }
+.palette-loading { padding: 14px 10px; font-size: var(--text-xs); color: var(--faint); }
+.palette-foot {
+  display: flex;
+  gap: 14px;
+  padding: 9px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--bg2);
+  font-size: var(--text-2xs);
+  color: var(--faint);
+}
+.palette-foot kbd {
+  display: inline-block;
+  min-width: 16px;
+  padding: 1px 4px;
+  margin-right: 3px;
+  background: var(--card2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  font-family: var(--sans);
+  font-size: var(--text-2xs);
+  text-align: center;
+}
+/* The row's two lines: what it is, and where it came from. */
+.palette-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.palette-text .palette-label { flex: none; }
+.palette-where {
+  font-size: var(--text-2xs);
+  color: var(--faint);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* ===== Under a message: when, and what it cost =====
+ *
+ * Reference rather than content. You read it when you are wondering why
+ * something took a while; the rest of the time it should stay out of the way
+ * of the answer, which is why it is the quietest text on the row and does not
+ * brighten on hover the way the actions above it do.
+ */
+.msg-meta {
+  display: flex;
+  gap: var(--s-3);
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 4px;
+  font-size: var(--text-2xs);
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+.message.user .msg-meta { justify-content: flex-end; }
+/* Dotted underline, not a pointer: there is more detail on hover — the model,
+   the seconds spent generating, the prompt rate — and nothing to click. */
+.msg-meta-tps { border-bottom: 1px dotted var(--border-hi); cursor: help; }
+
+/* ===== Chart artifacts =====
+   Drawn by renderChart() from a spec the model sent. Text wears text tokens,
+   never a series colour — the swatch beside a name carries identity, the name
+   itself stays legible ink. */
+.artifact-chart { padding: var(--s-4) var(--s-4) var(--s-3); }
+.chart-title {
+  font-size: var(--text-sm);
+  font-weight: var(--w-medium);
+  color: var(--text);
+  margin-bottom: var(--s-2);
+}
+.chart-svg { width: 100%; height: auto; display: block; }
+/* Scaffolding, not data. */
+.chart-grid { stroke: var(--border); stroke-width: 1; }
+.chart-tick { fill: var(--faint); font-size: var(--text-2xs); font-family: var(--sans); }
+.chart-axis-label {
+  fill: var(--muted); font-size: var(--text-2xs); font-family: var(--sans);
+  letter-spacing: 0.02em;
+}
+.chart-legend {
+  display: flex; flex-wrap: wrap; gap: var(--s-3) var(--s-4);
+  margin-top: var(--s-2);
+}
+.chart-key {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: var(--text-xs); color: var(--muted);
+}
+.chart-swatch {
+  width: 9px; height: 9px; border-radius: var(--r-xs); flex: none;
 }

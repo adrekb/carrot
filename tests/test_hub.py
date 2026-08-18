@@ -95,6 +95,83 @@ def test_detect_specs_apple_silicon(monkeypatch):
     assert specs["model_budget_gb"] == pytest.approx(16.0 * 0.65, abs=0.1)
 
 
+# ===== Which engine runs the model =====
+
+def test_every_engine_says_how_carrot_reaches_it():
+    """Recommending an engine Carrot cannot talk to is advice with nowhere to
+    go. Either it is built in, or it speaks the OpenAI wire format that
+    providers.py already routes."""
+    from carrot import providers
+    for engine in hub.ENGINES.values():
+        assert engine["access"] in ("builtin", "openai_provider")
+        assert engine["access_note"]
+    assert hub.ENGINES["ollama"]["access"] == "builtin"
+    assert providers.KIND_OPENAI == "openai"   # what the others plug into
+
+
+def test_cuda_machine_is_told_to_stay_on_ollama():
+    rec = hub.recommend_engine({"backend": "cuda", "gpu": "NVIDIA GeForce RTX 4070"})
+    assert rec["engine"]["id"] == "ollama"
+    assert rec["engine"]["backend"] == "cuda"
+    assert rec["gpu_vendor"] == "nvidia"
+    # Nothing to fix, so nothing is flagged above the fold.
+    assert rec["detail"] == ""
+
+
+def test_apple_silicon_hears_about_mlx():
+    rec = hub.recommend_engine({"backend": "metal", "gpu": "Apple M3 Pro"})
+    assert rec["engine"]["id"] == "ollama"
+    alts = {a["id"] for a in rec["alternatives"]}
+    assert "mlx" in alts
+    mlx = next(a for a in rec["alternatives"] if a["id"] == "mlx")
+    # No invented speedup. The session that wrote this had not measured one.
+    assert "not measured" in mlx["why"]
+
+
+def test_unreadable_amd_gpu_is_pointed_at_vulkan():
+    """The case this function exists for: a real GPU, no VRAM reading from it,
+    so the budget was planned for CPU and the card may be sitting idle."""
+    rec = hub.recommend_engine({"backend": "cpu", "gpu": "AMD Radeon RX 7800 XT"})
+    assert rec["gpu_vendor"] == "amd"
+    assert rec["engine"]["backend"] == "cpu"
+    assert any(a["backend"] == "vulkan" for a in rec["alternatives"])
+    # Says the estimates are CPU estimates rather than leaving them to be read
+    # as the machine's ceiling.
+    assert "CPU estimates" in rec["detail"]
+
+
+def test_intel_arc_counts_as_a_gpu_worth_mentioning():
+    rec = hub.recommend_engine({"backend": "cpu", "gpu": "Intel(R) Arc(TM) A770 Graphics"})
+    assert rec["gpu_vendor"] == "intel"
+    assert any(a["backend"] == "vulkan" for a in rec["alternatives"])
+
+
+def test_nvidia_wins_over_an_integrated_intel_on_the_same_line():
+    """Machines list every adapter. Reading the iGPU first would file an RTX
+    box under Intel and recommend Vulkan to a CUDA machine."""
+    rec = hub.recommend_engine(
+        {"backend": "cuda", "gpu": "NVIDIA GeForce RTX 4070; Intel(R) UHD Graphics 770"})
+    assert rec["gpu_vendor"] == "nvidia"
+
+
+def test_gpuless_machine_gets_no_upgrade_theatre():
+    rec = hub.recommend_engine({"backend": "cpu", "gpu": "Integrated/Unknown"})
+    assert rec["gpu_vendor"] == ""
+    assert rec["engine"]["id"] == "ollama"
+    assert all(a["backend"] != "vulkan" for a in rec["alternatives"])
+
+
+def test_overview_carries_the_engine_recommendation(monkeypatch):
+    monkeypatch.setattr(hub, "fetch_hf_trending", lambda: [])
+    monkeypatch.setattr(hub, "detect_specs", lambda refresh=False: {
+        "backend": "cuda", "gpu": "NVIDIA RTX 3060", "ram_gb": 32.0,
+        "vram_gb": 12.0, "model_budget_gb": 12.0,
+    })
+    data = hub.hub_overview()
+    assert data["engine"]["engine"]["id"] == "ollama"
+    assert data["engine"]["engine"]["backend_label"] == "CUDA"
+
+
 # ===== Catalog: bundled -> cached -> remote =====
 
 def test_catalog_falls_back_to_bundle_when_hub_unreachable(tmp_path, monkeypatch):
@@ -309,6 +386,21 @@ def test_quant_descent_uses_best_quality_that_fits():
     plan_none = hub.quant_plan(70.0, 4.0)
     assert plan_none["quant"] == "Q3_K_M"
     assert plan_none["fit"] == "too_big"
+
+
+def test_every_quant_on_the_ladder_says_what_it_costs():
+    """Memory and speed both improve as the bit-rate drops. Without a word
+    about quality, the card argues for the lowest quant and never says why
+    that is a bad idea."""
+    for name, _ in hub.QUANT_LADDER:
+        assert hub.QUANT_QUALITY.get(name), f"{name} has no quality note"
+    assert hub.quant_plan(8.0, 24.0)["quality_note"] == hub.QUANT_QUALITY["Q8_0"]
+    assert hub.quant_plan(70.0, 4.0)["quality_note"] == hub.QUANT_QUALITY["Q3_K_M"]
+
+
+def test_annotate_fit_carries_the_quality_note():
+    annotated = hub.annotate_fit(hub.BUNDLED_CATALOG, BIG_RIG)
+    assert all(m["quality_note"] == hub.QUANT_QUALITY[m["quant"]] for m in annotated)
 
 
 def test_apply_quant_plan_retags_pull_id():

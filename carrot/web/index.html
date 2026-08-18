@@ -367,6 +367,31 @@
   </div>
 </header>
 
+<!-- ===== The palette =====
+     Ctrl+K used to put the cursor in the composer. This replaces that without
+     taking it away: the box is a text field, and typing something and pressing
+     Enter with nothing selected starts a chat with it — so the old muscle
+     memory still ends up asking a question, and the same keystroke now also
+     reaches everything else without a second shortcut to learn. -->
+<div id="palette" class="palette hidden" role="dialog" aria-modal="true"
+     aria-label="Search or run a command">
+  <div class="palette-box">
+    <div class="palette-head">
+      <svg class="ico"><use href="#i-search"/></svg>
+      <input type="text" id="palette-input" autocomplete="off" spellcheck="false"
+             placeholder="Search or start a chat" aria-controls="palette-list">
+      <button class="icon-btn" onclick="closePalette()" aria-label="Close">
+        <svg class="ico"><use href="#i-x"/></svg></button>
+    </div>
+    <div id="palette-list" class="palette-list" role="listbox"></div>
+    <div class="palette-foot">
+      <span><kbd>↑</kbd><kbd>↓</kbd> Select</span>
+      <span><kbd>Enter</kbd> Open</span>
+      <span><kbd>Esc</kbd> Close</span>
+    </div>
+  </div>
+</div>
+
 <!-- ===== App body: left nav + views ===== -->
 <div id="app-body">
 <nav class="app-nav">
@@ -392,6 +417,37 @@
   <button class="nav-item" data-tab="settings" onclick="switchTab('settings')">
     <svg class="ico"><use href="#i-gear"/></svg><span class="nav-label">Settings</span>
   </button>
+
+  <!-- Everything above is where you go. This is what is happening.
+
+       The rail was four buttons and six hundred pixels of nothing, which is a
+       gap rather than restraint: work started here outlives the screen that
+       started it, and once you navigate away nothing anywhere says an agent or
+       a research run is still going. Two unequal halves — running work is
+       worth interrupting someone for and sits at the top; recents are a thing
+       you go looking for, so they stay collapsed until asked for. Both are
+       drawn by js/activity.js from one /api/activity call. -->
+  <div id="nav-activity" class="nav-activity"></div>
+
+  <!-- Everything above is where you go. This is what is true.
+
+       It sits at the foot of the rail because it is not a destination — it is
+       the answer to "is any of this leaving my machine", which for an app
+       whose whole argument is that it does not, should be readable without
+       going and looking for it. A dot and two words; the detail is a click
+       away, and the click is where the technical names live. -->
+  <div class="nav-foot">
+    <button id="privacy-chip" class="privacy-chip" onclick="togglePrivacyPanel()"
+            aria-haspopup="dialog" aria-expanded="false">
+      <span id="privacy-dot" class="privacy-dot"></span>
+      <span class="privacy-text">
+        <span id="privacy-where" class="privacy-where">Checking…</span>
+        <span id="privacy-model" class="privacy-model"></span>
+      </span>
+    </button>
+    <div id="privacy-panel" class="privacy-panel hidden" role="dialog"
+         aria-label="Where your data goes"></div>
+  </div>
 </nav>
 
 <!-- ===== Views ===== -->
@@ -521,8 +577,13 @@
              composer directly under it rather than parked at the bottom of a
              screen with nothing in between. -->
         <div class="chat-empty" id="chat-empty">
-          <h1 class="chat-empty-title">Where should we begin?</h1>
-          <p id="chat-empty-line" class="chat-empty-note"></p>
+          <!-- The heading and the where-from mark on one line: the mark is
+               about this question, and under it read as a footnote about the
+               machine. -->
+          <div class="chat-empty-head">
+            <h1 class="chat-empty-title">Where should we begin?</h1>
+            <p id="chat-empty-line" class="chat-empty-note"></p>
+          </div>
         </div>
       </div>
       <!-- The agent's work, under the transcript.
@@ -1275,10 +1336,15 @@
       </p>
 
       <div class="composer">
-        <input type="text" id="ws-new-name" placeholder="New workspace name">
+        <!-- Enter submits. A name field beside an Add button is a form to
+             everyone who has ever used one, and typing a name then pressing
+             Enter did nothing here. -->
+        <input type="text" id="ws-new-name" placeholder="New workspace name"
+               onkeydown="if(event.key==='Enter')createWorkspace()">
         <select id="ws-new-folder"></select>
         <button class="btn btn-primary" onclick="createWorkspace()">Add workspace</button>
-        <input type="text" id="folder-new-name" placeholder="New folder name">
+        <input type="text" id="folder-new-name" placeholder="New folder name"
+               onkeydown="if(event.key==='Enter')createFolder()">
         <select id="folder-new-parent"></select>
         <button class="btn btn-ghost" onclick="createFolder()">Add folder</button>
       </div>
@@ -1401,6 +1467,7 @@
       </p>
 
       <div id="hub-specs" class="hub-specs"></div>
+      <div id="hub-engine" class="hub-engine"></div>
 
       <div class="hub-search">
         <input type="text" id="hub-workload" placeholder="What will you use it for? e.g. long conversations, goal tracking, coding, daily updates…"
@@ -1677,6 +1744,14 @@
         <div class="theme-grid" id="theme-modes"></div>
         <div class="settings-row" style="margin-top:14px"><span class="settings-label">Accent</span></div>
         <div class="theme-grid" id="theme-accents"></div>
+        <label class="check-row" style="margin-top:14px">
+          <input type="checkbox" id="doc-paper-toggle" onchange="setDocPaper(this.checked)">
+          <span>Write documents on white paper, whatever the app theme</span>
+        </label>
+        <p class="muted small">
+          A dark interface suits something you operate; a document is trying to be a page.
+          This leaves the app as you set it and turns the editor white.
+        </p>
       </div>
 
       <div class="settings-card">
@@ -1741,6 +1816,39 @@
             <p class="muted small" id="ctx-overhead"></p>
           </div>
         </details>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-search"/></svg>
+          <h3>Where web results come from</h3>
+        </div>
+        <p class="muted small">
+          Carrot asks Exa first and falls back to DuckDuckGo. Exa is a neural search —
+          you describe the page you want rather than guessing its keywords — and it
+          returns the page's text with the result, which is the difference between
+          handing the model a list of places an answer might be and handing it the
+          answer. Its free endpoint needs no account and is counted per computer, so
+          this install has its own allowance. When that runs out for the day, Carrot
+          carries on with DuckDuckGo.
+        </p>
+        <div class="settings-row">
+          <span class="settings-label">Ask first</span>
+          <select id="search-provider" onchange="setSearchProvider(this.value)"></select>
+        </div>
+        <p class="muted small">
+          Whichever you pick, the other is still there if it cannot answer — losing
+          search for a day is worse than some results coming from the other engine.
+        </p>
+        <div class="settings-row">
+          <span class="settings-label">Exa API key</span>
+          <input type="password" id="exa-api-key" placeholder="optional — only to go past the free limit"
+                 spellcheck="false" onchange="setExaKey(this.value)">
+        </div>
+        <p class="muted small">
+          Only needed if you have an Exa account and want past the free daily cap.
+          Stored on this machine and never returned by the API once saved.
+        </p>
       </div>
 
       <div class="settings-card">
@@ -2362,5 +2470,14 @@
      listening at the document, including the ones the scripts above build
      later, so nothing here has to load before it. -->
 <script src="/js/dropdown.js"></script>
+<!-- Last, because it calls into the others: switchTab, newChat, newNote,
+     newDriveWorkspace, openConversation, openDriveItem. It guards every one of
+     them anyway — a palette entry for a pack that is switched off should do
+     nothing rather than throw — but loading it after them means the guards are
+     for genuinely absent features rather than for load order. -->
+<script src="/js/palette.js"></script>
+<!-- After app.js and agents.js: the rail's rows open conversations and runs
+     through the same functions the history menu uses. -->
+<script src="/js/activity.js"></script>
 </body>
 </html>

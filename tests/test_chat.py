@@ -1,7 +1,10 @@
 """Tests for chat endpoints (streaming and non-streaming) and conversations."""
+import asyncio
 import json
 
 import pytest
+
+from carrot import app as A
 
 
 def test_health(client):
@@ -373,3 +376,111 @@ class TestTheGapAnalysisDoesNotReachTheAnswer:
         tidy = source[source.index("def _tidy_answer"):]
         tidy = tidy[:tidy.index("\n\n\n")]
         assert "strip_process_preamble" in tidy
+
+
+class TestATurnNobodyIsListeningToIsStillWrittenDown:
+    """A cancelled run left the question and lost everything else.
+
+    Reported as "it got cancelled and nothing saved, which is not great": the
+    conversation kept the user's message and had no assistant row at all — no
+    partial answer, no trace, so every search the turn had already run and
+    every page it had already read went with it.
+
+    The store used to sit after the event loop. When the browser goes away,
+    Starlette closes the generator, which raises GeneratorExit at the `yield`.
+    GeneratorExit is a BaseException, so `except Exception` did not catch it
+    and nothing after the loop ran.
+
+    Driven by closing the generator directly rather than through TestClient:
+    the client buffers the whole response, so a `with` block that exits early
+    still consumes every frame and never disconnects. The first version of
+    this test passed against the broken code for exactly that reason.
+    """
+
+    def _drive(self, monkeypatch, conv_id, events, read=None):
+        """Run the endpoint's own generator and, optionally, walk away.
+
+        `read=None` drains it, which is a turn that finished. `read=n` stops
+        after n frames and closes, which raises GeneratorExit at the yield —
+        exactly what Starlette does when the browser disconnects.
+        """
+        def fake(*a, **k):
+            for event in events:
+                yield event
+        monkeypatch.setattr(A, "_agentic_chat_events", fake)
+
+        async def go():
+            response = await A.chat_stream(A.ChatRequest(
+                message="f35 status", conversation_id=conv_id, search_mode="off"))
+            frames = response.body_iterator
+            seen = 0
+            try:
+                async for _ in frames:
+                    seen += 1
+                    if read is not None and seen >= read:
+                        break
+            finally:
+                await frames.aclose()
+            return seen
+        return asyncio.run(go())
+
+    def test_a_disconnect_mid_stream_still_stores_what_there_was(
+            self, client, isolated_db, monkeypatch):
+        from carrot import conversation as conv_mod
+
+        conv = conv_mod.create_conversation("cancelled")
+        self._drive(monkeypatch, conv["id"], [
+            {"tool": {"name": "carrot__web_search", "args": {"query": "f35"}}},
+            {"tool_result": {"result": "some results"}},
+            {"chunk": "The F-35 is"},
+            {"_final_text": "The F-35 is"},
+            {"chunk": " a fighter"},
+        ], read=3)
+
+        messages = conv_mod.get_conversation(conv["id"])["messages"]
+        assistant = [m for m in messages if m["role"] == "assistant"]
+        assert assistant, "the turn was thrown away"
+        meta = assistant[-1].get("metadata") or {}
+        assert meta.get("trace"), "the searches it had already run were lost"
+        assert meta.get("interrupted") is True
+
+    def test_a_turn_that_finishes_is_not_marked_interrupted(
+            self, client, isolated_db, monkeypatch):
+        from carrot import conversation as conv_mod
+
+        conv = conv_mod.create_conversation("finished")
+        self._drive(monkeypatch, conv["id"],
+                    [{"chunk": "Done."}, {"_final_text": "Done."}])
+
+        assistant = [m for m in conv_mod.get_conversation(conv["id"])["messages"]
+                     if m["role"] == "assistant"]
+        assert assistant[-1]["content"] == "Done."
+        assert not (assistant[-1].get("metadata") or {}).get("interrupted")
+
+    def test_an_interrupted_turn_does_not_feed_the_memory_extractor(
+            self, client, isolated_db, monkeypatch):
+        """The extractor reads conclusions out of a turn. One cut off halfway
+        has none, and filing what it was mid-way through saying is how a
+        stopped sentence becomes a durable belief."""
+        from carrot import conversation as conv_mod
+
+        called = []
+        monkeypatch.setattr(A, "_post_turn", lambda *a, **k: called.append(a))
+        conv = conv_mod.create_conversation("half")
+        self._drive(monkeypatch, conv["id"], [
+            {"chunk": "The user always prefers"},
+            {"_final_text": "The user always prefers"},
+            {"chunk": " tabs over spaces"},
+        ], read=2)
+        assert called == [], "a half-finished turn was mined for memories"
+
+    def test_a_turn_with_nothing_at_all_stores_nothing(
+            self, client, isolated_db, monkeypatch):
+        """An empty row is not a record of anything, and it would show as a
+        blank reply under the question."""
+        from carrot import conversation as conv_mod
+
+        conv = conv_mod.create_conversation("empty")
+        self._drive(monkeypatch, conv["id"], [{"turn_id": "x"}], read=1)
+        assert [m for m in conv_mod.get_conversation(conv["id"])["messages"]
+                if m["role"] == "assistant"] == []

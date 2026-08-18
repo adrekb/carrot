@@ -35,7 +35,11 @@ def test_light_theme_overrides_every_ground_token():
     """A token the light block forgets keeps its dark value — e.g. dark text
     on a dark card over a white page, which is invisible rather than merely
     ugly. Check the ones that carry contrast."""
-    block = re.search(r':root\[data-theme="light"\]\s*\{(.*?)\n\}', CSS, re.S)
+    # `[^{]*` rather than `\s*`: the light block carries a second selector
+    # (`.paper`, for a white document inside a dark app), and pinning this to
+    # the exact selector text made it fail on a change that did not touch a
+    # single token.
+    block = re.search(r':root\[data-theme="light"\][^{]*\{(.*?)\n\}', CSS, re.S)
     assert block, "no light theme block"
     body = block.group(1)
     for token in ("--bg", "--bg2", "--card", "--card2", "--card3",
@@ -157,6 +161,72 @@ class TestWhereTheAnswerComesFrom:
     def test_the_marks_are_styled(self):
         for cls in (".where-mark", ".where-why", ".where-said"):
             assert cls in CSS, f"{cls} is built by renderEmptyStateLine but never styled"
+
+
+def test_the_blank_chat_reaches_the_bottom_of_the_window():
+    """The composer is `position: fixed`, so the view reserves space at its
+    foot to stop it sitting on the terminal. With nothing said yet the composer
+    moves to the middle of the page — and the reservation stayed, holding a
+    place nothing was going to stand in, so the panel stopped 172px short and
+    the empty state sat above a band of nothing.
+
+    The reservation still has to come back the moment there are messages, which
+    is why this is scoped to `.chat-blank` rather than removed.
+    """
+    assert "body.chat-blank #view-workspace" in CSS
+    reserve = CSS[CSS.index("#view-workspace {"):]
+    reserve = reserve[:reserve.index("}")]
+    assert "--composer-h" in reserve, (
+        "the normal reservation must still track the composer's real height")
+
+
+class TestTextOnColour:
+    """A sweep of 4682 rendered text nodes across six accents and both themes
+    found eighteen selectors under the contrast they needed. Almost all were
+    one of three mistakes, and these are the guards for those three.
+
+    The measuring itself cannot live here — it needs a browser — so what is
+    pinned is the shape of the fixes, which is what regresses.
+    """
+
+    def test_the_palette_carries_ink_for_each_kind_of_surface(self):
+        """Three, because they are three different backgrounds and one answer
+        cannot serve them: `--on-accent` for the fill, `--on-accent-bright` for
+        the bright end of the ramp, `--accent-ink` for the accent as words on
+        the page. Orchid needs white on one and near-black on another."""
+        for token in ("--on-accent:", "--on-accent-bright:", "--accent-ink:"):
+            assert token in CSS, f"{token} is missing from the palette"
+
+    def test_status_colours_are_themed(self):
+        """One value for both themes meant the dark-theme green and yellow
+        measured 1.87 and 1.64 on a light background — very nearly invisible."""
+        light = CSS[CSS.rindex(':root[data-theme="light"]'):]
+        light = light[light.index("{"):light.index("\n}")]
+        for token in ("--green:", "--yellow:", "--red:"):
+            assert token in light, f"{token} has no light-theme value"
+
+    def test_no_status_colour_is_hardcoded_past_the_palette(self):
+        """The badges wrote `rgb(126, 200, 128)` inline, so a themed `--green`
+        could never have reached them."""
+        for literal in ("rgb(126, 200, 128)", "rgb(233, 176, 74)"):
+            assert literal not in CSS, (
+                f"{literal} is a status colour written past the tokens")
+
+    def test_the_primary_button_does_not_write_white_on_the_bright_accent(self):
+        """`--accent` is the end of the ramp meant to be noticed rather than
+        read against: white on it measured 3.55 on orchid."""
+        rule = CSS[CSS.rindex(".btn-primary {"):]
+        rule = rule[:rule.index("}")]
+        assert "#fff" not in rule
+        assert "--on-accent" in rule
+
+    def test_faint_is_calibrated_against_its_worst_background(self):
+        """It was measured on `--card`, the lightest surface in the theme, and
+        then used on the darker ones where the same colour lands at 4.33."""
+        light = CSS[CSS.rindex(':root[data-theme="light"]'):]
+        light = light[light.index("{"):light.index("\n}")]
+        assert "--card2" in light[:light.index("--faint:")], (
+            "the --faint comment should name the surface it was measured against")
 
 
 def test_the_small_print_on_a_chosen_option_is_not_left_grey():

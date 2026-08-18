@@ -649,3 +649,82 @@ class TestInlineCitationsAreChips:
         block = css[css.index(".md a.cite-chip::before"):]
         block = block[:block.index("}")]
         assert "url(" not in block
+
+
+class TestTheDropdownArrowSurvivesItsOwnStylesheet:
+    """A row of filters rendered as a wall of tiled chevrons.
+
+    `select` sets `appearance: none`, so the chevron drawn by the `select` rule
+    is the *only* arrow a dropdown has. `background` is a shorthand: any later
+    or more specific rule setting `background: <colour>` on something that
+    reaches a `<select>` silently resets `background-image`, `background-repeat`
+    and `background-position` together.
+
+    That produced two different bugs from one cause. In dark, `.write-filter`
+    won outright and the arrow disappeared — a dropdown with no affordance at
+    all. In light, `:root[data-theme="light"] select` is more specific, so it
+    put the *image* back while repeat stayed `repeat` and position stayed
+    `0 0`, and the control filled edge to edge with chevrons.
+
+    Four more selects were found in the same state once it was looked for:
+    #worktree-picker, #agent-model, #prov-preset and #prov-kind.
+    """
+
+    # `select` as an element in the selector — not `user-select`, not `.selected`.
+    REACHES_A_SELECT = re.compile(r"(^|[\s,>+~])select($|[\s,.:>+~\[])")
+
+    def _rules(self):
+        css = read("css", "style.css")
+        # Flat enough for this: every `... { ... }` whose body has no nested
+        # brace. Comments run together with the following selector, so they are
+        # stripped rather than matched against.
+        for match in re.finditer(r"([^{}]+)\{([^{}]*)\}", css):
+            selector = re.sub(r"/\*.*?\*/", "", match.group(1), flags=re.S).strip()
+            yield selector, match.group(2)
+
+    def test_no_class_scoped_rule_clears_the_chevron_with_a_shorthand(self):
+        """Scoped by class or id, because that is what makes a rule dangerous.
+
+        A bare `input, select, textarea { background: ... }` has the same
+        specificity as the `select` rule and loses to it on source order, which
+        is why several of those are harmless and still in the file. A rule
+        carrying a class or an id outranks `select` outright and wins wherever
+        it sits — that is the shape all five bugs had.
+        """
+        offenders = []
+        for selector, body in self._rules():
+            if selector.startswith("@") or not self.REACHES_A_SELECT.search(selector):
+                continue
+            # The popup's own rows have no chevron to clear.
+            if re.search(r"select\s+(option|optgroup)", selector):
+                continue
+            reaching = [p for p in selector.split(",")
+                        if self.REACHES_A_SELECT.search(p.strip())]
+            if not any(re.search(r"[.#]", p) for p in reaching):
+                continue
+            if re.search(r"(^|;|\s)background\s*:", body):
+                offenders.append(selector.replace("\n", " ")[:70])
+        assert not offenders, (
+            "these outrank `select` and set the `background` shorthand, which "
+            "clears the chevron that `appearance: none` makes the only arrow — "
+            f"use background-color: {offenders}")
+
+    def test_the_chevron_and_its_geometry_live_in_one_rule(self):
+        """Splitting the image from its repeat/position is what let a theme
+        override restore one without the other."""
+        css = read("css", "style.css")
+        block = css[css.index("\nselect {"):]
+        block = block[:block.index("}")]
+        for prop in ("background-image", "background-repeat", "background-position"):
+            assert prop in block, f"{prop} belongs with the chevron, not elsewhere"
+
+    def test_the_theme_swaps_a_token_rather_than_the_image(self):
+        css = read("css", "style.css")
+        # Found by selector prefix: the block carries `.paper` as well.
+        light = css[css.index(':root[data-theme="light"]'):]
+        light = light[light.index("{"):light.index("}")]
+        assert "--select-chevron" in light
+        # Comments stripped first — the one above the token explains why there
+        # is no background-image here, and would otherwise match.
+        declarations = re.sub(r"/\*.*?\*/", "", light, flags=re.S)
+        assert "background-image" not in declarations

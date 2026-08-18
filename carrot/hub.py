@@ -252,6 +252,182 @@ def _detect_specs_uncached() -> dict:
     }
 
 
+# ===== Which engine should run the model =====
+#
+# Picking a model is only half the answer. The same weights on the same
+# machine run at wildly different speeds depending on what executes them,
+# and the difference is not a tuning detail — on a machine whose GPU Ollama
+# cannot address, it is the difference between using the graphics card and
+# not using it.
+#
+# Every engine here is one Carrot can actually talk to today, and each says
+# how. That constraint is the point: recommending MLX to someone whose app
+# has no MLX client is advice with nowhere to go. Ollama is built in;
+# everything else speaks the OpenAI chat-completions wire format, which
+# `providers.py` already routes and streams, so "use llama.cpp instead" is a
+# base URL in Settings rather than a feature request.
+#
+# What is deliberately *not* here: numbers comparing one engine to another.
+# llama.cpp, Ollama and LM Studio share the same ggml kernels, so on the same
+# backend they are within noise of each other, and the honest reason to switch
+# is which hardware each can reach — not a benchmark this file made up.
+ENGINES = {
+    "ollama": {
+        "id": "ollama",
+        "label": "Ollama",
+        "url": "https://ollama.com",
+        # How Carrot reaches it. "builtin" means the install, the model pulls,
+        # the storage screen and the chat all already point at it.
+        "access": "builtin",
+        "access_note": "Built in — Carrot installs it, pulls models into it and manages them here.",
+    },
+    "llamacpp": {
+        "id": "llamacpp",
+        "label": "llama.cpp server",
+        "url": "https://github.com/ggml-org/llama.cpp",
+        "access": "openai_provider",
+        "access_note": ("Run `llama-server` with a GGUF file, then add it in Settings → "
+                        "Providers as an OpenAI-compatible endpoint (usually "
+                        "http://localhost:8080/v1). Carrot chats through it, but you "
+                        "manage the model files yourself."),
+    },
+    "lmstudio": {
+        "id": "lmstudio",
+        "label": "LM Studio",
+        "url": "https://lmstudio.ai",
+        "access": "openai_provider",
+        "access_note": ("Switch on its local server, then pick the LM Studio preset in "
+                        "Settings → Providers. Downloads and backend selection happen in "
+                        "LM Studio, not in Carrot."),
+    },
+    "mlx": {
+        "id": "mlx",
+        "label": "MLX",
+        "url": "https://github.com/ml-explore/mlx-lm",
+        "access": "openai_provider",
+        "access_note": ("`mlx_lm.server` serves an OpenAI-compatible endpoint; add it in "
+                        "Settings → Providers as a custom provider. Apple Silicon only."),
+    },
+}
+
+# Compute backends, in the words a user would recognise on their own machine.
+_BACKEND_LABEL = {
+    "cuda": "CUDA", "rocm": "ROCm", "metal": "Metal", "cpu": "CPU", "vulkan": "Vulkan",
+}
+
+_VENDOR_MARKERS = (
+    # Ordered: an "NVIDIA GeForce RTX" string must not be read as Intel because
+    # the machine also lists an Intel iGPU further along the same line.
+    ("nvidia", ("nvidia", "geforce", "rtx ", "gtx ", "quadro", "tesla")),
+    ("amd", ("radeon", "amd ", "firepro", "vega")),
+    ("intel", ("intel", "arc ", "iris", "uhd graphics", "hd graphics")),
+    ("apple", ("apple m", "apple gpu")),
+)
+
+
+def _gpu_vendor(specs: dict) -> str:
+    """Whose GPU this is, from the detected name, or "" if we can't tell."""
+    name = (specs.get("gpu") or "").lower()
+    for vendor, markers in _VENDOR_MARKERS:
+        if any(marker in name for marker in markers):
+            return vendor
+    return ""
+
+
+def _engine(engine_id: str, backend: str, why: str, **extra) -> dict:
+    entry = dict(ENGINES[engine_id])
+    entry["backend"] = backend
+    entry["backend_label"] = _BACKEND_LABEL.get(backend, backend)
+    entry["why"] = why
+    entry.update(extra)
+    return entry
+
+
+def recommend_engine(specs: dict) -> dict:
+    """Which engine should run models here, why, and what else is worth trying.
+
+    Returns ``{"engine": <primary>, "alternatives": [...], "detail": str}``.
+    The primary is nearly always Ollama, and that is not laziness: it is the
+    one Carrot installs, pulls into and manages, so every other answer costs
+    the user a second application to keep models in. The alternatives exist
+    for the case where that costs them the GPU instead.
+    """
+    backend = specs.get("backend") or "cpu"
+    vendor = _gpu_vendor(specs)
+    gpu = (specs.get("gpu") or "").split(";")[0].strip()
+    alternatives = []
+
+    if backend == "cuda":
+        primary = _engine("ollama", "cuda",
+                          f"Ollama drives {gpu or 'this NVIDIA card'} through CUDA, which is "
+                          f"the fastest path this machine has. Nothing else here would be "
+                          f"quicker, and everything else is more setup.")
+        alternatives.append(_engine(
+            "llamacpp", "cuda",
+            "Same CUDA kernels underneath. Worth it only if you want to hand-tune layer "
+            "offload, batch size or a quant Ollama does not publish."))
+        detail = ""
+    elif backend == "metal":
+        primary = _engine("ollama", "metal",
+                          "Ollama uses Metal on Apple Silicon and reads from the same unified "
+                          "memory the CPU does, so there is no transfer cost to pay.")
+        alternatives.append(_engine(
+            "mlx", "metal",
+            "Apple's own framework, built for this chip rather than ported to it. Reports of "
+            "how much faster it is vary by model and Carrot has not measured it — treat it as "
+            "worth trying, not as a known win. Fewer models are converted for it than exist "
+            "as GGUF."))
+        detail = ""
+    elif backend == "rocm":
+        primary = _engine("ollama", "rocm",
+                          f"rocm-smi answered, so ROCm is installed and Ollama can drive "
+                          f"{gpu or 'this Radeon card'} with it.")
+        alternatives.append(_engine(
+            "lmstudio", "vulkan",
+            "Its Vulkan backend does not need ROCm at all. Useful if a driver update ever "
+            "takes ROCm away — Vulkan keeps working."))
+        detail = ""
+    elif vendor in ("amd", "intel"):
+        # The case worth writing this function for. There is a real GPU here
+        # and the budget was planned for CPU, because neither nvidia-smi nor
+        # rocm-smi answered. Carefully worded: Ollama ships ROCm libraries for
+        # several Radeon cards and may well use this one. What Carrot knows is
+        # that *it* could not read the VRAM, so it sized for CPU — which is the
+        # honest thing to say, and a different claim from "your GPU is unused".
+        vendor_label = "Radeon" if vendor == "amd" else "Intel"
+        primary = _engine(
+            "ollama", "cpu",
+            f"Carrot could not read VRAM off {gpu or f'this {vendor_label} GPU'} — nvidia-smi "
+            f"and rocm-smi both went unanswered — so models here are sized to fit in system "
+            f"RAM. Ollama may still reach the card on its own; the sizes below assume it "
+            f"does not, which errs towards a model that runs.")
+        alternatives.append(_engine(
+            "lmstudio", "vulkan",
+            f"Vulkan talks to {vendor_label} GPUs without CUDA or ROCm, and LM Studio picks "
+            f"the backend for you. If answers here are slower than they should be for the "
+            f"card in this machine, this is the thing to try."))
+        alternatives.append(_engine(
+            "llamacpp", "vulkan",
+            "The same Vulkan backend without the GUI, if you would rather run a server and "
+            "point Carrot at it."))
+        detail = (f"A {vendor_label} GPU is installed but Carrot has no reading from it. "
+                  f"Speed and size estimates on this screen are CPU estimates.")
+    else:
+        primary = _engine("ollama", "cpu",
+                          "No GPU Carrot can address, so models run on the CPU. Ollama is "
+                          "still the right engine — the limit here is memory bandwidth, and "
+                          "no local engine gets around that.")
+        alternatives.append(_engine(
+            "llamacpp", "cpu",
+            "Exposes thread count and batch size directly, which is the only lever left on "
+            "a CPU-only machine and worth perhaps 10-20%."))
+        detail = ("On CPU the model's size is what decides its speed. A smaller model at a "
+                  "higher bit-rate will feel better here than a large one squeezed down.")
+
+    return {"engine": primary, "alternatives": alternatives, "detail": detail,
+            "gpu_vendor": vendor}
+
+
 # ===== Catalog (bundled -> cached -> remote) =====
 
 def _catalog_urls() -> tuple:
@@ -368,6 +544,26 @@ QUANT_LADDER = [
 _MEM_OVERHEAD_FACTOR = 1.15
 _MEM_OVERHEAD_FLAT_GB = 1.2
 
+# What a rung of the ladder costs in answers, said in words.
+#
+# The Hub already shows the two numbers a quant decides — how much memory it
+# takes and how fast it runs — and both of them get *better* as the bit-rate
+# drops, so a screen showing only those makes Q3 look like the smart choice.
+# The third axis is the one the user actually cares about and the only one
+# with no number on the card. Deliberately qualitative: the published
+# perplexity deltas for these are small, model-dependent, and a poor proxy for
+# whether an answer is right, so quoting one here would be false precision
+# dressed up as measurement. Ordered by the ladder above.
+QUANT_QUALITY = {
+    "Q8_0": "Indistinguishable from the full-precision weights.",
+    "Q6_K": "Near-identical to full precision; differences show up in benchmarks, not in use.",
+    "Q5_K_M": "Very close to full quality, for about a third less memory.",
+    "Q4_K_M": "The usual tradeoff, and what most people run — a little weaker than "
+              "the full weights, half the memory.",
+    "Q3_K_M": "Noticeably weaker, and as low as Carrot will go. A smaller model at a "
+              "higher bit-rate is usually the better answer.",
+}
+
 
 def quant_plan(params_b: float, budget_gb: float) -> dict:
     """Best-quality quant that fits the budget, or Q3_K_M marked tight/too_big
@@ -397,6 +593,7 @@ def quant_plan(params_b: float, budget_gb: float) -> dict:
         "min_mem_gb": round(min_mem, 1),
         "fit": fit_level(min_mem, budget_gb),
         "quant_reason": f"best quality that fits this machine: {name}",
+        "quality_note": QUANT_QUALITY.get(name, ""),
     }
 
 
@@ -723,6 +920,10 @@ def annotate_fit(models: list, specs: dict) -> list:
         entry["fit"] = fit_level(float(m.get("min_mem_gb", 0)), budget)
         entry["est_tps"] = estimate_tokens_per_sec(
             float(m.get("download_gb") or 0), backend, entry["fit"])
+        # The third axis. Memory and speed are already on the card and both
+        # improve as the bit-rate falls; without this the card argues for the
+        # smallest quant available and never says what it costs.
+        entry.setdefault("quality_note", QUANT_QUALITY.get(m.get("quant"), ""))
         out.append(entry)
     return out
 
@@ -1060,6 +1261,10 @@ def hub_overview(refresh: bool = False) -> dict:
         "specs": specs,
         "models": models,
         "recommendations": recs,
+        # What should execute the model, alongside which model to run. Derived
+        # from `specs`, so it costs nothing extra and cannot disagree with the
+        # budget the rest of this payload was planned against.
+        "engine": recommend_engine(specs),
         # What the machine should start with, and what it will not do well.
         # Both belong in the same payload the splash already fetches: a
         # warning that needs a second request is a warning that arrives after

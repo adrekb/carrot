@@ -10,7 +10,9 @@ from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
+import asyncio
 import os
+import time
 import re
 import json
 import uuid
@@ -39,6 +41,7 @@ from carrot import (
     leaderboard as lb_mod,
     bootstrap as bootstrap_mod,
     hub as hub_mod,
+    activity as activity_mod,
     calfeed as calfeed_mod,
     ambient_capture as ambient_capture_mod,
     attachments as attach_mod,
@@ -3680,6 +3683,64 @@ def _remember_trace(trace: List[Dict[str, Any]], event: Dict[str, Any]):
     trace.append({kind: kept})
 
 
+def _persist_turn(req, trace, final_text, pending_questions, turn_started,
+                  origin, complete: bool):
+    """Write down what the turn produced, however it ended.
+
+    Called from a `finally`, including the GeneratorExit path where the browser
+    has already gone. Never raises and never yields: the caller is unwinding,
+    and the only thing worse than losing the turn is losing it and logging a
+    RuntimeError about a yield inside a finally.
+
+    ``complete`` says whether the turn reached an end of its own. It does not
+    decide whether to *store* — a half answer and the searches behind it are
+    exactly what somebody who pressed stop wants back, and dropping them is
+    what made a cancelled run look like it had never happened. It decides
+    whether to run the bookkeeping: the memory extractor reads conclusions out
+    of a turn, and a turn that was cut off halfway has none, so filing what it
+    was mid-way through saying as something now known about the user is how a
+    stopped sentence becomes a durable belief.
+    """
+    try:
+        # An empty turn is still worth a row when there is a trace: the
+        # searches happened, the pages were read, and a conversation that
+        # shows the question and nothing else is a conversation that lost
+        # them. With neither text nor trace there is nothing to keep.
+        if not (final_text or trace):
+            return
+        meta = {"trace": trace} if trace else {}
+        if pending_questions:
+            # Recorded on the row, so reopening the conversation restores
+            # the form rather than a paragraph that stops mid-thought.
+            meta["questions"] = pending_questions["questions"]
+            meta["awaiting_answers"] = bool(pending_questions.get("blocking"))
+        if not complete:
+            # So the transcript can say so on reopening, rather than showing a
+            # sentence that stops for no visible reason.
+            meta["interrupted"] = True
+        # What the turn cost, for the line under the answer. Merged rather
+        # than assigned: `meta` may already carry the questions a turn
+        # ended on, and losing those would turn a form back into a
+        # paragraph that stops mid-thought.
+        meta.update(_turn_metrics(turn_started))
+        stored = conv_mod.add_message(
+            req.conversation_id, "assistant", final_text,
+            metadata=meta or None)
+        # A turn that ended in a question has not concluded anything either,
+        # and letting the extractor run files the guesses the model was asking
+        # about as things now known about the user — the exact failure the gate
+        # exists to prevent, made durable.
+        if complete and not (pending_questions and pending_questions.get("blocking")):
+            _post_turn(
+                req.conversation_id, req.message, final_text,
+                stored.get("id") if isinstance(stored, dict) else None,
+                origin=_memory_origin(req, origin),
+            )
+    except Exception:
+        # Bookkeeping must never cost the user the answer they can see.
+        LOG.exception("could not store the assistant turn")
+
+
 def _memory_origin(req, override=None) -> str:
     """Which part of Carrot produced this turn, for the memory's provenance.
 
@@ -3758,7 +3819,15 @@ def _post_turn(conversation_id, user_message, assistant_text, message_id,
             except Exception:
                 pass
 
-    threading.Thread(target=work, daemon=True, name="carrot-post-turn").start()
+    # Returned so a caller that needs to know it finished can wait for it.
+    # Nothing in the request path does — that is the entire point of the thread
+    # — but a test asserting this bookkeeping was *skipped* has no other way to
+    # tell "it did not run" from "it has not run yet", and the alternative was
+    # a sleep long enough to be usually right. Usually right, in a suite this
+    # size, means a failure in a different file every few runs.
+    thread = threading.Thread(target=work, daemon=True, name="carrot-post-turn")
+    thread.start()
+    return thread
 
 
 def _open_conversation(req):
@@ -3882,6 +3951,9 @@ def _chat_stream_response(req, conv, history, skill, resolved, prelude=None,
     turn_id = uuid.uuid4().hex[:12]
 
     def _body():
+        # Before the model runs, so the rate recorded below belongs to this
+        # turn rather than to whatever ran last.
+        turn_started = time.perf_counter()
         final_text = ""
         # Set if the turn ended by asking rather than answering.
         pending_questions: Optional[Dict[str, Any]] = None
@@ -3903,6 +3975,11 @@ def _chat_stream_response(req, conv, history, skill, resolved, prelude=None,
         # The browser sees a stream that ended, has no text, and prints
         # "(no response)". Whatever breaks, the user gets told what broke, the
         # turn is saved, and `done` is sent.
+        # Set once the turn reaches an end of its own — the loop finishing, or
+        # the handler below writing an error. It stays False when GeneratorExit
+        # unwinds through a yield, which is how the `finally` tells "the turn
+        # concluded" from "the listener left".
+        finished = False
         try:
             for event in _agentic_chat_events(
                     history, resolved, skill, req.conversation_id, mode,
@@ -3926,6 +4003,7 @@ def _chat_stream_response(req, conv, history, skill, resolved, prelude=None,
                     outstanding.discard(event["approval_resolved"]["id"])
                 _remember_trace(trace, event)
                 yield f"data: {json.dumps(event)}\n\n"
+            finished = True
         except Exception as exc:
             LOG.exception("chat turn failed")
             final_text = final_text or (
@@ -3934,30 +4012,26 @@ def _chat_stream_response(req, conv, history, skill, resolved, prelude=None,
                 "asked. The trace above shows how far it got."
             )
             yield f"data: {json.dumps({'chunk': final_text})}\n\n"
-        try:
-            meta = {"trace": trace} if trace else {}
-            if pending_questions:
-                # Recorded on the row, so reopening the conversation restores
-                # the form rather than a paragraph that stops mid-thought.
-                meta["questions"] = pending_questions["questions"]
-                meta["awaiting_answers"] = bool(pending_questions.get("blocking"))
-            stored = conv_mod.add_message(
-                req.conversation_id, "assistant", final_text,
-                metadata=meta or None)
-            # A turn that ended in a question has not concluded anything, and
-            # the memory extractor works by reading conclusions out of a turn.
-            # Letting it run here files the guesses the model was asking about
-            # as things now known about the user — the exact failure the gate
-            # exists to prevent, made durable.
-            if not (pending_questions and pending_questions.get("blocking")):
-                _post_turn(
-                    req.conversation_id, req.message, final_text,
-                    stored.get("id") if isinstance(stored, dict) else None,
-                    origin=_memory_origin(req, origin),
-                )
-        except Exception:
-            # Bookkeeping must never cost the user the answer they can see.
-            LOG.exception("could not store the assistant turn")
+            finished = True
+        finally:
+            # In a `finally`, so that a turn nobody is listening to any more is
+            # still written down.
+            #
+            # This used to sit after the loop. When the browser goes away —
+            # the user pressing stop with no clean stop to fall back on, a
+            # reload, a backend restart — Starlette closes this generator and
+            # GeneratorExit is raised at the `yield` above. GeneratorExit is a
+            # BaseException, so the `except Exception` did not catch it *and*
+            # nothing after the loop ran: no message, no trace, no metrics.
+            # The conversation kept the question and lost the answer, along
+            # with every search and every page the turn had already read.
+            #
+            # Nothing in here may yield. A `yield` inside a finally during
+            # GeneratorExit is a RuntimeError, which would trade a lost turn
+            # for a lost turn plus a traceback — the `done` frame is sent after
+            # the block instead, where there is still a client to receive it.
+            _persist_turn(req, trace, final_text, pending_questions,
+                          turn_started, origin, complete=finished)
         yield f"data: {json.dumps({'done': True, 'conversation_id': req.conversation_id})}\n\n"
 
     def stream():
@@ -4045,8 +4119,12 @@ async def chat(req: ChatRequest):
     # not search, could not read a page, and had none of the never-answer-with-
     # nothing guarantees the streaming path has. It runs the same loop now and
     # collects the result, so the two doors into chat behave the same.
+    # Noted before the model runs, so the rate attached below is this turn's
+    # and not the previous one's.
+    turn_started = time.perf_counter()
     parts, tools_used, route_info = [], [], resolved.as_dict()
     final = ""
+    pending_questions = None
     for event in _agentic_chat_events(history, resolved, skill, req.conversation_id, mode,
                                       coder=bool(getattr(req, "coder", False))):
         if "_final_text" in event:
@@ -4055,13 +4133,28 @@ async def chat(req: ChatRequest):
             parts.append(event["chunk"])
         elif "tool" in event:
             tools_used.append(event["tool"].get("name", ""))
+        elif "questions" in event:
+            # This door ran the same loop as the streaming one and then threw
+            # the questions away: they were not recorded on the row, so a
+            # reopened conversation showed a paragraph that stops mid-thought,
+            # and the extractor below ran on a turn that had concluded
+            # nothing — filing the guesses the model was *asking about* as
+            # things now known about the user. The streaming path has guarded
+            # against exactly that since it was written.
+            pending_questions = event
     response = final or "".join(parts)
-    stored = conv_mod.add_message(req.conversation_id, "assistant", response)
-    _post_turn(
-        req.conversation_id, req.message, response,
-        stored.get("id") if isinstance(stored, dict) else None,
-        origin=_memory_origin(req),
-    )
+    meta = _turn_metrics(turn_started)
+    if pending_questions:
+        meta["questions"] = pending_questions["questions"]
+        meta["awaiting_answers"] = bool(pending_questions.get("blocking"))
+    stored = conv_mod.add_message(req.conversation_id, "assistant", response,
+                                  metadata=meta)
+    if not (pending_questions and pending_questions.get("blocking")):
+        _post_turn(
+            req.conversation_id, req.message, response,
+            stored.get("id") if isinstance(stored, dict) else None,
+            origin=_memory_origin(req),
+        )
     return {
         "conversation_id": req.conversation_id,
         "response": response,
@@ -4614,6 +4707,131 @@ def _work_preview(doc_format, body):
     return body[:220]
 
 
+# How many shapes a tile is worth. A canvas can hold hundreds; past a couple
+# of dozen at tile size they stop being distinguishable shapes and become
+# grey noise, and every one costs bytes in a listing that draws the whole
+# drive. The count of what was dropped is kept so the tile can say so.
+_THUMB_MAX_SHAPES = 18
+# Text long enough to recognise a slide by, short enough not to ship the deck.
+_THUMB_TEXT_CHARS = 60
+
+
+def _thumb_shapes(elements, box_keys, limit=_THUMB_MAX_SHAPES, frame=None):
+    """Elements as unit-square geometry, or None if there is nothing to draw.
+
+    A canvas has no edges, so it is normalised against the bounding box of
+    everything on it: a canvas whose boxes sit at x=2400 then looks like its
+    own arrangement rather than an empty tile with a speck in the corner.
+
+    A slide does have edges, and `frame` is them. Normalising a slide against
+    its contents would mean a decoration hanging off the left edge — the
+    template ships one at x=-228 — dragging the title inward and reporting a
+    layout the slide does not have. Anything outside the frame lands outside
+    the unit square and is clipped when drawn, which is what the slide does.
+    """
+    wk, hk = box_keys
+    boxed = []
+    for el in elements:
+        try:
+            x, y = float(el.get("x", 0)), float(el.get("y", 0))
+            w, h = float(el.get(wk) or 0), float(el.get(hk) or 0)
+        except (TypeError, ValueError):
+            continue
+        # Zero-area elements have no position to speak of, and negative extents
+        # come from shapes dragged right-to-left.
+        if w < 0:
+            x, w = x + w, -w
+        if h < 0:
+            y, h = y + h, -h
+        boxed.append((x, y, w, h, el))
+    if not boxed:
+        return None
+
+    if frame:
+        left, top = 0.0, 0.0
+        span_x = float(frame[0]) or 1.0
+        span_y = float(frame[1]) or 1.0
+    else:
+        left = min(b[0] for b in boxed)
+        top = min(b[1] for b in boxed)
+        span_x = max(b[0] + b[2] for b in boxed) - left or 1.0
+        span_y = max(b[1] + b[3] for b in boxed) - top or 1.0
+
+    shapes = []
+    for x, y, w, h, el in boxed[:limit]:
+        kind = (el.get("type") or "").lower()
+        shape = {
+            "t": "text" if kind == "text" else ("line" if kind in ("arrow", "line") else "box"),
+            "x": round((x - left) / span_x, 4),
+            "y": round((y - top) / span_y, 4),
+            "w": round(w / span_x, 4),
+            "h": round(h / span_y, 4),
+        }
+        text = el.get("text")
+        if shape["t"] == "text" and isinstance(text, str) and text.strip():
+            # First line only: a tile shows a label, not a paragraph.
+            shape["s"] = text.strip().splitlines()[0][:_THUMB_TEXT_CHARS]
+            # The type size, normalised like everything else.
+            #
+            # Not derivable from the box: a text element's height is the frame
+            # it may grow into, so a 56pt title in a short box and a 20pt
+            # subtitle in a tall one come out with the subtitle set larger —
+            # which is the deck template exactly, and it rendered upside down.
+            try:
+                size = float(el.get("size") or 0)
+            except (TypeError, ValueError):
+                size = 0
+            if size > 0:
+                shape["fs"] = round(size / span_y, 4)
+            if el.get("bold"):
+                shape["b"] = 1
+        shapes.append(shape)
+    return {"shapes": shapes, "more": max(0, len(boxed) - limit)}
+
+
+def _work_thumb(doc_format, body):
+    """What the document looks like, small enough to send for every tile.
+
+    `_work_preview` deliberately gives a canvas nothing, because its body is
+    JSON and a tile of `{"type":"excalidraw"…` previews nothing. The answer is
+    not to ship the body — a listing that draws the whole drive would then
+    weigh what the vault weighs — it is to ship the *arrangement*: a couple of
+    dozen rectangles in unit coordinates, which is what makes one canvas
+    recognisable from another at a glance and costs a few hundred bytes.
+
+    Decks get their first slide rather than every slide's words concatenated.
+    A deck is recognised by its title slide, the way a document is recognised
+    by its opening; the rest of the words in a list are not a picture of
+    anything.
+    """
+    body = body or ""
+    if doc_format not in (notes_mod.FORMAT_CANVAS, notes_mod.FORMAT_SLIDES):
+        return None
+    try:
+        parsed = json.loads(body)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+
+    if doc_format == notes_mod.FORMAT_CANVAS:
+        found = _thumb_shapes(parsed.get("elements") or [], ("width", "height"))
+        return dict(found, kind="canvas") if found else {"kind": "canvas", "shapes": [], "more": 0}
+
+    slides = parsed.get("slides") or []
+    if not slides:
+        return {"kind": "slides", "shapes": [], "more": 0, "count": 0}
+    size = parsed.get("size") if isinstance(parsed.get("size"), dict) else {}
+    frame = (size.get("w") or 1280, size.get("h") or 720)
+    found = _thumb_shapes(slides[0].get("elements") or [], ("w", "h"), frame=frame)
+    return {
+        "kind": "slides",
+        "count": len(slides),
+        "shapes": (found or {}).get("shapes", []),
+        "more": (found or {}).get("more", 0),
+    }
+
+
 def _work_haystack(doc_format, body):
     """Everything a search should look at, which is not what a tile shows.
 
@@ -4666,6 +4884,10 @@ def _work_document_items(homes, names):
             "updated": note.get("created_at") or 0,
             "path": note.get("path") or "",
             "preview": _work_preview(doc_format, body),
+            # Geometry for the formats whose body is JSON, so their tiles show
+            # the document rather than a stock glyph. None for prose, which is
+            # already recognisable from `preview`.
+            "thumb": _work_thumb(doc_format, body),
             # Stripped before the response goes out: it is the whole document,
             # and sending every body to draw a grid of tiles would make the
             # listing weigh what the vault weighs.
@@ -5417,18 +5639,72 @@ async def search_index(q: str, limit: int = 10, hybrid_weight: float = 0.5,
     )
 
 
+def _turn_metrics(turn_started: float) -> Dict[str, Any]:
+    """What this turn cost, for the line under the answer.
+
+    Read from Ollama's own counters rather than timed from outside: an external
+    stopwatch includes the queue, the tool calls and the socket, and reports a
+    figure well below what the model actually produced.
+
+    Empty when the model did not run — a hosted model, a cached answer, a reply
+    that was entirely tool output. A blank footer is correct there; borrowing
+    the previous turn's rate would be a number that looks measured and is not.
+    """
+    try:
+        sample = sysmon_mod.throughput.since(turn_started)
+    except Exception:
+        return {}
+    if not sample:
+        return {}
+    metrics = {"tps": sample.get("tps"), "tokens": sample.get("tokens"),
+               "seconds": sample.get("seconds"), "model": sample.get("model") or ""}
+    # Prompt processing is a separate bottleneck from generation: a long
+    # context is slow to ingest even when output is fast, and one number hides
+    # which of the two somebody is waiting on.
+    if sample.get("prompt_tokens"):
+        metrics["prompt_tokens"] = sample["prompt_tokens"]
+        metrics["prompt_tps"] = sample.get("prompt_tps")
+    return {"metrics": metrics}
+
+
+@app.delete("/api/conversations/{conv_id}/messages/{message_id}")
+async def delete_message(conv_id: str, message_id: int):
+    """Remove one message from a conversation.
+
+    Scoped by conversation as well as id: a bare message id is a guessable
+    integer, and deleting by it alone would let a wrong id in one conversation
+    remove a message from another.
+    """
+    removed = conv_mod.delete_message(conv_id, message_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail="no such message in that conversation")
+    return {"deleted": message_id}
+
+
 @app.get("/api/search/all")
 async def search_everything(q: str, limit: int = 10, workspace: Optional[str] = None):
-    """One query across conversations, documents and memory, in one scope."""
+    """One query across conversations, documents and memory, in one scope.
+
+    Off the event loop. All three searches are synchronous, and each may try to
+    embed the query — a socket call that waits out its timeout when Ollama is
+    not running. Run inline that is seconds of the whole process refusing to
+    answer anything else, which is what made a palette search hang rather than
+    return.
+    """
     scope = workspaces_mod.resolve_scope(workspace)
-    conversations = search.search_conversations(q, limit=limit, workspace_id=scope)
-    return {
-        "query": q,
-        "workspace_id": scope,
-        "conversations": conversations["results"],
-        "documents": indexer_mod.search_documents(q, limit=limit, workspace_id=scope)["results"],
-        "memories": memory_mod.search(q, limit=limit, workspace_id=scope),
-    }
+
+    def gather():
+        return {
+            "query": q,
+            "workspace_id": scope,
+            "conversations": search.search_conversations(
+                q, limit=limit, workspace_id=scope)["results"],
+            "documents": indexer_mod.search_documents(
+                q, limit=limit, workspace_id=scope)["results"],
+            "memories": memory_mod.search(q, limit=limit, workspace_id=scope),
+        }
+
+    return await asyncio.to_thread(gather)
 
 
 # ===== Agent tools =====
@@ -5484,6 +5760,17 @@ async def revert_journal(entry_id: str):
 
 
 # ===== Workspaces and folders =====
+
+@app.get("/api/activity")
+async def activity_overview(limit: int = activity_mod.RECENT_LIMIT):
+    """What is running and what you were last doing — the nav rail's whole state.
+
+    Polled, so it is one request rather than the three separate job lists it
+    aggregates, and `activity.overview` swallows its own failures: a rail that
+    500s is a strip of UI that disappears mid-session over a job list.
+    """
+    return activity_mod.overview(limit=limit)
+
 
 @app.get("/api/workspaces")
 async def workspace_tree(include_archived: bool = False):
@@ -6122,6 +6409,20 @@ async def set_provider_key(provider_id: str, req: ProviderKeyRequest):
         raise HTTPException(status_code=404, detail=str(exc))
     providers_mod.set_api_key(provider_id, req.api_key.strip())
     return providers_mod.require_provider(provider_id)
+
+
+@app.put("/api/search/key")
+async def set_search_key(req: ProviderKeyRequest):
+    """Store or clear the Exa key. An empty string forgets it.
+
+    Its own endpoint because the generic config PUT refuses anything in
+    SECRET_KEYS — one write path for secrets, so a credential cannot be stored
+    in a shape the redactor does not know to hide. The first version of this
+    setting posted to the generic endpoint, got a 400, and swallowed it: the
+    field looked like it saved and nothing was stored.
+    """
+    config.set_config("exa_api_key", req.api_key.strip())
+    return {"stored": bool(req.api_key.strip())}
 
 
 @app.put("/api/router/providers/{provider_id}/enabled")

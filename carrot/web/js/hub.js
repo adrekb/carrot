@@ -34,6 +34,7 @@ async function loadHub() {
     if (browse) { site.href = browse; site.classList.remove('hidden'); }
     else { site.classList.add('hidden'); }
     renderHubSpecs();
+    renderHubEngine();
     renderHubChips();
     renderHubMeta();
     await renderHubModels();
@@ -92,6 +93,43 @@ function renderHubSpecs() {
           <div><span class="muted small">Model budget</span><br><strong>${s.model_budget_gb} GB</strong>
             <span class="muted small">memory Carrot plans models into</span></div>
         </div>`;
+}
+
+// Which engine should execute the model, next to which model to run. The
+// alternatives fold away: on a machine with a CUDA card there is nothing to
+// decide, and the row should not imply there is.
+function renderHubEngine() {
+    const el = document.getElementById('hub-engine');
+    const rec = hubData.engine;
+    if (!rec || !rec.engine) { el.innerHTML = ''; return; }
+    const e = rec.engine;
+    const alts = rec.alternatives || [];
+    el.innerHTML = `
+        <div class="hub-spec-card hub-engine-card">
+          <div>
+            <span class="muted small">Runs your models</span><br>
+            <strong>${escHtml(e.label)} <span class="tag">${escHtml(e.backend_label)}</span></strong>
+            <div class="muted small">${escHtml(e.why)}</div>
+            ${e.access === 'builtin' ? '' :
+              `<div class="muted small">${escHtml(e.access_note)}</div>`}
+            ${rec.detail ? `<div class="small engine-detail">${escHtml(rec.detail)}</div>` : ''}
+          </div>
+        </div>`;
+    if (!alts.length) return;
+    const details = document.createElement('details');
+    details.className = 'hub-engine-alts';
+    details.innerHTML = `<summary class="muted small">Other engines that would run here (${alts.length})</summary>`;
+    for (const a of alts) {
+        const row = document.createElement('div');
+        row.className = 'hub-engine-alt';
+        row.innerHTML = `
+            <strong>${escHtml(a.label)} <span class="tag">${escHtml(a.backend_label)}</span></strong>
+            <div class="muted small">${escHtml(a.why)}</div>
+            <div class="muted small">${escHtml(a.access_note)}</div>
+            <a class="muted small" href="${escHtml(a.url)}" target="_blank" rel="noopener">${escHtml(a.label)} ↗</a>`;
+        details.appendChild(row);
+    }
+    el.appendChild(details);
 }
 
 function renderHubChips() {
@@ -198,6 +236,7 @@ function hubCard(m, installed, active, role) {
         </div>
         <div class="muted small">${escHtml(m.id)} · ${escHtml(m.quant || '')} · ${m.download_gb} GB download · needs ~${m.min_mem_gb} GB${m.est_tps ? ` · ~${m.est_tps} tok/s` : ''}</div>
         ${m.quant_reason ? `<div class="muted small quant-note">${escHtml(m.quant_reason)}</div>` : ''}
+        ${m.quality_note ? `<div class="muted small quality-note">${escHtml(m.quality_note)}</div>` : ''}
         <div class="hub-blurb">${escHtml(m.blurb || '')}${m.hf_url ? ` <a href="${escHtml(m.hf_url)}" target="_blank" rel="noopener">View on HF ↗</a>` : ''}</div>
         <div class="hub-tags">${(m.use_cases || []).map(u => `<span class="tag">${escHtml(u)}</span>`).join('')}${(m.modalities || []).map(u => `<span class="tag mod">${escHtml(u)}</span>`).join('')}</div>
         <div class="hub-card-actions"></div>`;

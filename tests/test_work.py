@@ -4,6 +4,7 @@ Documents you wrote and files you pointed Carrot at are different rows in
 different tables and the same thing on this screen — something with a name, a
 kind and a date, that you are trying to find again.
 """
+import json
 import os
 
 import pytest
@@ -237,3 +238,106 @@ class TestThePlaces:
         made = workspaces.create_workspace("Empty")
         places = client.get("/api/work/places").json()["workspaces"]
         assert any(w["id"] == made["id"] and w["count"] == 0 for w in places)
+
+
+class TestATileShowsTheDocument:
+    """Every canvas drew the same three hard-coded shapes and every deck the
+    same list of all its words, so a grid of them was a grid of identical
+    pictures — you could read the badge and the filename and nothing else.
+
+    The body cannot simply be sent: a listing that draws the whole drive would
+    then weigh what the vault weighs, which is why `_work_preview` gives a
+    canvas nothing at all. So the tile gets the *arrangement* — a bounded set
+    of shapes in unit coordinates.
+    """
+
+    CANVAS = json.dumps({"type": "excalidraw", "elements": [
+        {"type": "rectangle", "x": 60, "y": 80, "width": 220, "height": 120},
+        {"type": "text", "x": 72, "y": 92, "width": 196, "height": 24,
+         "text": "Rationalism\nsecond line"},
+        {"type": "arrow", "x": 300, "y": 200, "width": 100, "height": 60},
+    ]})
+
+    def _thumb(self, client, name, body, fmt):
+        notes.create_note(name, body, doc_format=fmt)
+        items = client.get("/api/work/items").json()["items"]
+        return next(i for i in items if i["name"] == name)["thumb"]
+
+    def test_a_canvas_carries_its_arrangement(self, client, isolated_db):
+        thumb = self._thumb(client, "Board", self.CANVAS, notes.FORMAT_CANVAS)
+        assert thumb["kind"] == "canvas"
+        assert [s["t"] for s in thumb["shapes"]] == ["box", "text", "line"]
+        # Unit coordinates against the bounding box of everything on it, so a
+        # canvas whose shapes sit far from the origin still looks like itself.
+        assert thumb["shapes"][0]["x"] == 0 and thumb["shapes"][0]["y"] == 0
+        assert all(0 <= s["x"] <= 1 and 0 <= s["y"] <= 1 for s in thumb["shapes"])
+
+    def test_canvas_text_is_one_line_not_the_paragraph(self, client, isolated_db):
+        thumb = self._thumb(client, "Board2", self.CANVAS, notes.FORMAT_CANVAS)
+        text = next(s for s in thumb["shapes"] if s["t"] == "text")
+        assert text["s"] == "Rationalism"
+
+    def test_an_empty_canvas_says_so_rather_than_drawing_nothing(self, client, isolated_db):
+        thumb = self._thumb(client, "Blank", '{"elements": []}', notes.FORMAT_CANVAS)
+        assert thumb == {"kind": "canvas", "shapes": [], "more": 0}
+
+    def test_a_deck_gets_its_first_slide_not_every_word(self, client, isolated_db):
+        deck = json.dumps({"size": {"w": 1280, "h": 720}, "slides": [
+            {"elements": [
+                {"type": "text", "x": 96, "y": 96, "w": 1088, "h": 120,
+                 "text": "Your deck", "size": 56, "bold": True},
+                {"type": "text", "x": 96, "y": 250, "w": 1088, "h": 380,
+                 "text": "A subtitle", "size": 30},
+            ]},
+            {"elements": [{"type": "text", "x": 0, "y": 0, "w": 100, "h": 50,
+                           "text": "Slide two", "size": 40}]},
+        ]})
+        thumb = self._thumb(client, "Deck", deck, notes.FORMAT_SLIDES)
+        assert thumb["count"] == 2
+        assert [s.get("s") for s in thumb["shapes"]] == ["Your deck", "A subtitle"]
+
+    def test_a_slide_is_measured_against_the_slide_not_its_contents(self, client, isolated_db):
+        """A decoration hanging off the left edge — the shipped template parks
+        one at x=-228 — would otherwise drag the title inward and report a
+        layout the slide does not have."""
+        deck = json.dumps({"size": {"w": 1280, "h": 720}, "slides": [{"elements": [
+            {"type": "text", "x": 96, "y": 96, "w": 1088, "h": 120, "text": "Title", "size": 56},
+            {"type": "chevron", "x": -228, "y": 58, "w": 320, "h": 240},
+        ]}]})
+        thumb = self._thumb(client, "Deck2", deck, notes.FORMAT_SLIDES)
+        title = next(s for s in thumb["shapes"] if s.get("s") == "Title")
+        assert title["x"] == pytest.approx(96 / 1280, abs=0.001)
+        # The decoration keeps its true position, outside the frame, and is
+        # clipped when drawn rather than being allowed to move the slide.
+        assert min(s["x"] for s in thumb["shapes"]) < 0
+
+    def test_type_size_comes_from_the_element_not_its_box(self, client, isolated_db):
+        """A text element's height is the frame it may grow into. Sizing from
+        that set a 30pt subtitle in a tall box larger than a 56pt title in a
+        short one, and the tile rendered upside down."""
+        deck = json.dumps({"size": {"w": 1280, "h": 720}, "slides": [{"elements": [
+            {"type": "text", "x": 96, "y": 96, "w": 1088, "h": 120, "text": "Big", "size": 56},
+            {"type": "text", "x": 96, "y": 250, "w": 1088, "h": 380, "text": "Small", "size": 30},
+        ]}]})
+        thumb = self._thumb(client, "Deck3", deck, notes.FORMAT_SLIDES)
+        big = next(s for s in thumb["shapes"] if s["s"] == "Big")
+        small = next(s for s in thumb["shapes"] if s["s"] == "Small")
+        assert big["fs"] > small["fs"]
+        assert big["h"] < small["h"]     # the box ordering that misled it
+
+    def test_a_tile_is_bounded_however_big_the_document(self, client, isolated_db):
+        """Hundreds of shapes stop being distinguishable at tile size and cost
+        bytes in a listing that draws everything."""
+        many = json.dumps({"elements": [
+            {"type": "rectangle", "x": i * 10, "y": i * 10, "width": 5, "height": 5}
+            for i in range(200)]})
+        thumb = self._thumb(client, "Huge", many, notes.FORMAT_CANVAS)
+        assert len(thumb["shapes"]) == 18
+        assert thumb["more"] == 182
+
+    def test_prose_has_no_geometry_because_its_preview_is_readable(self, client, isolated_db):
+        thumb = self._thumb(client, "Essay", "# Heading\n\nText.", notes.FORMAT_MARKDOWN)
+        assert thumb is None
+
+    def test_a_body_that_will_not_parse_does_not_break_the_listing(self, client, isolated_db):
+        assert self._thumb(client, "Broken", "not json", notes.FORMAT_CANVAS) is None

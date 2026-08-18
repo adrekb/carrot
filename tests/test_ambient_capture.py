@@ -117,6 +117,32 @@ class TestStorage:
         found = ambient_capture.recall("pension age")
         assert found and "pension" in found[0]["text"].lower()
 
+    def test_an_underscored_identifier_finds_the_frame_ocr_flattened(self, isolated_db):
+        """Windows OCR drops underscores — `search_for_agent` is stored as
+        `search for agent` (see TestWhatItCannotRead in test_ocr_accuracy.py).
+        That was written down as "identifiers are unfindable", which does not
+        follow: FTS5's tokenizer treats `_` as a separator on *both* sides, so
+        the quoted term becomes a phrase query for the three words the index
+        actually holds, and it matches.
+
+        Worth pinning rather than leaving to be rediscovered, because the
+        obvious "fix" — splitting identifiers into loose OR terms — would make
+        this worse. The phrase is the precise query; the spaced form below is
+        the loose one, and it is the one that drags in unrelated frames.
+        """
+        ambient_capture.store_frame(
+            "Traceback: the search for agent error happened while the handler "
+            "was still waiting on the queue, and nothing logged the cause.",
+            self.CONTEXT, "x")
+        ambient_capture.store_frame(
+            "A different window about search engines and how they rank pages, "
+            "with nothing whatever to do with agents or handlers.",
+            self.CONTEXT, "x")
+
+        found = ambient_capture.recall("search_for_agent")
+        assert len(found) == 1, "the phrase should match one frame, not both"
+        assert "search for agent" in found[0]["text"]
+
     def test_a_blank_screen_is_not_a_moment(self, isolated_db):
         assert ambient_capture.store_frame("ok", self.CONTEXT, "x") is None
 

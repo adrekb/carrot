@@ -41,9 +41,11 @@ KIND_IMAGE = "image"        # a raster the model produced or generated
 # diagram of the answer with the argument removed.
 KIND_VIDEO = "video"
 KIND_CODE = "code"          # a file worth showing whole, syntax highlighted
+# A chart the model describes rather than draws. See `normalize_chart`.
+KIND_CHART = "chart"
 
 KINDS = {KIND_HTML, KIND_SVG, KIND_MARKDOWN, KIND_MERMAID, KIND_IMAGE,
-         KIND_CODE, KIND_VIDEO}
+         KIND_CODE, KIND_VIDEO, KIND_CHART}
 
 # Big enough for a real chart or a page with inline data, small enough that a
 # runaway generation cannot fill the database.
@@ -152,6 +154,116 @@ def _read_workspace_video(path: str) -> str:
     return f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}"
 
 
+# ===== Charts =====
+#
+# The other kinds are markup the model wrote. A chart is not: the model sends
+# the numbers and Carrot draws them, and that difference is worth the extra
+# module.
+#
+# It is a security property first. Every other visual kind has to be sandboxed
+# because model-authored markup can carry script; a chart carries no markup at
+# all, so it renders inline in the app document with its text escaped, and
+# there is nothing to sandbox.
+#
+# It is also the only version of this that works here. Carrot routes to small
+# local models, and asking a 4B to emit correct SVG axis geometry — ticks,
+# baselines, a y-scale that starts at zero — is a bad bet that fails silently
+# and looks like a chart. Asking it for `{"labels": [...], "series": [...]}` is
+# something it can get right. The alternative already in the tool description,
+# writing a matplotlib script and running it, needs Python and matplotlib on
+# the user's machine and a round-trip through the shell to draw a bar chart.
+CHART_TYPES = ("bar", "hbar", "line", "area")
+# Six, because that is how many categorical colours were validated against both
+# themes for colour-blind separation. A seventh would have to be a generated
+# hue, which is where categorical palettes stop being distinguishable.
+MAX_SERIES = 6
+MAX_POINTS = 400
+
+
+def normalize_chart(content: str) -> str:
+    """Validate a chart spec and return it canonicalised, or raise.
+
+    Every failure names the fix. This is read by a model that has to correct
+    itself from the error text alone, so "chart series 2 has 4 values but there
+    are 5 labels" is worth the words over "invalid spec".
+    """
+    try:
+        spec = json.loads(content) if isinstance(content, str) else content
+    except (ValueError, TypeError) as exc:
+        raise ArtifactError(f"a chart needs JSON: {exc}")
+    if not isinstance(spec, dict):
+        raise ArtifactError('a chart spec is an object, e.g. {"type": "bar", '
+                            '"labels": [...], "series": [...]}')
+
+    chart_type = str(spec.get("type") or "bar").strip().lower()
+    if chart_type not in CHART_TYPES:
+        raise ArtifactError(f"chart type '{chart_type}' is not one of {list(CHART_TYPES)}")
+
+    labels = spec.get("labels") or []
+    if not isinstance(labels, list) or not labels:
+        raise ArtifactError("a chart needs `labels`: the category or time on each x position")
+    if len(labels) > MAX_POINTS:
+        raise ArtifactError(f"a chart takes at most {MAX_POINTS} points; got {len(labels)}")
+    labels = [str(x)[:80] for x in labels]
+
+    raw_series = spec.get("series")
+    # One unnamed series can be sent as a bare list of numbers.
+    if isinstance(raw_series, list) and raw_series and not isinstance(raw_series[0], dict):
+        raw_series = [{"name": "", "values": raw_series}]
+    if not isinstance(raw_series, list) or not raw_series:
+        raise ArtifactError('a chart needs `series`: [{"name": "…", "values": [1, 2, 3]}]')
+    if len(raw_series) > MAX_SERIES:
+        raise ArtifactError(
+            f"a chart takes at most {MAX_SERIES} series and got {len(raw_series)}. More than "
+            "that cannot be told apart by colour — send the top ones, or one chart each.")
+
+    series = []
+    for index, item in enumerate(raw_series):
+        if not isinstance(item, dict):
+            raise ArtifactError(f"series {index + 1} should be an object with `name` and `values`")
+        values = item.get("values")
+        if not isinstance(values, list):
+            raise ArtifactError(f"series {index + 1} needs `values`: a list of numbers")
+        if len(values) != len(labels):
+            raise ArtifactError(
+                f"series {index + 1} has {len(values)} values but there are {len(labels)} "
+                "labels — every series needs one value per label (use null for a gap)")
+        cleaned = []
+        for value in values:
+            if value is None or value == "":
+                cleaned.append(None)      # a real gap, drawn as one
+                continue
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                raise ArtifactError(
+                    f"series {index + 1} has a non-numeric value {value!r}. A chart takes "
+                    "numbers; put the units in `y_label`.")
+            # NaN and infinities have no position on an axis, and a scale
+            # computed with one in it silently becomes meaningless.
+            if number != number or number in (float("inf"), float("-inf")):
+                raise ArtifactError(f"series {index + 1} has a value that is not finite")
+            cleaned.append(number)
+        series.append({"name": str(item.get("name") or "")[:60], "values": cleaned})
+
+    if all(all(v is None for v in s["values"]) for s in series):
+        raise ArtifactError("every value in this chart is empty — there is nothing to draw")
+
+    return json.dumps({
+        "type": chart_type,
+        "title": str(spec.get("title") or "")[:160],
+        "x_label": str(spec.get("x_label") or "")[:80],
+        "y_label": str(spec.get("y_label") or "")[:80],
+        # A bar chart's baseline is zero and a truncated one misstates the
+        # data, which is the most common way a chart lies. A line chart of
+        # something that never approaches zero is a flat line at the top, so
+        # that one may say so — and has to say so explicitly.
+        "zero_baseline": bool(spec.get("zero_baseline", chart_type in ("bar", "hbar", "area"))),
+        "labels": labels,
+        "series": series,
+    })
+
+
 def create(kind: str, content: str, *, title: str = "", conversation_id: str = "",
            message_id: str = "", meta: Optional[Dict[str, Any]] = None,
            path: str = "") -> Dict[str, Any]:
@@ -180,6 +292,11 @@ def create(kind: str, content: str, *, title: str = "", conversation_id: str = "
                 "workspace, or `content` set to a data:video/… URI")
     elif kind == KIND_SVG:
         content = sanitize_svg(content)
+    elif kind == KIND_CHART:
+        # Validated here rather than at render time: a spec that cannot be
+        # drawn should fail while the model is still holding the numbers and
+        # can correct itself, not silently become a blank card in the chat.
+        content = normalize_chart(content)
 
     if not (content or "").strip():
         raise ArtifactError("an artifact needs content")

@@ -1,8 +1,12 @@
 """Build the Carrot one-click installer for the current platform.
 
 Produces a real, double-clickable app on all three OSes:
-  - Windows: one-click NSIS installer (``Carrot Setup <version>.exe``) with
-    the official Ollama installer bundled so first launch works offline-ish.
+  - Windows: one-click NSIS installer (``Carrot Setup <version>.exe``). The
+    official Ollama installer is *not* bundled by default — at 1492 MB it was
+    83% of the download, and the runtime bootstrap fetches it on first launch
+    with a progress bar. ``--bundle-ollama`` puts it back for offline installs.
+    Measured on Windows 11 x64 with the same extras CI installs
+    (``browser,cloud,vectors,speech``): 314,522,935 bytes, 300 MiB.
   - macOS: ``.dmg`` (Apple Silicon or Intel, matching the build machine).
   - Linux: ``.AppImage`` and ``.deb``.
 
@@ -20,7 +24,7 @@ bootstrap (carrot/bootstrap.py) fetches the right one per machine.
 Usage:
     python scripts/build_installer.py                 # full build for this OS
     python scripts/build_installer.py --backend-only  # just freeze the backend
-    python scripts/build_installer.py --no-ollama     # skip bundling OllamaSetup.exe (Windows)
+    python scripts/build_installer.py --bundle-ollama # embed OllamaSetup.exe for offline installs
 """
 import os
 import sys
@@ -280,8 +284,30 @@ def main():
     parser = argparse.ArgumentParser(description="Carrot one-click installer build")
     parser.add_argument("--backend-only", action="store_true",
                         help="Freeze the backend and stop")
+    # Bundling Ollama is now opt-in rather than opt-out.
+    #
+    # The official OllamaSetup.exe is 1492 MB. Bundling it made a 1790 MB
+    # installer of which 83% was a second application's installer — before
+    # anyone had opened Carrot once. The runtime bootstrap already downloads it
+    # with progress reporting, and already falls back to that when nothing is
+    # bundled, so the default costs a download at first launch and saves 1.5 GB
+    # at every download.
+    #
+    # Measured rather than inferred: a real build of this file on Windows 11
+    # x64 produces 314,522,935 bytes (300 MiB). Of the payload NSIS compresses,
+    # the frozen backend is 298 MB and Playwright's Chromium 431 MB on disk.
+    # Note that electron-builder only *warns* when `assets/ollama-setup.exe` is
+    # absent ("file source doesn't exist") and packages without it, which is
+    # what makes the unbundled default work at all — gui/package.json lists it
+    # unconditionally under `win.extraResources`.
+    #
+    # --bundle-ollama is kept for the case that justified it: building an
+    # installer for a machine that will never have a network, where the
+    # download cannot happen later.
+    parser.add_argument("--bundle-ollama", action="store_true",
+                        help="Windows: embed OllamaSetup.exe (~1.5 GB) for offline installs")
     parser.add_argument("--no-ollama", action="store_true",
-                        help="Windows: skip bundling OllamaSetup.exe (bootstrap downloads it instead)")
+                        help=argparse.SUPPRESS)   # now the default; kept so old scripts still run
     parser.add_argument("--no-browser", action="store_true",
                         help="Skip bundling Chromium; the Agent tab will be unavailable")
     args = parser.parse_args()
@@ -293,8 +319,11 @@ def main():
     write_model_manifest()
     if not args.no_browser:
         install_playwright_browser()
-    if IS_WINDOWS and not args.no_ollama:
+    if IS_WINDOWS and args.bundle_ollama:
         download_ollama_installer()
+    elif IS_WINDOWS:
+        log("Not bundling Ollama (1.5 GB) — first launch downloads it. "
+            "Use --bundle-ollama for an offline installer.")
     build_webvendor()
     build_electron()
     log("Done.")
