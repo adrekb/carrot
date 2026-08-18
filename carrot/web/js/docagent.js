@@ -121,6 +121,50 @@ function applyParsedDestination(parsed) {
     renderDestinationPicker();
 }
 
+// Send a deck, a paper or a canvas to chat.
+//
+// The prose editor has had a Send since it existed; the other three formats
+// never got one, because what they hold is not text. A deck is a JSON array of
+// positioned boxes and a canvas is an Excalidraw scene, and handing either to a
+// model is handing it several kilobytes of coordinates.
+//
+// The server renders them now (`/api/notes/{id}/text`, carrot/doctext.py), so
+// this is the same send the prose editor does with the readable form in place
+// of the raw body. One renderer rather than three in three editors, which is
+// the difference between a deck reading the same everywhere and three readings
+// that drift.
+async function sendDocumentToChat() {
+    if (!currentNoteId) return;
+    // What is on disk, not what is in the buffer — the same rule the prose
+    // send follows, and these editors autosave on their own schedule.
+    if (typeof saveCanvasNow === 'function' && isWriteMode('canvas')) await saveCanvasNow();
+    if (typeof saveSlidesNow === 'function' && isWriteMode('slides')) await saveSlidesNow();
+    if (typeof saveLatexDoc === 'function' && isWriteMode('latex')) await saveLatexDoc();
+
+    let rendered;
+    try {
+        rendered = await api(`/api/notes/${encodeURIComponent(currentNoteId)}/text`);
+    } catch (e) {
+        alert('Could not read this document: ' + e.message);
+        return;
+    }
+    if (!(rendered.text || '').trim()) {
+        alert('There is nothing in this document to send yet.');
+        return;
+    }
+    switchTab('workspace');
+    if (typeof setChatMode === 'function') setChatMode('chat');
+    const input = document.getElementById('cmd-input');
+    if (input) {
+        // Put it in the composer rather than sending it. A deck arriving in
+        // chat with no question attached is a wall of outline and no turn —
+        // what you want to say about it is the point, and only you have it.
+        input.value = rendered.text + '\n\n';
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+    }
+}
+
 async function sendDocToAgent() {
     if (!currentNoteId) return;
     const { text, partial } = noteSelectionOrBody();

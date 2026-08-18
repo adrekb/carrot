@@ -700,6 +700,7 @@
             <span id="canvas-status" class="editor-status"></span>
             <span id="canvas-zoom" class="editor-words">100%</span>
             <button class="btn btn-ghost" onclick="fitCanvasToContent()">Fit</button>
+            <button class="btn btn-ghost" onclick="sendDocumentToChat()" title="Send this document to chat as text">Send to chat</button>
             <button class="btn btn-ghost" onclick="deleteCurrentNote()">Delete</button>
           </div>
           <!-- The navigator that used to live here is now the shared rail on
@@ -741,6 +742,7 @@
                   <span>PDF</span><span class="export-sub">opens your print dialogue</span></button>
               </div>
             </div>
+            <button class="btn btn-ghost" onclick="sendDocumentToChat()" title="Send this document to chat as text">Send to chat</button>
             <button class="btn btn-primary" onclick="presentDeck()">Present</button>
           </div>
 
@@ -790,6 +792,7 @@
             <button class="btn btn-ghost" onclick="exportLatex('md')">.md</button>
             <button class="btn btn-ghost" onclick="exportLatex('html')">.html</button>
             <button class="btn btn-ghost" onclick="exportLatex('txt')">.txt</button>
+            <button class="btn btn-ghost" onclick="sendDocumentToChat()" title="Send this document to chat as text">Send to chat</button>
             <button class="btn btn-primary" onclick="saveLatexDocSmart()">Save</button>
           </div>
           <div class="latex-panes" id="latex-panes">

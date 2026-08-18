@@ -37,6 +37,7 @@ from carrot import (
     goals as goals_mod,
     reminders as rem_mod,
     notes as notes_mod,
+    doctext as doctext_mod,
     links as links_mod,
     leaderboard as lb_mod,
     bootstrap as bootstrap_mod,
@@ -5064,6 +5065,31 @@ async def get_note(note_id: str):
     if note is None:
         raise HTTPException(status_code=404, detail="Note not found")
     return note
+
+
+@app.get("/api/notes/{note_id}/text")
+async def get_note_text(note_id: str):
+    """The document as something worth putting in a prompt.
+
+    A deck is a JSON array of positioned boxes and a canvas is an Excalidraw
+    scene, so "send this to chat" on either of those used to mean sending
+    several kilobytes of coordinates and style keys — which is why neither had
+    a Send button at all. Rendered server-side rather than in each editor: one
+    renderer that the tests can hold, and every client path gets the same
+    reading rather than three that drift.
+    """
+    system = systemdocs_mod.get(note_id)
+    note = system if system is not None else notes_mod.get_note(note_id)
+    if note is None:
+        raise HTTPException(status_code=404, detail="Note not found")
+    doc_format = note.get("format") or doctext_mod.FORMAT_MARKDOWN
+    return {
+        "id": note_id,
+        "title": note.get("title", ""),
+        "format": doc_format,
+        "text": doctext_mod.as_text(note.get("body", ""), doc_format,
+                                    note.get("title", "")),
+    }
 
 
 @app.post("/api/notes")
