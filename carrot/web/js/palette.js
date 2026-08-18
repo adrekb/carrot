@@ -39,6 +39,21 @@ let paletteRecents = null;
 
 // The things you can start. Kept as data so the palette, and anything else
 // that wants a list of what Carrot can begin, agree about it.
+// Where a memory came from, as a glyph.
+//
+// Every memory drew the same brain, which is the one thing about a memory you
+// can already infer from the section it is under. What you cannot infer is
+// whether Carrot learned it while you were writing code or while you were
+// talking to it, and that is exactly the thing you want when deciding whether
+// a remembered "decision" applies. `origin` is already on the row (see
+// memory.py, ORIGINS) — it just was not being read.
+const MEMORY_ORIGIN_ICON = {
+    code: 'i-terminal',
+    document: 'i-note',
+    chat: 'i-chat',
+    manual: 'i-brain',   // you wrote it yourself; the brain is the plain case
+};
+
 const PALETTE_ACTIONS = [
     { id: 'new-chat', label: 'New chat', icon: 'i-chat', hint: 'Enter',
       run: () => { switchTab('workspace'); if (typeof newChat === 'function') newChat(); } },
@@ -310,7 +325,8 @@ function paletteGroups(query) {
         for (const m of (paletteFound.memories || [])) {
             add(mems, { id: 'mem:' + (m.id || m.content),
                 label: String(m.content || '').slice(0, 90),
-                icon: 'i-brain', hint: m.kind || '', where: m.subject || '',
+                icon: MEMORY_ORIGIN_ICON[m.origin] || 'i-brain',
+                hint: m.kind || '', where: m.subject || '',
                 score: paletteScore(m.content, needle),
                 run: () => switchTab('settings') });
         }

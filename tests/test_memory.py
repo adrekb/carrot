@@ -96,6 +96,49 @@ def test_search_finds_by_keyword(isolated_db, monkeypatch):
     assert "185" in results[0]["content"]
 
 
+def test_a_query_matching_nothing_returns_nothing(isolated_db, monkeypatch):
+    """Searching "f35" answered with a dog called Biscuit.
+
+    When FTS matched no words, `search` fell back to listing every memory and
+    handing it to the vector reranker. With embedding unavailable — which is
+    the normal state on a machine that has never run one, `vectors.count` for
+    memories being 0 — the reranker returned nothing and the unranked list of
+    everything was served as the result.
+
+    It was invisible until the command palette stopped discarding its own
+    results on a 1500ms timeout, and then it was every search.
+    """
+    monkeypatch.setattr(vectors, "search_text", lambda *a, **k: [])
+    memory.create("fact", "dog", "The user has a dog called Biscuit.")
+    memory.create("project", "pong", "The user is modifying pong.py.")
+
+    assert memory.search("f35") == []
+    assert memory.search("zzzznonsense") == []
+    # And the keyword path is untouched.
+    assert len(memory.search("Biscuit")) == 1
+
+
+def test_a_keyword_hit_survives_a_missing_reranker(isolated_db, monkeypatch):
+    """A word that matched is evidence on its own. Only the whole-corpus
+    fallback needs a ranker to vouch for it."""
+    monkeypatch.setattr(vectors, "search_text", lambda *a, **k: [])
+    memory.create("fact", "dog", "The user has a dog called Biscuit.")
+    assert len(memory.search("dog")) == 1
+
+
+def test_a_distant_neighbour_is_not_a_match(isolated_db, monkeypatch):
+    """With embedding working, the whole corpus is in the running and the top
+    of that list is merely the least unrelated thing on file."""
+    memory.create("fact", "dog", "The user has a dog called Biscuit.")
+    stored = memory.list_memories(limit=1)[0]
+    monkeypatch.setattr(vectors, "search_text",
+                        lambda *a, **k: [(stored["id"], 0.11)])
+    assert memory.search("aircraft designations") == []
+    monkeypatch.setattr(vectors, "search_text",
+                        lambda *a, **k: [(stored["id"], 0.93)])
+    assert len(memory.search("the pet")) == 1
+
+
 def test_search_tolerates_fts_operators(isolated_db, monkeypatch):
     """Raw user text goes into MATCH, so operators must not blow up the query."""
     monkeypatch.setattr(vectors, "search_text", lambda *a, **k: [])
