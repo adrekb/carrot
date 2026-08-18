@@ -148,3 +148,59 @@ class TestTheKeyIsNotLeaked:
         redacted = config.redact({"exa_api_key": "exa-secret-value"})
         assert redacted["exa_api_key"] is True
         assert "exa-secret-value" not in str(redacted)
+
+
+class TestAPdfIsADocument:
+    """`read_url` answered "not a readable document (application/pdf)".
+
+    Reported while researching the F-35: Lockheed's own fact sheet is a PDF,
+    and so is a great deal of the best material on the open web — filings,
+    papers, datasheets, standards. Turning all of it away meant the model read
+    whoever had written *about* the primary source instead of the source.
+
+    Nothing new was needed to read them. `attachments.extract_pdf_text` has
+    always done this for a PDF the user drags in; the fetcher simply refused
+    the content type before anything got a chance to look.
+    """
+
+    def test_the_content_type_is_recognised(self):
+        assert websearch._is_pdf("application/pdf", "https://x.test/a")
+        assert websearch._is_pdf("application/pdf; charset=binary", "https://x.test/a")
+
+    def test_a_silent_server_is_read_from_the_address(self):
+        """Plenty of hosts serve a .pdf as octet-stream, or say nothing."""
+        assert websearch._is_pdf("application/octet-stream", "https://x.test/facts.pdf")
+        assert websearch._is_pdf("", "https://x.test/report.PDF")
+
+    def test_a_web_page_is_still_a_web_page(self):
+        assert not websearch._is_pdf("text/html", "https://x.test/article")
+        assert not websearch._is_pdf("text/html", "https://x.test/about-pdf-files")
+
+    def test_the_text_comes_back_as_a_readable_document(self, monkeypatch):
+        monkeypatch.setattr(
+            "carrot.attachments.extract_pdf_text",
+            lambda blob, name="": "Program Status\n\n\n\n\nF-35: Air Dominance Delivered\n"
+                                  + "x" * 400)
+        out = websearch._read_pdf({}, b"%PDF-1.7 ...", "https://x.test/facts.pdf", 15000)
+        assert out.get("error") in (None, "")
+        assert out["kind"] == "pdf"
+        assert "Program Status" in out["text"]
+        # Page breaks arrive as runs of blank lines; the model should read prose.
+        assert "\n\n\n" not in out["text"]
+
+    def test_a_scan_says_so_rather_than_returning_nothing(self, monkeypatch):
+        """An empty success tells the model nothing and it answers from
+        snippets — the failure the read gates exist to catch, arriving through
+        the one door they do not watch."""
+        monkeypatch.setattr("carrot.attachments.extract_pdf_text",
+                            lambda blob, name="": "   ")
+        out = websearch._read_pdf({}, b"%PDF", "https://x.test/scan.pdf", 15000)
+        assert "scan" in out["error"]
+        assert not out.get("text")
+
+    def test_a_broken_pdf_names_what_happened(self, monkeypatch):
+        def boom(blob, name=""):
+            raise ValueError("EOF marker not found")
+        monkeypatch.setattr("carrot.attachments.extract_pdf_text", boom)
+        out = websearch._read_pdf({}, b"not a pdf", "https://x.test/x.pdf", 15000)
+        assert "EOF marker not found" in out["error"]
