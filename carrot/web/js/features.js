@@ -2690,13 +2690,78 @@ async function loadCodeHistory() {
         </button>`).join('');
 }
 
-// Replay a session into the agent log.
+// Rebuild one turn's tool path above its answer.
 //
-// Deliberately the prose only. The trace, the plan and the diff cards were
-// drawn from stream events that were never stored per-message here, so
-// rebuilding them would mean inventing a record rather than showing one — and
-// a re-enactment that quietly leaves out the four files a run touched is worse
-// than a transcript that admits it is one.
+// The claim that these were not kept was simply wrong: every turn stores its
+// trace on the assistant row — `TRACE_EVENTS` in app.py keeps `tool`,
+// `tool_result`, `plan`, `thinking` and the rest — because the Code tab posts
+// to the same endpoint as chat, which has replayed its traces all along. The
+// events were on disk the whole time and nothing here was reading them.
+//
+// Drawn with the same three functions the live stream uses, in the same order,
+// so a reopened session and a watched one are the same screen. The one honest
+// gap is the tool result, stored clipped at 400 characters — a page of test
+// output comes back as its first paragraph. Said on the card rather than in a
+// footnote under the whole session, because it is true of that card and not of
+// the turn.
+function replayAgentTrace(wrap, trace) {
+    if (!Array.isArray(trace) || !trace.length) return;
+    let pendingCard = null;
+    let plan = null;
+    for (const event of trace) {
+        if (event.thinking) {
+            const block = document.createElement('details');
+            block.className = 'think';
+            block.innerHTML = '<summary>Thought process</summary>'
+                + `<div class="think-body">${escHtml(event.thinking)}</div>`;
+            wrap.appendChild(block);
+        }
+        if (event.plan) plan = event.plan;      // the last one is the outcome
+        if (event.tool) {
+            const bare = String(event.tool.name || '').split('__').pop();
+            if (CARD_TOOLS.has(bare)) {
+                pendingCard = agentToolCard(wrap, event.tool);
+            } else {
+                pendingCard = null;
+                agentTrace(wrap, `→ ${event.tool.name}(${
+                    Object.entries(event.tool.args || {})
+                        .map(([k, v]) => `${k}=${String(v).slice(0, 60)}`).join(', ')})`,
+                    event.tool.rejected ? 'rejected' : '');
+            }
+        }
+        if (event.tool_result) {
+            const text = String(event.tool_result.result || '');
+            if (pendingCard) {
+                agentToolCardResult(pendingCard, text);
+                markReplayedResult(pendingCard, text);
+                pendingCard = null;
+            } else {
+                agentTrace(wrap, `← ${text.slice(0, 300)}`, 'result');
+            }
+        }
+        if (event.provider_error) {
+            agentTrace(wrap, `! ${event.provider_error.message || event.provider_error}`, 'rejected');
+        }
+        if (event.error) agentTrace(wrap, `! ${event.error}`, 'rejected');
+    }
+    if (plan && typeof renderPlan === 'function') {
+        renderPlan(wrap, plan, { collapsed: true });
+    }
+}
+
+// A stored result is clipped to 400 characters. Saying so on the card is the
+// difference between "the command printed this" and "the command printed this
+// much of this" — and only the second one is true here.
+function markReplayedResult(card, text) {
+    if (!card || text.length < 400) return;
+    const body = card.querySelector('.tool-output') || card;
+    const note = document.createElement('div');
+    note.className = 'tool-clipped';
+    note.textContent = 'stored trace — result kept to the first 400 characters';
+    body.appendChild(note);
+}
+
+// Replay a session into the agent log.
 async function openCodeSession(conversationId) {
     const log = document.getElementById('agent-log');
     if (!log) return;
@@ -2712,15 +2777,18 @@ async function openCodeSession(conversationId) {
     log.innerHTML = '';
     for (const message of (conv.messages || [])) {
         if (message.role !== 'user' && message.role !== 'assistant') continue;
-        const { body } = agentBubble(message.role, '');
-        body.innerHTML = message.role === 'assistant'
-            ? mdToHtml(message.content || '')
-            : escHtml(message.content || '');
+        const { wrap, body } = agentBubble(message.role, '');
+        // The trace goes above the answer, as it does live: it is what the turn
+        // did on the way to saying this, and reading it afterwards is reading
+        // it in the wrong order.
+        if (message.role === 'assistant') {
+            replayAgentTrace(wrap, (message.metadata || {}).trace);
+            wrap.appendChild(body);                 // back to the foot of the turn
+            body.innerHTML = mdToHtml(message.content || '');
+        } else {
+            body.innerHTML = escHtml(message.content || '');
+        }
     }
-    const note = document.createElement('div');
-    note.className = 'code-history-note';
-    note.textContent = 'Reopened — the tool trace and diffs from this session are not kept.';
-    log.appendChild(note);
     log.scrollTop = log.scrollHeight;
     codeHistoryOpen = false;
     document.getElementById('code-history')?.classList.add('hidden');

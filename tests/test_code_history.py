@@ -134,13 +134,60 @@ class TestTheCodeTabHasAHistory:
         assert opener, "openCodeSession not found"
         assert "agentConversationId = conversationId;" in opener.group(1)
 
-    def test_it_says_what_a_reopened_session_is_missing(self):
-        """The trace, plan and diff cards came from stream events that were
-        never stored per message. Redrawing the prose alone and saying nothing
-        would present a partial record as a whole one."""
+    def test_the_tool_path_comes_back_with_it(self):
+        """I shipped this replaying the prose only, with a note saying the
+        trace and diffs were not kept. That was wrong: every turn stores its
+        trace on the assistant row, because the Code tab posts to the same
+        endpoint as chat and chat has replayed its traces all along. The events
+        were on disk and nothing was reading them."""
         features = read("js", "features.js")
-        assert "code-history-note" in features
-        assert "not kept" in features
+        assert "function replayAgentTrace" in features
+        opener = re.search(r"async function openCodeSession\(conversationId\)\s*\{(.*?)\n\}",
+                           features, re.DOTALL).group(1)
+        assert "replayAgentTrace(wrap," in opener
+
+    def test_the_note_claiming_otherwise_is_gone(self):
+        """The sentence, not the phrase — the comment above `replayAgentTrace`
+        quotes the old claim in order to say it was wrong, and a test that
+        cannot tell those apart forbids explaining the fix."""
+        features = read("js", "features.js")
+        assert "the tool trace and diffs from this session are not kept" not in features
+        assert "code-history-note" not in features
+
+    def test_it_is_drawn_with_the_live_functions(self):
+        """A second renderer is a second thing to keep in step, and the way you
+        find out it drifted is a reopened session that does not look like the
+        one you watched."""
+        features = read("js", "features.js")
+        replay = re.search(r"function replayAgentTrace\(wrap, trace\)\s*\{(.*?)\n\}",
+                           features, re.DOTALL).group(1)
+        for shared in ("agentToolCard(", "agentToolCardResult(", "agentTrace(", "CARD_TOOLS"):
+            assert shared in replay, shared
+
+    def test_the_trace_sits_above_the_answer(self):
+        """It is what the turn did on the way to saying this; reading it
+        afterwards is reading it in the wrong order."""
+        features = read("js", "features.js")
+        opener = re.search(r"async function openCodeSession\(conversationId\)\s*\{(.*?)\n\}",
+                           features, re.DOTALL).group(1)
+        assert opener.index("replayAgentTrace(wrap,") < opener.index("wrap.appendChild(body)")
+
+    def test_a_clipped_result_says_so_on_its_own_card(self):
+        """Results are stored cut to 400 characters, so a page of test output
+        comes back as its first paragraph. A note under the whole session would
+        claim that of every card, including the ones stored whole."""
+        features = read("js", "features.js")
+        assert "function markReplayedResult" in features
+        assert "400" in features
+
+    def test_the_server_keeps_what_the_replay_needs(self):
+        """The other half of the contract. Dropping `tool` or `tool_result`
+        from the stored events would empty this without breaking anything that
+        would fail loudly."""
+        app_py = (ROOT / "carrot" / "app.py").read_text(encoding="utf-8")
+        kept = re.search(r"TRACE_EVENTS = \((.*?)\)", app_py, re.DOTALL).group(1)
+        for event in ('"tool"', '"tool_result"', '"plan"'):
+            assert event in kept, event
 
     def test_old_sessions_are_not_guessed_at(self):
         """Sessions from before the marker are in Chats. Inferring which ones
