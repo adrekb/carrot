@@ -809,12 +809,29 @@ body {
 .plan-head {
   display: flex; align-items: center; gap: 6px;
   padding: 7px 10px;
-  border-bottom: 1px solid var(--border);
   font-size: var(--text-xs);
   letter-spacing: 0.4px;
   text-transform: uppercase;
   color: var(--faint);
+  cursor: pointer;
+  list-style: none;
 }
+/* The rule under the head is the line between the head and the list, so it
+   belongs to the pair rather than to the head — left on the head alone it
+   underlines a closed card that has nothing beneath it. */
+.plan-box[open] > .plan-head { border-bottom: 1px solid var(--border); }
+.plan-head::-webkit-details-marker { display: none; }
+/* The same chevron as the trace, pointing the same way, turning the same
+   amount. Two disclosure controls stacked on one message should not be two
+   different gestures. */
+.plan-head::after {
+  content: "›";
+  margin-left: 6px;
+  display: inline-block;
+  transition: transform var(--dur-1) var(--ease);
+}
+.plan-box[open] > .plan-head::after { transform: rotate(90deg); }
+.plan-head:hover { color: var(--muted); }
 .plan-head .ico { width: 12px; height: 12px; }
 .plan-count { margin-left: auto; font-variant-numeric: tabular-nums; }
 .plan-items { padding: 5px 4px 7px; }

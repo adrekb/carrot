@@ -147,6 +147,57 @@ class ThinkTagStreamFilter:
         return self._drain(final=True)
 
 
+def merge_system_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Fold every system message into one, at the front.
+
+    Carrot builds the system half of a prompt as a stack of separate blocks —
+    answer style, the search directive, a skill's instructions, the workspace's
+    rules, the calendar, the ambient roster, what it remembers about the user,
+    the rolling summary — because each is written and switched on independently.
+    The OpenAI-shaped API those blocks are modelled on accepts as many as you
+    like, so nothing complained.
+
+    A GGUF's chat template is under no such obligation, and Qwen3's says:
+
+        {%- if message.role == "system" %}
+            {%- if not loop.first %}
+                {{- raise_exception('System message must be at the beginning.') }}
+
+    `loop.first` is true for index 0 only. So the *second* system block is
+    already an error, Ollama renders a template exception as HTTP 500, and every
+    turn dies before a token — a local model that answered "hi" fine and then
+    failed on everything real, because a bare chat sends one block and a chat
+    with search on sends two.
+
+    Reported as "500 Server Error ... /api/chat" with an empty plan and no
+    searches. Nothing in that sentence points at the prompt's shape, which is
+    why it read as the model being broken.
+
+    Merging is unconditional rather than per-model. One system block is the
+    shape every template accepts, the joined text is the same instruction the
+    stack always meant, and a rule that only runs for the models known to need
+    it is a rule that misses the next one.
+
+    Later blocks are hoisted to the front rather than left where they are. In
+    practice there are none — Carrot assembles the whole stack before the
+    transcript — but the template offers no faithful place to put one, so being
+    present at the top beats being a crash in the middle.
+    """
+    if sum(1 for m in messages if m.get("role") == "system") < 2:
+        return messages
+    blocks, rest = [], []
+    for message in messages:
+        if message.get("role") == "system":
+            content = message.get("content")
+            if isinstance(content, str) and content.strip():
+                blocks.append(content.strip())
+        else:
+            rest.append(message)
+    if not blocks:
+        return rest
+    return [{"role": "system", "content": "\n\n".join(blocks)}] + rest
+
+
 class OllamaClient:
     _thinking_support: Dict[str, bool] = {}
 
@@ -350,8 +401,8 @@ class OllamaClient:
         in the content stream.
         """
         model = model or self.default_model
-        body = {"model": model, "messages": messages, "stream": True,
-                "options": self._options(model)}
+        body = {"model": model, "messages": merge_system_messages(messages),
+                "stream": True, "options": self._options(model)}
         if tools:
             body["tools"] = tools
         if self.supports_thinking(model):
@@ -421,7 +472,7 @@ class OllamaClient:
     ) -> str:
         body = {
             "model": model or self.default_model,
-            "messages": messages,
+            "messages": merge_system_messages(messages),
             "stream": stream,
             "options": self._options(model or self.default_model),
         }
