@@ -8913,6 +8913,34 @@ body.nav-collapsed .nav-job-pulse { left: 6px; }
 .slides-present .slide-stage { border: none; }
 .slides-present .slide-el { border: none; outline: none; cursor: default; }
 
+/* The prose format bar. Shares every `.fmt-*` control with the deck's bar
+   below — the same button doing the same job should not be two buttons — and
+   differs only in sitting flush under the document toolbar rather than over a
+   stage. It does not wrap: a formatting row that reflows to two lines moves
+   Bold somewhere new every time the window changes width, so it scrolls
+   sideways on a narrow window and the hand keeps its map. */
+.format-bar {
+  display: flex; align-items: center; gap: var(--s-3);
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  padding: var(--s-2) var(--s-5);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg2);
+  scrollbar-width: none;
+}
+.format-bar::-webkit-scrollbar { display: none; }
+.format-bar .fmt-group,
+.format-bar .fmt-select { flex: none; }
+.format-bar .fmt-btn { line-height: 1; }
+.format-bar code { font-size: var(--text-2xs); background: none; padding: 0; }
+/* Why there is no font picker, in one word, in the place you look for one. */
+.fmt-note {
+  flex: none;
+  font-size: var(--text-2xs);
+  color: var(--faint);
+  cursor: help;
+}
+
 /* The format bar. */
 .slides-format {
   display: flex; align-items: center; gap: var(--s-3);

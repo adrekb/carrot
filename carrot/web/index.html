@@ -669,6 +669,15 @@
           <button class="btn btn-ghost" onclick="sendNoteToObsidian()" title="Save this note into your Obsidian vault as a Markdown file">→ Obsidian</button>
           <button class="btn btn-ghost" onclick="deleteCurrentNote()">Delete</button>
         </div>
+        <!-- The formatting row. Everything here was reachable already — by
+             typing markdown, by selecting text and waiting for the bubble, or
+             by remembering that `/` opens a menu. None of that is discoverable,
+             and a document editor whose toolbar offers Send, Obsidian and
+             Delete reads as a place that will not let you write bold text.
+             Markdown is still the file on disk, so the row stops where markdown
+             does: there is no font, no size, no colour and no alignment here,
+             because none of those survive the save. -->
+        <div id="note-format" class="format-bar hidden"></div>
         <div id="doc-refs" class="doc-refs hidden"></div>
         <div id="note-editor-host" class="milkdown-host"></div>
         <textarea id="note-fallback" class="note-fallback hidden" placeholder="Write your note…" oninput="scheduleNoteSave()"></textarea>

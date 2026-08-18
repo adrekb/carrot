@@ -268,7 +268,7 @@ async function newNote() {
 // `owns` but not `reveal` is what lets this hide them without also claiming
 // the right to show them.
 const WRITE_MODES = {
-    prose:  { owns: ['note-toolbar', 'note-editor-host', 'note-fallback', 'doc-refs'],
+    prose:  { owns: ['note-toolbar', 'note-format', 'note-editor-host', 'note-fallback', 'doc-refs'],
               reveal: ['note-toolbar'], rail: 'rail-backlinks' },
     latex:  { owns: ['latex-pane'], rail: 'rail-outline' },
     canvas: { owns: ['canvas-pane'], rail: 'rail-canvas' },
@@ -430,6 +430,7 @@ async function mountEditor(markdown) {
         host.classList.add('hidden');
         fallback.classList.remove('hidden');
         fallback.value = markdown;
+        showNoteFormatBar();
         return;
     }
     fallback.classList.add('hidden');
@@ -443,13 +444,250 @@ async function mountEditor(markdown) {
         } catch (_) { /* older Crepe: rely on autosave poll */ }
         await crepeInstance.create();
         crepeReady = true;
+        showNoteFormatBar();
     } catch (e) {
         crepeInstance = null;
         crepeReady = false;
         host.classList.add('hidden');
         fallback.classList.remove('hidden');
         fallback.value = markdown;
+        showNoteFormatBar();
     }
+}
+
+// ================================================================
+// The formatting row
+// ================================================================
+//
+// Crepe ships two ways to format: a bubble that appears when you select text,
+// and a `/` menu. Both are good and neither is visible, so the Write tab
+// shipped looking like it could not do bold — the only row on screen held
+// Send, Obsidian and Delete, which are things you do *to* a document rather
+// than *in* one.
+//
+// **The row stops where markdown stops.** Font, size, colour, alignment and
+// line spacing are the first things anyone reaches for after using Word, and
+// none of them exist in a `.md` file. A picker that silently does nothing on
+// save is worse than no picker, so they are absent rather than decorative.
+// What is here is every mark and block the schema actually has: each button
+// names a command exported by `CarrotMilkdownKit`, so a button cannot outlive
+// the command behind it — the vendor bundle would fail to build first.
+// Glyphs rather than icons, to match the deck's format bar — and each one
+// checked on screen rather than picked from a chart. Three did not survive
+// that: `⛓` renders as an unreadable pair of hooks at 11px, `▦` as a solid
+// blob, and `🖼` as a framed letter. Their replacements are the ones that were
+// legible at the size they are actually drawn at.
+const NOTE_FORMAT_ROWS = [
+    ['history', [
+        ['undo', '↶', 'Undo  (Ctrl+Z)'],
+        ['redo', '↷', 'Redo  (Ctrl+Shift+Z)'],
+    ]],
+    ['marks', [
+        ['strong', '<b>B</b>', 'Bold  (Ctrl+B)'],
+        ['emphasis', '<i>I</i>', 'Italic  (Ctrl+I)'],
+        ['strikethrough', '<s>S</s>', 'Strikethrough'],
+        ['inlineCode', '<code>&lt;&gt;</code>', 'Inline code'],
+        ['link', '🔗', 'Link'],
+    ]],
+    ['lists', [
+        ['bulletList', '•', 'Bulleted list'],
+        ['orderedList', '1.', 'Numbered list'],
+        ['liftListItem', '⇤', 'Outdent  (Shift+Tab)'],
+        ['sinkListItem', '⇥', 'Indent  (Tab)'],
+    ]],
+    ['blocks', [
+        ['blockquote', '❝', 'Quote'],
+        ['codeBlock', '{ }', 'Code block'],
+        ['hr', '―', 'Divider'],
+        ['table', '⊞', 'Table'],
+        ['image', '◲', 'Image'],
+    ]],
+];
+
+// Paragraph style. One control rather than six heading buttons, because these
+// are alternatives — a paragraph is exactly one of them — and a row of toggles
+// says the opposite.
+const NOTE_BLOCK_STYLES = [
+    ['paragraph', 'Normal text'],
+    ['h1', 'Heading 1'],
+    ['h2', 'Heading 2'],
+    ['h3', 'Heading 3'],
+    ['h4', 'Heading 4'],
+    ['h5', 'Heading 5'],
+    ['h6', 'Heading 6'],
+];
+
+let noteFormatBuilt = false;
+
+function buildNoteFormatBar() {
+    const bar = document.getElementById('note-format');
+    if (!bar || noteFormatBuilt) return;
+    let html = '<select id="note-block-style" class="fmt-select" title="Paragraph style"'
+        + ' onchange="noteSetBlockStyle(this.value)">'
+        + NOTE_BLOCK_STYLES.map(([value, label]) =>
+            '<option value="' + value + '">' + label + '</option>').join('')
+        + '</select>';
+    for (const [group, buttons] of NOTE_FORMAT_ROWS) {
+        html += '<div class="fmt-group" data-group="' + group + '">'
+            + buttons.map(([cmd, glyph, title]) =>
+                '<button class="fmt-btn" type="button" data-fmt="' + cmd + '"'
+                + ' title="' + title + '" onclick="noteFormat(\'' + cmd + '\')">'
+                + glyph + '</button>').join('')
+            + '</div>';
+    }
+    // Said once, here, rather than left to be discovered by trying: the reason
+    // there is no font picker is the file format, not an oversight.
+    html += '<span class="fmt-gap"></span>'
+        + '<span class="fmt-note" title="Saved as Markdown. Fonts, sizes, colours'
+        + ' and alignment are not part of that format, so they are not offered'
+        + ' here — they would be lost on save.">Markdown</span>';
+    bar.innerHTML = html;
+    noteFormatBuilt = true;
+}
+
+// The row is only useful while a Milkdown editor is mounted. On the textarea
+// fallback every button would be dead, so it is not shown at all.
+function showNoteFormatBar() {
+    const bar = document.getElementById('note-format');
+    if (!bar) return;
+    buildNoteFormatBar();
+    const live = !!(window.CarrotMilkdownKit && crepeInstance && crepeReady
+                    && isWriteMode('prose') && !currentNoteReadonly);
+    bar.classList.toggle('hidden', !live);
+    if (live) { watchNoteSelection(); syncNoteFormatBar(); }
+}
+
+// Run one command against the mounted editor.
+//
+// Focus first, always. A ProseMirror command applies at the selection, and
+// clicking a toolbar button moves focus to the button — without this the
+// selection is stale or gone and half the commands are silent no-ops, which is
+// the classic "the bold button works sometimes" bug.
+async function noteFormat(cmd) {
+    const kit = window.CarrotMilkdownKit;
+    if (!kit || !crepeInstance || !crepeReady) return;
+    const surface = document.querySelector('#note-editor-host .ProseMirror');
+    if (surface) surface.focus();
+
+    let payload;
+    if (cmd === 'link') {
+        const href = await inlineTextPrompt({
+            title: 'Link to', placeholder: 'https://…', action: 'Add link',
+        });
+        if (!href) return;
+        payload = { href };
+        if (surface) surface.focus();
+    } else if (cmd === 'image') {
+        const src = await inlineTextPrompt({
+            title: 'Image address', placeholder: 'https://…  or  /path/to/file.png',
+            action: 'Insert image',
+        });
+        if (!src) return;
+        payload = { src };
+        if (surface) surface.focus();
+    }
+
+    const key = kit.commands[cmd];
+    if (!key) return;
+    try {
+        crepeInstance.editor.action(kit.callCommand(key.key, payload));
+    } catch (_) { /* a command that does not apply here is not an error */ }
+    scheduleNoteSave();
+    syncNoteFormatBar();
+}
+
+function noteSetBlockStyle(value) {
+    const kit = window.CarrotMilkdownKit;
+    if (!kit || !crepeInstance || !crepeReady) return;
+    const surface = document.querySelector('#note-editor-host .ProseMirror');
+    if (surface) surface.focus();
+    try {
+        if (value === 'paragraph') {
+            crepeInstance.editor.action(kit.callCommand(kit.commands.paragraph.key));
+        } else {
+            crepeInstance.editor.action(
+                kit.callCommand(kit.commands.heading.key, Number(value.slice(1))));
+        }
+    } catch (_) {}
+    scheduleNoteSave();
+    syncNoteFormatBar();
+}
+
+// Which marks the button `data-fmt` names in the schema. Kept as a map rather
+// than assumed equal: the schema calls strikethrough `strike_through`, and
+// reading `schema.marks[button]` would leave that one button permanently dark.
+const NOTE_MARK_NAMES = {
+    strong: 'strong',
+    emphasis: 'emphasis',
+    strikethrough: 'strike_through',
+    inlineCode: 'inlineCode',
+    link: 'link',
+};
+
+// Which buttons are lit, and what the style picker reads.
+//
+// Marks come from `storedMarks` before the selection, because with an empty
+// cursor sitting after a Ctrl+B the mark is stored and not yet in the
+// document — reading the document there makes the button flick off the moment
+// you press it.
+function syncNoteFormatBar() {
+    const kit = window.CarrotMilkdownKit;
+    const bar = document.getElementById('note-format');
+    if (!bar || bar.classList.contains('hidden')) return;
+    if (!kit || !crepeInstance || !crepeReady) return;
+
+    const active = new Set();
+    let block = 'paragraph';
+    try {
+        crepeInstance.editor.action((ctx) => {
+            const { state } = ctx.get(kit.ctx.editorViewCtx);
+            const { from, to, $from, empty } = state.selection;
+            const marks = state.storedMarks || $from.marks();
+            for (const [button, markName] of Object.entries(NOTE_MARK_NAMES)) {
+                const type = state.schema.marks[markName];
+                if (!type) continue;
+                const on = empty
+                    ? marks.some((m) => m.type === type)
+                    : state.doc.rangeHasMark(from, to, type);
+                if (on) active.add(button);
+            }
+            if ($from.parent.type.name === 'heading') {
+                block = 'h' + ($from.parent.attrs.level || 1);
+            }
+            if ($from.parent.type.name === 'code_block') active.add('codeBlock');
+            // Walk out to find the enclosing list or quote: the cursor sits in
+            // a paragraph inside a list_item inside the list, so the node
+            // directly above it never says `bullet_list`.
+            for (let depth = $from.depth; depth > 0; depth--) {
+                const name = $from.node(depth).type.name;
+                if (name === 'bullet_list') active.add('bulletList');
+                if (name === 'ordered_list') active.add('orderedList');
+                if (name === 'blockquote') active.add('blockquote');
+            }
+        });
+    } catch (_) { return; }
+
+    for (const button of bar.querySelectorAll('.fmt-btn[data-fmt]')) {
+        button.classList.toggle('on', active.has(button.dataset.fmt));
+    }
+    const picker = document.getElementById('note-block-style');
+    if (picker && picker.value !== block) picker.value = block;
+}
+
+// Keep the lit buttons honest as the cursor moves. Bound once on the host
+// rather than on the editor, because Milkdown replaces its own DOM on every
+// remount and a listener on the ProseMirror node would be lost with it.
+function watchNoteSelection() {
+    const host = document.getElementById('note-editor-host');
+    if (!host || host.dataset.fmtWatched) return;
+    host.dataset.fmtWatched = '1';
+    const sync = () => syncNoteFormatBar();
+    host.addEventListener('keyup', sync);
+    host.addEventListener('mouseup', sync);
+    host.addEventListener('input', sync);
+    document.addEventListener('selectionchange', () => {
+        if (host.contains(document.activeElement)) sync();
+    });
 }
 
 // Milkdown escapes `[` when it serialises back to markdown, so a note
