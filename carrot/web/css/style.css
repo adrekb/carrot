@@ -2103,6 +2103,27 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   font-variant-numeric: tabular-nums;
   color: var(--faint);
 }
+/* `</>` on a coding session. Monospace because it is notation rather than a
+   word, and at the right end so a column of rows still reads down the left. */
+.nav-recent-tag {
+  margin-left: auto;
+  flex: none;
+  font-family: var(--mono);
+  font-size: var(--text-2xs);
+  color: var(--faint);
+}
+.nav-recent:hover .nav-recent-tag { color: var(--muted); }
+/* "see more". Quieter than the rows above it — it is the way out of the
+   section, not a member of it.
+
+   Not `.nav-more`: that name is already a component further down this file,
+   an uppercase tracked-out disclosure, and reusing it made these two rows
+   come out shouting "SEE ALL 5" in the middle of a lowercase rail. */
+.nav-seemore .nav-recent-label { color: var(--faint); }
+.nav-seemore:hover .nav-recent-label { color: var(--accent); }
+/* The gap that makes "in progress" a separate thought rather than a third
+   list. It is last now, so nothing below it supplies the separation. */
+.nav-activity > .nav-running { margin-top: 14px; margin-bottom: 0; }
 
 /* Reduced motion is handled in one place near the end of this file, so it can
    apply after every animation it has to override. */
@@ -6537,7 +6558,7 @@ body #cmdbar:focus-within {
    * screen saying that something is still happening. Freezing them does not
    * calm the interface down, it makes a live indicator indistinguishable from
    * a dead one. Slowed, because there is no reason for them to be brisk. */
-  .nav-job-pulse, .icon-btn.recording {
+  .nav-job-pulse, .icon-btn.recording, .chat-resume-pulse {
     animation-duration: 2.4s !important;
     animation-iteration-count: infinite !important;
   }
@@ -8313,6 +8334,54 @@ select.dd-open { border-color: var(--accent-line); }
   gap: var(--s-4);
 }
 .chat-empty-head .chat-empty-note { margin: 0; }
+
+/* The resume line. One row, under the question, quiet enough that the eye
+   reaches the composer first — it is an offer, not an instruction. Hidden
+   entirely when there is nothing to resume, because a row that says "nothing
+   yet" is a row that teaches people to stop reading the space. */
+.chat-resume {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  max-width: 100%;
+  padding: var(--s-2) var(--s-2) var(--s-2) var(--s-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--card);
+  font-size: var(--text-xs);
+}
+.chat-resume.hidden { display: none; }
+.chat-resume-lead { color: var(--faint); flex: none; }
+.chat-resume-label {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 42ch;
+}
+.chat-resume-go {
+  flex: none;
+  padding: 3px 10px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: var(--accent-fill, var(--accent));
+  color: var(--on-accent);
+  font: inherit;
+  font-size: var(--text-2xs);
+  font-weight: var(--w-semi);
+  cursor: pointer;
+}
+.chat-resume-go:hover { background: var(--accent-hi); }
+/* The same dot the rail uses for a live job, so "running" looks like one
+   thing across the app rather than two. */
+.chat-resume-pulse {
+  flex: none;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--green);
+  animation: pulse-dot 1.8s ease-in-out infinite;
+}
+@keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 .where-mark {
   display: inline-flex;
   align-items: center;
@@ -8519,6 +8588,20 @@ body.nav-collapsed .nav-job-pulse { left: 6px; }
 .history-dot.chip-agent { background: var(--green); }
 .history-chip.chip-chat.active { border-color: var(--accent); }
 .history-chip.chip-agent.active { border-color: var(--green); background: color-mix(in srgb, var(--green) 14%, transparent); }
+/* Code sessions. Yellow because the two kinds already here are the accent and
+   the green, and a third that is either of those is a third that cannot be
+   told from the other two at 6px. */
+.chip-code { --chip: var(--yellow); }
+.history-dot.chip-code { background: var(--yellow); }
+.history-chip.chip-code.active { border-color: var(--yellow); background: color-mix(in srgb, var(--yellow) 14%, transparent); }
+/* `</>` beside the title. The dot already carries the colour; this carries the
+   meaning, for anyone who has not learned what yellow means yet. */
+.history-tag {
+  flex: none;
+  font-family: var(--mono);
+  font-size: var(--text-2xs);
+  color: var(--faint);
+}
 .history-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .history-when { font-size: var(--text-2xs); color: var(--faint); flex: 0 0 auto; }
 .history-empty { padding: var(--s-5); color: var(--faint); font-size: var(--text-sm); }

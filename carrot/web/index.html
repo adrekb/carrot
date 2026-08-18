@@ -480,6 +480,7 @@
             <div class="history-filters">
               <button class="history-chip active" data-kind="all" onclick="setHistoryFilter('all')">All</button>
               <button class="history-chip chip-chat" data-kind="chat" onclick="setHistoryFilter('chat')">Chat</button>
+              <button class="history-chip chip-code" data-kind="code" onclick="setHistoryFilter('code')">Code</button>
               <button class="history-chip chip-agent" data-kind="agent" onclick="setHistoryFilter('agent')">Agent</button>
             </div>
             <div id="history-list" class="history-list"></div>
@@ -584,6 +585,13 @@
             <h1 class="chat-empty-title">Where should we begin?</h1>
             <p id="chat-empty-line" class="chat-empty-note"></p>
           </div>
+          <!-- One line, and only when there is something true to put in it.
+               The blank screen knows what you were last doing and said nothing
+               about it, so coming back meant going and looking for your own
+               work. Drawn by js/activity.js from the poll the rail already
+               makes — no second request, and it stays current while you sit
+               here. Absent rather than empty on a fresh install. -->
+          <div id="chat-resume" class="chat-resume hidden"></div>
         </div>
       </div>
       <!-- The agent's work, under the transcript.

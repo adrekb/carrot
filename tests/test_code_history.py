@@ -91,8 +91,12 @@ class TestACodingTurnMarksItsSession:
 
 
 class TestChatsNoLongerListsThem:
-    def test_the_filter_exists(self):
-        assert "(c.metadata || {}).surface !== 'code'" in read("js", "app.js")
+    """The blanket filter is gone — see TestTheHistoryMenuHoldsBoth. Marking
+    them is what mattered; what the marker is *used* for changed once the menu
+    could label a code session instead of hiding it."""
+
+    def test_the_marker_is_what_the_menu_sorts_on(self):
+        assert "(c.metadata || {}).surface === 'code'" in read("js", "app.js")
 
     def test_the_filter_is_no_longer_dead(self):
         """It has been there all along; what it needed was for something to set
@@ -151,7 +155,7 @@ class TestTheRailNamesItsSections:
     sidebar, and the thing it is actually like sets its headings in the same
     case as the rows under them and tells them apart by weight."""
 
-    @pytest.mark.parametrize("label", [">recent</summary>", "'running now'",
+    @pytest.mark.parametrize("label", [">recent</summary>", "'in progress'",
                                        "'needs a look'", ">workspaces</summary>"])
     def test_the_headings_are_lowercase(self, label):
         assert label in read("js", "activity.js")
@@ -271,10 +275,167 @@ class TestTheRailDoesNotLoseRecents:
         assert "let activityLoaded = false;" in activity
         assert "activityLoaded = true;" in activity
 
-    def test_recents_still_render_after_workspaces(self):
-        """Order matters and so does the early return: the workspaces block has
-        to be appended before `if (!recent.length) return;`, or a rail with no
-        recents loses the section that does have something in it."""
+    def test_no_section_can_early_return_past_another(self):
+        """The first version returned early when there were no recents, which
+        put every section after that one at the mercy of the one before it.
+        Each is its own `if` now — see TestTheRailIsAGlanceNotAList for the
+        order they run in."""
         activity = read("js", "activity.js")
-        assert (activity.index("activityWorkspaceRow(workspace)")
-                < activity.index("if (!recent.length) return;"))
+        assert "if (!recent.length) return;" not in activity
+
+class TestRecentsKnowWhichAreCode:
+    """A chat session and a coding session are the same row from the same
+    table, they read identically at 12px, and they open in different tabs."""
+
+    @pytest.mark.parametrize("metadata,expected", [
+        ('{"surface": "code"}', "code"),
+        ('{"surface": "agent"}', "conversation"),
+        ("{}", "conversation"),
+        (None, "conversation"),
+        ("not json at all", "conversation"),
+    ])
+    def test_the_kind_is_read_off_the_metadata(self, metadata, expected):
+        from carrot import activity
+
+        assert activity._surface_kind(metadata) == expected
+
+    def test_broken_metadata_costs_one_row_its_icon_not_the_panel(self):
+        """The rail is polled. A row with an unparseable blob must not raise
+        through `recent()` and empty the whole thing."""
+        from carrot import activity
+
+        assert activity._surface_kind("{{{") == "conversation"
+
+    def test_the_query_selects_metadata(self):
+        """Without the column there is nothing to classify from, and every
+        session comes back as a conversation."""
+        source = (ROOT / "carrot" / "activity.py").read_text(encoding="utf-8")
+        assert "SELECT id, title, updated_at, metadata FROM conversations" in source
+
+
+class TestTheRailIsAGlanceNotAList:
+    def test_the_caps_are_three_and_five(self):
+        activity = read("js", "activity.js")
+        assert "const RAIL_WORKSPACES = 3;" in activity
+        assert "const RAIL_RECENTS = 5;" in activity
+
+    def test_both_sections_are_sliced(self):
+        activity = read("js", "activity.js")
+        assert "activityWorkspaces.slice(0, RAIL_WORKSPACES)" in activity
+        assert "recent.slice(0, RAIL_RECENTS)" in activity
+
+    def test_there_is_a_way_past_the_cap(self):
+        activity = read("js", "activity.js")
+        assert "function activityMoreRow" in activity
+        assert "see more" in activity
+        assert "see all" in activity
+
+    def test_see_more_does_not_reuse_the_other_nav_more(self):
+        """`.nav-more` is already a component in this stylesheet — an uppercase
+        tracked-out disclosure — so reusing the name made these rows shout
+        "SEE ALL 5" in the middle of a lowercase rail."""
+        activity = read("js", "activity.js")
+        assert "'nav-recent nav-seemore'" in activity
+        assert "'nav-recent nav-more'" not in activity
+        css = read("css", "style.css")
+        assert ".nav-seemore .nav-recent-label" in css
+
+    def test_a_code_row_is_marked(self):
+        activity = read("js", "activity.js")
+        row = re.search(r"function activityRecentRow\(item\)\s*\{(.*?)\n\}",
+                        activity, re.DOTALL)
+        assert row, "activityRecentRow not found"
+        assert "&lt;/&gt;" in row.group(1)
+        assert "item.kind === 'code'" in row.group(1)
+
+    def test_a_code_row_opens_in_the_code_tab(self):
+        """Sending it to chat renders it as a transcript in a tab with no file
+        tree, no diff and no agent — the same conversation, and not the thing
+        that was clicked."""
+        activity = read("js", "activity.js")
+        assert "code: (id) => {" in activity
+        assert "switchTab('code');" in activity
+
+    def test_in_progress_comes_last(self):
+        """It is the only section that moves, and a moving thing at the foot of
+        a still rail is not missed. What the top cost was pushing the two
+        sections you navigate with down the page whenever something ran."""
+        activity = read("js", "activity.js")
+        render = re.search(r"function renderActivity\(\)\s*\{(.*?)\n\}",
+                           activity, re.DOTALL).group(1)
+        assert render.index("activityWorkspaceRow") < render.index("activityRecentRow")
+        assert render.index("activityRecentRow") < render.index("nav-running")
+
+    def test_it_is_called_in_progress(self):
+        assert "'in progress'" in read("js", "activity.js")
+
+
+class TestTheHistoryMenuHoldsBoth:
+    def test_code_sessions_are_no_longer_filtered_out(self):
+        """Right while they had nowhere else to be listed; wrong now that this
+        is *the* history. A history that silently omits half your week is worse
+        than one that mixes two kinds."""
+        app_js = read("js", "app.js")
+        assert ".filter(c => (c.metadata || {}).surface !== 'code')" not in app_js
+
+    def test_they_are_their_own_kind(self):
+        app_js = read("js", "app.js")
+        assert "(c.metadata || {}).surface === 'code' ? 'code' : 'chat'" in app_js
+
+    def test_there_is_a_code_filter_chip(self):
+        assert 'data-kind="code"' in read("index.html")
+
+    def test_the_rows_are_labelled(self):
+        app_js = read("js", "app.js")
+        assert "history-tag" in app_js
+        assert "&lt;/&gt;" in app_js
+
+    def test_the_dot_has_a_colour_of_its_own(self):
+        """Two kinds were the accent and the green; a third that is either of
+        those cannot be told from them at 6px."""
+        css = read("css", "style.css")
+        assert ".history-dot.chip-code { background: var(--yellow); }" in css
+
+    def test_opening_one_goes_to_the_code_tab(self):
+        app_js = read("js", "app.js")
+        opener = re.search(r"function openHistoryItem\(kind, id\)\s*\{(.*?)\n\}",
+                           app_js, re.DOTALL).group(1)
+        assert "if (kind === 'code')" in opener
+        assert opener.index("kind === 'code'") < opener.index("switchTab('workspace')")
+
+
+class TestTheBlankScreenSaysWhatYouWereDoing:
+    def test_the_line_exists(self):
+        assert 'id="chat-resume"' in read("index.html")
+
+    def test_it_is_absent_rather_than_empty(self):
+        """A row that says "nothing yet" teaches people to stop reading the
+        space it occupies."""
+        activity = read("js", "activity.js")
+        resume = re.search(r"function renderChatResume\(\)\s*\{(.*?)\n\}",
+                           activity, re.DOTALL).group(1)
+        assert "host.classList.add('hidden')" in resume
+
+    def test_running_work_wins_over_a_finished_thing(self):
+        """"Research is going" is a reason to wait or watch; "you were reading
+        X" is only a way back."""
+        activity = read("js", "activity.js")
+        resume = re.search(r"function renderChatResume\(\)\s*\{(.*?)\n\}",
+                           activity, re.DOTALL).group(1)
+        assert resume.index("running.length") < resume.index("else if (recent)")
+
+    def test_it_costs_no_extra_request(self):
+        """It is drawn from the poll the rail already makes."""
+        activity = read("js", "activity.js")
+        resume = re.search(r"function renderChatResume\(\)\s*\{(.*?)\n\}",
+                           activity, re.DOTALL).group(1)
+        assert "api(" not in resume
+        assert "renderChatResume();" in activity
+
+    def test_the_live_dot_survives_reduced_motion(self):
+        """It is the only thing on screen saying something is still happening,
+        and a frozen live indicator is indistinguishable from a dead one."""
+        css = read("css", "style.css")
+        assert ".chat-resume-pulse" in css
+        # The exceptions are listed on one line with the other live dots.
+        assert ".nav-job-pulse, .icon-btn.recording, .chat-resume-pulse {" in css

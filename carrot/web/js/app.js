@@ -1155,12 +1155,14 @@ async function loadHistory() {
         api('/api/agent/runs').then(r => r.runs || []).catch(() => []),
     ]);
     historyCache = [
-        ...(Array.isArray(convs) ? convs : (convs.conversations || []))
-            // Code sessions are conversations too — same endpoint, same table.
-            // They belong to the Code tab's own history, not to this one.
-            .filter(c => (c.metadata || {}).surface !== 'code')
-            .map(c => ({
-            kind: 'chat',
+        // Code sessions are conversations too — same endpoint, same table.
+        // They were filtered out of here entirely, which was right while they
+        // had nowhere else to be listed and wrong now: this menu is *the*
+        // history, and a history that silently omits half your week is worse
+        // than one that mixes two kinds. They are a kind instead, so the Code
+        // chip narrows to them and All shows everything you actually did.
+        ...(Array.isArray(convs) ? convs : (convs.conversations || [])).map(c => ({
+            kind: (c.metadata || {}).surface === 'code' ? 'code' : 'chat',
             id: c.id,
             title: c.title || 'Untitled',
             when: historyEpoch(c.updated_at || c.created_at),
@@ -1187,6 +1189,7 @@ function renderHistory() {
         <button class="history-item" data-kind="${i.kind}" data-id="${escHtml(String(i.id))}">
           <span class="history-dot chip-${i.kind}"></span>
           <span class="history-title">${escHtml(i.title)}</span>
+          ${i.kind === 'code' ? '<span class="history-tag">&lt;/&gt;</span>' : ''}
           <span class="history-when">${escHtml(writeWhen(i.when))}</span>
         </button>`).join('');
     for (const el of host.querySelectorAll('.history-item')) {
@@ -1196,6 +1199,11 @@ function renderHistory() {
 
 function openHistoryItem(kind, id) {
     closeHistoryMenu();
+    if (kind === 'code') {
+        switchTab('code');
+        if (typeof openCodeSession === 'function') openCodeSession(id);
+        return;
+    }
     switchTab('workspace');
     if (kind === 'agent') {
         setChatMode('agent');
