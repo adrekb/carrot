@@ -945,6 +945,48 @@ body {
   overflow-y: auto;
   margin-bottom: 8px;
 }
+/* The tool path folds. It is the tallest thing in a multi-turn search — a
+   dozen calls and their results — and once the answer has landed it is a
+   record rather than something to read. The scroll moves to the body so the
+   summary stays put while the lines run under it. */
+details.trace {
+  max-height: none;
+  overflow: visible;
+  /* There is a second `.trace` rule further down this file with
+     `min-height: 120px`, from when a trace was always an open box with room
+     to scroll in. Left alone it holds a *folded* trace open at 120px of
+     nothing — the summary, then an empty panel, which is worse than not
+     folding it. A fold has to be allowed to be the height of its summary. */
+  min-height: 0;
+}
+details.trace .trace-lines {
+  max-height: 130px;
+  overflow-y: auto;
+}
+.trace-summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  color: var(--faint);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 2px 0;
+}
+.trace-summary::-webkit-details-marker { display: none; }
+.trace-summary::before {
+  content: "›";
+  display: inline-block;
+  transition: transform var(--dur-1) var(--ease);
+}
+details.trace[open] > .trace-summary::before { transform: rotate(90deg); }
+.trace-summary:hover { color: var(--muted); }
+.trace-count { margin-left: auto; font-variant-numeric: tabular-nums; }
+
+@media (prefers-reduced-motion: reduce) {
+  .trace-summary::before { transition: none; }
+}
 .trace-line::before { content: '> '; color: var(--accent); }
 .trace-line.err { color: var(--red); }
 .trace-think {

@@ -1996,18 +1996,42 @@ async function streamTurn(url, payload, skill) {
     contentEl.innerHTML = '<span class="caret">&nbsp;</span>';
 
     // Lazily created tool-call trace box (terminal-style, above the answer).
-    let toolEl = null;
+    //
+    // A <details>, because on a multi-turn search this is the tallest thing in
+    // the conversation — a dozen tool calls and their results, pushing the
+    // answer the user asked for off the bottom of the screen. Open while it
+    // runs, because watching it is the point; folded when the turn lands, with
+    // a count, because by then the answer is the point and the path is
+    // something you go back to.
+    let toolEl = null, toolLines = null;
+    const toolCounts = newTraceCounts();
     function toolLine(text, cls) {
         if (!toolEl) {
-            toolEl = document.createElement('div');
+            toolEl = document.createElement('details');
             toolEl.className = 'trace tool-trace';
+            toolEl.open = true;
+            toolEl.innerHTML = '<summary class="trace-summary">Tool path'
+                + '<span class="trace-count"></span></summary>'
+                + '<div class="trace-lines"></div>';
+            toolLines = toolEl.querySelector('.trace-lines');
+            toolEl.addEventListener('toggle', () => { toolEl.dataset.touched = '1'; });
             assistantEl.insertBefore(toolEl, contentEl);
         }
         const div = document.createElement('div');
         div.className = 'trace-line' + (cls ? ' ' + cls : '');
         div.textContent = text;
-        toolEl.appendChild(div);
-        toolEl.scrollTop = toolEl.scrollHeight;
+        toolLines.appendChild(div);
+        toolCounts.lines += 1;
+        toolLines.scrollTop = toolLines.scrollHeight;
+    }
+    // Folded, not discarded — and left alone if the reader has already opened
+    // or closed it themselves, since a box that reopens under the cursor when
+    // the turn ends is the app arguing with them.
+    function finishTrace() {
+        if (!toolEl) return;
+        const count = toolEl.querySelector('.trace-count');
+        if (count) count.textContent = summariseTrace(toolCounts);
+        if (!toolEl.dataset.touched) toolEl.open = false;
     }
     if (skill) toolLine('skill: ' + skill.name, 'intent');
 
@@ -2111,6 +2135,7 @@ async function streamTurn(url, payload, skill) {
                         toolLine(warning, 'error');
                     }
                 }
+                countTraceEvent(toolCounts, payload);
                 if (payload.tool) {
                     // A rejected call used to print exactly like a real one and
                     // then show no result — four of those in a row is what a
@@ -2193,6 +2218,7 @@ async function streamTurn(url, payload, skill) {
             }
         }
         finishThink();
+        finishTrace();
         contentEl.classList.add('md');
         // "(no response)" told the user nothing. The backend now guarantees
         // text on every path, so reaching here means the connection itself
@@ -2249,12 +2275,19 @@ async function streamTurn(url, payload, skill) {
         // red is telling them their own action went wrong. It only gets here
         // when the server-side stop did not take and the fetch was cut.
         if (e.name === 'AbortError') {
+            // The path the turn took is what the user was watching when they
+            // pressed stop, and it is the only record of how far it got —
+            // fold it, never drop it.
+            finishThink();
+            finishTrace();
             contentEl.classList.add('md');
             const note = document.createElement('div');
             note.className = 'stopped-note';
             note.textContent = 'Stopped.';
             contentEl.appendChild(note);
         } else {
+            finishThink();
+            finishTrace();
             contentEl.textContent = e.message;
             contentEl.classList.add('error');
         }
@@ -2682,6 +2715,72 @@ async function openConversation(convId) {
     switchTab('workspace');
 }
 
+// ===== What the turn actually did =====
+//
+// The fold used to say "17 steps", which is true and tells you nothing: the
+// number counts lines of developer output, and a reader deciding whether to
+// open it wants to know what kind of work happened, not how much text there
+// is. "Searched the web · Read 4 pages · Checked 5 claims" is the same trace
+// described in the reader's terms; the raw lines are still one click away for
+// anyone who wants to audit them.
+//
+// Counted by what the tools *are* rather than by their names alone, so a tool
+// added later lands in "Ran N tools" instead of silently going missing.
+const TRACE_KINDS = [
+    // [test on the tool name, singular, plural(n)]
+    [/search/i, 'Searched the web', n => `Searched the web ${n}×`],
+    [/read_url|fetch|browse/i, n => 'Read a page', n => `Read ${n} pages`],
+    [/memory/i, n => 'Checked memory', n => `Checked memory ${n}×`],
+    [/file|write|edit|read_file/i, n => 'Touched a file', n => `Touched ${n} files`],
+    [/command|shell|terminal/i, n => 'Ran a command', n => `Ran ${n} commands`],
+];
+
+function summariseTrace(counts) {
+    const parts = [];
+    if (counts.thinking) parts.push('Thought it through');
+    for (const [, one, many] of TRACE_KINDS) {
+        const n = counts.kinds[one.toString()] || 0;
+        if (n) parts.push(n === 1 ? (typeof one === 'function' ? one(1) : one) : many(n));
+    }
+    if (counts.other) {
+        parts.push(counts.other === 1 ? 'Ran a tool' : `Ran ${counts.other} tools`);
+    }
+    if (counts.findings) {
+        parts.push(counts.findings === 1 ? 'Checked a claim'
+                                         : `Checked ${counts.findings} claims`);
+    }
+    if (counts.errors) parts.push(counts.errors === 1 ? '1 failed' : `${counts.errors} failed`);
+    // Nothing recognisable happened, so fall back to the honest count rather
+    // than inventing a description of it.
+    if (!parts.length) {
+        const n = counts.lines || 0;
+        return n ? `${n} step${n === 1 ? '' : 's'}` : '';
+    }
+    return parts.join(' · ');
+}
+
+function newTraceCounts() {
+    return { kinds: {}, other: 0, thinking: 0, findings: 0, errors: 0, lines: 0 };
+}
+
+function countTraceEvent(counts, event) {
+    if (event.thinking) { counts.thinking += 1; return; }
+    if (event.error || event.provider_error) { counts.errors += 1; return; }
+    if (event.finding || event.verdict) { counts.findings += 1; return; }
+    if (!event.tool) return;
+    counts.lines += 1;
+    if (event.tool.rejected) { counts.errors += 1; return; }
+    const name = String(event.tool.name || '');
+    for (const [test, one] of TRACE_KINDS) {
+        if (test.test(name)) {
+            const key = one.toString();
+            counts.kinds[key] = (counts.kinds[key] || 0) + 1;
+            return;
+        }
+    }
+    counts.other += 1;
+}
+
 // Rebuild a stored trace above a message that has already been rendered.
 //
 // The same shapes the live stream draws, from the same event names, so a
@@ -2692,9 +2791,12 @@ async function openConversation(convId) {
 function replayTrace(messageEl, trace) {
     if (!messageEl || !Array.isArray(trace) || !trace.length) return;
     const content = messageEl.querySelector('.content');
-    const box = document.createElement('div');
-    box.className = 'trace tool-trace';
-    messageEl.insertBefore(box, content || null);
+    const shell = document.createElement('details');
+    shell.className = 'trace tool-trace';
+    shell.innerHTML = '<summary class="trace-summary">Tool path'
+        + '<span class="trace-count"></span></summary><div class="trace-lines"></div>';
+    const box = shell.querySelector('.trace-lines');
+    messageEl.insertBefore(shell, content || null);
 
     const line = (text, cls) => {
         const div = document.createElement('div');
@@ -2743,7 +2845,14 @@ function replayTrace(messageEl, trace) {
         if (event.error) line('error: ' + event.error, 'error');
     }
     if (plan && plan.goals) renderPlan(messageEl, plan);
-    if (!box.childElementCount) box.remove();
+    // Nothing to show: take the whole shell, not just its body, or a reopened
+    // turn grows an empty "Tool path" fold above every answer.
+    if (!box.childElementCount) { shell.remove(); return; }
+    const counts = newTraceCounts();
+    for (const event of trace) countTraceEvent(counts, event);
+    counts.lines = counts.lines || box.childElementCount;
+    const count = shell.querySelector('.trace-count');
+    if (count) count.textContent = summariseTrace(counts);
 }
 
 // ===== Which panels the conversation page shows =====
