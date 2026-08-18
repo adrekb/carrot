@@ -9117,6 +9117,83 @@ body.nav-collapsed .nav-job-pulse { left: 6px; }
   font-style: italic;
 }
 
+/* ===== The Context chip =====
+   Sits with the model pill, because both answer "what is this turn made of".
+   Quieter than the model: the model is a choice you make every turn, and this
+   is a thing you check. */
+#context-picker { position: relative; flex: none; }
+#context-btn {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--card2);
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+  white-space: nowrap;
+}
+#context-btn:hover { color: var(--text); border-color: var(--border-hi); }
+#context-btn .ico { width: 14px; height: 14px; }
+#context-pop {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 3400;
+  width: 268px;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: var(--s-2);
+  background: var(--surface-pop);
+  border: 1px solid var(--border-hi);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow);
+}
+#context-pop.hidden { display: none; }
+.context-row {
+  display: flex; align-items: center; gap: var(--s-3);
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--r-xs);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-xs);
+  text-align: left;
+  cursor: pointer;
+}
+.context-row:hover:not([disabled]) { background: var(--card2); }
+/* Switched off: struck through as well as dimmed, because on a list of ten
+   rows a colour change alone reads as "less important" rather than "not
+   going". */
+.context-row.off .context-name { text-decoration: line-through; color: var(--faint); }
+/* On, but with nothing to contribute this turn. Shown rather than hidden — a
+   list that changes length as you type is a list you cannot learn. */
+.context-row.idle .context-name { color: var(--muted); }
+.context-row[disabled] { cursor: default; opacity: 0.75; }
+.context-check {
+  width: 12px; flex: none;
+  color: var(--accent);
+  font-size: var(--text-2xs);
+}
+.context-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.context-size {
+  flex: none;
+  font-size: var(--text-2xs);
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+.context-foot {
+  padding: var(--s-3) 8px 2px;
+  font-size: var(--text-2xs);
+  color: var(--faint);
+  border-top: 1px solid var(--border);
+  margin-top: var(--s-2);
+}
+.context-empty { padding: var(--s-3); font-size: var(--text-xs); color: var(--faint); }
+
 /* The prose format bar. Shares every `.fmt-*` control with the deck's bar
    below — the same button doing the same job should not be two buttons — and
    differs only in sitting flush under the document toolbar rather than over a

@@ -2411,6 +2411,21 @@
         <div id="search-mode-list"></div>
       </div>
     </div>
+    <!-- What the model is actually being told, beside the thing you are
+         telling it. The question "why does it know about my calendar" is asked
+         at the composer, and until now the only answer was to read app.py. -->
+    <div id="context-picker">
+      <button id="context-btn" onclick="toggleContextPop()"
+              title="What Carrot is being told this turn">
+        <svg class="ico"><use href="#i-info"/></svg>
+        <span id="context-label">Context</span>
+      </button>
+      <div id="context-pop" class="hidden">
+        <div class="pop-section">What Carrot is being told</div>
+        <div id="context-list"></div>
+        <div class="context-foot" id="context-foot"></div>
+      </div>
+    </div>
     <div id="model-picker">
       <button id="model-btn" onclick="toggleModelPop()">
         <svg class="ico"><use href="#i-chip"/></svg>
@@ -2503,6 +2518,7 @@
 <script src="/js/palette.js"></script>
 <!-- After app.js and agents.js: the rail's rows open conversations and runs
      through the same functions the history menu uses. -->
+<script src="/js/context.js"></script>
 <script src="/js/activity.js"></script>
 </body>
 </html>
