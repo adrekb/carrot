@@ -373,7 +373,7 @@ function renderSlideStage() {
     const scale = slideScale();
 
     host.innerHTML =
-        '<div class="slide-stage" style="width:' + SLIDE_W + 'px;height:' + SLIDE_H + 'px;'
+        '<div class="slide-stage paper" style="width:' + SLIDE_W + 'px;height:' + SLIDE_H + 'px;'
         + 'transform:scale(' + scale + ');'
         + (slide.background ? 'background:' + slide.background + ';' : '') + '">'
         + slide.elements.map(el => elementHtml(el, {
@@ -396,7 +396,7 @@ function renderSlidesFilm() {
         + ' draggable="true" data-index="' + i + '" onclick="gotoSlide(' + i + ')">'
         + '<span class="slide-thumb-n">' + (i + 1) + '</span>'
         + '<span class="slide-thumb-box">'
-        + '<span class="slide-stage" style="width:' + SLIDE_W + 'px;height:' + SLIDE_H + 'px;'
+        + '<span class="slide-stage paper" style="width:' + SLIDE_W + 'px;height:' + SLIDE_H + 'px;'
         + 'transform:scale(' + scale + ');'
         + (s.background ? 'background:' + s.background + ';' : '') + '">'
         + (s.elements || []).map(el => elementHtml(el)).join('')
@@ -1196,7 +1196,7 @@ async function ensureReveal() {
 }
 
 function slideHtml(slide) {
-    return '<div class="slide-stage" style="width:' + SLIDE_W + 'px;height:' + SLIDE_H + 'px;'
+    return '<div class="slide-stage paper" style="width:' + SLIDE_W + 'px;height:' + SLIDE_H + 'px;'
         + (slide.background ? 'background:' + slide.background + ';' : '') + '">'
         + (slide.elements || []).map(el => elementHtml(el)).join('')
         + '</div>';

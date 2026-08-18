@@ -1746,6 +1746,27 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 }
 .milkdown-host.paper .ProseMirror { background: var(--bg2); color: var(--text); }
 
+/* The block handle you could see but never click.
+   Milkdown sets `data-show="false"` the moment the pointer leaves a block, and
+   its own stylesheet then applies `pointer-events: none` — but the handle is
+   positioned out in the left gutter, so the trip from the text to the button
+   crosses dead space that belongs to no block. The handle is switched off
+   before the pointer arrives, and because it takes no pointer events it cannot
+   keep itself alive either. Reported as "it only stays for a fraction of a
+   second, unclickable".
+
+   Keeping it live while the pointer is anywhere in the editor is how every
+   editor with a gutter handle behaves: it follows the block you are nearest,
+   and it is still there when you go for it. Milkdown repositions it on each
+   block it resolves, so this shows the current one, not a stale one.
+
+   An override of a vendored rule, which is worth saying out loud: if the
+   bundle is rebuilt and the plugin starts handling this itself, this can go. */
+.milkdown-host:hover .milkdown-block-handle[data-show="false"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 .milkdown-host { flex: 1; overflow-y: auto; }
 .milkdown-host .milkdown { background: transparent; color: var(--text); }
 .milkdown-host .ProseMirror { padding: 20px 26px; min-height: 100%; outline: none; line-height: 1.6; }
@@ -8844,10 +8865,21 @@ body.nav-collapsed .nav-job-pulse { left: 6px; }
   outline: none;
 }
 
+/* A slide is a page, so it is paper — white in either theme, with the chrome
+   around it staying dark. It was `--card`, the app's panel colour, which made
+   the stage another panel and a deck a dark rectangle you edit inside a dark
+   window.
+
+   The `paper` class matters as much as the colour here, and is why this is not
+   simply a lighter background: a deck stores its text colour as `var(--text)`,
+   so on a white stage in a dark theme every word would have come out white on
+   white. `paper` gives the subtree the light palette, so `--text` inside a
+   slide is ink and the explicit colours somebody chose — a red heading, a blue
+   box — are untouched. */
 .slide-stage {
   position: relative;
   flex: 0 0 auto;
-  background: var(--card);
+  background: var(--bg2);
   border: 1px solid var(--border);
   transform-origin: center center;
   overflow: hidden;
@@ -8871,7 +8903,14 @@ body.nav-collapsed .nav-job-pulse { left: 6px; }
   opacity: 0;
 }
 .slide-el.selected .slide-el-resize { opacity: 1; }
-.slides-present .slide-stage { background: none; border: none; }
+/* Presented, the slide is still the page: paper, with the dark viewport
+   letterboxing it the way a projector does. It used to be `none`, which
+   let reveal's viewport show through — fine when the stage had no palette
+   of its own, and wrong the moment it became `.paper`, because the text a
+   deck stores as `var(--text)` is ink inside that subtree and ink on a
+   dark viewport is an unreadable slide. A deck that sets its own
+   background still wins: that is an inline style on the stage. */
+.slides-present .slide-stage { border: none; }
 .slides-present .slide-el { border: none; outline: none; cursor: default; }
 
 /* The format bar. */
