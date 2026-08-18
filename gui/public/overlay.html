@@ -59,7 +59,15 @@
        the accent as ink — and the foreground that sits on it. One dark value
        cannot be right for both a yellow and a blue. */
     --accent-fill: #e0620f;
+    --accent-hi: #ff9450;
     --on-accent: #1a1208;
+    --faint: #96907f;
+    /* The composer's own surface. Not --card: the app's command bar sits at
+       `--surface-pop` behind a brighter edge than a card gets, because it
+       floats over the page rather than sitting in it — which is exactly what
+       this panel does. */
+    --pop: #272520;
+    --pop-edge: rgba(232, 222, 200, 0.14);
     --drop: rgba(0, 0, 0, 0.5);
     --drop-sm: rgba(0, 0, 0, 0.3);
 
@@ -85,6 +93,9 @@
     --stroke-hi: rgba(40, 34, 22, 0.18);
     --text: #1e1b14;
     --muted: #5f584a;
+    --faint: #6b6355;
+    --pop: #ffffff;
+    --pop-edge: rgba(38, 32, 26, 0.13);
     --drop: rgba(38, 30, 22, 0.22);
     --drop-sm: rgba(38, 30, 22, 0.12);
   }
@@ -122,16 +133,6 @@
     to   { opacity: 1; transform: none; }
   }
 
-  .mark {
-    width: 26px; height: 26px;
-    flex: 0 0 auto;
-    border-radius: var(--r-sm);
-    background: var(--accent-soft);
-    display: flex; align-items: center; justify-content: center;
-    color: var(--accent);
-  }
-  .mark svg { width: 15px; height: 15px; }
-
   input {
     flex: 1;
     min-width: 0;
@@ -146,16 +147,37 @@
   }
   input::placeholder { color: var(--muted); }
 
+  /* Was a bordered "Enter" chip, which is a key cap — a thing the app's
+     composer does not have, because the send button is the affordance. So the
+     chip is the send button now, and this is what is left of it: the states it
+     was also carrying (Listening, Thinking, Mic blocked), as a quiet word
+     rather than a boxed one. Empty when idle. */
   .hint {
     flex: 0 0 auto;
     font-size: var(--text-2xs);
-    color: var(--muted);
-    border: 1px solid var(--stroke);
-    border-radius: var(--r-xs);
-    padding: 2px 6px;
+    color: var(--faint);
     letter-spacing: 0.02em;
   }
-  .hint.busy { color: var(--accent); border-color: var(--accent-line); }
+  .hint:empty { display: none; }
+  .hint.busy { color: var(--accent); }
+
+  /* 36px, circular, accent-filled — `#send-btn`, to the pixel. It is the one
+     control in the app's composer that is a filled circle, and it means send;
+     drawing it any other way in here makes the panel a different app. */
+  .send {
+    flex: 0 0 auto;
+    width: 36px; height: 36px;
+    display: flex; align-items: center; justify-content: center;
+    border: none;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #fff;
+    cursor: pointer;
+    transition: background 0.16s var(--ease), transform 0.12s var(--ease);
+  }
+  .send svg { width: 17px; height: 17px; }
+  .send:hover { background: var(--accent-hi); }
+  .send:active { transform: scale(0.94); }
 
   /* The reply lands under the bar; the window grows to fit it. */
   .reply {
@@ -197,13 +219,23 @@
      One surface holding the input, the attachment tray and the footer,
      rather than a bare bar. The bar keeps its own padding but drops the
      border and shadow now that the panel carries them. */
+  /* The app's command bar, not a bar of our own.
+     `--r-lg` and `--pop`, and the two-row layout its stylesheet insists on:
+     "Two rows, always: the question, then the controls. Not a flex row that
+     wraps under pressure — the rows are the design." This panel was that flex
+     row: input, mic, paperclip and an Enter chip all on one line, which is a
+     different product's idea of a command bar. */
   .panel {
-    background: var(--panel);
-    border: 1px solid var(--stroke);
-    border-radius: var(--r-xl);
+    background: var(--pop);
+    border: 1px solid var(--pop-edge);
+    border-radius: var(--r-lg);
     box-shadow: 0 26px 70px var(--drop), 0 2px 8px var(--drop-sm);
     animation: rise 0.22s var(--ease);
     position: relative;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
   }
   .bar {
     background: none;
@@ -211,13 +243,21 @@
     box-shadow: none;
     border-radius: 0;
     animation: none;
-    padding: 15px 16px 13px;
+    padding: 0;
   }
   input { font-size: var(--text-md); }
 
+  /* The control row. Same order as the app's: the things you add to the
+     question on the left, the thing that sends it on the right. */
+  .controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
   .icon {
     flex: 0 0 auto;
-    width: 30px; height: 30px;
+    width: 32px; height: 32px;
     display: flex; align-items: center; justify-content: center;
     border: 0;
     border-radius: var(--r-sm);
@@ -236,7 +276,6 @@
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
-    padding: 0 16px 12px;
   }
   .tray.hidden { display: none; }
   .file {
@@ -259,29 +298,25 @@
   }
   .file-x:hover { color: var(--text); }
 
-  /* Footer: workspace scope on the left, the escape hint on the right */
-  .foot {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 0 12px 11px 13px;
-  }
   .spacer { flex: 1; }
+  /* The app's `#search-btn`: a filled pill on the surface above the bar, with
+     a hairline edge. It was a borderless ghost, which read as a label rather
+     than a control — and it is the only thing in the panel you can change. */
   .chip {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 4px 9px;
+    padding: 5px 9px;
     border-radius: var(--r-sm);
-    border: 1px solid transparent;
-    background: none;
-    color: var(--muted);
+    border: 1px solid var(--stroke);
+    background: var(--sheen);
+    color: var(--text);
     font: inherit;
     font-size: var(--text-xs);
     cursor: pointer;
   }
-  .chip svg { width: 13px; height: 13px; }
-  .chip:hover { background: var(--sheen); color: var(--text); border-color: var(--stroke-hi); }
+  .chip svg { width: 13px; height: 13px; color: var(--muted); }
+  .chip:hover { border-color: var(--accent-line); }
   .key { font-size: var(--text-2xs); color: var(--muted); opacity: 0.75; }
 
   /* Workspace menu, anchored inside the panel so it cannot be clipped by
@@ -289,7 +324,7 @@
   .menu {
     position: absolute;
     left: 12px;
-    bottom: 40px;
+    bottom: 52px;
     min-width: 210px;
     max-height: 190px;
     overflow-y: auto;
@@ -328,12 +363,19 @@
 </head>
 <body>
   <div class="panel">
+    <!-- Row one: the question. The accent tile that used to sit to the left of
+         it is gone — the app's composer has no leading mark, and a logo inside
+         an input is a search box from another decade. -->
     <div class="bar">
-      <div class="mark">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
-             stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
-      </div>
       <input id="q" placeholder="Ask Carrot anything…" autofocus autocomplete="off" spellcheck="false">
+    </div>
+
+    <div class="tray hidden" id="tray"></div>
+
+    <!-- Row two: what you can add to the question, then what sends it. Same
+         order and the same controls as the app's, so the hand that has used
+         one has used the other. -->
+    <div class="controls">
       <button class="icon" id="dictate" title="Dictate (click, then speak)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
              stroke-linecap="round" stroke-linejoin="round"><rect x="9.2" y="2.6" width="5.6" height="11" rx="2.8"/><path d="M5.4 11.2a6.6 6.6 0 0 0 13.2 0M12 17.8V21.4M8.6 21.4h6.8"/></svg>
@@ -342,19 +384,18 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
              stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5l-8.8 8.8a5.3 5.3 0 0 1-7.5-7.5l9-9a3.5 3.5 0 0 1 5 5l-9 9a1.8 1.8 0 0 1-2.5-2.5l8.3-8.3"/></svg>
       </button>
-      <span class="hint" id="hint">Enter</span>
-    </div>
-
-    <div class="tray hidden" id="tray"></div>
-
-    <div class="foot">
       <button class="chip" id="ws" title="Ask inside a workspace">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
              stroke-linecap="round" stroke-linejoin="round"><path d="M3.2 6.6a2 2 0 0 1 2-2h3.6l2.2 2.6h7.8a2 2 0 0 1 2 2v8.2a2 2 0 0 1-2 2H5.2a2 2 0 0 1-2-2z"/></svg>
         <span id="ws-label">All workspaces</span>
       </button>
       <span class="spacer"></span>
-      <span class="key">Esc to close</span>
+      <span class="hint" id="hint"></span>
+      <span class="key">Esc</span>
+      <button class="send" id="send" title="Send">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+             stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+      </button>
     </div>
 
     <div class="menu hidden" id="ws-menu"></div>
@@ -466,7 +507,7 @@
       recogniser.onerror = (e) => {
         stopDictation();
         hint.textContent = e.error === 'not-allowed' ? 'Mic blocked' : 'Mic error';
-        setTimeout(() => { hint.textContent = 'Enter'; }, 2200);
+        setTimeout(() => { hint.textContent = ''; }, 2200);
       };
       recogniser.onend = () => stopDictation();
       try {
@@ -484,7 +525,7 @@
     recogniser = null;
     listening = false;
     dictateBtn.classList.remove('on');
-    hint.textContent = 'Enter';
+    hint.textContent = '';
     hint.classList.remove('busy');
     input.focus();
   }
@@ -613,11 +654,13 @@
       showReply(esc('Could not reach Carrot: ' + (err && err.message ? err.message : err)));
     } finally {
       busy = false;
-      hint.textContent = 'Enter';
+      hint.textContent = '';
       hint.classList.remove('busy');
       input.focus();
     }
   }
+
+  document.getElementById('send').addEventListener('click', () => ask());
 
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {

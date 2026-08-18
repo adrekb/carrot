@@ -206,6 +206,74 @@ class TestEveryAccentAgrees:
         assert overlay_palette(overlay, "dark", "ember")["--accent-fill"] != "#df3d17"
 
 
+def rule(source, selector):
+    """The declarations of one rule, by exact selector."""
+    for selectors, body in BLOCK.findall(stylesheet(source)):
+        if [part.strip() for part in selectors.split(",")] == [selector]:
+            return {name.strip(): value.strip() for name, value in
+                    (d.split(":", 1) for d in body.split(";") if ":" in d)}
+    raise AssertionError("no rule for " + selector)
+
+
+class TestItIsTheAppsCommandBar:
+    """Matching colours is not matching a design language, and this file did
+    the first and not the second: the same orange on a panel that was a single
+    wrapping row with a logo tile at the left end and a bordered `Enter` key
+    cap at the right. The app's composer is none of those things, and its own
+    stylesheet is explicit about the part that matters —
+
+        Two rows, always: the question, then the controls. Not a flex row that
+        wraps under pressure — the rows are the design, so there is no width at
+        which the layout is a compromise.
+
+    — so the panel is now that: question, then controls, with the app's send
+    button on the end of them."""
+
+    def test_the_shell_is_the_command_bar(self, app, overlay):
+        theirs = rule(app, "#cmdbar")
+        mine = rule(overlay, ".panel")
+        assert mine["flex-direction"] == theirs["flex-direction"] == "column"
+        assert mine["gap"] == theirs["gap"]
+        assert mine["padding"] == theirs["padding"]
+        assert mine["border-radius"] == theirs["border-radius"] == "var(--r-lg)"
+
+    def test_the_surface_is_the_floating_one(self, app, overlay):
+        """`--surface-pop`, not `--card`. A panel that floats over the page is
+        drawn differently from one sitting in it, and this floats over the
+        whole desktop."""
+        assert app_palette(app, "dark")["--surface-pop"] == overlay_palette(overlay, "dark")["--pop"]
+        assert (app_palette(app, "dark")["--surface-pop-edge"]
+                == overlay_palette(overlay, "dark")["--pop-edge"])
+
+    def test_the_send_button_is_the_apps(self, app, overlay):
+        theirs = rule(app, "#send-btn")
+        mine = rule(overlay, ".send")
+        for name in ("width", "height", "border-radius"):
+            assert mine[name] == theirs[name], name
+        assert mine["background"] == theirs["background"] == "var(--accent)"
+
+    def test_there_is_no_key_cap_where_the_button_goes(self, overlay):
+        """A bordered `Enter` chip beside a send button is the same instruction
+        twice, and the app shows neither."""
+        assert "hint.textContent = 'Enter'" not in overlay
+        hint = rule(overlay, ".hint")
+        assert "border" not in hint
+
+    def test_the_button_actually_sends(self, overlay):
+        """It replaced the only thing that said how to submit, so a decorative
+        one would leave the panel with no visible way to ask anything."""
+        assert "getElementById('send').addEventListener('click'" in overlay
+
+    def test_the_input_has_no_leading_tile(self, overlay):
+        """A logo inside the input is a search box from another decade, and the
+        app's composer has no leading mark at all."""
+        assert 'class="mark"' not in overlay
+        assert ".mark {" not in overlay
+
+    def test_the_icon_buttons_are_the_apps_size(self, app, overlay):
+        assert rule(app, ".icon-btn")["width"] == rule(overlay, ".icon")["width"] == "32px"
+
+
 class TestItUsesAScaleRatherThanAHalfPixelRack:
     def test_no_half_pixel_sizes_remain(self, overlay):
         assert not re.findall(r"font-size:\s*[0-9]+\.5px", overlay)
