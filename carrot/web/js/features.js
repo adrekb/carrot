@@ -2624,6 +2624,109 @@ function newAgentTask() {
     document.getElementById('agent-input')?.focus();
 }
 
+// ===== Code sessions you have had before =====
+//
+// The Code tab could start a session and never get back to one. Every other
+// panel in the app keeps its work — chat has a list, Research has runs, the
+// editor has checkpoints — and the one you spend hours in dropped everything
+// the moment you clicked New task.
+//
+// The conversations were there the whole time: the agent posts to the same
+// /api/chat/stream and its sessions are rows in the same table. What was
+// missing was the marker saying which ones they are (set server-side now, from
+// the `coder` flag) and any way to look at them.
+//
+// Sessions older than that marker are not listed. They are in Chats, where
+// they have always been, and guessing retroactively which conversation was a
+// coding one from the tools it happened to call would put somebody's private
+// chat in this list. A gap in a history is recoverable; the other way is not.
+
+let codeHistoryOpen = false;
+
+// "3h", "yesterday", "12 Aug". A session list is scanned for the one you were
+// in an hour ago, so recent times are relative and older ones are a date —
+// "23 days ago" is arithmetic nobody asked to do.
+function codeSessionWhen(value) {
+    const then = Date.parse(value || '');
+    if (isNaN(then)) return '';
+    const mins = Math.round((Date.now() - then) / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return mins + 'm';
+    if (mins < 60 * 24) return Math.round(mins / 60) + 'h';
+    if (mins < 60 * 48) return 'yesterday';
+    return new Date(then).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+}
+
+async function toggleCodeHistory() {
+    const panel = document.getElementById('code-history');
+    if (!panel) return;
+    codeHistoryOpen = !codeHistoryOpen;
+    panel.classList.toggle('hidden', !codeHistoryOpen);
+    if (codeHistoryOpen) await loadCodeHistory();
+}
+
+async function loadCodeHistory() {
+    const panel = document.getElementById('code-history');
+    if (!panel) return;
+    panel.innerHTML = '<div class="code-history-empty">Loading…</div>';
+    let rows = [];
+    try {
+        const data = await api('/api/conversations?limit=100');
+        rows = (Array.isArray(data) ? data : (data.conversations || []))
+            .filter(c => (c.metadata || {}).surface === 'code');
+    } catch (e) {
+        panel.innerHTML = `<div class="code-history-empty">Could not load: ${escHtml(e.message)}</div>`;
+        return;
+    }
+    if (!rows.length) {
+        panel.innerHTML = '<div class="code-history-empty">No earlier sessions yet. '
+            + 'Ones from before this was added are in Chats.</div>';
+        return;
+    }
+    panel.innerHTML = rows.map(c => `
+        <button class="code-history-row" onclick="openCodeSession('${escHtml(c.id)}')">
+          <span class="code-history-title">${escHtml(c.title || 'Untitled session')}</span>
+          <span class="code-history-when">${escHtml(codeSessionWhen(c.updated_at || c.created_at))}</span>
+        </button>`).join('');
+}
+
+// Replay a session into the agent log.
+//
+// Deliberately the prose only. The trace, the plan and the diff cards were
+// drawn from stream events that were never stored per-message here, so
+// rebuilding them would mean inventing a record rather than showing one — and
+// a re-enactment that quietly leaves out the four files a run touched is worse
+// than a transcript that admits it is one.
+async function openCodeSession(conversationId) {
+    const log = document.getElementById('agent-log');
+    if (!log) return;
+    let conv;
+    try {
+        conv = await api(`/api/conversations/${encodeURIComponent(conversationId)}`);
+    } catch (e) {
+        return;
+    }
+    agentConversationId = conversationId;
+    agentAttachments = [];
+    renderAgentTray();
+    log.innerHTML = '';
+    for (const message of (conv.messages || [])) {
+        if (message.role !== 'user' && message.role !== 'assistant') continue;
+        const { body } = agentBubble(message.role, '');
+        body.innerHTML = message.role === 'assistant'
+            ? mdToHtml(message.content || '')
+            : escHtml(message.content || '');
+    }
+    const note = document.createElement('div');
+    note.className = 'code-history-note';
+    note.textContent = 'Reopened — the tool trace and diffs from this session are not kept.';
+    log.appendChild(note);
+    log.scrollTop = log.scrollHeight;
+    codeHistoryOpen = false;
+    document.getElementById('code-history')?.classList.add('hidden');
+    document.getElementById('agent-input')?.focus();
+}
+
 // ===== What the panel says before you have asked it anything =====
 //
 // It said "Tell me what to build, fix or explain" and named the folder. That

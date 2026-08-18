@@ -1053,9 +1053,14 @@
                     title="The agent can create, edit, move and delete files, and run commands.">Act</button>
           </div>
           <span class="spacer"></span>
+          <!-- Earlier sessions. Beside New task on purpose: starting one and
+               getting back to one are the same decision, taken at the same
+               moment, and the tab had only half of it. -->
+          <button class="icon-btn" title="Earlier sessions" onclick="toggleCodeHistory()"><svg class="ico"><use href="#i-clock"/></svg></button>
           <button class="icon-btn" title="New task" onclick="newAgentTask()"><svg class="ico"><use href="#i-plus"/></svg></button>
           <button class="icon-btn" title="Hide the agent" onclick="toggleAgentSide()"><svg class="ico"><use href="#i-x"/></svg></button>
         </div>
+        <div id="code-history" class="code-history hidden"></div>
         <div id="agent-log" class="agent-log">
           <div class="agent-hello">
             <p>Tell me what to build, fix or explain. I can see the files in

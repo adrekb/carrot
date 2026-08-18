@@ -15,6 +15,11 @@
 let activityData = { running: [], recent: [], any_running: false };
 let activityTimer = null;
 let activityRecentsOpen = false;
+// Workspaces change when you make one, not every four seconds, so they are
+// fetched once and kept — polling them on the rail's cadence would be a
+// database round trip a minute for a list that is almost always identical.
+let activityWorkspaces = null;
+let activityWorkspacesOpen = false;
 
 // Polling, tuned to what is actually changing.
 //
@@ -94,8 +99,30 @@ function renderActivity() {
         // and a stopped run is not a category of work — it is something that
         // wants a decision. Say what it wants.
         box.innerHTML = `<div class="nav-sec-head">${
-            running.some(j => j.status === 'running') ? 'Running now' : 'Needs a look'}</div>`;
+            running.some(j => j.status === 'running') ? 'running now' : 'needs a look'}</div>`;
         for (const job of running) box.appendChild(activityJobRow(job));
+        host.appendChild(box);
+    }
+
+    // Workspaces, above recents.
+    //
+    // The rail answers "what is happening" and "what was I just doing", and
+    // was missing the third question a sidebar is for: what am I doing this
+    // inside of. Workspaces are already the app's containers — a conversation,
+    // a document and a repo can all be filed in one — but the only way to see
+    // them was to go to Work and look. A container you cannot see from
+    // anywhere is a container people stop filing things into.
+    //
+    // Collapsed by default, like recents, and for the same reason: this is
+    // something you go looking for, not something that should be occupying the
+    // rail before you ask.
+    if (activityWorkspaces && activityWorkspaces.length) {
+        const box = document.createElement('details');
+        box.className = 'nav-recents';
+        box.open = activityWorkspacesOpen;
+        box.addEventListener('toggle', () => { activityWorkspacesOpen = box.open; });
+        box.innerHTML = '<summary class="nav-sec-head">workspaces</summary>';
+        for (const workspace of activityWorkspaces) box.appendChild(activityWorkspaceRow(workspace));
         host.appendChild(box);
     }
 
@@ -107,7 +134,7 @@ function renderActivity() {
     details.className = 'nav-recents';
     details.open = activityRecentsOpen;
     details.addEventListener('toggle', () => { activityRecentsOpen = details.open; });
-    details.innerHTML = '<summary class="nav-sec-head">Recent</summary>';
+    details.innerHTML = '<summary class="nav-sec-head">recent</summary>';
     for (const item of recent) details.appendChild(activityRecentRow(item));
     host.appendChild(details);
 }
@@ -133,6 +160,38 @@ function activityJobRow(job) {
     return row;
 }
 
+function activityWorkspaceRow(workspace) {
+    const row = document.createElement('button');
+    row.className = 'nav-recent';
+    const count = Object.values(workspace.counts || {}).reduce((a, b) => a + b, 0);
+    row.title = workspace.name + (count ? ` — ${count} item${count === 1 ? '' : 's'}` : ' — empty');
+    row.innerHTML = `
+        <svg class="ico"><use href="#i-folder"/></svg>
+        <span class="nav-recent-label">${escHtml(workspace.name)}</span>
+        ${count ? `<span class="nav-recent-count">${count}</span>` : ''}`;
+    // Making it active as well as opening it: picking a workspace out of the
+    // rail is a statement about what you are working on, and leaving the
+    // active one behind would file the next thing you make into the last one.
+    row.onclick = async () => {
+        try {
+            if (typeof setActiveWorkspace === 'function') await setActiveWorkspace(workspace.id);
+        } catch (_) { /* opening it still works */ }
+        if (typeof switchTab === 'function') switchTab('workspaces');
+        if (typeof openWorkspace === 'function') openWorkspace(workspace.id);
+    };
+    return row;
+}
+
+async function loadActivityWorkspaces() {
+    try {
+        const rows = await api('/api/workspaces');
+        activityWorkspaces = Array.isArray(rows) ? rows : (rows.workspaces || []);
+    } catch (_) {
+        activityWorkspaces = [];
+    }
+    renderActivity();
+}
+
 function activityRecentRow(item) {
     const row = document.createElement('button');
     row.className = 'nav-recent';
@@ -146,6 +205,7 @@ function activityRecentRow(item) {
 
 window.addEventListener('DOMContentLoaded', () => {
     loadActivity();
+    loadActivityWorkspaces();
     document.addEventListener('visibilitychange', () => {
         if (!document.hidden) loadActivity();
     });

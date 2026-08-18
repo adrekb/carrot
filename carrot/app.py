@@ -3838,6 +3838,18 @@ def _open_conversation(req):
         if temporary:
             meta[conv_mod.TEMPORARY_KEY] = True
         surface = (getattr(req, "surface", None) or "").strip()
+        # A turn from the Code tab marks its conversation as one, here rather
+        # than in the browser. app.js already filters `surface === 'code'` out
+        # of the Chats list — but nothing ever set the marker, so the filter
+        # has been a no-op and every coding session has been sitting in Chats
+        # among the ordinary ones, while the Code tab had no history at all.
+        #
+        # Server-side because `coder` is what actually decides the shape of the
+        # turn: it is the flag that attaches the plan/act preamble and the
+        # workspace rules, so any caller that sets it is running a coding turn
+        # whether or not it remembered to say so twice.
+        if not surface and getattr(req, "coder", False):
+            surface = conv_mod.SURFACE_CODE
         if surface:
             meta[conv_mod.SURFACE_KEY] = surface
         created = conv_mod.create_conversation(
