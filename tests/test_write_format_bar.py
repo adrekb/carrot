@@ -128,6 +128,26 @@ class TestItLightsUpForWhatIsActuallyThere:
         assert "storedMarks" in sync.group(1)
 
 
+class TestTheGutterKeepsOnlyWhatIsOnlyThere:
+    """The handle in the left margin had a `+` and a drag grip. The `+` opened
+    the menu `/` opens, which is now also the row's job — so the gutter held a
+    third way to do what two other things already did, one of them permanently
+    on screen. The grip stays: dragging a block is the one thing the gutter is
+    for and the only one with nowhere else to live."""
+
+    def test_the_add_button_is_hidden(self):
+        css = (ROOT / "carrot" / "web" / "css" / "style.css").read_text(encoding="utf-8")
+        assert ".milkdown-block-handle .operation-item:first-child { display: none; }" in css
+
+    def test_the_drag_grip_is_not(self):
+        """Both are `.operation-item`, add then drag, so hiding them by class
+        rather than by position would take the grip with it and leave a gutter
+        that reacts to the pointer and does nothing."""
+        css = (ROOT / "carrot" / "web" / "css" / "style.css").read_text(encoding="utf-8")
+        assert ".milkdown-block-handle .operation-item { display: none; }" not in css
+        assert ":last-child { display: none; }" not in css
+
+
 class TestItStopsWhereMarkdownStops:
     """Font, size, colour and alignment are the first things anyone reaches for
     after Word, and none of them survive a save to `.md`. A control that

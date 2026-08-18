@@ -26,12 +26,30 @@
     font-display: swap;
   }
   /* Kept in step with the main window's palette. The overlay is a file://
-     page, so it cannot read the app's stored theme; the desktop shell
-     relays it and stamps data-theme / data-accent on <html> (see the
-     script at the end of this file). */
+     page, so it cannot read the app's stylesheet or its stored theme; the
+     desktop shell relays the theme and stamps data-theme / data-accent on
+     <html> (see the script at the end of this file), and the values are
+     copied here by hand.
+
+     Copied from the app's *computed* palette, not from the first `:root` in
+     its stylesheet. That matters: style.css declares `--card` and `--accent`
+     in more than one `:root` block and the later one wins, so reading the
+     file top-down gives a cool slate palette the app has never actually
+     rendered. Every value below was read out of a running window.
+
+     What had drifted was small and all in the same direction — the panel a
+     shade darker than a card, the stroke heavier, and `--sheen` left as
+     `transparent`, which is why no hover in this panel did anything at all.
+
+     A copied palette drifts, so the tests compare the two files and fail
+     when they do. */
   :root {
-    --panel: #1c1a15;
-    --stroke: rgba(232, 222, 200, 0.12);
+    /* --panel is the app's --card: the value a floating surface sits at.
+       --sheen is --card2, the surface above it that hovers land on. */
+    --panel: #22201a;
+    --sheen: #2b2921;
+    --stroke: rgba(232, 222, 200, 0.08);
+    --stroke-hi: rgba(232, 222, 200, 0.15);
     --text: #f2ece0;
     --muted: #a89f8d;
     --accent: #ff7a2b;
@@ -42,21 +60,39 @@
        cannot be right for both a yellow and a blue. */
     --accent-fill: #e0620f;
     --on-accent: #1a1208;
-    --sheen: transparent;
     --drop: rgba(0, 0, 0, 0.5);
     --drop-sm: rgba(0, 0, 0, 0.3);
+
+    /* The app's type scale and radii, so a chip in here is the size a chip is
+       out there. These were a rack of half-pixel one-offs — 10.5, 11.5, 12.5,
+       13.5, 14.5 — five sizes, none of them the app's, no two of them a step
+       apart. That is what a scale looks like before it is one. */
+    --text-2xs: 11px;
+    --text-xs: 12px;
+    --text-sm: 13px;
+    --text-base: 14px;
+    --text-md: 16px;
+    --r-xs: 4px;
+    --r-sm: 8px;
+    --r-lg: 14px;
+    --r-xl: 20px;
     --ease: cubic-bezier(0.32, 0.72, 0, 1);
   }
   :root[data-theme="light"] {
-    --panel: #fcfaf5;
-    --stroke: rgba(40, 34, 22, 0.13);
+    --panel: #fffdf8;
+    --sheen: #efe9db;
+    --stroke: rgba(40, 34, 22, 0.11);
+    --stroke-hi: rgba(40, 34, 22, 0.18);
     --text: #1e1b14;
     --muted: #5f584a;
-    --sheen: transparent;
     --drop: rgba(38, 30, 22, 0.22);
     --drop-sm: rgba(38, 30, 22, 0.12);
   }
-  :root[data-accent="ember"]  { --accent: #ff4f28; --accent-soft: rgba(255, 79, 40, 0.18);  --accent-line: rgba(255, 79, 40, 0.42); --accent-fill: #df3d17; --on-accent: #1a1208; }
+  /* Ember's fill is #e8471f rather than the #df3d17 this file used to carry:
+     that value sat in the gap between the two inks — 4.25 against
+     --on-accent, 4.36 against white — so every filled ember surface failed AA
+     by a little. The app lifted it; this had not. */
+  :root[data-accent="ember"]  { --accent: #ff4f28; --accent-soft: rgba(255, 79, 40, 0.18);  --accent-line: rgba(255, 79, 40, 0.42); --accent-fill: #e8471f; --on-accent: #1a1208; }
   :root[data-accent="amber"]  { --accent: #ffab1a; --accent-soft: rgba(255, 171, 26, 0.18); --accent-line: rgba(255, 171, 26, 0.42); --accent-fill: #e09000; --on-accent: #1a1208; }
   :root[data-accent="orchid"] { --accent: #b95cf5; --accent-soft: rgba(185, 92, 245, 0.18); --accent-line: rgba(185, 92, 245, 0.42); --accent-fill: #8e2fd0; --on-accent: #ffffff; }
   :root[data-accent="teal"]   { --accent: #10c9a6; --accent-soft: rgba(16, 201, 166, 0.18); --accent-line: rgba(16, 201, 166, 0.42); --accent-fill: #0a9b80; --on-accent: #0a1a16; }
@@ -73,7 +109,7 @@
   .bar {
     background: var(--panel);
     border: 1px solid var(--stroke);
-    border-radius: 18px;
+    border-radius: var(--r-xl);
     box-shadow: 0 22px 60px var(--drop), 0 2px 6px var(--drop-sm);
     padding: 12px 14px;
     display: flex;
@@ -89,7 +125,7 @@
   .mark {
     width: 26px; height: 26px;
     flex: 0 0 auto;
-    border-radius: 8px;
+    border-radius: var(--r-sm);
     background: var(--accent-soft);
     display: flex; align-items: center; justify-content: center;
     color: var(--accent);
@@ -104,7 +140,7 @@
     outline: none;
     color: var(--text);
     font: inherit;
-    font-size: 14.5px;
+    font-size: var(--text-base);
     letter-spacing: -0.01em;
     padding: 3px 0;
   }
@@ -112,10 +148,10 @@
 
   .hint {
     flex: 0 0 auto;
-    font-size: 10.5px;
+    font-size: var(--text-2xs);
     color: var(--muted);
     border: 1px solid var(--stroke);
-    border-radius: 6px;
+    border-radius: var(--r-xs);
     padding: 2px 6px;
     letter-spacing: 0.02em;
   }
@@ -126,10 +162,10 @@
     margin-top: 9px;
     background: var(--panel);
     border: 1px solid var(--stroke);
-    border-radius: 16px;
+    border-radius: var(--r-lg);
     box-shadow: 0 22px 60px var(--drop);
     padding: 13px 15px;
-    font-size: 13.5px;
+    font-size: var(--text-sm);
     line-height: 1.62;
     color: var(--text);
     max-height: 260px;
@@ -164,7 +200,7 @@
   .panel {
     background: var(--panel);
     border: 1px solid var(--stroke);
-    border-radius: 20px;
+    border-radius: var(--r-xl);
     box-shadow: 0 26px 70px var(--drop), 0 2px 8px var(--drop-sm);
     animation: rise 0.22s var(--ease);
     position: relative;
@@ -177,14 +213,14 @@
     animation: none;
     padding: 15px 16px 13px;
   }
-  input { font-size: 16px; }
+  input { font-size: var(--text-md); }
 
   .icon {
     flex: 0 0 auto;
     width: 30px; height: 30px;
     display: flex; align-items: center; justify-content: center;
     border: 0;
-    border-radius: 9px;
+    border-radius: var(--r-sm);
     background: none;
     color: var(--muted);
     cursor: pointer;
@@ -209,14 +245,14 @@
     gap: 7px;
     max-width: 260px;
     padding: 5px 8px 5px 10px;
-    border-radius: 9px;
+    border-radius: var(--r-sm);
     border: 1px solid var(--stroke);
     background: var(--sheen);
-    font-size: 11.5px;
+    font-size: var(--text-xs);
   }
   .file.bad { border-color: var(--accent-line); color: var(--accent); }
   .file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .file-meta { color: var(--muted); font-size: 10.5px; flex: 0 0 auto; }
+  .file-meta { color: var(--muted); font-size: var(--text-2xs); flex: 0 0 auto; }
   .file-x {
     border: 0; background: none; color: var(--muted);
     cursor: pointer; font-size: 14px; line-height: 1; padding: 0 2px;
@@ -236,17 +272,17 @@
     align-items: center;
     gap: 6px;
     padding: 4px 9px;
-    border-radius: 8px;
+    border-radius: var(--r-sm);
     border: 1px solid transparent;
     background: none;
     color: var(--muted);
     font: inherit;
-    font-size: 11.5px;
+    font-size: var(--text-xs);
     cursor: pointer;
   }
   .chip svg { width: 13px; height: 13px; }
-  .chip:hover { background: var(--sheen); color: var(--text); border-color: var(--stroke); }
-  .key { font-size: 10.5px; color: var(--muted); opacity: 0.75; }
+  .chip:hover { background: var(--sheen); color: var(--text); border-color: var(--stroke-hi); }
+  .key { font-size: var(--text-2xs); color: var(--muted); opacity: 0.75; }
 
   /* Workspace menu, anchored inside the panel so it cannot be clipped by
      the window — the window is only as tall as the content. */
@@ -258,7 +294,7 @@
     max-height: 190px;
     overflow-y: auto;
     padding: 5px;
-    border-radius: 12px;
+    border-radius: var(--r-lg);
     background: var(--panel);
     border: 1px solid var(--stroke);
     box-shadow: 0 20px 50px var(--drop);
@@ -268,9 +304,9 @@
   .menu-item {
     display: block; width: 100%;
     padding: 7px 9px;
-    border: 0; border-radius: 8px;
+    border: 0; border-radius: var(--r-sm);
     background: none; color: var(--text);
-    font: inherit; font-size: 12.5px; text-align: left; cursor: pointer;
+    font: inherit; font-size: var(--text-sm); text-align: left; cursor: pointer;
   }
   .menu-item:hover { background: var(--sheen); }
   /* Filled, like the main window's nav. A tint of the accent and an ordinary
@@ -281,7 +317,7 @@
     color: var(--on-accent);
     border-radius: 999px;
   }
-  .menu-empty { padding: 8px 9px; font-size: 11.5px; color: var(--muted); }
+  .menu-empty { padding: 8px 9px; font-size: var(--text-xs); color: var(--muted); }
 
   /* Whole-panel drop target */
   body.dropping .panel {

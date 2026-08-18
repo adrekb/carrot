@@ -1784,6 +1784,18 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   pointer-events: auto;
 }
 
+/* …and the `+` on that handle is gone, now that there is a formatting row.
+   It opened the same menu `/` opens, which is now also the row's job — so the
+   gutter held a third way to do what two other things already did, one of them
+   permanently on screen. What is left is the drag grip, which is the one thing
+   the gutter is for and the only one with nowhere else to live.
+
+   The handle renders two `.operation-item` divs, add then drag, so this is
+   positional. It is an override of a vendored component's markup and will need
+   revisiting if the bundle is rebuilt against a Crepe that reorders them —
+   the drag grip disappearing instead is what that would look like. */
+.milkdown-block-handle .operation-item:first-child { display: none; }
+
 .milkdown-host { flex: 1; overflow-y: auto; }
 .milkdown-host .milkdown { background: transparent; color: var(--text); }
 .milkdown-host .ProseMirror { padding: 20px 26px; min-height: 100%; outline: none; line-height: 1.6; }
