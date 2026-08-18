@@ -720,8 +720,9 @@ class TestTheDropdownArrowSurvivesItsOwnStylesheet:
 
     def test_the_theme_swaps_a_token_rather_than_the_image(self):
         css = read("css", "style.css")
-        light = css[css.index(':root[data-theme="light"] {'):]
-        light = light[:light.index("}")]
+        # Found by selector prefix: the block carries `.paper` as well.
+        light = css[css.index(':root[data-theme="light"]'):]
+        light = light[light.index("{"):light.index("}")]
         assert "--select-chevron" in light
         # Comments stripped first — the one above the token explains why there
         # is no background-image here, and would otherwise match.

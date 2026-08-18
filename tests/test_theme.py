@@ -35,7 +35,11 @@ def test_light_theme_overrides_every_ground_token():
     """A token the light block forgets keeps its dark value — e.g. dark text
     on a dark card over a white page, which is invisible rather than merely
     ugly. Check the ones that carry contrast."""
-    block = re.search(r':root\[data-theme="light"\]\s*\{(.*?)\n\}', CSS, re.S)
+    # `[^{]*` rather than `\s*`: the light block carries a second selector
+    # (`.paper`, for a white document inside a dark app), and pinning this to
+    # the exact selector text made it fail on a change that did not touch a
+    # single token.
+    block = re.search(r':root\[data-theme="light"\][^{]*\{(.*?)\n\}', CSS, re.S)
     assert block, "no light theme block"
     body = block.group(1)
     for token in ("--bg", "--bg2", "--card", "--card2", "--card3",
@@ -196,8 +200,8 @@ class TestTextOnColour:
     def test_status_colours_are_themed(self):
         """One value for both themes meant the dark-theme green and yellow
         measured 1.87 and 1.64 on a light background — very nearly invisible."""
-        light = CSS[CSS.rindex(':root[data-theme="light"] {'):]
-        light = light[:light.index("\n}")]
+        light = CSS[CSS.rindex(':root[data-theme="light"]'):]
+        light = light[light.index("{"):light.index("\n}")]
         for token in ("--green:", "--yellow:", "--red:"):
             assert token in light, f"{token} has no light-theme value"
 
@@ -219,8 +223,8 @@ class TestTextOnColour:
     def test_faint_is_calibrated_against_its_worst_background(self):
         """It was measured on `--card`, the lightest surface in the theme, and
         then used on the darker ones where the same colour lands at 4.33."""
-        light = CSS[CSS.rindex(':root[data-theme="light"] {'):]
-        light = light[:light.index("\n}")]
+        light = CSS[CSS.rindex(':root[data-theme="light"]'):]
+        light = light[light.index("{"):light.index("\n}")]
         assert "--card2" in light[:light.index("--faint:")], (
             "the --faint comment should name the surface it was measured against")
 

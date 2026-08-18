@@ -456,6 +456,46 @@ async function setAnswerCustom(text) {
     } catch (_) { /* ignore */ }
 }
 
+// ===== Writing on paper =====
+//
+// A dark interface is right for a tool you operate and wrong for a page you
+// write on: a document is the one surface in the app that is trying to be a
+// piece of paper, and reading a dark theme as paper takes a leap the writer
+// has to make every time they look at it. This decouples the two — the app
+// stays in whatever theme you set, the document goes white.
+//
+// Scoped by a class rather than by a second theme, so there is one palette in
+// the stylesheet with two selectors on it (see `.paper`), not two palettes.
+let docPaper = false;
+
+function applyDocPaper() {
+    // The editor column, not the whole view: the file list, toolbar and
+    // backlinks belong to the app and should keep the app's theme, or the
+    // setting stops being "the page is paper" and becomes "the tab is light".
+    // The editor surface only. `.split-main` took the browse grid, the
+    // filters and the whole left column with it, which is not "the document
+    // is paper", it is "the tab is light" — and it is what the setting
+    // visibly did on first try.
+    for (const el of document.querySelectorAll('#note-editor-host, #note-fallback')) {
+        el.classList.toggle('paper', docPaper);
+    }
+}
+
+async function setDocPaper(enabled) {
+    docPaper = !!enabled;
+    applyDocPaper();
+    try {
+        await api('/api/config/doc_paper', {
+            method: 'PUT', body: JSON.stringify(docPaper),
+        });
+    } catch (_) {
+        const box = document.getElementById('doc-paper-toggle');
+        if (box) box.checked = !docPaper;
+        docPaper = !docPaper;
+        applyDocPaper();
+    }
+}
+
 // How much a local model may hold in mind at once.
 //
 // Presented as three choices rather than a token count, because "num_ctx" is

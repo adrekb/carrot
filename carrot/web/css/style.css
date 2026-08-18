@@ -1737,6 +1737,15 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   pointer-events: none;
 }
 
+/* Paper mode paints its own ground. Without this the subtree has light tokens
+   but no surface of its own, so the app's dark background still shows through
+   between the blocks and the "paper" reads as a light patch on a dark page. */
+.milkdown-host.paper, textarea.note-fallback.paper {
+  background: var(--bg2);
+  color: var(--text);
+}
+.milkdown-host.paper .ProseMirror { background: var(--bg2); color: var(--text); }
+
 .milkdown-host { flex: 1; overflow-y: auto; }
 .milkdown-host .milkdown { background: transparent; color: var(--text); }
 .milkdown-host .ProseMirror { padding: 20px 26px; min-height: 100%; outline: none; line-height: 1.6; }
@@ -4154,7 +4163,13 @@ select option:checked { background-color: #2f333d; }
 /* ---- Light ----
    Not the dark palette inverted: a warm paper ground, and the glass
    goes to white-over-colour so the ambient wash still reads through. */
-:root[data-theme="light"] {
+/* Paper. The same light tokens, scoped to a subtree rather than the whole
+   document, so a document can be white while the app around it stays dark.
+   Written as an extra selector on the existing blocks rather than a copy of
+   the values, because two copies of a palette drift and only one of them
+   ever gets audited. See the `doc_paper` setting. */
+:root[data-theme="light"],
+.paper {
   --scheme: light;
   --bg: #f6f4f1;
   --bg2: #fbfaf8;
@@ -4332,7 +4347,8 @@ select option:checked { background-color: #2f333d; }
    the accent itself reaches only 3.62. Its own --accent-hi is the same hue
    one step up the ramp. */
 :root[data-theme="dark"][data-accent="indigo"] { --accent-ink: var(--accent-hi); }
-:root[data-theme="light"][data-accent="carrot"], :root[data-theme="light"] { --accent-ink: #a8480a; }
+:root[data-theme="light"][data-accent="carrot"], :root[data-theme="light"],
+.paper { --accent-ink: #a8480a; }
 :root[data-theme="light"][data-accent="ember"]  { --accent-ink: #b02f10; }
 :root[data-theme="light"][data-accent="amber"]  { --accent-ink: #8f6410; }
 :root[data-theme="light"][data-accent="orchid"] { --accent-ink: #7326a8; }
@@ -4670,7 +4686,8 @@ code, pre, .kbd { font-family: var(--mono); }
 
 /* Cream ground, charcoal ink — the same relationship inverted, so light
    mode reads as paper rather than as a switched-off screen. */
-:root[data-theme="light"] {
+:root[data-theme="light"],
+.paper {
   --bg: #f4efe4;
   --bg2: #faf6ed;
   --card: #fffdf8;
@@ -7550,7 +7567,11 @@ select.dd-open { border-color: var(--accent-line); }
   aspect-ratio: 8 / 10;
   border: 1px solid var(--border-hi);
   border-radius: var(--r-sm);
-  background: var(--card2);
+  /* Paper, like the document tiles below it — this face is a picture of the
+     page you would get, and a dark one sells a blank document as a dark
+     document. The class is added in JS so the face carries the light tokens
+     its artwork is drawn from. */
+  background: var(--bg2);
   margin-bottom: 8px;
   overflow: hidden;
   transition: border-color var(--dur-1) var(--ease), box-shadow var(--dur-1) var(--ease);
@@ -7609,13 +7630,22 @@ select.dd-open { border-color: var(--accent-line); }
   display: flex;
   flex-direction: column;
 }
+/* A page, and pages are white.
+   These were `--card2`, so in the dark theme a grid of documents was a grid of
+   dark rectangles — the one thing on the screen that is a picture of a piece
+   of paper, rendered as another panel. Word, Docs and Canva all keep their
+   chrome dark and their pages white for the same reason: the thumbnail is not
+   part of the interface, it is a small photograph of the document.
+
+   `.paper` gives the tile the light theme's tokens, so the thumbnail's own
+   text and marks come out as ink on paper without a second palette. */
 .write-recent-page {
   height: 196px;
   padding: 12px 11px;
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--r-sm) var(--r-sm) 0 0;
-  background: var(--card2);
+  background: var(--bg2);
   color: var(--muted);
   /* Relative on purpose, and not a new step on the scale: this is the
      document shrunk, not a label. You recognise your own writing by its

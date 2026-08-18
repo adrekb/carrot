@@ -3961,7 +3961,7 @@ function renderWriteStartCards() {
             ? (card.subtitle || '')
             : `Needs the ${(card.requires || {}).label || 'pack'}`;
         el.innerHTML =
-            `<span class="write-card-face write-card-face-${escHtml(card.id)}">`
+            `<span class="write-card-face paper write-card-face-${escHtml(card.id)}">`
             + writeCardArt(card) + `</span>`
             + `<span class="write-card-title">${escHtml(card.title)}</span>`
             + `<span class="write-card-sub${card.available ? '' : ' write-card-needs'}">${escHtml(sub)}</span>`;
@@ -4601,7 +4601,10 @@ async function renderWriteStartRecents() {
             + ' data-id="' + escHtml(String(item.id)) + '"'
             + ' data-name="' + escHtml(item.name) + '"'
             + ' title="' + escHtml(item.path || item.name) + '">'
-            + '<span class="write-recent-page">' + driveThumb(item) + '</span>'
+            // `paper`: the thumbnail is a picture of a page, so it carries the
+            // light palette regardless of the app's theme — see the rule for
+            // .write-recent-page.
+            + '<span class="write-recent-page paper">' + driveThumb(item) + '</span>'
             + (doc ? '<label class="tile-pick"><input type="checkbox"></label>'
                    + '<button class="tile-menu" title="More">⋮</button>' : '')
             + '<span class="write-recent-foot">'
