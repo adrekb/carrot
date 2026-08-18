@@ -6411,6 +6411,20 @@ async def set_provider_key(provider_id: str, req: ProviderKeyRequest):
     return providers_mod.require_provider(provider_id)
 
 
+@app.put("/api/search/key")
+async def set_search_key(req: ProviderKeyRequest):
+    """Store or clear the Exa key. An empty string forgets it.
+
+    Its own endpoint because the generic config PUT refuses anything in
+    SECRET_KEYS — one write path for secrets, so a credential cannot be stored
+    in a shape the redactor does not know to hide. The first version of this
+    setting posted to the generic endpoint, got a 400, and swallowed it: the
+    field looked like it saved and nothing was stored.
+    """
+    config.set_config("exa_api_key", req.api_key.strip())
+    return {"stored": bool(req.api_key.strip())}
+
+
 @app.put("/api/router/providers/{provider_id}/enabled")
 async def set_provider_enabled(provider_id: str, req: ProviderEnabledRequest):
     try:

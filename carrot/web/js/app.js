@@ -645,9 +645,70 @@ async function setReaderFallback(enabled) {
     }
 }
 
+// ===== Which search answers first =====
+
+const SEARCH_PROVIDER_LABELS = {
+    auto: 'Exa, then DuckDuckGo',
+    exa: 'Exa',
+    duckduckgo: 'DuckDuckGo',
+};
+
+async function setSearchProvider(value) {
+    try {
+        await api('/api/config/search_provider', {
+            method: 'PUT', body: JSON.stringify(String(value || 'auto')),
+        });
+    } catch (_) { /* the select still shows what they picked; the next load corrects it */ }
+}
+
+async function setExaKey(value) {
+    // Its own endpoint: the generic config PUT refuses secrets outright, and
+    // the first version of this posted there, took the 400 into an empty catch
+    // and left the field looking like it had saved.
+    const field = document.getElementById('exa-api-key');
+    try {
+        const result = await api('/api/search/key', {
+            method: 'PUT', body: JSON.stringify({ api_key: String(value || '').trim() }),
+        });
+        if (field) {
+            field.value = '';
+            field.placeholder = result.stored ? 'a key is saved — type to replace it'
+                                              : 'optional — only to go past the free limit';
+        }
+    } catch (e) {
+        if (field) field.placeholder = 'could not save that key: ' + e.message;
+    }
+}
+
+function renderSearchProvider(cfg) {
+    const select = document.getElementById('search-provider');
+    if (select) {
+        const chosen = (cfg || {}).search_provider || 'auto';
+        select.innerHTML = Object.entries(SEARCH_PROVIDER_LABELS).map(([id, label]) =>
+            `<option value="${escHtml(id)}"${id === chosen ? ' selected' : ''}>`
+            + `${escHtml(label)}</option>`).join('');
+    }
+    // The key comes back as a boolean, never the value — so the field says
+    // whether one is set rather than pretending to show it.
+    const key = document.getElementById('exa-api-key');
+    if (key) {
+        const held = !!(cfg || {}).exa_api_key;
+        key.value = '';
+        key.placeholder = held ? 'a key is saved — type to replace it'
+                               : 'optional — only to go past the free limit';
+    }
+}
+
 function renderReaderFallback(cfg) {
     const box = document.getElementById('reader-fallback-toggle');
     if (box) box.checked = !!(cfg || {}).reader_fallback;
+    // Restored from the same payload rather than its own request: it is an
+    // appearance setting, and the editor should already be paper by the time
+    // the user first looks at it.
+    docPaper = !!(cfg || {}).doc_paper;
+    const paper = document.getElementById('doc-paper-toggle');
+    if (paper) paper.checked = docPaper;
+    applyDocPaper();
 }
 
 async function loadRecapConfig() {
@@ -659,6 +720,7 @@ async function loadRecapConfig() {
         // Same fetch, so the rail's server copy costs nothing extra.
         syncRailFromServer(cfg);
         renderReaderFallback(cfg);
+        renderSearchProvider(cfg);
         renderAnswerStyle(cfg);
         _pendingCtxCfg = cfg;
         renderContextChoices(cfg, _lastModels || {});

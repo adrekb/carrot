@@ -1821,6 +1821,39 @@
       <div class="settings-card">
         <div class="settings-head">
           <svg class="ico"><use href="#i-search"/></svg>
+          <h3>Where web results come from</h3>
+        </div>
+        <p class="muted small">
+          Carrot asks Exa first and falls back to DuckDuckGo. Exa is a neural search —
+          you describe the page you want rather than guessing its keywords — and it
+          returns the page's text with the result, which is the difference between
+          handing the model a list of places an answer might be and handing it the
+          answer. Its free endpoint needs no account and is counted per computer, so
+          this install has its own allowance. When that runs out for the day, Carrot
+          carries on with DuckDuckGo.
+        </p>
+        <div class="settings-row">
+          <span class="settings-label">Ask first</span>
+          <select id="search-provider" onchange="setSearchProvider(this.value)"></select>
+        </div>
+        <p class="muted small">
+          Whichever you pick, the other is still there if it cannot answer — losing
+          search for a day is worse than some results coming from the other engine.
+        </p>
+        <div class="settings-row">
+          <span class="settings-label">Exa API key</span>
+          <input type="password" id="exa-api-key" placeholder="optional — only to go past the free limit"
+                 spellcheck="false" onchange="setExaKey(this.value)">
+        </div>
+        <p class="muted small">
+          Only needed if you have an Exa account and want past the free daily cap.
+          Stored on this machine and never returned by the API once saved.
+        </p>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-search"/></svg>
           <h3>When a page won't open</h3>
         </div>
         <p class="muted small">

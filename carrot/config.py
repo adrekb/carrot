@@ -191,6 +191,10 @@ SECRET_KEYS = {
     # A hook's token is a credential that works without a session, so it must
     # never come back out through the config endpoint.
     "webhooks",
+    # A search key is billed to somebody. Optional — the free endpoint needs
+    # none — which is exactly why it would be easy to forget it is a
+    # credential when someone does paste one in.
+    "exa_api_key",
 }
 
 

@@ -223,3 +223,33 @@ def unauthenticated_client(isolated_db, fake_ollama, no_background_workers):
 
     with TestClient(carrot_app.app) as c:
         yield c
+
+
+@pytest.fixture(autouse=True)
+def no_live_search(monkeypatch):
+    """No test may reach a real search provider.
+
+    Exa's free endpoint is metered per IP per day. A suite that calls it for
+    real spends the developer's own allowance on every run, goes red on a
+    train, and — worst — passes for reasons that have nothing to do with the
+    code. One test was already doing it: `_raw_search` became the provider
+    chain, so a case written to check which DuckDuckGo client is preferred
+    quietly started making live calls to Exa instead.
+
+    Raising rather than returning [] on purpose: an empty result is a state
+    the callers handle, so a test that hit the network would still pass and
+    the leak would stay hidden. Tests that want a provider patch it.
+
+    Only Exa is blocked. `_ddg_search` goes through a client library the tests
+    already replace in `sys.modules`, so it does not reach the network on its
+    own — and blocking it here broke the one case that legitimately drives it
+    with a fake client.
+    """
+    from carrot import websearch
+
+    def refuse(*a, **k):
+        raise AssertionError(
+            "a test tried to reach Exa — patch websearch._exa_search, or "
+            "websearch.search, instead")
+
+    monkeypatch.setattr(websearch, "_exa_search", refuse)
