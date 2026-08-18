@@ -9269,32 +9269,56 @@ body.nav-collapsed .nav-job-pulse { left: 6px; }
 .slide-el-image { padding: 0; border: none; }
 
 .slides-shapes { position: relative; }
+/* The group heading, and the grid under it. Lowercase and quiet: it is a
+   divider, not a control. */
+.shape-group {
+  font-size: var(--text-2xs);
+  color: var(--faint);
+  padding: var(--s-3) 2px 4px;
+}
+.shape-group:first-child { padding-top: 0; }
+.shape-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: var(--s-2);
+}
+
 .slides-shape-pop {
   position: absolute;
   top: calc(100% + 6px);
   left: 0;
   z-index: 3400;
-  width: 260px;
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: var(--s-2);
+  /* Wide enough for seven swatches, and scrolling past two groups — a menu
+     that runs off the bottom of the window is a menu whose last group does
+     not exist. */
+  width: 272px;
+  max-height: 62vh;
+  overflow-y: auto;
+  display: block;
   padding: var(--s-3);
   background: var(--card2);
   border: 1px solid var(--border-hi);
   border-radius: var(--r-sm);
   box-shadow: 0 12px 32px rgba(0, 0, 0, .45);
 }
+/* Just the swatch now. At eleven shapes the name under each one was helpful;
+   at thirty-four it was most of the menu, and a drawn square does not need
+   the word "square" beneath it. The name is the tooltip and the aria-label,
+   so it is still there for the pointer and for a screen reader. */
 .shape-item {
-  display: flex; flex-direction: column; align-items: center; gap: var(--s-2);
-  padding: var(--s-3) var(--s-2);
-  background: none; border: none; border-radius: var(--r-sm);
+  display: flex; align-items: center; justify-content: center;
+  padding: var(--s-2);
+  background: none; border: none; border-radius: var(--r-xs);
   cursor: pointer;
-  font-family: var(--sans); font-size: var(--text-2xs); color: var(--muted);
+  color: var(--muted);
 }
 .shape-item:hover { background: var(--card3); color: var(--text); }
 /* Each shape drawn as itself — a grid of names would make you read ten words
    to find the triangle. */
-.shape-swatch { width: 26px; height: 26px; background: var(--muted); display: block; }
+.shape-swatch { width: 22px; height: 22px; background: var(--muted); display: block; }
+/* A pill is a pill because it is wider than it is tall. Square with a 999px
+   radius is a circle, which is the ellipse two swatches along. */
+.shape-swatch[data-shape="pill"] { height: 13px; margin: 4px 0; }
 .shape-item:hover .shape-swatch { background: var(--accent); }
 
 .fmt-picker {

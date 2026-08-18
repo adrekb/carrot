@@ -253,20 +253,66 @@ function slideScale() {
 // gradient — which is the thing that was actually missing. The outline is a
 // second clipped div behind the first, inset by the stroke width, because a
 // border on a clipped element is clipped away with everything else.
-const SLIDE_SHAPES = {
-    rect:     { label: 'Rectangle', clip: '' },
-    rounded:  { label: 'Rounded',   clip: '', radius: 18 },
-    ellipse:  { label: 'Ellipse',   clip: 'ellipse(50% 50%)' },
-    triangle: { label: 'Triangle',  clip: 'polygon(50% 0%, 100% 100%, 0% 100%)' },
-    diamond:  { label: 'Diamond',   clip: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' },
-    pentagon: { label: 'Pentagon',  clip: 'polygon(50% 0%, 100% 38%, 82% 100%, 18% 100%, 0% 38%)' },
-    hexagon:  { label: 'Hexagon',   clip: 'polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%)' },
-    star:     { label: 'Star',      clip: 'polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%)' },
-    arrow:    { label: 'Arrow',     clip: 'polygon(0% 30%, 60% 30%, 60% 0%, 100% 50%, 60% 100%, 60% 70%, 0% 70%)' },
-    chevron:  { label: 'Chevron',   clip: 'polygon(0% 0%, 72% 0%, 100% 50%, 72% 100%, 0% 100%, 28% 50%)' },
-    line:     { label: 'Line',      clip: '' },
-};
+// The shape library.
+//
+// Eleven shapes is enough to draw a box and an arrow and nothing else — you
+// reach for a cylinder for a database, a callout for a remark, a left arrow
+// for a flow that goes back, and there is a rectangle. This is the set a deck
+// actually needs, grouped the way every slide editor groups it, because forty
+// shapes in one flat grid is a worse eleven.
+//
+// All `clip-path` polygons, which is what makes the size affordable: no SVG
+// assets, no export path to teach, they scale to any box, and they already
+// work in the thumbnails and the presentation because those are the same DOM.
+// `radius` is for the two that are rounded rather than clipped, and `line` is
+// the one that is neither.
+const SLIDE_SHAPE_GROUPS = ['Shapes', 'Arrows', 'Callouts'];
 
+const SLIDE_SHAPES = {
+    // ---- Shapes ----
+    rect:      { label: 'Rectangle',  group: 'Shapes', clip: '' },
+    rounded:   { label: 'Rounded',    group: 'Shapes', clip: '', radius: 18, swatch: '5px' },
+    pill:      { label: 'Pill',       group: 'Shapes', clip: '', radius: 999, swatch: '999px' },
+    ellipse:   { label: 'Ellipse',    group: 'Shapes', clip: 'ellipse(50% 50%)' },
+    triangle:  { label: 'Triangle',   group: 'Shapes', clip: 'polygon(50% 0%, 100% 100%, 0% 100%)' },
+    rtriangle: { label: 'Right triangle', group: 'Shapes', clip: 'polygon(0% 0%, 0% 100%, 100% 100%)' },
+    parallel:  { label: 'Parallelogram', group: 'Shapes', clip: 'polygon(22% 0%, 100% 0%, 78% 100%, 0% 100%)' },
+    trapezoid: { label: 'Trapezoid',  group: 'Shapes', clip: 'polygon(22% 0%, 78% 0%, 100% 100%, 0% 100%)' },
+    diamond:   { label: 'Diamond',    group: 'Shapes', clip: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' },
+    pentagon:  { label: 'Pentagon',   group: 'Shapes', clip: 'polygon(50% 0%, 100% 38%, 82% 100%, 18% 100%, 0% 38%)' },
+    hexagon:   { label: 'Hexagon',    group: 'Shapes', clip: 'polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%)' },
+    octagon:   { label: 'Octagon',    group: 'Shapes', clip: 'polygon(30% 0%, 70% 0%, 100% 30%, 100% 70%, 70% 100%, 30% 100%, 0% 70%, 0% 30%)' },
+    star:      { label: 'Star',       group: 'Shapes', clip: 'polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%)' },
+    star4:     { label: 'Four-point star', group: 'Shapes', clip: 'polygon(50% 0%, 62% 38%, 100% 50%, 62% 62%, 50% 100%, 38% 62%, 0% 50%, 38% 38%)' },
+    cross:     { label: 'Cross',      group: 'Shapes', clip: 'polygon(33% 0%, 67% 0%, 67% 33%, 100% 33%, 100% 67%, 67% 67%, 67% 100%, 33% 100%, 33% 67%, 0% 67%, 0% 33%, 33% 33%)' },
+    chevron:   { label: 'Chevron',    group: 'Shapes', clip: 'polygon(0% 0%, 72% 0%, 100% 50%, 72% 100%, 0% 100%, 28% 50%)' },
+    // A database, a step, a corner. The three that turn up in every diagram
+    // and cannot be faked with a rectangle.
+    cylinder:  { label: 'Cylinder',   group: 'Shapes', clip: 'polygon(0% 12%, 8% 4%, 25% 0%, 50% 0%, 75% 0%, 92% 4%, 100% 12%, 100% 88%, 92% 96%, 75% 100%, 50% 100%, 25% 100%, 8% 96%, 0% 88%)' },
+    step:      { label: 'Step',       group: 'Shapes', clip: 'polygon(0% 0%, 50% 0%, 50% 50%, 100% 50%, 100% 100%, 0% 100%)' },
+    corner:    { label: 'L-shape',    group: 'Shapes', clip: 'polygon(0% 0%, 38% 0%, 38% 62%, 100% 62%, 100% 100%, 0% 100%)' },
+    heart:     { label: 'Heart',      group: 'Shapes', clip: 'polygon(50% 100%, 15% 65%, 0% 35%, 12% 8%, 32% 4%, 50% 22%, 68% 4%, 88% 8%, 100% 35%, 85% 65%)' },
+    line:      { label: 'Line',       group: 'Shapes', clip: '' },
+
+    // ---- Arrows ----
+    arrow:      { label: 'Right arrow', group: 'Arrows', clip: 'polygon(0% 30%, 60% 30%, 60% 0%, 100% 50%, 60% 100%, 60% 70%, 0% 70%)' },
+    arrowleft:  { label: 'Left arrow',  group: 'Arrows', clip: 'polygon(100% 30%, 40% 30%, 40% 0%, 0% 50%, 40% 100%, 40% 70%, 100% 70%)' },
+    arrowup:    { label: 'Up arrow',    group: 'Arrows', clip: 'polygon(30% 100%, 30% 40%, 0% 40%, 50% 0%, 100% 40%, 70% 40%, 70% 100%)' },
+    arrowdown:  { label: 'Down arrow',  group: 'Arrows', clip: 'polygon(30% 0%, 30% 60%, 0% 60%, 50% 100%, 100% 60%, 70% 60%, 70% 0%)' },
+    arrowlr:    { label: 'Left-right',  group: 'Arrows', clip: 'polygon(0% 50%, 25% 0%, 25% 30%, 75% 30%, 75% 0%, 100% 50%, 75% 100%, 75% 70%, 25% 70%, 25% 100%)' },
+    arrowud:    { label: 'Up-down',     group: 'Arrows', clip: 'polygon(50% 0%, 100% 25%, 70% 25%, 70% 75%, 100% 75%, 50% 100%, 0% 75%, 30% 75%, 30% 25%, 0% 25%)' },
+    arrowbent:  { label: 'Bent arrow',  group: 'Arrows', clip: 'polygon(0% 70%, 0% 100%, 70% 100%, 70% 100%, 70% 30%, 55% 30%, 80% 0%, 100% 30%, 85% 30%, 85% 70%)' },
+    arrownotch: { label: 'Notched',     group: 'Arrows', clip: 'polygon(0% 30%, 60% 30%, 60% 0%, 100% 50%, 60% 100%, 60% 70%, 0% 70%, 14% 50%)' },
+    arrowquad:  { label: 'Four-way',    group: 'Arrows', clip: 'polygon(50% 0%, 68% 22%, 57% 22%, 57% 43%, 78% 43%, 78% 32%, 100% 50%, 78% 68%, 78% 57%, 57% 57%, 57% 78%, 68% 78%, 50% 100%, 32% 78%, 43% 78%, 43% 57%, 22% 57%, 22% 68%, 0% 50%, 22% 32%, 22% 43%, 43% 43%, 43% 22%, 32% 22%)' },
+
+    // ---- Callouts ----
+    // The tail is part of the clip, so it scales with the box and needs no
+    // second element to keep in step with the first.
+    speech:     { label: 'Speech',       group: 'Callouts', clip: 'polygon(0% 0%, 100% 0%, 100% 75%, 32% 75%, 14% 100%, 16% 75%, 0% 75%)' },
+    speechleft: { label: 'Speech left',  group: 'Callouts', clip: 'polygon(0% 0%, 100% 0%, 100% 75%, 86% 75%, 88% 100%, 68% 75%, 0% 75%)' },
+    speechup:   { label: 'Speech above', group: 'Callouts', clip: 'polygon(0% 25%, 16% 25%, 14% 0%, 32% 25%, 100% 25%, 100% 100%, 0% 100%)' },
+    banner:     { label: 'Banner',       group: 'Callouts', clip: 'polygon(0% 0%, 100% 0%, 100% 100%, 50% 78%, 0% 100%)' },
+};
 function isShape(type) { return Object.prototype.hasOwnProperty.call(SLIDE_SHAPES, type); }
 
 // The filters an image can carry. All CSS, so they cost nothing to apply, work
@@ -919,21 +965,42 @@ function deleteSlide() {
 }
 
 
-// Every shape in one menu, each drawn as itself — a grid of names would make
-// you read ten words to find the triangle.
+// Every shape drawn as itself — a grid of names makes you read ten words to
+// find the triangle — and under a heading, because thirty-four in one flat
+// grid is a worse eleven.
+//
+// The name moved from under each swatch into the tooltip and the aria-label.
+// At eleven shapes the labels helped; at thirty-four they were most of the
+// menu, and a drawn square does not need the word "square" beneath it.
+function shapeMenuHtml() {
+    return SLIDE_SHAPE_GROUPS.map(group => {
+        const items = Object.entries(SLIDE_SHAPES).filter(([, s]) => s.group === group);
+        if (!items.length) return '';
+        return '<div class="shape-group">' + escHtml(group) + '</div>'
+            + '<div class="shape-grid">' + items.map(([key, s]) =>
+                '<button class="shape-item" title="' + escHtml(s.label) + '"'
+                + ' aria-label="' + escHtml(s.label) + '"'
+                + ' onclick="addSlideElement(\'' + key + '\'); toggleShapeMenu()">'
+                + '<span class="shape-swatch" data-shape="' + key + '" style="'
+                + (s.clip ? 'clip-path:' + s.clip + ';' : '')
+                // The swatch is 22px and the shape is 200. A radius that reads
+                // as "slightly rounded" on the slide is a circle at this size,
+                // which is why `rounded`, `pill` and `ellipse` all drew as the
+                // same dot. `swatch` is the radius for the drawing rather than
+                // for the shape; where a shape does not set one, its own is
+                // already small enough to survive.
+                + (s.swatch !== undefined ? 'border-radius:' + s.swatch + ';'
+                   : s.radius ? 'border-radius:' + s.radius + 'px;' : '')
+                + (key === 'line' ? 'height:2px;margin:10px 0;' : '')
+                + '"></span></button>').join('')
+            + '</div>';
+    }).join('');
+}
+
 function toggleShapeMenu() {
     const pop = document.getElementById('slides-shape-pop');
     if (!pop) return;
-    if (pop.classList.contains('hidden')) {
-        pop.innerHTML = Object.entries(SLIDE_SHAPES).map(([key, s]) =>
-            '<button class="shape-item" title="' + s.label + '"'
-            + ' onclick="addSlideElement(\'' + key + '\'); toggleShapeMenu()">'
-            + '<span class="shape-swatch" style="'
-            + (s.clip ? 'clip-path:' + s.clip + ';' : '')
-            + (s.radius ? 'border-radius:6px;' : '')
-            + (key === 'line' ? 'height:2px;margin:11px 0;' : '')
-            + '"></span><span class="shape-name">' + s.label + '</span></button>').join('');
-    }
+    if (pop.classList.contains('hidden')) pop.innerHTML = shapeMenuHtml();
     pop.classList.toggle('hidden');
 }
 
