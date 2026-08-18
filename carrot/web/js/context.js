@@ -82,11 +82,44 @@ function renderContext() {
     for (const row of list.querySelectorAll('.context-row:not([disabled])')) {
         row.onclick = () => setContextSource(row.dataset.source);
     }
-    if (foot) {
-        foot.textContent = contextData.chars
-            ? `about ${contextSize(contextData.chars)} of prompt`
-            : 'nothing to send yet';
+    renderContextMeter(foot);
+}
+
+// How full the window is.
+//
+// The same `.ctx-meter` the Code tab draws, rather than a second bar that
+// means the same thing in a different shape — and the same tight/full
+// thresholds, so amber means the same thing in both places.
+//
+// Tokens are characters over four. A divisor rather than a real count, and
+// said as "about" wherever it is shown: tokenising the prompt to draw a bar
+// costs more than the bar is worth, and the bar's question is "am I near the
+// edge", which four-to-one answers well enough to act on.
+function renderContextMeter(host) {
+    if (!host) return;
+    if (!contextData || !contextData.chars) {
+        host.className = 'context-foot';
+        host.textContent = 'Nothing to send yet';
+        return;
     }
+    const window = contextData.window || 0;
+    const tokens = contextData.tokens || 0;
+    if (!window) {
+        // No window known for this model — a bar with no scale is a bar that
+        // invents one, so it says the number and stops.
+        host.className = 'context-foot';
+        host.textContent = `about ${tokens.toLocaleString()} tokens`;
+        return;
+    }
+    const fraction = Math.min(1, tokens / window);
+    const percent = Math.round(fraction * 100);
+    host.className = 'context-foot ctx-meter'
+        + (fraction > 0.85 ? ' full' : fraction > 0.7 ? ' tight' : '');
+    host.innerHTML = '<div class="ctx-bar"><span></span></div><span class="ctx-text"></span>';
+    host.querySelector('.ctx-bar > span').style.width = Math.max(percent, 1) + '%';
+    const thousands = n => n >= 1000 ? `${Math.round(n / 1000)}k` : String(n);
+    host.querySelector('.ctx-text').textContent =
+        `about ${thousands(tokens)} / ${thousands(window)}`;
 }
 
 // Characters, not tokens. The number the server has is characters, and

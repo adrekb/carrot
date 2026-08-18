@@ -5184,9 +5184,23 @@ async def context_preview(message: str = "", conversation_id: str = "",
             "chars": found["chars"] if found else 0,
             "parts": found["parts"] if found else 0,
         })
+    chars = sum(s["chars"] for s in sources if s["enabled"])
+    # Characters to tokens at four to one. A rough divisor rather than a real
+    # count, and labelled "about" everywhere it is shown, because tokenising
+    # the prompt to draw a bar would cost more than the bar is worth — and the
+    # bar's job is "am I near the edge", which four-to-one answers.
+    window = 0
+    try:
+        route = router_mod.route(task=router_mod.TASK_CHAT)
+        window = ctxwin_mod.window_for(
+            route.provider, route.model).get("tokens", 0) or 0
+    except Exception:
+        window = 0
     return {"sources": sources,
             "items": sum(1 for s in sources if s["present"] and s["enabled"]),
-            "chars": sum(s["chars"] for s in sources if s["enabled"])}
+            "chars": chars,
+            "tokens": chars // 4,
+            "window": window}
 
 
 @app.post("/api/context/toggle")

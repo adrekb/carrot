@@ -2094,15 +2094,6 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 .nav-recents > summary:hover { color: var(--text); }
 .nav-recent-label { color: var(--muted); }
 .nav-recent:hover .nav-recent-label { color: var(--text); }
-/* How much is filed in a workspace, at the right end of its row. Tabular so a
-   column of them lines up, and quiet — it is context for the name, not a
-   badge asking to be dealt with. */
-.nav-recent-count {
-  margin-left: auto;
-  font-size: var(--text-2xs);
-  font-variant-numeric: tabular-nums;
-  color: var(--faint);
-}
 /* `</>` on a coding session. Monospace because it is notation rather than a
    word, and at the right end so a column of rows still reads down the left. */
 .nav-recent-tag {
@@ -2121,9 +2112,15 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
    come out shouting "SEE ALL 5" in the middle of a lowercase rail. */
 .nav-seemore .nav-recent-label { color: var(--faint); }
 .nav-seemore:hover .nav-recent-label { color: var(--accent); }
-/* The gap that makes "in progress" a separate thought rather than a third
-   list. It is last now, so nothing below it supplies the separation. */
-.nav-activity > .nav-running { margin-top: 14px; margin-bottom: 0; }
+/* "Nothing for now". The one empty state in this rail that earns its place:
+   this section is where you look to find out whether something is still
+   running, and a section that vanishes when the answer is "no" makes the
+   question unanswerable without opening a tab. */
+.nav-idle {
+  padding: 4px 9px 2px;
+  font-size: var(--text-xs);
+  color: var(--faint);
+}
 
 /* Reduced motion is handled in one place near the end of this file, so it can
    apply after every animation it has to override. */
@@ -9186,12 +9183,15 @@ body.nav-collapsed .nav-job-pulse { left: 6px; }
   font-variant-numeric: tabular-nums;
 }
 .context-foot {
-  padding: var(--s-3) 8px 2px;
+  padding: var(--s-3) 8px 4px;
   font-size: var(--text-2xs);
   color: var(--faint);
   border-top: 1px solid var(--border);
   margin-top: var(--s-2);
 }
+/* When it is a meter it is `.ctx-meter` too, which brings its own flex row —
+   the padding and the rule above it are all this has to keep. */
+.context-foot.ctx-meter { display: flex; align-items: center; gap: var(--s-3); }
 .context-empty { padding: var(--s-3); font-size: var(--text-xs); color: var(--faint); }
 
 /* The prose format bar. Shares every `.fmt-*` control with the deck's bar

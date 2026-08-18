@@ -15,11 +15,6 @@
 let activityData = { running: [], recent: [], any_running: false };
 let activityTimer = null;
 let activityRecentsOpen = false;
-// Workspaces change when you make one, not every four seconds, so they are
-// fetched once and kept — polling them on the rail's cadence would be a
-// database round trip a minute for a list that is almost always identical.
-let activityWorkspaces = null;
-let activityWorkspacesOpen = false;
 // Whether /api/activity has ever answered. Distinct from "has any activity":
 // an empty rail and an unloaded one look the same and mean opposite things.
 let activityLoaded = false;
@@ -104,7 +99,6 @@ function scheduleActivity() {
 // the place that is actually built for looking — which is what "see more" is
 // for. Capping also fixes the thing that made the rail unusable as it filled
 // up: an unbounded recents section pushed "in progress" off the bottom.
-const RAIL_WORKSPACES = 3;
 const RAIL_RECENTS = 5;
 
 function renderActivity() {
@@ -114,26 +108,32 @@ function renderActivity() {
     const recent = activityData.recent || [];
     host.innerHTML = '';
 
-    // Workspaces first — what you are working *inside of*, before what you were
-    // working *on*. Both come before running work now: a job announces itself
-    // by moving, so it does not need the top of the rail as well, and the two
-    // sections you navigate with do.
-    if (activityWorkspaces && activityWorkspaces.length) {
-        const box = document.createElement('details');
-        box.className = 'nav-recents';
-        box.open = activityWorkspacesOpen;
-        box.addEventListener('toggle', () => { activityWorkspacesOpen = box.open; });
-        box.innerHTML = '<summary class="nav-sec-head">workspaces</summary>';
-        for (const workspace of activityWorkspaces.slice(0, RAIL_WORKSPACES)) {
-            box.appendChild(activityWorkspaceRow(workspace));
-        }
-        if (activityWorkspaces.length > RAIL_WORKSPACES) {
-            box.appendChild(activityMoreRow(
-                `see all ${activityWorkspaces.length}`,
-                () => { if (typeof switchTab === 'function') switchTab('workspaces'); }));
-        }
-        host.appendChild(box);
+    // In progress, first, and always — even with nothing in it.
+    //
+    // It moved to the foot on the argument that a moving thing is not missed
+    // there, and moved back because the section that replaced it should not
+    // have existed: the top bar already has a workspace picker, and a second
+    // list of the same workspaces in the rail was two controls for one thing.
+    //
+    // Kept on screen when empty, which is the opposite of what this section
+    // used to do. An empty state that says "nothing running" trains people to
+    // stop reading a panel — unless the panel is *where you look* to find out,
+    // and disappearing entirely is what made "is that research still going?"
+    // unanswerable without opening a tab.
+    const box = document.createElement('div');
+    box.className = 'nav-running';
+    box.innerHTML = `<div class="nav-sec-head">${
+        running.length && !running.some(j => j.status === 'running')
+            ? 'needs a look' : 'in progress'}</div>`;
+    if (running.length) {
+        for (const job of running) box.appendChild(activityJobRow(job));
+    } else {
+        const idle = document.createElement('div');
+        idle.className = 'nav-idle';
+        idle.textContent = 'Nothing for now';
+        box.appendChild(idle);
     }
+    host.appendChild(box);
 
     if (recent.length) {
         const details = document.createElement('details');
@@ -153,26 +153,17 @@ function renderActivity() {
         host.appendChild(details);
     }
 
-    // In progress, last and set apart.
-    //
-    // It used to sit at the top on the argument that running work is worth
-    // interrupting for. It is — but it is also the only section that moves,
-    // and a moving thing at the bottom of a still rail is not missed. What the
-    // top buys instead is pushing the two sections you actually navigate with
-    // down the page, on the days when something is running.
     renderChatResume();
+}
 
-    if (running.length) {
-        const box = document.createElement('div');
-        box.className = 'nav-running';
-        // "Unfinished" described the row rather than addressing the reader,
-        // and a stopped run is not a category of work — it is something that
-        // wants a decision. Say what it wants.
-        box.innerHTML = `<div class="nav-sec-head">${
-            running.some(j => j.status === 'running') ? 'in progress' : 'needs a look'}</div>`;
-        for (const job of running) box.appendChild(activityJobRow(job));
-        host.appendChild(box);
-    }
+// The row at the foot of a capped section. A row rather than a link, because
+// it is in a column of rows and the hand is already there.
+function activityMoreRow(label, onClick) {
+    const row = document.createElement('button');
+    row.className = 'nav-recent nav-seemore';
+    row.innerHTML = `<span class="nav-recent-label">${escHtml(label)}</span>`;
+    row.onclick = onClick;
+    return row;
 }
 
 // The one line on the blank chat screen that is about you rather than about
@@ -251,45 +242,6 @@ function activityJobRow(job) {
     return row;
 }
 
-function activityWorkspaceRow(workspace) {
-    const row = document.createElement('button');
-    row.className = 'nav-recent';
-    const count = Object.values(workspace.counts || {}).reduce((a, b) => a + b, 0);
-    row.title = workspace.name + (count ? ` — ${count} item${count === 1 ? '' : 's'}` : ' — empty');
-    row.innerHTML = `
-        <svg class="ico"><use href="#i-folder"/></svg>
-        <span class="nav-recent-label">${escHtml(workspace.name)}</span>
-        ${count ? `<span class="nav-recent-count">${count}</span>` : ''}`;
-    // Making it active as well as opening it: picking a workspace out of the
-    // rail is a statement about what you are working on, and leaving the
-    // active one behind would file the next thing you make into the last one.
-    row.onclick = async () => {
-        try {
-            if (typeof setActiveWorkspace === 'function') await setActiveWorkspace(workspace.id);
-        } catch (_) { /* opening it still works */ }
-        if (typeof switchTab === 'function') switchTab('workspaces');
-        if (typeof openWorkspace === 'function') openWorkspace(workspace.id);
-    };
-    return row;
-}
-
-async function loadActivityWorkspaces() {
-    try {
-        const rows = await api('/api/workspaces');
-        activityWorkspaces = Array.isArray(rows) ? rows : (rows.workspaces || []);
-    } catch (_) {
-        activityWorkspaces = [];
-    }
-    // Only redraw once there is something to draw *around*. This fetch races
-    // the first activity poll, and it usually wins — /api/workspaces is one
-    // small table and /api/activity is four queries. Redrawing on the way past
-    // rebuilds the rail from an activityData that is still empty, so for the
-    // gap between the two the rail is a workspaces section and nothing else —
-    // and if the activity call then fails, it stays that way, which reads
-    // exactly like recents having been removed.
-    if (activityLoaded) renderActivity();
-}
-
 function activityRecentRow(item) {
     const row = document.createElement('button');
     row.className = 'nav-recent';
@@ -309,7 +261,6 @@ function activityRecentRow(item) {
 
 window.addEventListener('DOMContentLoaded', () => {
     loadActivity();
-    loadActivityWorkspaces();
     document.addEventListener('visibilitychange', () => {
         if (!document.hidden) loadActivity();
     });

@@ -203,7 +203,7 @@ class TestTheRailNamesItsSections:
     case as the rows under them and tells them apart by weight."""
 
     @pytest.mark.parametrize("label", [">recent</summary>", "'in progress'",
-                                       "'needs a look'", ">workspaces</summary>"])
+                                       "'needs a look'"])
     def test_the_headings_are_lowercase(self, label):
         assert label in read("js", "activity.js")
 
@@ -214,29 +214,14 @@ class TestTheRailNamesItsSections:
         assert "text-transform: uppercase" not in head.group(1)
         assert "--w-bold" in head.group(1)
 
-    def test_workspaces_are_in_the_rail(self):
-        """The rail answered "what is running" and "what was I just doing" and
-        not "what am I doing this inside of"."""
+    def test_the_rail_does_not_list_workspaces(self):
+        """It did, briefly. That was one list too many: the top bar already has
+        a workspace picker, so the rail was a second control for the same thing
+        — and the one you could not switch from."""
         activity = read("js", "activity.js")
-        assert "function activityWorkspaceRow" in activity
-        assert "/api/workspaces" in activity
+        assert "activityWorkspaceRow" not in activity
+        assert "/api/workspaces" not in activity
 
-    def test_they_are_not_refetched_on_every_poll(self):
-        """The rail polls every four seconds; workspaces change when you make
-        one. Polling them on that cadence is a round trip a minute for a list
-        that is almost always identical."""
-        activity = read("js", "activity.js")
-        loader = re.search(r"async function loadActivity\(\)\s*\{(.*?)\n\}", activity, re.DOTALL)
-        assert loader, "loadActivity not found"
-        assert "/api/workspaces" not in loader.group(1)
-
-    def test_picking_one_makes_it_active(self):
-        """Opening without activating would file the next thing you make into
-        whichever workspace was active before."""
-        activity = read("js", "activity.js")
-        row = re.search(r"function activityWorkspaceRow\(workspace\)\s*\{(.*?)\n\}",
-                        activity, re.DOTALL)
-        assert "setActiveWorkspace" in row.group(1)
 
 def _luminance(rgb):
     def channel(value):
@@ -301,19 +286,12 @@ class TestTheActiveWorkspaceRowIsReadable:
         assert contrast("#96907f", "#e0620f") < 1.5
 
 
-class TestTheRailDoesNotLoseRecents:
-    """/api/workspaces is one small table and /api/activity is four queries, so
-    the workspaces fetch usually wins the race. Redrawing on the way past
-    rebuilt the rail from an activityData that had not arrived — a workspaces
-    section and nothing else, which reads exactly like recents being removed,
-    and stays that way if the activity call then fails."""
-
-    def test_the_workspace_fetch_waits_for_activity(self):
+class TestTheRailSectionsAreIndependent:
+    def test_no_section_can_early_return_past_another(self):
+        """The first version returned early when there were no recents, which
+        put every section after that one at the mercy of the one before it."""
         activity = read("js", "activity.js")
-        loader = re.search(r"async function loadActivityWorkspaces\(\)\s*\{(.*?)\n\}",
-                           activity, re.DOTALL)
-        assert loader, "loadActivityWorkspaces not found"
-        assert "if (activityLoaded) renderActivity();" in loader.group(1)
+        assert "if (!recent.length) return;" not in activity
 
     def test_loaded_is_distinct_from_empty(self):
         """An empty rail and an unloaded one look the same and mean opposite
@@ -322,13 +300,6 @@ class TestTheRailDoesNotLoseRecents:
         assert "let activityLoaded = false;" in activity
         assert "activityLoaded = true;" in activity
 
-    def test_no_section_can_early_return_past_another(self):
-        """The first version returned early when there were no recents, which
-        put every section after that one at the mercy of the one before it.
-        Each is its own `if` now — see TestTheRailIsAGlanceNotAList for the
-        order they run in."""
-        activity = read("js", "activity.js")
-        assert "if (!recent.length) return;" not in activity
 
 class TestRecentsKnowWhichAreCode:
     """A chat session and a coding session are the same row from the same
@@ -361,21 +332,15 @@ class TestRecentsKnowWhichAreCode:
 
 
 class TestTheRailIsAGlanceNotAList:
-    def test_the_caps_are_three_and_five(self):
+    def test_recents_are_capped(self):
         activity = read("js", "activity.js")
-        assert "const RAIL_WORKSPACES = 3;" in activity
         assert "const RAIL_RECENTS = 5;" in activity
-
-    def test_both_sections_are_sliced(self):
-        activity = read("js", "activity.js")
-        assert "activityWorkspaces.slice(0, RAIL_WORKSPACES)" in activity
         assert "recent.slice(0, RAIL_RECENTS)" in activity
 
     def test_there_is_a_way_past_the_cap(self):
         activity = read("js", "activity.js")
         assert "function activityMoreRow" in activity
         assert "see more" in activity
-        assert "see all" in activity
 
     def test_see_more_does_not_reuse_the_other_nav_more(self):
         """`.nav-more` is already a component in this stylesheet — an uppercase
@@ -403,15 +368,21 @@ class TestTheRailIsAGlanceNotAList:
         assert "code: (id) => {" in activity
         assert "switchTab('code');" in activity
 
-    def test_in_progress_comes_last(self):
-        """It is the only section that moves, and a moving thing at the foot of
-        a still rail is not missed. What the top cost was pushing the two
-        sections you navigate with down the page whenever something ran."""
+    def test_in_progress_comes_first(self):
+        """It went to the foot, then back to the top when the section that had
+        displaced it turned out to be a duplicate of the top bar's picker."""
         activity = read("js", "activity.js")
         render = re.search(r"function renderActivity\(\)\s*\{(.*?)\n\}",
                            activity, re.DOTALL).group(1)
-        assert render.index("activityWorkspaceRow") < render.index("activityRecentRow")
-        assert render.index("activityRecentRow") < render.index("nav-running")
+        assert render.index("nav-running") < render.index("activityRecentRow")
+
+    def test_it_stays_on_screen_when_nothing_is_running(self):
+        """The one empty state in this rail that earns its place: this is where
+        you look to find out whether something is still going, and a section
+        that vanishes when the answer is no makes the question unanswerable
+        without opening a tab."""
+        assert "Nothing for now" in read("js", "activity.js")
+        assert ".nav-idle" in read("css", "style.css")
 
     def test_it_is_called_in_progress(self):
         assert "'in progress'" in read("js", "activity.js")
