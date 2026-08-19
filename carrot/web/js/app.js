@@ -173,6 +173,9 @@ function setChatMode(mode) {
             ? 'Give Carrot a task — it will work in a real browser and report back'
             : 'Ask anything — Ctrl+K to focus, / for skills';
     }
+    // Leaving Agent mode with the trajectory open would hide the transcript
+    // behind a panel whose button is no longer on screen to close it.
+    if (mode !== 'agent' && typeof closeChatTrajectory === 'function') closeChatTrajectory();
     if (typeof syncChatBlank === 'function') syncChatBlank();
     if (mode === 'agent' && typeof loadAgent === 'function') loadAgent();
 }
@@ -1155,12 +1158,14 @@ async function loadHistory() {
         api('/api/agent/runs').then(r => r.runs || []).catch(() => []),
     ]);
     historyCache = [
-        ...(Array.isArray(convs) ? convs : (convs.conversations || []))
-            // Code sessions are conversations too — same endpoint, same table.
-            // They belong to the Code tab's own history, not to this one.
-            .filter(c => (c.metadata || {}).surface !== 'code')
-            .map(c => ({
-            kind: 'chat',
+        // Code sessions are conversations too — same endpoint, same table.
+        // They were filtered out of here entirely, which was right while they
+        // had nowhere else to be listed and wrong now: this menu is *the*
+        // history, and a history that silently omits half your week is worse
+        // than one that mixes two kinds. They are a kind instead, so the Code
+        // chip narrows to them and All shows everything you actually did.
+        ...(Array.isArray(convs) ? convs : (convs.conversations || [])).map(c => ({
+            kind: (c.metadata || {}).surface === 'code' ? 'code' : 'chat',
             id: c.id,
             title: c.title || 'Untitled',
             when: historyEpoch(c.updated_at || c.created_at),
@@ -1187,6 +1192,7 @@ function renderHistory() {
         <button class="history-item" data-kind="${i.kind}" data-id="${escHtml(String(i.id))}">
           <span class="history-dot chip-${i.kind}"></span>
           <span class="history-title">${escHtml(i.title)}</span>
+          ${i.kind === 'code' ? '<span class="history-tag">&lt;/&gt;</span>' : ''}
           <span class="history-when">${escHtml(writeWhen(i.when))}</span>
         </button>`).join('');
     for (const el of host.querySelectorAll('.history-item')) {
@@ -1196,6 +1202,11 @@ function renderHistory() {
 
 function openHistoryItem(kind, id) {
     closeHistoryMenu();
+    if (kind === 'code') {
+        switchTab('code');
+        if (typeof openCodeSession === 'function') openCodeSession(id);
+        return;
+    }
     switchTab('workspace');
     if (kind === 'agent') {
         setChatMode('agent');
@@ -1513,15 +1524,25 @@ function appendMessage(role, content, messageId, extra = {}) {
 // event, so a plan looks and behaves the same in chat, Research and the Code
 // tab — three different-looking progress lists would be three things to learn.
 
-function renderPlan(host, plan) {
+function renderPlan(host, plan, { collapsed = false } = {}) {
     if (!host || !plan || !plan.goals || !plan.goals.length) return null;
     let box = host.querySelector('.plan-box');
     if (!box) {
-        box = document.createElement('div');
+        // A `<details>`, like the trace above it. Open while the run is going,
+        // because watching what is left is the only reason the list is on
+        // screen before the answer is — and shut on a turn being re-read,
+        // where four questions nobody is waiting on push the answer off the
+        // bottom of the screen.
+        //
+        // Never closed automatically once open: the plan finishing is not a
+        // reason to take it away from someone mid-sentence, and the toggle
+        // survives re-renders on its own because only `.plan-items` is rebuilt.
+        box = document.createElement('details');
         box.className = 'plan-box';
-        box.innerHTML = '<div class="plan-head">'
+        box.open = !collapsed;
+        box.innerHTML = '<summary class="plan-head">'
             + '<svg class="ico"><use href="#i-check"/></svg><span>Plan</span>'
-            + '<span class="plan-count"></span></div><div class="plan-items"></div>';
+            + '<span class="plan-count"></span></summary><div class="plan-items"></div>';
         // Above whatever the host uses for its prose — `.content` in a chat
         // bubble, `.agent-body` in the Code tab's. Appending instead would put
         // the checklist under the answer, where the one thing it is for
@@ -2946,7 +2967,7 @@ function replayTrace(messageEl, trace) {
         if (event.provider_error) line('provider: ' + event.provider_error.message, 'error');
         if (event.error) line('error: ' + event.error, 'error');
     }
-    if (plan && plan.goals) renderPlan(messageEl, plan);
+    if (plan && plan.goals) renderPlan(messageEl, plan, { collapsed: true });
     // Nothing to show: take the whole shell, not just its body, or a reopened
     // turn grows an empty "Tool path" fold above every answer.
     if (!box.childElementCount) { shell.remove(); return; }

@@ -1,6 +1,7 @@
 """Tests for chat endpoints (streaming and non-streaming) and conversations."""
 import asyncio
 import json
+import time
 
 import pytest
 
@@ -397,12 +398,38 @@ class TestATurnNobodyIsListeningToIsStillWrittenDown:
     this test passed against the broken code for exactly that reason.
     """
 
-    def _drive(self, monkeypatch, conv_id, events, read=None):
+    def _assistant_rows(self, conv_id, expected=1, timeout=5.0):
+        """The stored assistant turns, waited for rather than read once.
+
+        The store happens in the generator's `finally`, which runs in the
+        threadpool worker Starlette iterates the sync generator on. Closing
+        the async wrapper can return before that worker has finished, so a
+        read straight afterwards is a race — it passed alone and failed in the
+        full suite, where the machine is busy enough for the write to land
+        second. Polling asserts what the code guarantees (it gets written)
+        without asserting when."""
+        from carrot import conversation as conv_mod
+
+        deadline = time.time() + timeout
+        while True:
+            rows = [m for m in conv_mod.get_conversation(conv_id)["messages"]
+                    if m["role"] == "assistant"]
+            if len(rows) >= expected or time.time() > deadline:
+                return rows
+            time.sleep(0.05)
+
+    def _drive(self, monkeypatch, conv_id, events, until=None):
         """Run the endpoint's own generator and, optionally, walk away.
 
-        `read=None` drains it, which is a turn that finished. `read=n` stops
-        after n frames and closes, which raises GeneratorExit at the yield —
-        exactly what Starlette does when the browser disconnects.
+        `until=None` drains it, which is a turn that finished. `until="text"`
+        reads until a frame contains that text and closes, raising GeneratorExit
+        at the yield — exactly what Starlette does when the browser leaves.
+
+        Waiting for a *marker* rather than a frame count is the difference
+        between a test and a coin toss. StreamingResponse runs a sync generator
+        in a threadpool, so how far ahead it has run when the close lands
+        varies with load: counting frames passed alone and failed inside the
+        full suite, because the tool events had not yet reached the trace.
         """
         def fake(*a, **k):
             for event in events:
@@ -415,9 +442,10 @@ class TestATurnNobodyIsListeningToIsStillWrittenDown:
             frames = response.body_iterator
             seen = 0
             try:
-                async for _ in frames:
+                async for frame in frames:
                     seen += 1
-                    if read is not None and seen >= read:
+                    text = frame.decode() if isinstance(frame, bytes) else str(frame)
+                    if until is not None and until in text:
                         break
             finally:
                 await frames.aclose()
@@ -435,10 +463,9 @@ class TestATurnNobodyIsListeningToIsStillWrittenDown:
             {"chunk": "The F-35 is"},
             {"_final_text": "The F-35 is"},
             {"chunk": " a fighter"},
-        ], read=3)
+        ], until="The F-35 is")
 
-        messages = conv_mod.get_conversation(conv["id"])["messages"]
-        assistant = [m for m in messages if m["role"] == "assistant"]
+        assistant = self._assistant_rows(conv["id"])
         assert assistant, "the turn was thrown away"
         meta = assistant[-1].get("metadata") or {}
         assert meta.get("trace"), "the searches it had already run were lost"
@@ -452,8 +479,7 @@ class TestATurnNobodyIsListeningToIsStillWrittenDown:
         self._drive(monkeypatch, conv["id"],
                     [{"chunk": "Done."}, {"_final_text": "Done."}])
 
-        assistant = [m for m in conv_mod.get_conversation(conv["id"])["messages"]
-                     if m["role"] == "assistant"]
+        assistant = self._assistant_rows(conv["id"])
         assert assistant[-1]["content"] == "Done."
         assert not (assistant[-1].get("metadata") or {}).get("interrupted")
 
@@ -471,7 +497,7 @@ class TestATurnNobodyIsListeningToIsStillWrittenDown:
             {"chunk": "The user always prefers"},
             {"_final_text": "The user always prefers"},
             {"chunk": " tabs over spaces"},
-        ], read=2)
+        ], until="The user always prefers")
         assert called == [], "a half-finished turn was mined for memories"
 
     def test_a_turn_with_nothing_at_all_stores_nothing(
@@ -481,6 +507,5 @@ class TestATurnNobodyIsListeningToIsStillWrittenDown:
         from carrot import conversation as conv_mod
 
         conv = conv_mod.create_conversation("empty")
-        self._drive(monkeypatch, conv["id"], [{"turn_id": "x"}], read=1)
-        assert [m for m in conv_mod.get_conversation(conv["id"])["messages"]
-                if m["role"] == "assistant"] == []
+        self._drive(monkeypatch, conv["id"], [{"turn_id": "x"}], until="turn_id")
+        assert self._assistant_rows(conv["id"], expected=1, timeout=1.0) == []

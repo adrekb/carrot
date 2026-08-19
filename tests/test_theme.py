@@ -255,3 +255,107 @@ def test_the_stylesheet_has_no_control_characters():
     """
     bad = [i for i, ch in enumerate(CSS) if ord(ch) < 32 and ch not in "\n\r\t"]
     assert not bad, f"control characters in style.css at offsets {bad[:5]}"
+
+
+# ===== Black =====
+#
+# The ground is #000000. Not a very dark grey that photographs as black —
+# actual black, which on an OLED panel is the pixel switched off.
+#
+# It replaced a warm charcoal (#16150f, cream #f2ece0) that was a considered
+# thing, and two of that theme's ideas had to survive the change: surfaces
+# separate by luminance rather than by a line, and the accent stays warm.
+
+def _lin(value):
+    value /= 255
+    return value / 12.92 if value <= 0.03928 else ((value + 0.055) / 1.055) ** 2.4
+
+
+def _luminance(hex_value):
+    hex_value = hex_value.lstrip("#")
+    r, g, b = (int(hex_value[i:i + 2], 16) for i in (0, 2, 4))
+    return 0.2126 * _lin(r) + 0.7152 * _lin(g) + 0.0722 * _lin(b)
+
+
+def _ratio(a, b):
+    la, lb = _luminance(a), _luminance(b)
+    return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+
+
+_BLOCK = re.compile(r"([^{}]+)\{([^{}]*)\}", re.DOTALL)
+_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
+
+
+def _dark_token(name):
+    """The winning value for the default dark root.
+
+    Not the first declaration and not the last one in the file: style.css
+    declares these in several `:root` blocks, and the light theme — which is
+    an extra selector on `:root[data-theme="light"]` — comes after the dark
+    one. Reading top-down gives a palette the app has never drawn; reading
+    bottom-up gives the light theme.
+    """
+    stripped = _COMMENT.sub("", CSS)
+    value = None
+    for selectors, body in _BLOCK.findall(stripped):
+        parts = [p.strip() for p in selectors.split(",")]
+        if not any(p == ":root" for p in parts):
+            continue
+        for found_name, found_value in re.findall(r"(--[a-z0-9-]+):\s*([^;]+);", body):
+            if found_name == name:
+                value = found_value.strip()
+    assert value is not None, f"{name} is not defined on a bare :root"
+    return value
+
+
+class TestTheDarkThemeIsActuallyBlack:
+    def test_the_ground_is_black(self):
+        assert _dark_token("--bg") == "#000000"
+
+    def test_the_nav_is_black_too(self):
+        """A black page with a grey rail down the side is a grey app with a
+        black hole in it."""
+        assert _dark_token("--surface-nav") == "#000000"
+
+    @pytest.mark.parametrize("token", ["--bg", "--bg2", "--card", "--card2", "--card3"])
+    def test_the_ground_ramp_is_neutral(self, token):
+        """The old ramp was warm on purpose. On a neutral black a warm tint
+        reads as a brown haze rather than as a surface, so the steps are grey
+        — the warmth moved entirely into the accent."""
+        value = _dark_token(token).lstrip("#")
+        r, g, b = (int(value[i:i + 2], 16) for i in (0, 2, 4))
+        assert max(r, g, b) - min(r, g, b) <= 6, f"{token} is tinted: {value}"
+
+    def test_surfaces_still_separate_by_luminance(self):
+        """The charcoal theme's own steps were 1.05, 1.07, 1.12, 1.14. Starting
+        from black must not mean flattening everything into it."""
+        ramp = [_dark_token(t) for t in ("--bg", "--bg2", "--card", "--card2", "--card3")]
+        steps = [_ratio(a, b) for a, b in zip(ramp, ramp[1:])]
+        assert all(step >= 1.05 for step in steps), steps
+
+    @pytest.mark.parametrize("token,least", [("--text", 12.0), ("--muted", 6.0), ("--faint", 4.5)])
+    def test_the_ink_clears_aa_on_a_card(self, token, least):
+        """`--faint` is used at 11px, which is the worst case for it."""
+        assert _ratio(_dark_token(token), _dark_token("--card")) >= least
+
+    def test_the_ink_is_not_flat_white(self):
+        """#fff on #000 is the one pairing that buzzes at the edges of type."""
+        assert _dark_token("--text").lower() != "#ffffff"
+
+    def test_the_accent_is_still_warm(self):
+        """Orange on neutral black is the pairing the old warm ground was
+        reaching for, and it reads better here than it did there."""
+        assert _ratio("#ff7a2b", "#000000") > _ratio("#ff7a2b", "#16150f")
+
+    def test_the_wash_is_turned_down(self):
+        """I left this alone first, on a measurement: the strongest pool lifts
+        the ground 1.21x on black against 1.30x on the charcoal, so it is
+        quieter relative to what it sits on, not louder.
+
+        That answered the wrong question. "Is it louder than it was" is not
+        "does it belong on a theme whose whole point is #000000" — and on a
+        black ground a coloured pool does not read as depth, it reads as the
+        reason the app is not black. Not zero, because at this strength it is
+        still a lit edge under the composer, which is where it was working."""
+        strength = re.search(r"--wash-strength:\s*([0-9.]+);", CSS).group(1)
+        assert 0 < float(strength) <= 0.5, strength

@@ -147,6 +147,57 @@ class ThinkTagStreamFilter:
         return self._drain(final=True)
 
 
+def merge_system_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Fold every system message into one, at the front.
+
+    Carrot builds the system half of a prompt as a stack of separate blocks —
+    answer style, the search directive, a skill's instructions, the workspace's
+    rules, the calendar, the ambient roster, what it remembers about the user,
+    the rolling summary — because each is written and switched on independently.
+    The OpenAI-shaped API those blocks are modelled on accepts as many as you
+    like, so nothing complained.
+
+    A GGUF's chat template is under no such obligation, and Qwen3's says:
+
+        {%- if message.role == "system" %}
+            {%- if not loop.first %}
+                {{- raise_exception('System message must be at the beginning.') }}
+
+    `loop.first` is true for index 0 only. So the *second* system block is
+    already an error, Ollama renders a template exception as HTTP 500, and every
+    turn dies before a token — a local model that answered "hi" fine and then
+    failed on everything real, because a bare chat sends one block and a chat
+    with search on sends two.
+
+    Reported as "500 Server Error ... /api/chat" with an empty plan and no
+    searches. Nothing in that sentence points at the prompt's shape, which is
+    why it read as the model being broken.
+
+    Merging is unconditional rather than per-model. One system block is the
+    shape every template accepts, the joined text is the same instruction the
+    stack always meant, and a rule that only runs for the models known to need
+    it is a rule that misses the next one.
+
+    Later blocks are hoisted to the front rather than left where they are. In
+    practice there are none — Carrot assembles the whole stack before the
+    transcript — but the template offers no faithful place to put one, so being
+    present at the top beats being a crash in the middle.
+    """
+    if sum(1 for m in messages if m.get("role") == "system") < 2:
+        return messages
+    blocks, rest = [], []
+    for message in messages:
+        if message.get("role") == "system":
+            content = message.get("content")
+            if isinstance(content, str) and content.strip():
+                blocks.append(content.strip())
+        else:
+            rest.append(message)
+    if not blocks:
+        return rest
+    return [{"role": "system", "content": "\n\n".join(blocks)}] + rest
+
+
 class OllamaClient:
     _thinking_support: Dict[str, bool] = {}
 
@@ -330,6 +381,24 @@ class OllamaClient:
         self._thinking_support[model] = supported
         return supported
 
+    def supports_tools(self, model: str) -> bool:
+        """Whether the model advertises function calling.
+
+        Ollama refuses the whole request when it does not — HTTP 400,
+        "phi4:14b does not support tools" — so a turn that offers tools to a
+        model without them does not degrade to a toolless answer, it dies
+        before the first token. What the user sees is the fallback: an answer
+        written from no evidence, saying the notes contain nothing.
+
+        Checked the same way `supports_thinking` is, because it is the same
+        kind of fact and was the only one of the two nobody had asked for.
+        """
+        if not hasattr(self, "_tool_support"):
+            self._tool_support: Dict[str, bool] = {}
+        if model not in self._tool_support:
+            self._tool_support[model] = "tools" in self.capabilities(model)
+        return self._tool_support[model]
+
     def supports_vision(self, model: str) -> bool:
         """Whether the model can accept images."""
         from carrot.attachments import model_supports_vision
@@ -350,9 +419,13 @@ class OllamaClient:
         in the content stream.
         """
         model = model or self.default_model
-        body = {"model": model, "messages": messages, "stream": True,
-                "options": self._options(model)}
-        if tools:
+        body = {"model": model, "messages": merge_system_messages(messages),
+                "stream": True, "options": self._options(model)}
+        # Offered only to a model that can take them. A model without the
+        # capability rejects the request outright rather than ignoring the
+        # field, so this is the difference between a turn that answers without
+        # tools and a turn that does not happen.
+        if tools and self.supports_tools(model):
             body["tools"] = tools
         if self.supports_thinking(model):
             body["think"] = True
@@ -421,7 +494,7 @@ class OllamaClient:
     ) -> str:
         body = {
             "model": model or self.default_model,
-            "messages": messages,
+            "messages": merge_system_messages(messages),
             "stream": stream,
             "options": self._options(model or self.default_model),
         }

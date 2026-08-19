@@ -397,6 +397,38 @@ class TestThePlanChecklist:
         assert "researchGoals = [];" in source
         assert "document.getElementById('research-plan-host').innerHTML = '';" in source
 
+    def test_it_folds_away(self):
+        """Four questions nobody is waiting on any more, standing between the
+        reader and the answer. On a re-read the plan is history, and history
+        belongs behind the same disclosure the trace above it uses."""
+        source = read("js", "app.js")
+        assert "box = document.createElement('details');" in source
+        assert "<summary class=\"plan-head\">" in source
+
+    def test_it_is_open_while_the_run_is_going(self):
+        """Watching what is left is the only reason it is on screen before the
+        answer exists, so a live plan that starts shut is a plan nobody sees."""
+        source = read("js", "app.js")
+        assert "box.open = !collapsed;" in source
+        # The live call site takes the default.
+        assert "renderPlan(assistantEl, payload.plan);" in source
+
+    def test_a_re_read_turn_gets_it_shut(self):
+        source = read("js", "app.js")
+        assert "renderPlan(messageEl, plan, { collapsed: true });" in source
+
+    def test_the_rule_under_the_head_belongs_to_the_open_state(self):
+        """Left on the head alone it underlines a closed card with nothing
+        beneath it."""
+        css = read("css", "style.css")
+        assert ".plan-box[open] > .plan-head { border-bottom: 1px solid var(--border); }" in css
+
+    def test_it_discloses_the_same_way_the_trace_does(self):
+        """Two folds stacked on one message should not be two gestures."""
+        css = read("css", "style.css")
+        assert ".plan-box[open] > .plan-head::after { transform: rotate(90deg); }" in css
+        assert "details.trace[open] > .trace-summary::before { transform: rotate(90deg); }" in css
+
 
 class TestTheTerminalStartsOutOfTheWay:
     def test_it_is_collapsed_by_default(self):

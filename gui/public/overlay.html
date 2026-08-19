@@ -26,14 +26,32 @@
     font-display: swap;
   }
   /* Kept in step with the main window's palette. The overlay is a file://
-     page, so it cannot read the app's stored theme; the desktop shell
-     relays it and stamps data-theme / data-accent on <html> (see the
-     script at the end of this file). */
+     page, so it cannot read the app's stylesheet or its stored theme; the
+     desktop shell relays the theme and stamps data-theme / data-accent on
+     <html> (see the script at the end of this file), and the values are
+     copied here by hand.
+
+     Copied from the app's *computed* palette, not from the first `:root` in
+     its stylesheet. That matters: style.css declares `--card` and `--accent`
+     in more than one `:root` block and the later one wins, so reading the
+     file top-down gives a cool slate palette the app has never actually
+     rendered. Every value below was read out of a running window.
+
+     What had drifted was small and all in the same direction — the panel a
+     shade darker than a card, the stroke heavier, and `--sheen` left as
+     `transparent`, which is why no hover in this panel did anything at all.
+
+     A copied palette drifts, so the tests compare the two files and fail
+     when they do. */
   :root {
-    --panel: #1c1a15;
-    --stroke: rgba(232, 222, 200, 0.12);
-    --text: #f2ece0;
-    --muted: #a89f8d;
+    /* --panel is the app's --card: the value a floating surface sits at.
+       --sheen is --card2, the surface above it that hovers land on. */
+    --panel: #151517;
+    --sheen: #1f1f23;
+    --stroke: rgba(255, 255, 255, 0.08);
+    --stroke-hi: rgba(255, 255, 255, 0.15);
+    --text: #f4f4f6;
+    --muted: #a0a0a8;
     --accent: #ff7a2b;
     --accent-soft: rgba(255, 122, 43, 0.18);
     --accent-line: rgba(255, 122, 43, 0.42);
@@ -41,22 +59,51 @@
        the accent as ink — and the foreground that sits on it. One dark value
        cannot be right for both a yellow and a blue. */
     --accent-fill: #e0620f;
+    --accent-hi: #ff9450;
     --on-accent: #1a1208;
-    --sheen: transparent;
+    --faint: #8a8a93;
+    /* The composer's own surface. Not --card: the app's command bar sits at
+       `--surface-pop` behind a brighter edge than a card gets, because it
+       floats over the page rather than sitting in it — which is exactly what
+       this panel does. */
+    --pop: #1a1a1e;
+    --pop-edge: rgba(255, 255, 255, 0.14);
     --drop: rgba(0, 0, 0, 0.5);
     --drop-sm: rgba(0, 0, 0, 0.3);
+
+    /* The app's type scale and radii, so a chip in here is the size a chip is
+       out there. These were a rack of half-pixel one-offs — 10.5, 11.5, 12.5,
+       13.5, 14.5 — five sizes, none of them the app's, no two of them a step
+       apart. That is what a scale looks like before it is one. */
+    --text-2xs: 11px;
+    --text-xs: 12px;
+    --text-sm: 13px;
+    --text-base: 14px;
+    --text-md: 16px;
+    --r-xs: 4px;
+    --r-sm: 8px;
+    --r-lg: 14px;
+    --r-xl: 20px;
     --ease: cubic-bezier(0.32, 0.72, 0, 1);
   }
   :root[data-theme="light"] {
-    --panel: #fcfaf5;
-    --stroke: rgba(40, 34, 22, 0.13);
+    --panel: #fffdf8;
+    --sheen: #efe9db;
+    --stroke: rgba(40, 34, 22, 0.11);
+    --stroke-hi: rgba(40, 34, 22, 0.18);
     --text: #1e1b14;
     --muted: #5f584a;
-    --sheen: transparent;
+    --faint: #6b6355;
+    --pop: #ffffff;
+    --pop-edge: rgba(38, 32, 26, 0.13);
     --drop: rgba(38, 30, 22, 0.22);
     --drop-sm: rgba(38, 30, 22, 0.12);
   }
-  :root[data-accent="ember"]  { --accent: #ff4f28; --accent-soft: rgba(255, 79, 40, 0.18);  --accent-line: rgba(255, 79, 40, 0.42); --accent-fill: #df3d17; --on-accent: #1a1208; }
+  /* Ember's fill is #e8471f rather than the #df3d17 this file used to carry:
+     that value sat in the gap between the two inks — 4.25 against
+     --on-accent, 4.36 against white — so every filled ember surface failed AA
+     by a little. The app lifted it; this had not. */
+  :root[data-accent="ember"]  { --accent: #ff4f28; --accent-soft: rgba(255, 79, 40, 0.18);  --accent-line: rgba(255, 79, 40, 0.42); --accent-fill: #e8471f; --on-accent: #1a1208; }
   :root[data-accent="amber"]  { --accent: #ffab1a; --accent-soft: rgba(255, 171, 26, 0.18); --accent-line: rgba(255, 171, 26, 0.42); --accent-fill: #e09000; --on-accent: #1a1208; }
   :root[data-accent="orchid"] { --accent: #b95cf5; --accent-soft: rgba(185, 92, 245, 0.18); --accent-line: rgba(185, 92, 245, 0.42); --accent-fill: #8e2fd0; --on-accent: #ffffff; }
   :root[data-accent="teal"]   { --accent: #10c9a6; --accent-soft: rgba(16, 201, 166, 0.18); --accent-line: rgba(16, 201, 166, 0.42); --accent-fill: #0a9b80; --on-accent: #0a1a16; }
@@ -73,7 +120,7 @@
   .bar {
     background: var(--panel);
     border: 1px solid var(--stroke);
-    border-radius: 18px;
+    border-radius: var(--r-xl);
     box-shadow: 0 22px 60px var(--drop), 0 2px 6px var(--drop-sm);
     padding: 12px 14px;
     display: flex;
@@ -86,16 +133,6 @@
     to   { opacity: 1; transform: none; }
   }
 
-  .mark {
-    width: 26px; height: 26px;
-    flex: 0 0 auto;
-    border-radius: 8px;
-    background: var(--accent-soft);
-    display: flex; align-items: center; justify-content: center;
-    color: var(--accent);
-  }
-  .mark svg { width: 15px; height: 15px; }
-
   input {
     flex: 1;
     min-width: 0;
@@ -104,32 +141,53 @@
     outline: none;
     color: var(--text);
     font: inherit;
-    font-size: 14.5px;
+    font-size: var(--text-base);
     letter-spacing: -0.01em;
     padding: 3px 0;
   }
   input::placeholder { color: var(--muted); }
 
+  /* Was a bordered "Enter" chip, which is a key cap — a thing the app's
+     composer does not have, because the send button is the affordance. So the
+     chip is the send button now, and this is what is left of it: the states it
+     was also carrying (Listening, Thinking, Mic blocked), as a quiet word
+     rather than a boxed one. Empty when idle. */
   .hint {
     flex: 0 0 auto;
-    font-size: 10.5px;
-    color: var(--muted);
-    border: 1px solid var(--stroke);
-    border-radius: 6px;
-    padding: 2px 6px;
+    font-size: var(--text-2xs);
+    color: var(--faint);
     letter-spacing: 0.02em;
   }
-  .hint.busy { color: var(--accent); border-color: var(--accent-line); }
+  .hint:empty { display: none; }
+  .hint.busy { color: var(--accent); }
+
+  /* 36px, circular, accent-filled — `#send-btn`, to the pixel. It is the one
+     control in the app's composer that is a filled circle, and it means send;
+     drawing it any other way in here makes the panel a different app. */
+  .send {
+    flex: 0 0 auto;
+    width: 36px; height: 36px;
+    display: flex; align-items: center; justify-content: center;
+    border: none;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #fff;
+    cursor: pointer;
+    transition: background 0.16s var(--ease), transform 0.12s var(--ease);
+  }
+  .send svg { width: 17px; height: 17px; }
+  .send:hover { background: var(--accent-hi); }
+  .send:active { transform: scale(0.94); }
 
   /* The reply lands under the bar; the window grows to fit it. */
   .reply {
     margin-top: 9px;
     background: var(--panel);
     border: 1px solid var(--stroke);
-    border-radius: 16px;
+    border-radius: var(--r-lg);
     box-shadow: 0 22px 60px var(--drop);
     padding: 13px 15px;
-    font-size: 13.5px;
+    font-size: var(--text-sm);
     line-height: 1.62;
     color: var(--text);
     max-height: 260px;
@@ -161,13 +219,23 @@
      One surface holding the input, the attachment tray and the footer,
      rather than a bare bar. The bar keeps its own padding but drops the
      border and shadow now that the panel carries them. */
+  /* The app's command bar, not a bar of our own.
+     `--r-lg` and `--pop`, and the two-row layout its stylesheet insists on:
+     "Two rows, always: the question, then the controls. Not a flex row that
+     wraps under pressure — the rows are the design." This panel was that flex
+     row: input, mic, paperclip and an Enter chip all on one line, which is a
+     different product's idea of a command bar. */
   .panel {
-    background: var(--panel);
-    border: 1px solid var(--stroke);
-    border-radius: 20px;
+    background: var(--pop);
+    border: 1px solid var(--pop-edge);
+    border-radius: var(--r-lg);
     box-shadow: 0 26px 70px var(--drop), 0 2px 8px var(--drop-sm);
     animation: rise 0.22s var(--ease);
     position: relative;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
   }
   .bar {
     background: none;
@@ -175,16 +243,24 @@
     box-shadow: none;
     border-radius: 0;
     animation: none;
-    padding: 15px 16px 13px;
+    padding: 0;
   }
-  input { font-size: 16px; }
+  input { font-size: var(--text-md); }
+
+  /* The control row. Same order as the app's: the things you add to the
+     question on the left, the thing that sends it on the right. */
+  .controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
 
   .icon {
     flex: 0 0 auto;
-    width: 30px; height: 30px;
+    width: 32px; height: 32px;
     display: flex; align-items: center; justify-content: center;
     border: 0;
-    border-radius: 9px;
+    border-radius: var(--r-sm);
     background: none;
     color: var(--muted);
     cursor: pointer;
@@ -200,7 +276,6 @@
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
-    padding: 0 16px 12px;
   }
   .tray.hidden { display: none; }
   .file {
@@ -209,56 +284,52 @@
     gap: 7px;
     max-width: 260px;
     padding: 5px 8px 5px 10px;
-    border-radius: 9px;
+    border-radius: var(--r-sm);
     border: 1px solid var(--stroke);
     background: var(--sheen);
-    font-size: 11.5px;
+    font-size: var(--text-xs);
   }
   .file.bad { border-color: var(--accent-line); color: var(--accent); }
   .file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .file-meta { color: var(--muted); font-size: 10.5px; flex: 0 0 auto; }
+  .file-meta { color: var(--muted); font-size: var(--text-2xs); flex: 0 0 auto; }
   .file-x {
     border: 0; background: none; color: var(--muted);
     cursor: pointer; font-size: 14px; line-height: 1; padding: 0 2px;
   }
   .file-x:hover { color: var(--text); }
 
-  /* Footer: workspace scope on the left, the escape hint on the right */
-  .foot {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 0 12px 11px 13px;
-  }
   .spacer { flex: 1; }
+  /* The app's `#search-btn`: a filled pill on the surface above the bar, with
+     a hairline edge. It was a borderless ghost, which read as a label rather
+     than a control — and it is the only thing in the panel you can change. */
   .chip {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 4px 9px;
-    border-radius: 8px;
-    border: 1px solid transparent;
-    background: none;
-    color: var(--muted);
+    padding: 5px 9px;
+    border-radius: var(--r-sm);
+    border: 1px solid var(--stroke);
+    background: var(--sheen);
+    color: var(--text);
     font: inherit;
-    font-size: 11.5px;
+    font-size: var(--text-xs);
     cursor: pointer;
   }
-  .chip svg { width: 13px; height: 13px; }
-  .chip:hover { background: var(--sheen); color: var(--text); border-color: var(--stroke); }
-  .key { font-size: 10.5px; color: var(--muted); opacity: 0.75; }
+  .chip svg { width: 13px; height: 13px; color: var(--muted); }
+  .chip:hover { border-color: var(--accent-line); }
+  .key { font-size: var(--text-2xs); color: var(--muted); opacity: 0.75; }
 
   /* Workspace menu, anchored inside the panel so it cannot be clipped by
      the window — the window is only as tall as the content. */
   .menu {
     position: absolute;
     left: 12px;
-    bottom: 40px;
+    bottom: 52px;
     min-width: 210px;
     max-height: 190px;
     overflow-y: auto;
     padding: 5px;
-    border-radius: 12px;
+    border-radius: var(--r-lg);
     background: var(--panel);
     border: 1px solid var(--stroke);
     box-shadow: 0 20px 50px var(--drop);
@@ -268,9 +339,9 @@
   .menu-item {
     display: block; width: 100%;
     padding: 7px 9px;
-    border: 0; border-radius: 8px;
+    border: 0; border-radius: var(--r-sm);
     background: none; color: var(--text);
-    font: inherit; font-size: 12.5px; text-align: left; cursor: pointer;
+    font: inherit; font-size: var(--text-sm); text-align: left; cursor: pointer;
   }
   .menu-item:hover { background: var(--sheen); }
   /* Filled, like the main window's nav. A tint of the accent and an ordinary
@@ -281,7 +352,7 @@
     color: var(--on-accent);
     border-radius: 999px;
   }
-  .menu-empty { padding: 8px 9px; font-size: 11.5px; color: var(--muted); }
+  .menu-empty { padding: 8px 9px; font-size: var(--text-xs); color: var(--muted); }
 
   /* Whole-panel drop target */
   body.dropping .panel {
@@ -292,12 +363,19 @@
 </head>
 <body>
   <div class="panel">
+    <!-- Row one: the question. The accent tile that used to sit to the left of
+         it is gone — the app's composer has no leading mark, and a logo inside
+         an input is a search box from another decade. -->
     <div class="bar">
-      <div class="mark">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
-             stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
-      </div>
       <input id="q" placeholder="Ask Carrot anything…" autofocus autocomplete="off" spellcheck="false">
+    </div>
+
+    <div class="tray hidden" id="tray"></div>
+
+    <!-- Row two: what you can add to the question, then what sends it. Same
+         order and the same controls as the app's, so the hand that has used
+         one has used the other. -->
+    <div class="controls">
       <button class="icon" id="dictate" title="Dictate (click, then speak)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
              stroke-linecap="round" stroke-linejoin="round"><rect x="9.2" y="2.6" width="5.6" height="11" rx="2.8"/><path d="M5.4 11.2a6.6 6.6 0 0 0 13.2 0M12 17.8V21.4M8.6 21.4h6.8"/></svg>
@@ -306,19 +384,18 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
              stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5l-8.8 8.8a5.3 5.3 0 0 1-7.5-7.5l9-9a3.5 3.5 0 0 1 5 5l-9 9a1.8 1.8 0 0 1-2.5-2.5l8.3-8.3"/></svg>
       </button>
-      <span class="hint" id="hint">Enter</span>
-    </div>
-
-    <div class="tray hidden" id="tray"></div>
-
-    <div class="foot">
       <button class="chip" id="ws" title="Ask inside a workspace">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
              stroke-linecap="round" stroke-linejoin="round"><path d="M3.2 6.6a2 2 0 0 1 2-2h3.6l2.2 2.6h7.8a2 2 0 0 1 2 2v8.2a2 2 0 0 1-2 2H5.2a2 2 0 0 1-2-2z"/></svg>
         <span id="ws-label">All workspaces</span>
       </button>
       <span class="spacer"></span>
-      <span class="key">Esc to close</span>
+      <span class="hint" id="hint"></span>
+      <span class="key">Esc</span>
+      <button class="send" id="send" title="Send">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+             stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+      </button>
     </div>
 
     <div class="menu hidden" id="ws-menu"></div>
@@ -430,7 +507,7 @@
       recogniser.onerror = (e) => {
         stopDictation();
         hint.textContent = e.error === 'not-allowed' ? 'Mic blocked' : 'Mic error';
-        setTimeout(() => { hint.textContent = 'Enter'; }, 2200);
+        setTimeout(() => { hint.textContent = ''; }, 2200);
       };
       recogniser.onend = () => stopDictation();
       try {
@@ -448,7 +525,7 @@
     recogniser = null;
     listening = false;
     dictateBtn.classList.remove('on');
-    hint.textContent = 'Enter';
+    hint.textContent = '';
     hint.classList.remove('busy');
     input.focus();
   }
@@ -577,11 +654,13 @@
       showReply(esc('Could not reach Carrot: ' + (err && err.message ? err.message : err)));
     } finally {
       busy = false;
-      hint.textContent = 'Enter';
+      hint.textContent = '';
       hint.classList.remove('busy');
       input.focus();
     }
   }
+
+  document.getElementById('send').addEventListener('click', () => ask());
 
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {

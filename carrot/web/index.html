@@ -480,6 +480,7 @@
             <div class="history-filters">
               <button class="history-chip active" data-kind="all" onclick="setHistoryFilter('all')">All</button>
               <button class="history-chip chip-chat" data-kind="chat" onclick="setHistoryFilter('chat')">Chat</button>
+              <button class="history-chip chip-code" data-kind="code" onclick="setHistoryFilter('code')">Code</button>
               <button class="history-chip chip-agent" data-kind="agent" onclick="setHistoryFilter('agent')">Agent</button>
             </div>
             <div id="history-list" class="history-list"></div>
@@ -566,10 +567,17 @@
           <button class="mode-opt" id="chat-mode-agent" onclick="setChatMode('agent')"
                   title="Give Carrot a task and let it work">Agent</button>
         </div>
+        <!-- The same trajectory the Code tab has. An agent run in chat is the
+             same shape of thing — turns, tools, time — and the question "which
+             turn took the minute" does not become a different question because
+             of which tab it was started in. -->
+        <button class="icon-btn" id="chat-trajectory-btn" title="Trajectory — what this run did"
+                onclick="toggleChatTrajectory()"><svg class="ico"><use href="#i-pulse"/></svg></button>
         <!-- The Panels control and its rail are gone. Four panels nobody
              chose, on the page you open most, plus a settings button for
              them in the strip above the conversation. -->
       </div>
+      <div id="chat-trajectory" class="agent-trajectory hidden"></div>
       <div id="chat-messages">
         <!-- One question, at the size of a question. The logo and the line
              telling you the box below is a box were decoration in front of an
@@ -584,6 +592,13 @@
             <h1 class="chat-empty-title">Where should we begin?</h1>
             <p id="chat-empty-line" class="chat-empty-note"></p>
           </div>
+          <!-- One line, and only when there is something true to put in it.
+               The blank screen knows what you were last doing and said nothing
+               about it, so coming back meant going and looking for your own
+               work. Drawn by js/activity.js from the poll the rail already
+               makes — no second request, and it stays current while you sit
+               here. Absent rather than empty on a fresh install. -->
+          <div id="chat-resume" class="chat-resume hidden"></div>
         </div>
       </div>
       <!-- The agent's work, under the transcript.
@@ -669,6 +684,15 @@
           <button class="btn btn-ghost" onclick="sendNoteToObsidian()" title="Save this note into your Obsidian vault as a Markdown file">→ Obsidian</button>
           <button class="btn btn-ghost" onclick="deleteCurrentNote()">Delete</button>
         </div>
+        <!-- The formatting row. Everything here was reachable already — by
+             typing markdown, by selecting text and waiting for the bubble, or
+             by remembering that `/` opens a menu. None of that is discoverable,
+             and a document editor whose toolbar offers Send, Obsidian and
+             Delete reads as a place that will not let you write bold text.
+             Markdown is still the file on disk, so the row stops where markdown
+             does: there is no font, no size, no colour and no alignment here,
+             because none of those survive the save. -->
+        <div id="note-format" class="format-bar hidden"></div>
         <div id="doc-refs" class="doc-refs hidden"></div>
         <div id="note-editor-host" class="milkdown-host"></div>
         <textarea id="note-fallback" class="note-fallback hidden" placeholder="Write your note…" oninput="scheduleNoteSave()"></textarea>
@@ -683,6 +707,7 @@
             <span id="canvas-status" class="editor-status"></span>
             <span id="canvas-zoom" class="editor-words">100%</span>
             <button class="btn btn-ghost" onclick="fitCanvasToContent()">Fit</button>
+            <button class="btn btn-ghost" onclick="sendDocumentToChat()" title="Send this document to chat as text">Send to chat</button>
             <button class="btn btn-ghost" onclick="deleteCurrentNote()">Delete</button>
           </div>
           <!-- The navigator that used to live here is now the shared rail on
@@ -724,6 +749,7 @@
                   <span>PDF</span><span class="export-sub">opens your print dialogue</span></button>
               </div>
             </div>
+            <button class="btn btn-ghost" onclick="sendDocumentToChat()" title="Send this document to chat as text">Send to chat</button>
             <button class="btn btn-primary" onclick="presentDeck()">Present</button>
           </div>
 
@@ -773,6 +799,7 @@
             <button class="btn btn-ghost" onclick="exportLatex('md')">.md</button>
             <button class="btn btn-ghost" onclick="exportLatex('html')">.html</button>
             <button class="btn btn-ghost" onclick="exportLatex('txt')">.txt</button>
+            <button class="btn btn-ghost" onclick="sendDocumentToChat()" title="Send this document to chat as text">Send to chat</button>
             <button class="btn btn-primary" onclick="saveLatexDocSmart()">Save</button>
           </div>
           <div class="latex-panes" id="latex-panes">
@@ -1044,9 +1071,22 @@
                     title="The agent can create, edit, move and delete files, and run commands.">Act</button>
           </div>
           <span class="spacer"></span>
+          <!-- Earlier sessions. Beside New task on purpose: starting one and
+               getting back to one are the same decision, taken at the same
+               moment, and the tab had only half of it. -->
+          <button class="icon-btn" title="Earlier sessions" onclick="toggleCodeHistory()"><svg class="ico"><use href="#i-clock"/></svg></button>
+          <!-- What the run did, as turns rather than as a transcript. The
+               three questions you have about a session you did not watch —
+               how many times did it read a file, which turn took the minute,
+               did it search before or after it edited — are all answered by
+               scrolling and holding it in your head, or by this. -->
+          <button class="icon-btn" id="trajectory-btn" title="Trajectory — what this run did"
+                  onclick="toggleTrajectory()"><svg class="ico"><use href="#i-pulse"/></svg></button>
           <button class="icon-btn" title="New task" onclick="newAgentTask()"><svg class="ico"><use href="#i-plus"/></svg></button>
           <button class="icon-btn" title="Hide the agent" onclick="toggleAgentSide()"><svg class="ico"><use href="#i-x"/></svg></button>
         </div>
+        <div id="code-history" class="code-history hidden"></div>
+        <div id="agent-trajectory" class="agent-trajectory hidden"></div>
         <div id="agent-log" class="agent-log">
           <div class="agent-hello">
             <p>Tell me what to build, fix or explain. I can see the files in
@@ -2386,6 +2426,21 @@
         <div id="search-mode-list"></div>
       </div>
     </div>
+    <!-- What the model is actually being told, beside the thing you are
+         telling it. The question "why does it know about my calendar" is asked
+         at the composer, and until now the only answer was to read app.py. -->
+    <div id="context-picker">
+      <button id="context-btn" onclick="toggleContextPop()"
+              title="What Carrot is being told this turn">
+        <svg class="ico"><use href="#i-info"/></svg>
+        <span id="context-label">Context</span>
+      </button>
+      <div id="context-pop" class="hidden">
+        <div class="pop-section">What Carrot is being told</div>
+        <div id="context-list"></div>
+        <div class="context-foot" id="context-foot"></div>
+      </div>
+    </div>
     <div id="model-picker">
       <button id="model-btn" onclick="toggleModelPop()">
         <svg class="ico"><use href="#i-chip"/></svg>
@@ -2478,6 +2533,8 @@
 <script src="/js/palette.js"></script>
 <!-- After app.js and agents.js: the rail's rows open conversations and runs
      through the same functions the history menu uses. -->
+<script src="/js/context.js"></script>
+<script src="/js/turnrail.js"></script>
 <script src="/js/activity.js"></script>
 </body>
 </html>

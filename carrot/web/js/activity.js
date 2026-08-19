@@ -15,6 +15,9 @@
 let activityData = { running: [], recent: [], any_running: false };
 let activityTimer = null;
 let activityRecentsOpen = false;
+// Whether /api/activity has ever answered. Distinct from "has any activity":
+// an empty rail and an unloaded one look the same and mean opposite things.
+let activityLoaded = false;
 
 // Polling, tuned to what is actually changing.
 //
@@ -30,6 +33,7 @@ const ACTIVITY_ICON = {
     research: 'i-search',
     index: 'i-folder',
     conversation: 'i-chat',
+    code: 'i-terminal',
 };
 
 // Where each kind of thing opens.
@@ -55,12 +59,20 @@ const ACTIVITY_OPEN = {
         switchTab('workspace'); setChatMode('chat');
         if (typeof openConversation === 'function') openConversation(id);
     },
+    // A coding session opens where it was had. Sending it to chat would render
+    // it as a transcript in a tab with no file tree, no diff and no agent —
+    // technically the same conversation, and not the thing you clicked.
+    code: (id) => {
+        switchTab('code');
+        if (typeof openCodeSession === 'function') openCodeSession(id);
+    },
     index: () => switchTab('settings'),
 };
 
 async function loadActivity() {
     try {
         activityData = await api('/api/activity');
+        activityLoaded = true;
     } catch (e) {
         // The rail is decoration around the app, not the app. A failed poll
         // leaves the last good answer on screen rather than blanking it.
@@ -80,6 +92,15 @@ function scheduleActivity() {
         activityData.any_running ? ACTIVITY_POLL_BUSY_MS : ACTIVITY_POLL_IDLE_MS);
 }
 
+// How many of each the rail shows before it stops and offers the rest.
+//
+// A rail is a glance, not a list. Three workspaces and five recents is about
+// what the eye takes in without reading, and everything past that is a trip to
+// the place that is actually built for looking — which is what "see more" is
+// for. Capping also fixes the thing that made the rail unusable as it filled
+// up: an unbounded recents section pushed "in progress" off the bottom.
+const RAIL_RECENTS = 5;
+
 function renderActivity() {
     const host = document.getElementById('nav-activity');
     if (!host) return;
@@ -87,29 +108,117 @@ function renderActivity() {
     const recent = activityData.recent || [];
     host.innerHTML = '';
 
+    // In progress, first, and always — even with nothing in it.
+    //
+    // It moved to the foot on the argument that a moving thing is not missed
+    // there, and moved back because the section that replaced it should not
+    // have existed: the top bar already has a workspace picker, and a second
+    // list of the same workspaces in the rail was two controls for one thing.
+    //
+    // Kept on screen when empty, which is the opposite of what this section
+    // used to do. An empty state that says "nothing running" trains people to
+    // stop reading a panel — unless the panel is *where you look* to find out,
+    // and disappearing entirely is what made "is that research still going?"
+    // unanswerable without opening a tab.
+    const box = document.createElement('div');
+    box.className = 'nav-running';
+    box.innerHTML = `<div class="nav-sec-head">${
+        running.length && !running.some(j => j.status === 'running')
+            ? 'needs a look' : 'in progress'}</div>`;
     if (running.length) {
-        const box = document.createElement('div');
-        box.className = 'nav-running';
-        // "Unfinished" described the row rather than addressing the reader,
-        // and a stopped run is not a category of work — it is something that
-        // wants a decision. Say what it wants.
-        box.innerHTML = `<div class="nav-sec-head">${
-            running.some(j => j.status === 'running') ? 'Running now' : 'Needs a look'}</div>`;
         for (const job of running) box.appendChild(activityJobRow(job));
-        host.appendChild(box);
+    } else {
+        const idle = document.createElement('div');
+        idle.className = 'nav-idle';
+        idle.textContent = 'Nothing for now';
+        box.appendChild(idle);
+    }
+    host.appendChild(box);
+
+    if (recent.length) {
+        const details = document.createElement('details');
+        details.className = 'nav-recents';
+        details.open = activityRecentsOpen;
+        details.addEventListener('toggle', () => { activityRecentsOpen = details.open; });
+        details.innerHTML = '<summary class="nav-sec-head">recent</summary>';
+        for (const item of recent.slice(0, RAIL_RECENTS)) {
+            details.appendChild(activityRecentRow(item));
+        }
+        // Always offered, not only when the rail is full: the rail holds the
+        // last five and the history holds everything, so "see more" is true
+        // even at four — there are older ones, they are just not from today.
+        details.appendChild(activityMoreRow('see more', () => {
+            if (typeof toggleHistoryMenu === 'function') toggleHistoryMenu();
+        }));
+        host.appendChild(details);
     }
 
-    if (!recent.length) return;
-    // Recessed by default, and it stays that way between polls — re-rendering
-    // a section the user opened, closed, would be the panel arguing with them
-    // every four seconds.
-    const details = document.createElement('details');
-    details.className = 'nav-recents';
-    details.open = activityRecentsOpen;
-    details.addEventListener('toggle', () => { activityRecentsOpen = details.open; });
-    details.innerHTML = '<summary class="nav-sec-head">Recent</summary>';
-    for (const item of recent) details.appendChild(activityRecentRow(item));
-    host.appendChild(details);
+    renderChatResume();
+}
+
+// The row at the foot of a capped section. A row rather than a link, because
+// it is in a column of rows and the hand is already there.
+function activityMoreRow(label, onClick) {
+    const row = document.createElement('button');
+    row.className = 'nav-recent nav-seemore';
+    row.innerHTML = `<span class="nav-recent-label">${escHtml(label)}</span>`;
+    row.onclick = onClick;
+    return row;
+}
+
+// The one line on the blank chat screen that is about you rather than about
+// Carrot.
+//
+// Running work wins over a finished thing: "research is going" is a reason to
+// wait or watch, and "you were reading X" is only a way back. Both are one
+// sentence and one button, because this sits under the question and the
+// question is what the screen is for — anything taller starts competing with
+// the thing you came here to type.
+function renderChatResume() {
+    const host = document.getElementById('chat-resume');
+    if (!host) return;
+    const running = (activityData.running || []).filter(j => j.status === 'running');
+    const recent = (activityData.recent || [])[0];
+    let what = null;
+    if (running.length) {
+        const job = running[0];
+        what = {
+            lead: 'In progress',
+            label: job.label || job.kind,
+            action: 'Open',
+            kind: job.kind,
+            id: job.id,
+            live: true,
+        };
+    } else if (recent) {
+        what = {
+            lead: recent.kind === 'code' ? 'Last code session' : 'Last conversation',
+            label: recent.label,
+            action: 'Resume',
+            kind: recent.kind,
+            id: recent.id,
+            live: false,
+        };
+    }
+    if (!what) { host.classList.add('hidden'); host.innerHTML = ''; return; }
+    host.classList.remove('hidden');
+    host.innerHTML = `
+        ${what.live ? '<span class="chat-resume-pulse" aria-hidden="true"></span>' : ''}
+        <span class="chat-resume-lead">${escHtml(what.lead)}</span>
+        <span class="chat-resume-label">${escHtml(what.label)}</span>
+        <button class="chat-resume-go">${escHtml(what.action)}</button>`;
+    host.querySelector('.chat-resume-go').onclick =
+        () => (ACTIVITY_OPEN[what.kind] || (() => {}))(what.id);
+}
+
+// The row at the foot of a capped section. A row rather than a link, because
+// it is in a column of rows and the hand is already there.
+function activityMoreRow(label, onClick) {
+    const row = document.createElement('button');
+    row.className = 'nav-recent nav-seemore';
+    row.innerHTML = `<span class="nav-recent-label">${escHtml(label)}</span>`;
+    row.onclick = onClick;
+    return row;
 }
 
 function activityJobRow(job) {
@@ -136,10 +245,16 @@ function activityJobRow(job) {
 function activityRecentRow(item) {
     const row = document.createElement('button');
     row.className = 'nav-recent';
-    row.title = item.label;
+    const isCode = item.kind === 'code';
+    // `</>` rather than a second chat icon. Chat sessions and coding sessions
+    // are the same kind of row from the same table, they read identically at
+    // this size, and they open in different tabs — so the one that is not the
+    // default says so, in the notation everybody already reads as "code".
+    row.title = (isCode ? 'Code session — ' : '') + item.label;
     row.innerHTML = `
         <svg class="ico"><use href="#${escHtml(ACTIVITY_ICON[item.kind] || 'i-clock')}"/></svg>
-        <span class="nav-recent-label">${escHtml(item.label)}</span>`;
+        <span class="nav-recent-label">${escHtml(item.label)}</span>
+        ${isCode ? '<span class="nav-recent-tag" aria-label="code session">&lt;/&gt;</span>' : ''}`;
     row.onclick = () => (ACTIVITY_OPEN[item.kind] || (() => {}))(item.id);
     return row;
 }

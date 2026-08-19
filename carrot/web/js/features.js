@@ -268,7 +268,7 @@ async function newNote() {
 // `owns` but not `reveal` is what lets this hide them without also claiming
 // the right to show them.
 const WRITE_MODES = {
-    prose:  { owns: ['note-toolbar', 'note-editor-host', 'note-fallback', 'doc-refs'],
+    prose:  { owns: ['note-toolbar', 'note-format', 'note-editor-host', 'note-fallback', 'doc-refs'],
               reveal: ['note-toolbar'], rail: 'rail-backlinks' },
     latex:  { owns: ['latex-pane'], rail: 'rail-outline' },
     canvas: { owns: ['canvas-pane'], rail: 'rail-canvas' },
@@ -430,6 +430,7 @@ async function mountEditor(markdown) {
         host.classList.add('hidden');
         fallback.classList.remove('hidden');
         fallback.value = markdown;
+        showNoteFormatBar();
         return;
     }
     fallback.classList.add('hidden');
@@ -443,13 +444,250 @@ async function mountEditor(markdown) {
         } catch (_) { /* older Crepe: rely on autosave poll */ }
         await crepeInstance.create();
         crepeReady = true;
+        showNoteFormatBar();
     } catch (e) {
         crepeInstance = null;
         crepeReady = false;
         host.classList.add('hidden');
         fallback.classList.remove('hidden');
         fallback.value = markdown;
+        showNoteFormatBar();
     }
+}
+
+// ================================================================
+// The formatting row
+// ================================================================
+//
+// Crepe ships two ways to format: a bubble that appears when you select text,
+// and a `/` menu. Both are good and neither is visible, so the Write tab
+// shipped looking like it could not do bold — the only row on screen held
+// Send, Obsidian and Delete, which are things you do *to* a document rather
+// than *in* one.
+//
+// **The row stops where markdown stops.** Font, size, colour, alignment and
+// line spacing are the first things anyone reaches for after using Word, and
+// none of them exist in a `.md` file. A picker that silently does nothing on
+// save is worse than no picker, so they are absent rather than decorative.
+// What is here is every mark and block the schema actually has: each button
+// names a command exported by `CarrotMilkdownKit`, so a button cannot outlive
+// the command behind it — the vendor bundle would fail to build first.
+// Glyphs rather than icons, to match the deck's format bar — and each one
+// checked on screen rather than picked from a chart. Three did not survive
+// that: `⛓` renders as an unreadable pair of hooks at 11px, `▦` as a solid
+// blob, and `🖼` as a framed letter. Their replacements are the ones that were
+// legible at the size they are actually drawn at.
+const NOTE_FORMAT_ROWS = [
+    ['history', [
+        ['undo', '↶', 'Undo  (Ctrl+Z)'],
+        ['redo', '↷', 'Redo  (Ctrl+Shift+Z)'],
+    ]],
+    ['marks', [
+        ['strong', '<b>B</b>', 'Bold  (Ctrl+B)'],
+        ['emphasis', '<i>I</i>', 'Italic  (Ctrl+I)'],
+        ['strikethrough', '<s>S</s>', 'Strikethrough'],
+        ['inlineCode', '<code>&lt;&gt;</code>', 'Inline code'],
+        ['link', '🔗', 'Link'],
+    ]],
+    ['lists', [
+        ['bulletList', '•', 'Bulleted list'],
+        ['orderedList', '1.', 'Numbered list'],
+        ['liftListItem', '⇤', 'Outdent  (Shift+Tab)'],
+        ['sinkListItem', '⇥', 'Indent  (Tab)'],
+    ]],
+    ['blocks', [
+        ['blockquote', '❝', 'Quote'],
+        ['codeBlock', '{ }', 'Code block'],
+        ['hr', '―', 'Divider'],
+        ['table', '⊞', 'Table'],
+        ['image', '◲', 'Image'],
+    ]],
+];
+
+// Paragraph style. One control rather than six heading buttons, because these
+// are alternatives — a paragraph is exactly one of them — and a row of toggles
+// says the opposite.
+const NOTE_BLOCK_STYLES = [
+    ['paragraph', 'Normal text'],
+    ['h1', 'Heading 1'],
+    ['h2', 'Heading 2'],
+    ['h3', 'Heading 3'],
+    ['h4', 'Heading 4'],
+    ['h5', 'Heading 5'],
+    ['h6', 'Heading 6'],
+];
+
+let noteFormatBuilt = false;
+
+function buildNoteFormatBar() {
+    const bar = document.getElementById('note-format');
+    if (!bar || noteFormatBuilt) return;
+    let html = '<select id="note-block-style" class="fmt-select" title="Paragraph style"'
+        + ' onchange="noteSetBlockStyle(this.value)">'
+        + NOTE_BLOCK_STYLES.map(([value, label]) =>
+            '<option value="' + value + '">' + label + '</option>').join('')
+        + '</select>';
+    for (const [group, buttons] of NOTE_FORMAT_ROWS) {
+        html += '<div class="fmt-group" data-group="' + group + '">'
+            + buttons.map(([cmd, glyph, title]) =>
+                '<button class="fmt-btn" type="button" data-fmt="' + cmd + '"'
+                + ' title="' + title + '" onclick="noteFormat(\'' + cmd + '\')">'
+                + glyph + '</button>').join('')
+            + '</div>';
+    }
+    // Said once, here, rather than left to be discovered by trying: the reason
+    // there is no font picker is the file format, not an oversight.
+    html += '<span class="fmt-gap"></span>'
+        + '<span class="fmt-note" title="Saved as Markdown. Fonts, sizes, colours'
+        + ' and alignment are not part of that format, so they are not offered'
+        + ' here — they would be lost on save.">Markdown</span>';
+    bar.innerHTML = html;
+    noteFormatBuilt = true;
+}
+
+// The row is only useful while a Milkdown editor is mounted. On the textarea
+// fallback every button would be dead, so it is not shown at all.
+function showNoteFormatBar() {
+    const bar = document.getElementById('note-format');
+    if (!bar) return;
+    buildNoteFormatBar();
+    const live = !!(window.CarrotMilkdownKit && crepeInstance && crepeReady
+                    && isWriteMode('prose') && !currentNoteReadonly);
+    bar.classList.toggle('hidden', !live);
+    if (live) { watchNoteSelection(); syncNoteFormatBar(); }
+}
+
+// Run one command against the mounted editor.
+//
+// Focus first, always. A ProseMirror command applies at the selection, and
+// clicking a toolbar button moves focus to the button — without this the
+// selection is stale or gone and half the commands are silent no-ops, which is
+// the classic "the bold button works sometimes" bug.
+async function noteFormat(cmd) {
+    const kit = window.CarrotMilkdownKit;
+    if (!kit || !crepeInstance || !crepeReady) return;
+    const surface = document.querySelector('#note-editor-host .ProseMirror');
+    if (surface) surface.focus();
+
+    let payload;
+    if (cmd === 'link') {
+        const href = await inlineTextPrompt({
+            title: 'Link to', placeholder: 'https://…', action: 'Add link',
+        });
+        if (!href) return;
+        payload = { href };
+        if (surface) surface.focus();
+    } else if (cmd === 'image') {
+        const src = await inlineTextPrompt({
+            title: 'Image address', placeholder: 'https://…  or  /path/to/file.png',
+            action: 'Insert image',
+        });
+        if (!src) return;
+        payload = { src };
+        if (surface) surface.focus();
+    }
+
+    const key = kit.commands[cmd];
+    if (!key) return;
+    try {
+        crepeInstance.editor.action(kit.callCommand(key.key, payload));
+    } catch (_) { /* a command that does not apply here is not an error */ }
+    scheduleNoteSave();
+    syncNoteFormatBar();
+}
+
+function noteSetBlockStyle(value) {
+    const kit = window.CarrotMilkdownKit;
+    if (!kit || !crepeInstance || !crepeReady) return;
+    const surface = document.querySelector('#note-editor-host .ProseMirror');
+    if (surface) surface.focus();
+    try {
+        if (value === 'paragraph') {
+            crepeInstance.editor.action(kit.callCommand(kit.commands.paragraph.key));
+        } else {
+            crepeInstance.editor.action(
+                kit.callCommand(kit.commands.heading.key, Number(value.slice(1))));
+        }
+    } catch (_) {}
+    scheduleNoteSave();
+    syncNoteFormatBar();
+}
+
+// Which marks the button `data-fmt` names in the schema. Kept as a map rather
+// than assumed equal: the schema calls strikethrough `strike_through`, and
+// reading `schema.marks[button]` would leave that one button permanently dark.
+const NOTE_MARK_NAMES = {
+    strong: 'strong',
+    emphasis: 'emphasis',
+    strikethrough: 'strike_through',
+    inlineCode: 'inlineCode',
+    link: 'link',
+};
+
+// Which buttons are lit, and what the style picker reads.
+//
+// Marks come from `storedMarks` before the selection, because with an empty
+// cursor sitting after a Ctrl+B the mark is stored and not yet in the
+// document — reading the document there makes the button flick off the moment
+// you press it.
+function syncNoteFormatBar() {
+    const kit = window.CarrotMilkdownKit;
+    const bar = document.getElementById('note-format');
+    if (!bar || bar.classList.contains('hidden')) return;
+    if (!kit || !crepeInstance || !crepeReady) return;
+
+    const active = new Set();
+    let block = 'paragraph';
+    try {
+        crepeInstance.editor.action((ctx) => {
+            const { state } = ctx.get(kit.ctx.editorViewCtx);
+            const { from, to, $from, empty } = state.selection;
+            const marks = state.storedMarks || $from.marks();
+            for (const [button, markName] of Object.entries(NOTE_MARK_NAMES)) {
+                const type = state.schema.marks[markName];
+                if (!type) continue;
+                const on = empty
+                    ? marks.some((m) => m.type === type)
+                    : state.doc.rangeHasMark(from, to, type);
+                if (on) active.add(button);
+            }
+            if ($from.parent.type.name === 'heading') {
+                block = 'h' + ($from.parent.attrs.level || 1);
+            }
+            if ($from.parent.type.name === 'code_block') active.add('codeBlock');
+            // Walk out to find the enclosing list or quote: the cursor sits in
+            // a paragraph inside a list_item inside the list, so the node
+            // directly above it never says `bullet_list`.
+            for (let depth = $from.depth; depth > 0; depth--) {
+                const name = $from.node(depth).type.name;
+                if (name === 'bullet_list') active.add('bulletList');
+                if (name === 'ordered_list') active.add('orderedList');
+                if (name === 'blockquote') active.add('blockquote');
+            }
+        });
+    } catch (_) { return; }
+
+    for (const button of bar.querySelectorAll('.fmt-btn[data-fmt]')) {
+        button.classList.toggle('on', active.has(button.dataset.fmt));
+    }
+    const picker = document.getElementById('note-block-style');
+    if (picker && picker.value !== block) picker.value = block;
+}
+
+// Keep the lit buttons honest as the cursor moves. Bound once on the host
+// rather than on the editor, because Milkdown replaces its own DOM on every
+// remount and a listener on the ProseMirror node would be lost with it.
+function watchNoteSelection() {
+    const host = document.getElementById('note-editor-host');
+    if (!host || host.dataset.fmtWatched) return;
+    host.dataset.fmtWatched = '1';
+    const sync = () => syncNoteFormatBar();
+    host.addEventListener('keyup', sync);
+    host.addEventListener('mouseup', sync);
+    host.addEventListener('input', sync);
+    document.addEventListener('selectionchange', () => {
+        if (host.contains(document.activeElement)) sync();
+    });
 }
 
 // Milkdown escapes `[` when it serialises back to markdown, so a note
@@ -2383,6 +2621,406 @@ function newAgentTask() {
     agentAttachments = [];
     renderAgentTray();
     renderAgentHello();
+    document.getElementById('agent-input')?.focus();
+}
+
+// ===== Trajectory =====
+//
+// The transcript says what happened. It does not say where the run went, and
+// the three questions anybody has about a session they did not watch — how
+// many times did it read a file, which turn took the minute, did it search
+// before or after it edited — are answered today by scrolling the whole thing
+// and holding it in your head.
+//
+// So the same stored events, laid out as turns. Assembled on the server from
+// the traces that were already there (carrot/trajectory.py), which is why this
+// cannot disagree with the transcript beside it: there is one record and two
+// readings of it.
+
+let trajectoryOpen = false;
+// Which panel the trajectory is currently drawn into, and for which
+// conversation. Two surfaces show it — the Code tab's agent side and chat's
+// Agent mode — and they are the same run rendered by the same function, not
+// two views that will drift.
+let trajectoryHostId = 'agent-trajectory';
+// The *getter*, not the id. Captured as a value it goes stale the moment a run
+// starts after the panel was opened — which is the normal case, because you
+// open the trajectory to watch a run rather than after one.
+let trajectoryConversationOf = () => null;
+
+// The mark in the left gutter. Glyphs rather than colour alone, because the
+// column is scanned down rather than read across — you are looking for the
+// tool calls among the thinking, and a row of identically-shaped lines in
+// different colours does not give you that at a glance.
+const TRAJECTORY_MARKS = {
+    route: '◈',
+    thinking: '◐',
+    plan: '☰',
+    tool: '→',
+    answer: '▸',
+    error: '!',
+    stopped: '■',
+};
+
+// The Code tab's agent side.
+async function toggleTrajectory() {
+    return toggleTrajectoryIn('agent-trajectory', 'agent-log', 'trajectory-btn',
+                              () => agentConversationId);
+}
+
+// Chat's Agent mode. Same run, same renderer, a different panel to draw into —
+// the trajectory is a property of the conversation, and both surfaces have one.
+async function toggleChatTrajectory() {
+    return toggleTrajectoryIn('chat-trajectory', 'chat-messages', 'chat-trajectory-btn',
+                              () => currentConversationId);
+}
+
+// Put the transcript back. Called when Agent mode is left, because the button
+// that would close this goes with it.
+function closeChatTrajectory() {
+    if (!trajectoryOpen || trajectoryHostId !== 'chat-trajectory') return;
+    trajectoryOpen = false;
+    document.getElementById('chat-trajectory')?.classList.add('hidden');
+    document.getElementById('chat-messages')?.classList.remove('hidden');
+    document.getElementById('chat-trajectory-btn')?.classList.remove('on');
+}
+
+async function toggleTrajectoryIn(hostId, logId, buttonId, conversationOf) {
+    const panel = document.getElementById(hostId);
+    const log = document.getElementById(logId);
+    if (!panel || !log) return;
+    trajectoryOpen = !(trajectoryOpen && trajectoryHostId === hostId);
+    trajectoryHostId = hostId;
+    trajectoryConversationOf = conversationOf;
+    panel.classList.toggle('hidden', !trajectoryOpen);
+    // It replaces the transcript rather than sitting above it: they are two
+    // readings of one run, and showing both at once means neither has the width.
+    log.classList.toggle('hidden', trajectoryOpen);
+    document.getElementById(buttonId)?.classList.toggle('on', trajectoryOpen);
+    if (trajectoryOpen) await loadTrajectory();
+}
+
+async function loadTrajectory() {
+    const panel = document.getElementById(trajectoryHostId);
+    if (!panel) return;
+    const conversationId = trajectoryConversationOf();
+    if (!conversationId) {
+        panel.innerHTML = '<div class="traj-empty">Nothing to plot yet — '
+            + 'ask for something and this fills in as it runs.</div>';
+        return;
+    }
+    panel.innerHTML = '<div class="traj-empty">Reading the run…</div>';
+    let data;
+    try {
+        data = await api(`/api/conversations/${encodeURIComponent(conversationId)}/trajectory`);
+    } catch (e) {
+        panel.innerHTML = `<div class="traj-empty">Could not read it: ${escHtml(e.message)}</div>`;
+        return;
+    }
+    renderTrajectory(data);
+}
+
+function renderTrajectory(data) {
+    const panel = document.getElementById(trajectoryHostId);
+    if (!panel) return;
+    const turns = data.turns || [];
+    if (!turns.length) {
+        panel.innerHTML = '<div class="traj-empty">This session has no turns yet.</div>';
+        return;
+    }
+    const totals = data.totals || {};
+    // The longest turn sets the bar scale. Against a fixed maximum every bar
+    // in a fast session is a stub, and the question the bars answer is which
+    // turn was the slow one — a relative question.
+    const longest = Math.max(...turns.map(t => t.seconds || 0), 0);
+
+    panel.innerHTML = `
+        <div class="traj-totals">
+          ${trajCount(totals.turns, 'turn')} · ${trajCount(totals.tools, 'tool call')}
+          ${totals.seconds ? ' · ' + trajDuration(totals.seconds) : ''}
+          ${totals.tokens ? ' · ' + trajTokens(totals.tokens) : ''}
+        </div>
+        ${turns.map(turn => trajTurn(turn, longest)).join('')}`;
+}
+
+function trajTurn(turn, longest) {
+    const bar = longest && turn.seconds
+        ? `<span class="traj-bar"><span style="width:${Math.max(2, Math.round(turn.seconds / longest * 100))}%"></span></span>`
+        : '';
+    const cost = [
+        turn.seconds ? trajDuration(turn.seconds) : '',
+        turn.tokens ? trajTokens(turn.tokens) : '',
+        turn.model || '',
+    ].filter(Boolean).join(' · ');
+    return `
+      <div class="traj-turn">
+        <div class="traj-head">
+          <span class="traj-index">Turn ${turn.index}</span>
+          <span class="traj-question">${escHtml(turn.question || '(started on its own)')}</span>
+          <span class="traj-cost">${escHtml(cost)}</span>
+        </div>
+        ${bar}
+        <div class="traj-steps">${(turn.steps || []).map(trajStep).join('')}</div>
+      </div>`;
+}
+
+function trajStep(step) {
+    const mark = TRAJECTORY_MARKS[step.kind] || '·';
+    let label = '';
+    let detail = '';
+    let state = '';
+    if (step.kind === 'tool') {
+        label = step.name;
+        detail = step.args;
+        state = step.rejected ? 'refused' : step.ok === false ? 'failed' : step.ok ? 'ok' : '';
+    } else if (step.kind === 'route') {
+        label = step.label;
+        detail = step.local ? 'on this machine' : 'cloud';
+    } else if (step.kind === 'thinking') {
+        label = 'thought';
+        detail = trajChars(step.chars);
+    } else if (step.kind === 'plan') {
+        label = 'plan';
+        detail = `${step.done}/${step.goals}`;
+    } else if (step.kind === 'answer') {
+        label = 'answered';
+        detail = trajChars(step.chars);
+    } else if (step.kind === 'error') {
+        label = 'failed';
+        detail = step.detail;
+        state = 'failed';
+    } else if (step.kind === 'stopped') {
+        label = 'stopped';
+        detail = 'the turn did not finish';
+    }
+    // What opening the row shows. A step with nothing more to say stays a
+    // row rather than becoming a control that does nothing when clicked —
+    // which is the worst of the three states a disclosure can be in.
+    const full = trajExpansion(step);
+    const row = `
+      <div class="traj-line">
+        <span class="traj-mark" aria-hidden="true">${mark}</span>
+        <span class="traj-label">${escHtml(label)}</span>
+        <span class="traj-detail">${escHtml(detail || '')}</span>
+        ${state ? `<span class="traj-state ${escHtml(state)}">${escHtml(state)}</span>` : ''}
+      </div>`;
+    const classes = `traj-step traj-${escHtml(step.kind)}${state === 'failed' ? ' bad' : ''}`;
+    if (!full) return `<div class="${classes}">${row}</div>`;
+    return `
+      <details class="${classes} traj-open">
+        <summary>${row}</summary>
+        <pre class="traj-full">${escHtml(full)}</pre>
+      </details>`;
+}
+
+// The long form of a step, or nothing.
+//
+// A tool shows its arguments and what came back — the result the trace kept,
+// which is 400 characters, so this is everything there is rather than a second
+// summary of it. Thinking, a plan and an answer each carry their own text.
+function trajExpansion(step) {
+    if (step.kind === 'tool') {
+        const parts = [];
+        if (step.args_full) parts.push(step.args_full);
+        if (step.result_full) parts.push(step.result_full);
+        // Two blank lines between the call and its result: they are different
+        // things, and a command's output often starts with a blank line of its
+        // own that would otherwise read as the separator.
+        return parts.join('\n\n');
+    }
+    return step.detail || '';
+}
+
+function trajCount(n, noun) {
+    const value = n || 0;
+    return `${value} ${noun}${value === 1 ? '' : 's'}`;
+}
+
+// Seconds under a minute, m:ss over it. "184s" is a number you have to convert
+// before it means anything.
+function trajDuration(seconds) {
+    if (seconds < 60) return `${Math.round(seconds)}s`;
+    const minutes = Math.floor(seconds / 60);
+    const rest = Math.round(seconds % 60);
+    return `${minutes}m ${String(rest).padStart(2, '0')}s`;
+}
+
+function trajTokens(tokens) {
+    return tokens >= 1000 ? `${(tokens / 1000).toFixed(1).replace(/\.0$/, '')}k tok` : `${tokens} tok`;
+}
+
+function trajChars(chars) {
+    return chars >= 1000 ? `${Math.round(chars / 1000)}k chars` : `${chars} chars`;
+}
+
+// ===== Code sessions you have had before =====
+//
+// The Code tab could start a session and never get back to one. Every other
+// panel in the app keeps its work — chat has a list, Research has runs, the
+// editor has checkpoints — and the one you spend hours in dropped everything
+// the moment you clicked New task.
+//
+// The conversations were there the whole time: the agent posts to the same
+// /api/chat/stream and its sessions are rows in the same table. What was
+// missing was the marker saying which ones they are (set server-side now, from
+// the `coder` flag) and any way to look at them.
+//
+// Sessions older than that marker are not listed. They are in Chats, where
+// they have always been, and guessing retroactively which conversation was a
+// coding one from the tools it happened to call would put somebody's private
+// chat in this list. A gap in a history is recoverable; the other way is not.
+
+let codeHistoryOpen = false;
+
+// "3h", "yesterday", "12 Aug". A session list is scanned for the one you were
+// in an hour ago, so recent times are relative and older ones are a date —
+// "23 days ago" is arithmetic nobody asked to do.
+function codeSessionWhen(value) {
+    const then = Date.parse(value || '');
+    if (isNaN(then)) return '';
+    const mins = Math.round((Date.now() - then) / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return mins + 'm';
+    if (mins < 60 * 24) return Math.round(mins / 60) + 'h';
+    if (mins < 60 * 48) return 'yesterday';
+    return new Date(then).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+}
+
+async function toggleCodeHistory() {
+    const panel = document.getElementById('code-history');
+    if (!panel) return;
+    codeHistoryOpen = !codeHistoryOpen;
+    panel.classList.toggle('hidden', !codeHistoryOpen);
+    if (codeHistoryOpen) await loadCodeHistory();
+}
+
+async function loadCodeHistory() {
+    const panel = document.getElementById('code-history');
+    if (!panel) return;
+    panel.innerHTML = '<div class="code-history-empty">Loading…</div>';
+    let rows = [];
+    try {
+        const data = await api('/api/conversations?limit=100');
+        rows = (Array.isArray(data) ? data : (data.conversations || []))
+            .filter(c => (c.metadata || {}).surface === 'code');
+    } catch (e) {
+        panel.innerHTML = `<div class="code-history-empty">Could not load: ${escHtml(e.message)}</div>`;
+        return;
+    }
+    if (!rows.length) {
+        panel.innerHTML = '<div class="code-history-empty">No earlier sessions yet. '
+            + 'Ones from before this was added are in Chats.</div>';
+        return;
+    }
+    panel.innerHTML = rows.map(c => `
+        <button class="code-history-row" onclick="openCodeSession('${escHtml(c.id)}')">
+          <span class="code-history-title">${escHtml(c.title || 'Untitled session')}</span>
+          <span class="code-history-when">${escHtml(codeSessionWhen(c.updated_at || c.created_at))}</span>
+        </button>`).join('');
+}
+
+// Rebuild one turn's tool path above its answer.
+//
+// The claim that these were not kept was simply wrong: every turn stores its
+// trace on the assistant row — `TRACE_EVENTS` in app.py keeps `tool`,
+// `tool_result`, `plan`, `thinking` and the rest — because the Code tab posts
+// to the same endpoint as chat, which has replayed its traces all along. The
+// events were on disk the whole time and nothing here was reading them.
+//
+// Drawn with the same three functions the live stream uses, in the same order,
+// so a reopened session and a watched one are the same screen. The one honest
+// gap is the tool result, stored clipped at 400 characters — a page of test
+// output comes back as its first paragraph. Said on the card rather than in a
+// footnote under the whole session, because it is true of that card and not of
+// the turn.
+function replayAgentTrace(wrap, trace) {
+    if (!Array.isArray(trace) || !trace.length) return;
+    let pendingCard = null;
+    let plan = null;
+    for (const event of trace) {
+        if (event.thinking) {
+            const block = document.createElement('details');
+            block.className = 'think';
+            block.innerHTML = '<summary>Thought process</summary>'
+                + `<div class="think-body">${escHtml(event.thinking)}</div>`;
+            wrap.appendChild(block);
+        }
+        if (event.plan) plan = event.plan;      // the last one is the outcome
+        if (event.tool) {
+            const bare = String(event.tool.name || '').split('__').pop();
+            if (CARD_TOOLS.has(bare)) {
+                pendingCard = agentToolCard(wrap, event.tool);
+            } else {
+                pendingCard = null;
+                agentTrace(wrap, `→ ${event.tool.name}(${
+                    Object.entries(event.tool.args || {})
+                        .map(([k, v]) => `${k}=${String(v).slice(0, 60)}`).join(', ')})`,
+                    event.tool.rejected ? 'rejected' : '');
+            }
+        }
+        if (event.tool_result) {
+            const text = String(event.tool_result.result || '');
+            if (pendingCard) {
+                agentToolCardResult(pendingCard, text);
+                markReplayedResult(pendingCard, text);
+                pendingCard = null;
+            } else {
+                agentTrace(wrap, `← ${text.slice(0, 300)}`, 'result');
+            }
+        }
+        if (event.provider_error) {
+            agentTrace(wrap, `! ${event.provider_error.message || event.provider_error}`, 'rejected');
+        }
+        if (event.error) agentTrace(wrap, `! ${event.error}`, 'rejected');
+    }
+    if (plan && typeof renderPlan === 'function') {
+        renderPlan(wrap, plan, { collapsed: true });
+    }
+}
+
+// A stored result is clipped to 400 characters. Saying so on the card is the
+// difference between "the command printed this" and "the command printed this
+// much of this" — and only the second one is true here.
+function markReplayedResult(card, text) {
+    if (!card || text.length < 400) return;
+    const body = card.querySelector('.tool-output') || card;
+    const note = document.createElement('div');
+    note.className = 'tool-clipped';
+    note.textContent = 'stored trace — result kept to the first 400 characters';
+    body.appendChild(note);
+}
+
+// Replay a session into the agent log.
+async function openCodeSession(conversationId) {
+    const log = document.getElementById('agent-log');
+    if (!log) return;
+    let conv;
+    try {
+        conv = await api(`/api/conversations/${encodeURIComponent(conversationId)}`);
+    } catch (e) {
+        return;
+    }
+    agentConversationId = conversationId;
+    agentAttachments = [];
+    renderAgentTray();
+    log.innerHTML = '';
+    for (const message of (conv.messages || [])) {
+        if (message.role !== 'user' && message.role !== 'assistant') continue;
+        const { wrap, body } = agentBubble(message.role, '');
+        // The trace goes above the answer, as it does live: it is what the turn
+        // did on the way to saying this, and reading it afterwards is reading
+        // it in the wrong order.
+        if (message.role === 'assistant') {
+            replayAgentTrace(wrap, (message.metadata || {}).trace);
+            wrap.appendChild(body);                 // back to the foot of the turn
+            body.innerHTML = mdToHtml(message.content || '');
+        } else {
+            body.innerHTML = escHtml(message.content || '');
+        }
+    }
+    log.scrollTop = log.scrollHeight;
+    codeHistoryOpen = false;
+    document.getElementById('code-history')?.classList.add('hidden');
     document.getElementById('agent-input')?.focus();
 }
 

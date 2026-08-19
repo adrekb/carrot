@@ -805,6 +805,51 @@ def rank_results(results: List[Dict[str, str]]) -> List[Dict[str, str]]:
 
 # ===== Fetch =====
 
+MAX_PDF_BYTES = 12 * 1024 * 1024
+
+
+def _is_pdf(content_type: str, url: str) -> bool:
+    """A PDF by what the server says, or by the address when it says nothing.
+
+    Plenty of hosts serve `application/octet-stream` for a .pdf, and a few
+    say nothing at all, so the extension is a fallback rather than the test.
+    """
+    if "application/pdf" in (content_type or "").lower():
+        return True
+    if "pdf" in (content_type or "").lower() and "html" not in content_type.lower():
+        return True
+    return urlparse(url).path.lower().endswith(".pdf")
+
+
+def _read_pdf(result: Dict[str, Any], blob: bytes, url: str,
+              max_chars: int) -> Dict[str, Any]:
+    """Text out of a fetched PDF, or a reason it could not be read.
+
+    Failures are reported the way a blocked page is, naming what happened,
+    because "this one is scanned, find another source" is something the
+    model can act on and a bare empty string is not.
+    """
+    try:
+        from . import attachments
+
+        text = attachments.extract_pdf_text(blob, name=urlparse(url).path or "document.pdf")
+    except Exception as exc:
+        result["error"] = f"could not read this PDF: {exc}"
+        return result
+    # Blank-line runs are how a PDF's page breaks arrive; collapse them so
+    # the model reads prose rather than a column of gaps.
+    text = re.sub('\n{3,}', '\n\n', text).strip()
+    if len(text) < MIN_READABLE_CHARS:
+        result["error"] = (
+            "this PDF has no selectable text — it is a scan. Use a different "
+            "source for the same material.")
+        return result
+    result["text"] = text[:max_chars]
+    result["title"] = result.get("title") or (urlparse(url).path.rsplit("/", 1)[-1] or url)
+    result["kind"] = "pdf"
+    return result
+
+
 def _is_textual(content_type: str) -> bool:
     return any(kind in content_type.lower() for kind in TEXTUAL_TYPES)
 
@@ -1065,6 +1110,21 @@ def fetch(url: str, max_chars: int = DEFAULT_MAX_CHARS, timeout: float = DEFAULT
                 return result
 
             content_type = response.headers.get("content-type", "")
+            # A PDF is a document, not a download to refuse.
+            #
+            # Refusing them cost the answer, not just the page: a great many
+            # of the best sources on the open web are PDFs — a manufacturer's
+            # own fact sheet, a filing, a paper, a datasheet — and the reader
+            # turned every one of them away with "not a readable document",
+            # so the model fell back to whoever had written *about* the
+            # primary source instead of reading it.
+            #
+            # The extractor is the one attachments already use for a PDF the
+            # user drags in, page cap and all; there was no capability
+            # missing here, only a door that was shut.
+            if _is_pdf(content_type, current):
+                return _read_pdf(result, response.content[:MAX_PDF_BYTES],
+                                 current, max_chars)
             if not _is_textual(content_type):
                 result["error"] = f"not a readable document ({content_type or 'unknown type'})"
                 return result

@@ -25,6 +25,8 @@ sidebar becomes the reason the app feels busy.
 """
 from __future__ import annotations
 
+import json
+
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -164,6 +166,20 @@ def running() -> List[Dict[str, Any]]:
     return jobs
 
 
+def _surface_kind(metadata: Any) -> str:
+    """`code` for a Code-tab session, `conversation` for everything else.
+
+    Unparseable metadata is a conversation rather than an error: the rail is
+    polled and a row with a broken JSON blob should cost that row its icon,
+    not the whole panel.
+    """
+    try:
+        surface = (json.loads(metadata or "{}") or {}).get("surface")
+    except (TypeError, ValueError):
+        return "conversation"
+    return "code" if surface == "code" else "conversation"
+
+
 def recent(limit: int = RECENT_LIMIT) -> List[Dict[str, Any]]:
     """What you were last doing — conversations, plus finished runs.
 
@@ -174,14 +190,19 @@ def recent(limit: int = RECENT_LIMIT) -> List[Dict[str, Any]]:
     conn = get_db()
     try:
         rows = [dict(r) for r in conn.execute(
-            "SELECT id, title, updated_at FROM conversations "
+            "SELECT id, title, updated_at, metadata FROM conversations "
             "WHERE COALESCE(title, '') != '' ORDER BY updated_at DESC LIMIT ?",
             (limit,),
         ).fetchall()]
     finally:
         conn.close()
+    # A coding session is its own kind here rather than a conversation with a
+    # note attached, because the rail draws kinds: it is what picks the icon
+    # and what "code" filters on. Telling them apart matters more in a list of
+    # six than anywhere else — "add a retry loop to client.py" and "what is the
+    # news" look identical at 12px, and open in different tabs.
     items = [{
-        "kind": "conversation",
+        "kind": _surface_kind(row.get("metadata")),
         "id": row["id"],
         "label": _truncate(row["title"], 46),
         "at": row["updated_at"],

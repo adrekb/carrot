@@ -37,6 +37,8 @@ from carrot import (
     goals as goals_mod,
     reminders as rem_mod,
     notes as notes_mod,
+    doctext as doctext_mod,
+    trajectory as trajectory_mod,
     links as links_mod,
     leaderboard as lb_mod,
     bootstrap as bootstrap_mod,
@@ -1222,8 +1224,69 @@ def _coder_context(conversation_id: str = ""):
     return blocks
 
 
+# ===== What the model is actually receiving =====
+#
+# The system half of a prompt is assembled from eight independent switches, and
+# until now the only way to know which of them fired on a given turn was to
+# read this function. That is the wrong place for it: "why does it know about
+# my calendar" and "why did it not use what it remembers" are questions asked
+# at the composer, about the turn you are typing.
+#
+# So every block is added through one place that names it, measures it and can
+# be told to leave it out. The manifest that produces is what the Context chip
+# reads, and the same code path serves it — a preview built by a second
+# function would eventually describe a prompt the model never got, which is
+# worse than no preview at all.
+#
+# `toggle` is false for the ones that are not a preference: the conversation
+# itself, the document you explicitly sent, the skill you explicitly invoked.
+# Offering a switch for those would be offering to ignore what was just asked.
+CONTEXT_SOURCES = (
+    ("style",    "Answer style",      "How you asked answers to read", True),
+    ("search",   "Search mode",       "Whether Carrot may search the web", False),
+    ("skill",    "Skill",             "Instructions of the skill you invoked", False),
+    ("document", "Document",          "A document or selection you sent", False),
+    ("coder",    "Workspace rules",   "The Code tab's mode and your repo's rules", True),
+    ("calendar", "Calendar",          "Your next few days", True),
+    ("screen",   "Screen history",    "That Carrot may search what was on screen", True),
+    ("memory",   "Memory",            "What Carrot remembers about you", True),
+    ("summary",  "Earlier in this chat", "A rolling summary of older turns", True),
+    ("recent",   "This conversation",  "The recent turns, verbatim", False),
+)
+
+CONTEXT_LABELS = {source: label for source, label, _, _ in CONTEXT_SOURCES}
+CONTEXT_DETAILS = {source: detail for source, _, detail, _ in CONTEXT_SOURCES}
+CONTEXT_TOGGLEABLE = {source for source, _, _, toggle in CONTEXT_SOURCES if toggle}
+CONTEXT_OFF_KEY = "context_off"
+
+
+def context_disabled() -> set:
+    """The sources the user has switched off, ignoring any that cannot be.
+
+    Filtered rather than trusted: a stale config naming a source that is no
+    longer optional would silently drop the conversation out of every prompt.
+    """
+    try:
+        stored = config.get_config().get(CONTEXT_OFF_KEY) or []
+    except Exception:
+        return set()
+    return {s for s in stored if s in CONTEXT_TOGGLEABLE}
+
+
+def _context_add(history, manifest, disabled, source, content):
+    """Add one system block, unless it is switched off. Record it either way."""
+    text = (content or "").strip() if isinstance(content, str) else ""
+    if not text:
+        return
+    off = source in disabled
+    manifest.append({"source": source, "chars": len(text), "included": not off})
+    if not off:
+        history.append({"role": "system", "content": text})
+
+
 def _prepare_history(conv, message, skill_slug, extra_system=None, mode=None,
-                     images=None, coder=False, memory=None, replay=False):
+                     images=None, coder=False, memory=None, replay=False,
+                     manifest=None):
     """Build the model message list for a turn.
 
     Order matters: the search directive, then skill instructions, then any
@@ -1234,27 +1297,26 @@ def _prepare_history(conv, message, skill_slug, extra_system=None, mode=None,
     """
     history = []
     skill = None
+    manifest = manifest if manifest is not None else []
+    disabled = context_disabled()
+
+    def add(source, content):
+        _context_add(history, manifest, disabled, source, content)
+
     # How the user wants an answer to read. First, so anything more specific
     # later in the prompt — a skill's instructions, a document's format — can
     # still override it.
-    style = answer_style_directive()
-    if style:
-        history.append({"role": "system", "content": style})
+    add("style", answer_style_directive())
     if mode:
-        history.append({"role": "system", "content": search_directive(mode)})
+        add("search", search_directive(mode))
     if skill_slug:
         skill = skills_mod.get_skill(skill_slug)
         if skill and skill.get("instructions"):
-            history.append({
-                "role": "system",
-                "content": (
-                    f"The user invoked the '{skill['name']}' skill. "
-                    f"Follow these instructions:\n\n{skill['instructions']}"
-                ),
-            })
+            add("skill",
+                f"The user invoked the '{skill['name']}' skill. "
+                f"Follow these instructions:\n\n{skill['instructions']}")
 
-    if extra_system:
-        history.append({"role": "system", "content": extra_system})
+    add("document", extra_system)
 
     # The coding agent's mode, and whatever instruction files the workspace
     # carries. A repo already set up for Cline, Continue, Goose or Cursor is
@@ -1267,16 +1329,15 @@ def _prepare_history(conv, message, skill_slug, extra_system=None, mode=None,
     # pong.py. The mode belongs to the coding panel, not to the app.
     if coder:
         try:
-            history.extend(_coder_context(conv.get("id", "") if conv else ""))
+            for block in _coder_context(conv.get("id", "") if conv else ""):
+                add("coder", block.get("content", ""))
         except Exception:
             pass
 
     # Calendar awareness is an explicit opt-in; when on, the assistant sees
     # the next few days so "what does my week look like" just works.
     try:
-        cal_block = calfeed_mod.agent_context()
-        if cal_block:
-            history.append({"role": "system", "content": cal_block})
+        add("calendar", calfeed_mod.agent_context())
     except Exception:
         pass
 
@@ -1289,9 +1350,7 @@ def _prepare_history(conv, message, skill_slug, extra_system=None, mode=None,
     # question with capture switched off it will apologise for a limitation it
     # cannot describe. One line costs almost nothing and removes both.
     try:
-        roster = ambient_capture_mod.agent_roster_line()
-        if roster:
-            history.append({"role": "system", "content": roster})
+        add("screen", ambient_capture_mod.agent_roster_line())
     except Exception:
         pass
 
@@ -1303,18 +1362,31 @@ def _prepare_history(conv, message, skill_slug, extra_system=None, mode=None,
             # Recall is scoped to the workspace the conversation lives in, not
             # the one that happens to be active — re-opening an old chat should
             # bring back its own context, not today's.
-            block = memory_mod.as_prompt_block(memory_mod.recall(
+            add("memory", memory_mod.as_prompt_block(memory_mod.recall(
                 message,
                 workspace_id=workspaces_mod.workspace_of(
                     workspaces_mod.KIND_CONVERSATION, conv.get("id", "")
                 ) or "",
-            ))
-            if block:
-                history.append({"role": "system", "content": block})
+            )))
         except Exception:
             pass
 
-    history += summarize_mod.build_history(conv)
+    # One call produces both the rolling summary and the recent turns, and they
+    # are different answers to "what is Carrot being told": one is a compression
+    # you might switch off, the other is the conversation you are having.
+    # A turn with no conversation yet — the first message of a new chat, and
+    # every Context preview typed before one exists — has no history to add.
+    # `build_history` reads `conversation["messages"]` and raised on None, which
+    # the preview was quietly swallowing: it caught the error after the earlier
+    # blocks were built and reported a manifest that stopped halfway.
+    for turn in (summarize_mod.build_history(conv) if conv else []):
+        if turn.get("role") == "system":
+            add("summary", turn.get("content", ""))
+        else:
+            manifest.append({"source": "recent",
+                             "chars": len(str(turn.get("content", ""))),
+                             "included": True})
+            history.append(turn)
     # On a rerun the question is already the last thing in the transcript —
     # only the answer was rewound — so appending it again would hand the model
     # the same question twice in a row and make it read as insistence.
@@ -3838,6 +3910,18 @@ def _open_conversation(req):
         if temporary:
             meta[conv_mod.TEMPORARY_KEY] = True
         surface = (getattr(req, "surface", None) or "").strip()
+        # A turn from the Code tab marks its conversation as one, here rather
+        # than in the browser. app.js already filters `surface === 'code'` out
+        # of the Chats list — but nothing ever set the marker, so the filter
+        # has been a no-op and every coding session has been sitting in Chats
+        # among the ordinary ones, while the Code tab had no history at all.
+        #
+        # Server-side because `coder` is what actually decides the shape of the
+        # turn: it is the flag that attaches the plan/act preamble and the
+        # workspace rules, so any caller that sets it is running a coding turn
+        # whether or not it remembered to say so twice.
+        if not surface and getattr(req, "coder", False):
+            surface = conv_mod.SURFACE_CODE
         if surface:
             meta[conv_mod.SURFACE_KEY] = surface
         created = conv_mod.create_conversation(
@@ -5052,6 +5136,126 @@ async def get_note(note_id: str):
     if note is None:
         raise HTTPException(status_code=404, detail="Note not found")
     return note
+
+
+class ContextToggleRequest(BaseModel):
+    source: str
+    enabled: bool = True
+
+
+@app.get("/api/context")
+async def context_preview(message: str = "", conversation_id: str = "",
+                          mode: str = "", coder: bool = False):
+    """What the next turn would carry, source by source.
+
+    Built by the same function that builds the prompt, with the model call left
+    off — a preview written separately would eventually describe a prompt the
+    model never got, which is worse than no preview at all.
+
+    `message` matters: memory recall is a search against what you are about to
+    ask, so an inspector that previewed the empty string would always report
+    that Carrot remembers nothing.
+    """
+    conv = conv_mod.get_conversation(conversation_id) if conversation_id else None
+    manifest: List[Dict[str, Any]] = []
+    try:
+        _prepare_history(conv, message, "", mode=mode or None, coder=coder,
+                         manifest=manifest)
+    except Exception:
+        pass
+    disabled = context_disabled()
+    by_source: Dict[str, Dict[str, Any]] = {}
+    for entry in manifest:
+        row = by_source.setdefault(entry["source"], {"chars": 0, "parts": 0})
+        row["chars"] += entry["chars"]
+        row["parts"] += 1
+    sources = []
+    for source, label, detail, toggleable in CONTEXT_SOURCES:
+        found = by_source.get(source)
+        sources.append({
+            "id": source,
+            "label": label,
+            "detail": detail,
+            "toggleable": toggleable,
+            "enabled": source not in disabled,
+            # Present says "this turn actually has one of these", which is a
+            # different thing from enabled: the calendar can be switched on and
+            # still contribute nothing on a day with nothing in it.
+            "present": bool(found),
+            "chars": found["chars"] if found else 0,
+            "parts": found["parts"] if found else 0,
+        })
+    chars = sum(s["chars"] for s in sources if s["enabled"])
+    # Characters to tokens at four to one. A rough divisor rather than a real
+    # count, and labelled "about" everywhere it is shown, because tokenising
+    # the prompt to draw a bar would cost more than the bar is worth — and the
+    # bar's job is "am I near the edge", which four-to-one answers.
+    window = 0
+    try:
+        route = router_mod.route(task=router_mod.TASK_CHAT)
+        window = ctxwin_mod.window_for(
+            route.provider, route.model).get("tokens", 0) or 0
+    except Exception:
+        window = 0
+    return {"sources": sources,
+            "items": sum(1 for s in sources if s["present"] and s["enabled"]),
+            "chars": chars,
+            "tokens": chars // 4,
+            "window": window}
+
+
+@app.post("/api/context/toggle")
+async def context_toggle(req: ContextToggleRequest):
+    """Switch one source off, or back on."""
+    if req.source not in CONTEXT_TOGGLEABLE:
+        raise HTTPException(status_code=400,
+                            detail="That part of the prompt cannot be switched off.")
+    off = set(config.get_config().get(CONTEXT_OFF_KEY) or [])
+    if req.enabled:
+        off.discard(req.source)
+    else:
+        off.add(req.source)
+    config.set_config(CONTEXT_OFF_KEY, sorted(off))
+    return {"source": req.source, "enabled": req.enabled, "off": sorted(off)}
+
+
+@app.get("/api/conversations/{conv_id}/trajectory")
+async def conversation_trajectory(conv_id: str):
+    """One run, as turns rather than as a transcript.
+
+    Assembled from what is already stored — every assistant row carries its
+    trace and its metrics — so this records nothing new and cannot disagree
+    with the transcript beside it.
+    """
+    conv = conv_mod.get_conversation(conv_id)
+    if conv is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return trajectory_mod.for_conversation(conv)
+
+
+@app.get("/api/notes/{note_id}/text")
+async def get_note_text(note_id: str):
+    """The document as something worth putting in a prompt.
+
+    A deck is a JSON array of positioned boxes and a canvas is an Excalidraw
+    scene, so "send this to chat" on either of those used to mean sending
+    several kilobytes of coordinates and style keys — which is why neither had
+    a Send button at all. Rendered server-side rather than in each editor: one
+    renderer that the tests can hold, and every client path gets the same
+    reading rather than three that drift.
+    """
+    system = systemdocs_mod.get(note_id)
+    note = system if system is not None else notes_mod.get_note(note_id)
+    if note is None:
+        raise HTTPException(status_code=404, detail="Note not found")
+    doc_format = note.get("format") or doctext_mod.FORMAT_MARKDOWN
+    return {
+        "id": note_id,
+        "title": note.get("title", ""),
+        "format": doc_format,
+        "text": doctext_mod.as_text(note.get("body", ""), doc_format,
+                                    note.get("title", "")),
+    }
 
 
 @app.post("/api/notes")

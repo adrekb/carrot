@@ -632,12 +632,18 @@ body {
 .engine-row .val { font-family: var(--mono); font-size: var(--text-sm); color: var(--text); }
 
 /* ===== Workspace center ===== */
+/* The chat column is the ground, not a card.
+   It was `--card`, which on a warm charcoal read as a panel the conversation
+   sat in and on black reads as the reason the app is not black: the page
+   behind it *is* #000, and this covered every pixel of it. The things that
+   should lift off a black page are the bubbles, the composer and the popovers
+   — a container the size of the window is not one of them. */
 #ws-center {
   flex: 1;
   display: flex;
   flex-direction: column;
   min-width: 0;
-  background: var(--card);
+  background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow: hidden;
@@ -809,12 +815,29 @@ body {
 .plan-head {
   display: flex; align-items: center; gap: 6px;
   padding: 7px 10px;
-  border-bottom: 1px solid var(--border);
   font-size: var(--text-xs);
   letter-spacing: 0.4px;
   text-transform: uppercase;
   color: var(--faint);
+  cursor: pointer;
+  list-style: none;
 }
+/* The rule under the head is the line between the head and the list, so it
+   belongs to the pair rather than to the head — left on the head alone it
+   underlines a closed card that has nothing beneath it. */
+.plan-box[open] > .plan-head { border-bottom: 1px solid var(--border); }
+.plan-head::-webkit-details-marker { display: none; }
+/* The same chevron as the trace, pointing the same way, turning the same
+   amount. Two disclosure controls stacked on one message should not be two
+   different gestures. */
+.plan-head::after {
+  content: "›";
+  margin-left: 6px;
+  display: inline-block;
+  transition: transform var(--dur-1) var(--ease);
+}
+.plan-box[open] > .plan-head::after { transform: rotate(90deg); }
+.plan-head:hover { color: var(--muted); }
 .plan-head .ico { width: 12px; height: 12px; }
 .plan-count { margin-left: auto; font-variant-numeric: tabular-nums; }
 .plan-items { padding: 5px 4px 7px; }
@@ -1746,6 +1769,39 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 }
 .milkdown-host.paper .ProseMirror { background: var(--bg2); color: var(--text); }
 
+/* The block handle you could see but never click.
+   Milkdown sets `data-show="false"` the moment the pointer leaves a block, and
+   its own stylesheet then applies `pointer-events: none` — but the handle is
+   positioned out in the left gutter, so the trip from the text to the button
+   crosses dead space that belongs to no block. The handle is switched off
+   before the pointer arrives, and because it takes no pointer events it cannot
+   keep itself alive either. Reported as "it only stays for a fraction of a
+   second, unclickable".
+
+   Keeping it live while the pointer is anywhere in the editor is how every
+   editor with a gutter handle behaves: it follows the block you are nearest,
+   and it is still there when you go for it. Milkdown repositions it on each
+   block it resolves, so this shows the current one, not a stale one.
+
+   An override of a vendored rule, which is worth saying out loud: if the
+   bundle is rebuilt and the plugin starts handling this itself, this can go. */
+.milkdown-host:hover .milkdown-block-handle[data-show="false"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* …and the `+` on that handle is gone, now that there is a formatting row.
+   It opened the same menu `/` opens, which is now also the row's job — so the
+   gutter held a third way to do what two other things already did, one of them
+   permanently on screen. What is left is the drag grip, which is the one thing
+   the gutter is for and the only one with nowhere else to live.
+
+   The handle renders two `.operation-item` divs, add then drag, so this is
+   positional. It is an override of a vendored component's markup and will need
+   revisiting if the bundle is rebuilt against a Crepe that reorders them —
+   the drag grip disappearing instead is what that would look like. */
+.milkdown-block-handle .operation-item:first-child { display: none; }
+
 .milkdown-host { flex: 1; overflow-y: auto; }
 .milkdown-host .milkdown { background: transparent; color: var(--text); }
 .milkdown-host .ProseMirror { padding: 20px 26px; min-height: 100%; outline: none; line-height: 1.6; }
@@ -1964,11 +2020,16 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
    above the privacy chip, which keeps its own `margin-top: auto`, so this
    grows downward from the nav and the chip stays pinned to the floor. */
 .nav-activity { margin-top: 14px; min-height: 0; overflow-y: auto; }
+/* Lowercase and bold, not uppercase and tracked out.
+   Small caps with 0.08em of tracking is the house style of a dashboard, and
+   this rail is a sidebar — the thing it is actually like is the list of
+   sections in a chat app, where the heading is quiet, set in the same case as
+   everything under it, and told apart by weight rather than by shouting. The
+   tracking went with the case: letter-spacing exists to keep capitals from
+   colliding, and lowercase at 12px does not need it. */
 .nav-sec-head {
   font-size: var(--text-xs);
-  font-weight: var(--w-semi);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-weight: var(--w-bold);
   color: var(--muted);
   padding: 0 8px 6px;
 }
@@ -2039,6 +2100,33 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 .nav-recents > summary:hover { color: var(--text); }
 .nav-recent-label { color: var(--muted); }
 .nav-recent:hover .nav-recent-label { color: var(--text); }
+/* `</>` on a coding session. Monospace because it is notation rather than a
+   word, and at the right end so a column of rows still reads down the left. */
+.nav-recent-tag {
+  margin-left: auto;
+  flex: none;
+  font-family: var(--mono);
+  font-size: var(--text-2xs);
+  color: var(--faint);
+}
+.nav-recent:hover .nav-recent-tag { color: var(--muted); }
+/* "see more". Quieter than the rows above it — it is the way out of the
+   section, not a member of it.
+
+   Not `.nav-more`: that name is already a component further down this file,
+   an uppercase tracked-out disclosure, and reusing it made these two rows
+   come out shouting "SEE ALL 5" in the middle of a lowercase rail. */
+.nav-seemore .nav-recent-label { color: var(--faint); }
+.nav-seemore:hover .nav-recent-label { color: var(--accent); }
+/* "Nothing for now". The one empty state in this rail that earns its place:
+   this section is where you look to find out whether something is still
+   running, and a section that vanishes when the answer is "no" makes the
+   question unanswerable without opening a tab. */
+.nav-idle {
+  padding: 4px 9px 2px;
+  font-size: var(--text-xs);
+  color: var(--faint);
+}
 
 /* Reduced motion is handled in one place near the end of this file, so it can
    apply after every animation it has to override. */
@@ -3362,6 +3450,30 @@ body.nav-collapsed .privacy-chip { justify-content: center; padding: 8px 0; }
 .ws-row-main { flex: 1; cursor: pointer; display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .ws-row-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ws-row-meta { color: var(--faint); font-size: var(--text-xs); font-family: var(--mono); flex: none; }
+/* "0 items" on the active row was unreadable, and measurably so: `--faint` on
+   `--accent-fill` is **1.11:1**. The row sets `--on-accent` for the orange
+   fill and the line above hard-sets a mid grey picked to be quiet on a dark
+   card, which on orange is neither quiet nor legible.
+
+   Full ink, with no opacity — and that is the measured answer rather than the
+   obvious one. Dimming it looked right, but every `--accent-fill`/`--on-accent`
+   pair in this file is tuned to *just* clear AA: ember is 4.72:1, so 0.9 alpha
+   takes it to 4.29 and under. There is no headroom to spend on quietness.
+   Carrot 5.22 → 4.68 at 0.9, teal 5.13 → 4.54; ember is the one that decides
+   it. The meta is already smaller and monospaced, which is the distinction it
+   needed anyway.
+
+   The buttons come along for the same reason: `.btn-ghost` sets its own
+   `--muted`, and both of them sit on the fill too. */
+.ws-row.active .ws-row-meta { color: var(--on-accent); }
+.ws-row.active .btn-ghost {
+  color: var(--on-accent);
+  border-color: color-mix(in srgb, var(--on-accent) 28%, transparent);
+  background: color-mix(in srgb, var(--on-accent) 10%, transparent);
+}
+.ws-row.active .btn-ghost:hover {
+  background: color-mix(in srgb, var(--on-accent) 18%, transparent);
+}
 
 .ws-detail-head { border-bottom: 1px solid var(--border); padding-bottom: 8px; margin-bottom: 4px; }
 .ws-detail-head h3 { margin: 0 0 3px; font-size: var(--text-md); }
@@ -4158,7 +4270,16 @@ select option:checked { background-color: #2f333d; }
   --select-chevron: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2399a0ae' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9l6 6 6-6'/></svg>");
 
   --wash-sat: 125%;
-  --wash-strength: 1;
+  /* Turned down for the black theme, and this overrules a measurement.
+     I checked whether the wash had got louder on black and it had not — the
+     strongest pool lifts the ground 1.21x against the charcoal's 1.30x, so it
+     is quieter relative to what it sits on. That answered the wrong question.
+     "Is it louder than it was" is not "does it belong on a theme whose whole
+     point is #000000", and on a black ground a coloured pool does not read as
+     depth, it reads as the reason the app is not black.
+     Not zero: at this strength it is still a lit edge under the composer,
+     which is the one place the glow was doing work. */
+  --wash-strength: 0.35;
 }
 
 /* ---- Light ----
@@ -4629,60 +4750,74 @@ code, pre, .kbd { font-family: var(--mono); }
 }
 
 /* =====================================================================
-   Charcoal & cream
+   Black
    =====================================================================
-   An editorial pass, not a hue swap. The type roles are the app's, set
-   once at the top of this file — one face for the interface, DM Mono for
-   code. This theme changes what they sit on, not which they are.
+   The ground is #000000. Not a very dark grey that photographs as black —
+   actual black, which on an OLED panel is the pixel switched off, and on
+   any panel is the only value a dark theme cannot be accused of missing.
 
-   It used to pair Playfair Display with Vollkorn, and the editorial feel
-   was doing real work — but a serif inside a dark tool UI reads as a
-   magazine pastiche rather than as reading material, and neither face was
-   ever committed, so both silently fell back to Georgia. The distinction
-   that mattered (announcing vs reading vs operating) survives; the serifs
-   do not.
+   This replaced a warm charcoal (#16150f, cream #f2ece0) that was a
+   considered thing: pressed ink rather than screen-black, surfaces
+   separating by a few percent of luminance. Two of its ideas survive and
+   one does not.
 
-   All four are SIL OFL, which is why they can ship inside a public
-   installer. License texts: /assets/fonts/*-OFL.txt */
+   **Kept: separation by luminance, never by a line.** The five ground
+   steps are picked to reproduce the charcoal ramp's own contrast ratios
+   almost exactly — 1.07, 1.07, 1.11, 1.17 against its 1.05, 1.07, 1.12,
+   1.14 — so a card still lifts off the page by the same amount it always
+   did. Starting from black does not mean flattening everything into it.
+
+   **Kept: the warm accent.** Orange on a neutral black is the pairing the
+   old theme was reaching for with its warm ground, and it works better
+   here: #ff7a2b reads at 8.07:1 on #000 against 7.19:1 on the charcoal.
+
+   **Gone: cream text.** #f2ece0 is right on a warm ground and wrong on a
+   neutral one, where it reads as a brown haze rather than as white. The
+   ink is near-white and very slightly cool, which is what keeps true
+   black from looking like a fault. */
 :root {
 
-  /* Charcoal: warm and slightly green-black, the colour of pressed ink
-     rather than the blue-black of a screen. Surfaces separate by a few
-     percent of luminance, never by a line. */
-  --bg: #16150f;
-  --bg2: #1b1a13;
-  --card: #22201a;
-  --card2: #2b2921;
-  --card3: #35322a;
-  --border: rgba(232, 222, 200, 0.08);
-  --border-hi: rgba(232, 222, 200, 0.15);
+  /* Black, and four steps off it. The ratios between them are the
+     charcoal theme's, transposed — see the note above. */
+  --bg: #000000;
+  --bg2: #0c0c0e;
+  --card: #151517;
+  --card2: #1f1f23;
+  --card3: #2b2b31;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-hi: rgba(255, 255, 255, 0.15);
 
-  /* Cream, not white. #fff on a warm charcoal reads blue and buzzes. */
-  --text: #f2ece0;
-  --muted: #a89f8d;
-  --faint: #96907f;   /* 5.11:1 on --card */
+  /* Near-white, not #fff. A flat white on a flat black is the one pairing
+     that buzzes at the edges of type; a couple of points off each end
+     settles it without anybody being able to name the difference. */
+  --text: #f4f4f6;
+  --muted: #a0a0a8;   /* 7.21:1 on --card */
+  --faint: #8a8a93;   /* 5.33:1 on --card */
 
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow: 0 8px 24px rgba(0, 0, 0, 0.38);
-  --shadow-lg: 0 24px 64px rgba(0, 0, 0, 0.55);
+  /* A shadow on black is nearly invisible, so the ground steps and the
+     borders carry the separation. These stay for the surfaces that float
+     over *content* rather than over the page. */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+  --shadow-lg: 0 24px 64px rgba(0, 0, 0, 0.75);
 
-  --surface-bar: #1b1a13;
-  --surface-nav: #131209;
-  --surface-card: #22201a;
-  --surface-card-hi: #2b2921;
-  --surface-pop: #272520;
-  --surface-bar-edge: rgba(232, 222, 200, 0.10);
-  --surface-nav-edge: rgba(232, 222, 200, 0.08);
-  --surface-card-edge: rgba(232, 222, 200, 0.10);
-  --surface-card-edge-hi: rgba(232, 222, 200, 0.16);
-  --surface-pop-edge: rgba(232, 222, 200, 0.14);
-  --surface-hover: rgba(255, 246, 226, 0.05);
-  --veil: rgba(22, 21, 15, 0.6);
-  --scrim: rgba(12, 11, 8, 0.66);
+  --surface-bar: #0c0c0e;
+  --surface-nav: #000000;
+  --surface-card: #151517;
+  --surface-card-hi: #1f1f23;
+  --surface-pop: #1a1a1e;
+  --surface-bar-edge: rgba(255, 255, 255, 0.10);
+  --surface-nav-edge: rgba(255, 255, 255, 0.08);
+  --surface-card-edge: rgba(255, 255, 255, 0.10);
+  --surface-card-edge-hi: rgba(255, 255, 255, 0.16);
+  --surface-pop-edge: rgba(255, 255, 255, 0.14);
+  --surface-hover: rgba(255, 255, 255, 0.05);
+  --veil: rgba(0, 0, 0, 0.66);
+  --scrim: rgba(0, 0, 0, 0.78);
 
-  --opt-bg: #26241d;
-  --opt-text: #f2ece0;
-  --opt-sel: #333027;
+  --opt-bg: #1a1a1e;
+  --opt-text: #f4f4f6;
+  --opt-sel: #2b2b31;
 }
 
 /* Cream ground, charcoal ink — the same relationship inverted, so light
@@ -6449,7 +6584,7 @@ body #cmdbar:focus-within {
    * screen saying that something is still happening. Freezing them does not
    * calm the interface down, it makes a live indicator indistinguishable from
    * a dead one. Slowed, because there is no reason for them to be brisk. */
-  .nav-job-pulse, .icon-btn.recording {
+  .nav-job-pulse, .icon-btn.recording, .chat-resume-pulse {
     animation-duration: 2.4s !important;
     animation-iteration-count: infinite !important;
   }
@@ -8225,6 +8360,54 @@ select.dd-open { border-color: var(--accent-line); }
   gap: var(--s-4);
 }
 .chat-empty-head .chat-empty-note { margin: 0; }
+
+/* The resume line. One row, under the question, quiet enough that the eye
+   reaches the composer first — it is an offer, not an instruction. Hidden
+   entirely when there is nothing to resume, because a row that says "nothing
+   yet" is a row that teaches people to stop reading the space. */
+.chat-resume {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  max-width: 100%;
+  padding: var(--s-2) var(--s-2) var(--s-2) var(--s-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--card);
+  font-size: var(--text-xs);
+}
+.chat-resume.hidden { display: none; }
+.chat-resume-lead { color: var(--faint); flex: none; }
+.chat-resume-label {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 42ch;
+}
+.chat-resume-go {
+  flex: none;
+  padding: 3px 10px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: var(--accent-fill, var(--accent));
+  color: var(--on-accent);
+  font: inherit;
+  font-size: var(--text-2xs);
+  font-weight: var(--w-semi);
+  cursor: pointer;
+}
+.chat-resume-go:hover { background: var(--accent-hi); }
+/* The same dot the rail uses for a live job, so "running" looks like one
+   thing across the app rather than two. */
+.chat-resume-pulse {
+  flex: none;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--green);
+  animation: pulse-dot 1.8s ease-in-out infinite;
+}
+@keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 .where-mark {
   display: inline-flex;
   align-items: center;
@@ -8431,6 +8614,20 @@ body.nav-collapsed .nav-job-pulse { left: 6px; }
 .history-dot.chip-agent { background: var(--green); }
 .history-chip.chip-chat.active { border-color: var(--accent); }
 .history-chip.chip-agent.active { border-color: var(--green); background: color-mix(in srgb, var(--green) 14%, transparent); }
+/* Code sessions. Yellow because the two kinds already here are the accent and
+   the green, and a third that is either of those is a third that cannot be
+   told from the other two at 6px. */
+.chip-code { --chip: var(--yellow); }
+.history-dot.chip-code { background: var(--yellow); }
+.history-chip.chip-code.active { border-color: var(--yellow); background: color-mix(in srgb, var(--yellow) 14%, transparent); }
+/* `</>` beside the title. The dot already carries the colour; this carries the
+   meaning, for anyone who has not learned what yellow means yet. */
+.history-tag {
+  flex: none;
+  font-family: var(--mono);
+  font-size: var(--text-2xs);
+  color: var(--faint);
+}
 .history-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .history-when { font-size: var(--text-2xs); color: var(--faint); flex: 0 0 auto; }
 .history-empty { padding: var(--s-5); color: var(--faint); font-size: var(--text-sm); }
@@ -8844,10 +9041,21 @@ body.nav-collapsed .nav-job-pulse { left: 6px; }
   outline: none;
 }
 
+/* A slide is a page, so it is paper — white in either theme, with the chrome
+   around it staying dark. It was `--card`, the app's panel colour, which made
+   the stage another panel and a deck a dark rectangle you edit inside a dark
+   window.
+
+   The `paper` class matters as much as the colour here, and is why this is not
+   simply a lighter background: a deck stores its text colour as `var(--text)`,
+   so on a white stage in a dark theme every word would have come out white on
+   white. `paper` gives the subtree the light palette, so `--text` inside a
+   slide is ink and the explicit colours somebody chose — a red heading, a blue
+   box — are untouched. */
 .slide-stage {
   position: relative;
   flex: 0 0 auto;
-  background: var(--card);
+  background: var(--bg2);
   border: 1px solid var(--border);
   transform-origin: center center;
   overflow: hidden;
@@ -8871,8 +9079,414 @@ body.nav-collapsed .nav-job-pulse { left: 6px; }
   opacity: 0;
 }
 .slide-el.selected .slide-el-resize { opacity: 1; }
-.slides-present .slide-stage { background: none; border: none; }
+/* Presented, the slide is still the page: paper, with the dark viewport
+   letterboxing it the way a projector does. It used to be `none`, which
+   let reveal's viewport show through — fine when the stage had no palette
+   of its own, and wrong the moment it became `.paper`, because the text a
+   deck stores as `var(--text)` is ink inside that subtree and ink on a
+   dark viewport is an unreadable slide. A deck that sets its own
+   background still wins: that is an inline style on the stage. */
+.slides-present .slide-stage { border: none; }
 .slides-present .slide-el { border: none; outline: none; cursor: default; }
+
+/* Earlier coding sessions, under the agent's head.
+   A panel rather than a menu: the list is scanned, not picked from a short
+   set, and it has to be able to get long without becoming a popup that runs
+   off the bottom of the window. Capped and scrolling for the same reason. */
+.code-history {
+  max-height: 260px;
+  overflow-y: auto;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg2);
+  padding: var(--s-2);
+}
+.code-history-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-3);
+  width: 100%;
+  padding: var(--s-2) var(--s-3);
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.code-history-row:hover { background: var(--card2); }
+.code-history-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.code-history-when {
+  flex: none;
+  font-size: var(--text-2xs);
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+.code-history-empty {
+  padding: var(--s-3);
+  font-size: var(--text-xs);
+  color: var(--faint);
+}
+/* On a replayed card whose result was longer than the trace keeps. Said on the
+   card because it is true of that card — a note under the whole session would
+   claim it of every one, including the ones stored whole. */
+.tool-clipped {
+  margin-top: var(--s-2);
+  font-size: var(--text-2xs);
+  color: var(--faint);
+  font-style: italic;
+}
+
+/* The trajectory control belongs to Agent mode, not to chat.
+   A plain conversation has turns and no tools, so its trajectory is a list of
+   questions with nothing under them — a control that is present and pointless
+   most of the time. Gated on the attribute `setChatMode` already sets, rather
+   than by a second line of JS that can fall out of step with it. */
+#chat-trajectory-btn { display: none; }
+#view-workspace[data-chat-mode="agent"] #chat-trajectory-btn { display: flex; }
+
+/* ===== Trajectory =====
+   The same run the transcript shows, as turns. Dense on purpose: the whole
+   point is fitting a session on one screen, which is what makes "which turn
+   took the minute" a glance rather than a scroll. */
+.agent-trajectory {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--s-4);
+  font-size: var(--text-xs);
+}
+.agent-trajectory.hidden { display: none; }
+.traj-empty { color: var(--faint); padding: var(--s-4) 0; }
+.traj-totals {
+  color: var(--muted);
+  padding-bottom: var(--s-3);
+  margin-bottom: var(--s-4);
+  border-bottom: 1px solid var(--border);
+}
+.traj-turn { margin-bottom: var(--s-5); }
+.traj-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-3);
+}
+.traj-index { flex: none; color: var(--muted); font-weight: var(--w-semi); }
+.traj-question {
+  flex: 1;
+  min-width: 0;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.traj-cost {
+  flex: none;
+  color: var(--faint);
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+}
+/* How long this turn took against the longest one in the run. Scaled to the
+   run rather than to a fixed maximum: in a fast session every bar against a
+   fixed scale is a stub, and the question the bars answer — which one was
+   slow — is a relative one. */
+.traj-bar {
+  display: block;
+  height: 2px;
+  margin: var(--s-2) 0 var(--s-3);
+  background: var(--card2);
+  border-radius: var(--r-pill);
+  overflow: hidden;
+}
+.traj-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: var(--r-pill);
+}
+.traj-steps { display: flex; flex-direction: column; gap: 1px; }
+.traj-step { color: var(--muted); }
+.traj-line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-3);
+  padding: 2px 0 2px var(--s-2);
+}
+/* A step with more to say is a `<details>`; one without stays a plain row, so
+   a click never lands on something that has nothing to open. The marker is
+   suppressed because the row already has a glyph in its left gutter and two
+   would be one too many. */
+.traj-step.traj-open > summary { cursor: pointer; list-style: none; }
+.traj-step.traj-open > summary::-webkit-details-marker { display: none; }
+.traj-step.traj-open > summary:hover { background: var(--card2); border-radius: var(--r-xs); }
+.traj-step.traj-open[open] > summary .traj-detail { color: var(--muted); }
+.traj-full {
+  margin: var(--s-2) 0 var(--s-3) 24px;
+  padding: var(--s-3);
+  max-height: 260px;
+  overflow: auto;
+  background: var(--card);
+  border-left: 2px solid var(--border-hi);
+  border-radius: 0 var(--r-xs) var(--r-xs) 0;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: var(--text-2xs);
+  line-height: 1.5;
+  /* Wrapped, not scrolled sideways: a command's output is lines, and a
+     horizontal scrollbar inside a panel you opened to read something is a
+     second thing to operate before you can read it. */
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.traj-mark {
+  flex: none;
+  width: 12px;
+  color: var(--faint);
+  font-family: var(--mono);
+}
+.traj-label { flex: none; color: var(--text); font-family: var(--mono); }
+.traj-detail {
+  flex: 1;
+  min-width: 0;
+  color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.traj-state {
+  flex: none;
+  font-size: var(--text-2xs);
+  color: var(--faint);
+}
+.traj-state.ok { color: var(--green); }
+.traj-state.failed, .traj-state.refused { color: var(--red); }
+.traj-step.bad .traj-label { color: var(--red); }
+/* The tool calls are what the column is scanned for, so they are the only
+   rows drawn at full strength. */
+.traj-tool .traj-mark { color: var(--accent); }
+
+/* ===== The turn rail =====
+   One tick per question, down the right edge of the transcript. Collapsed it
+   is a column of dashes; hovered it is the questions.
+
+   Not a proportional minimap: that makes a three-line question and a
+   two-screen answer different sizes, so the thing you are looking for is the
+   smallest mark on the rail. Every question gets the same tick. */
+.turn-rail {
+  position: absolute;
+  top: 50%;
+  right: var(--s-4);
+  transform: translateY(-50%);
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  max-height: 60%;
+  overflow-y: auto;
+  padding: var(--s-2);
+  border: 1px solid transparent;
+  border-radius: var(--r-lg);
+  scrollbar-width: none;
+  /* Out of the way until wanted. The ticks are legible at this opacity and
+     the labels are not shown at all, so nothing here competes with the text
+     it sits beside. */
+  transition: background var(--dur-2) var(--ease), border-color var(--dur-2) var(--ease);
+}
+.turn-rail::-webkit-scrollbar { display: none; }
+.turn-rail.hidden { display: none; }
+.turn-rail:hover {
+  background: var(--surface-pop);
+  border-color: var(--border-hi);
+  box-shadow: var(--shadow);
+}
+
+.turn-tick {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--s-3);
+  width: 100%;
+  padding: 3px 4px;
+  border: 0;
+  border-radius: var(--r-xs);
+  background: none;
+  color: var(--faint);
+  font: inherit;
+  font-size: var(--text-2xs);
+  text-align: right;
+  cursor: pointer;
+}
+.turn-rail:hover .turn-tick:hover { background: var(--card2); color: var(--text); }
+
+/* The label exists in the DOM at all times — it is what a screen reader reads
+   and what the tick means — and is laid out only while the rail is open. */
+.turn-tick-label {
+  display: none;
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.turn-rail:hover .turn-tick-label { display: block; }
+.turn-tick.on { color: var(--accent); }
+
+/* The dash. Short by default, longer for the turn you are reading — length
+   rather than colour alone, so the current position is findable at a glance
+   down a column of twenty. */
+.turn-tick-mark {
+  flex: none;
+  width: 14px;
+  height: 2px;
+  /* Fully rounded rather than a 1px corner: on a 2px bar those are the same
+     drawing, and the pill token is on the scale where 1px is not. */
+  border-radius: var(--r-pill);
+  background: var(--faint);
+  opacity: 0.55;
+  transition: width var(--dur-2) var(--ease), opacity var(--dur-2) var(--ease);
+}
+.turn-tick:hover .turn-tick-mark { opacity: 1; }
+.turn-tick.on .turn-tick-mark { width: 20px; background: var(--accent); opacity: 1; }
+
+/* The rail is a sibling of the transcript — inside it, it would scroll away
+   with the text it navigates — so the column holding both is what positions
+   it. Without this it anchors to the page and sits over the sidebar on a
+   narrow window. */
+#ws-center { position: relative; }
+
+/* ===== No native scrollbars, anywhere =====
+ *
+ * A scrollbar does two things: it says where you are, and it lets you drag.
+ * In this app the first is answered better by what is on screen — the turn
+ * rail marks questions rather than a proportion of pixels, the film strip
+ * shows slides, the tree shows files — and the second is a gesture almost
+ * nobody reaches for when a wheel, a trackpad and the keyboard all do it.
+ * What was left in every pane was a grey bar down the edge of the content.
+ *
+ * The drawing is hidden, not the behaviour. Every one of these still scrolls
+ * by wheel, trackpad, keyboard, and by the controls built for it — this is
+ * `scrollbar-width`, not `overflow: hidden`, and the difference is that the
+ * second one would break all four while looking identical in a screenshot.
+ *
+ * Applied at the root rather than pane by pane, because the panes are the
+ * whole app: chasing them individually is a rule per scroll container and a
+ * missed one every time a pane is added. Monaco, Excalidraw and reveal draw
+ * their own scrollbars as ordinary elements, so they are untouched by this
+ * and keep whatever they decided to show. */
+* { scrollbar-width: none; }
+*::-webkit-scrollbar { width: 0; height: 0; }
+
+/* ===== The Context chip =====
+   Sits with the model pill, because both answer "what is this turn made of".
+   Quieter than the model: the model is a choice you make every turn, and this
+   is a thing you check. */
+#context-picker { position: relative; flex: none; }
+#context-btn {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--card2);
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+  white-space: nowrap;
+}
+#context-btn:hover { color: var(--text); border-color: var(--border-hi); }
+#context-btn .ico { width: 14px; height: 14px; }
+#context-pop {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 3400;
+  width: 268px;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: var(--s-2);
+  background: var(--surface-pop);
+  border: 1px solid var(--border-hi);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow);
+}
+#context-pop.hidden { display: none; }
+.context-row {
+  display: flex; align-items: center; gap: var(--s-3);
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--r-xs);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-xs);
+  text-align: left;
+  cursor: pointer;
+}
+.context-row:hover:not([disabled]) { background: var(--card2); }
+/* Switched off: struck through as well as dimmed, because on a list of ten
+   rows a colour change alone reads as "less important" rather than "not
+   going". */
+.context-row.off .context-name { text-decoration: line-through; color: var(--faint); }
+/* On, but with nothing to contribute this turn. Shown rather than hidden — a
+   list that changes length as you type is a list you cannot learn. */
+.context-row.idle .context-name { color: var(--muted); }
+.context-row[disabled] { cursor: default; opacity: 0.75; }
+.context-check {
+  width: 12px; flex: none;
+  color: var(--accent);
+  font-size: var(--text-2xs);
+}
+.context-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.context-size {
+  flex: none;
+  font-size: var(--text-2xs);
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+.context-foot {
+  padding: var(--s-3) 8px 4px;
+  font-size: var(--text-2xs);
+  color: var(--faint);
+  border-top: 1px solid var(--border);
+  margin-top: var(--s-2);
+}
+/* When it is a meter it is `.ctx-meter` too, which brings its own flex row —
+   the padding and the rule above it are all this has to keep. */
+.context-foot.ctx-meter { display: flex; align-items: center; gap: var(--s-3); }
+.context-empty { padding: var(--s-3); font-size: var(--text-xs); color: var(--faint); }
+
+/* The prose format bar. Shares every `.fmt-*` control with the deck's bar
+   below — the same button doing the same job should not be two buttons — and
+   differs only in sitting flush under the document toolbar rather than over a
+   stage. It does not wrap: a formatting row that reflows to two lines moves
+   Bold somewhere new every time the window changes width, so it scrolls
+   sideways on a narrow window and the hand keeps its map. */
+.format-bar {
+  display: flex; align-items: center; gap: var(--s-3);
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  padding: var(--s-2) var(--s-5);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg2);
+  scrollbar-width: none;
+}
+.format-bar::-webkit-scrollbar { display: none; }
+.format-bar .fmt-group,
+.format-bar .fmt-select { flex: none; }
+.format-bar .fmt-btn { line-height: 1; }
+.format-bar code { font-size: var(--text-2xs); background: none; padding: 0; }
+/* Why there is no font picker, in one word, in the place you look for one. */
+.fmt-note {
+  flex: none;
+  font-size: var(--text-2xs);
+  color: var(--faint);
+  cursor: help;
+}
 
 /* The format bar. */
 .slides-format {
@@ -8998,32 +9612,56 @@ body.nav-collapsed .nav-job-pulse { left: 6px; }
 .slide-el-image { padding: 0; border: none; }
 
 .slides-shapes { position: relative; }
+/* The group heading, and the grid under it. Lowercase and quiet: it is a
+   divider, not a control. */
+.shape-group {
+  font-size: var(--text-2xs);
+  color: var(--faint);
+  padding: var(--s-3) 2px 4px;
+}
+.shape-group:first-child { padding-top: 0; }
+.shape-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: var(--s-2);
+}
+
 .slides-shape-pop {
   position: absolute;
   top: calc(100% + 6px);
   left: 0;
   z-index: 3400;
-  width: 260px;
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: var(--s-2);
+  /* Wide enough for seven swatches, and scrolling past two groups — a menu
+     that runs off the bottom of the window is a menu whose last group does
+     not exist. */
+  width: 272px;
+  max-height: 62vh;
+  overflow-y: auto;
+  display: block;
   padding: var(--s-3);
   background: var(--card2);
   border: 1px solid var(--border-hi);
   border-radius: var(--r-sm);
   box-shadow: 0 12px 32px rgba(0, 0, 0, .45);
 }
+/* Just the swatch now. At eleven shapes the name under each one was helpful;
+   at thirty-four it was most of the menu, and a drawn square does not need
+   the word "square" beneath it. The name is the tooltip and the aria-label,
+   so it is still there for the pointer and for a screen reader. */
 .shape-item {
-  display: flex; flex-direction: column; align-items: center; gap: var(--s-2);
-  padding: var(--s-3) var(--s-2);
-  background: none; border: none; border-radius: var(--r-sm);
+  display: flex; align-items: center; justify-content: center;
+  padding: var(--s-2);
+  background: none; border: none; border-radius: var(--r-xs);
   cursor: pointer;
-  font-family: var(--sans); font-size: var(--text-2xs); color: var(--muted);
+  color: var(--muted);
 }
 .shape-item:hover { background: var(--card3); color: var(--text); }
 /* Each shape drawn as itself — a grid of names would make you read ten words
    to find the triangle. */
-.shape-swatch { width: 26px; height: 26px; background: var(--muted); display: block; }
+.shape-swatch { width: 22px; height: 22px; background: var(--muted); display: block; }
+/* A pill is a pill because it is wider than it is tall. Square with a 999px
+   radius is a circle, which is the ellipse two swatches along. */
+.shape-swatch[data-shape="pill"] { height: 13px; margin: 4px 0; }
 .shape-item:hover .shape-swatch { background: var(--accent); }
 
 .fmt-picker {
