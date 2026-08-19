@@ -38,6 +38,7 @@ from carrot import (
     reminders as rem_mod,
     notes as notes_mod,
     doctext as doctext_mod,
+    trajectory as trajectory_mod,
     links as links_mod,
     leaderboard as lb_mod,
     bootstrap as bootstrap_mod,
@@ -5216,6 +5217,20 @@ async def context_toggle(req: ContextToggleRequest):
         off.add(req.source)
     config.set_config(CONTEXT_OFF_KEY, sorted(off))
     return {"source": req.source, "enabled": req.enabled, "off": sorted(off)}
+
+
+@app.get("/api/conversations/{conv_id}/trajectory")
+async def conversation_trajectory(conv_id: str):
+    """One run, as turns rather than as a transcript.
+
+    Assembled from what is already stored — every assistant row carries its
+    trace and its metrics — so this records nothing new and cannot disagree
+    with the transcript beside it.
+    """
+    conv = conv_mod.get_conversation(conv_id)
+    if conv is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return trajectory_mod.for_conversation(conv)
 
 
 @app.get("/api/notes/{note_id}/text")

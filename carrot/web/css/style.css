@@ -9128,6 +9128,98 @@ body.nav-collapsed .nav-job-pulse { left: 6px; }
   font-style: italic;
 }
 
+/* ===== Trajectory =====
+   The same run the transcript shows, as turns. Dense on purpose: the whole
+   point is fitting a session on one screen, which is what makes "which turn
+   took the minute" a glance rather than a scroll. */
+.agent-trajectory {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--s-4);
+  font-size: var(--text-xs);
+}
+.agent-trajectory.hidden { display: none; }
+.traj-empty { color: var(--faint); padding: var(--s-4) 0; }
+.traj-totals {
+  color: var(--muted);
+  padding-bottom: var(--s-3);
+  margin-bottom: var(--s-4);
+  border-bottom: 1px solid var(--border);
+}
+.traj-turn { margin-bottom: var(--s-5); }
+.traj-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-3);
+}
+.traj-index { flex: none; color: var(--muted); font-weight: var(--w-semi); }
+.traj-question {
+  flex: 1;
+  min-width: 0;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.traj-cost {
+  flex: none;
+  color: var(--faint);
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+}
+/* How long this turn took against the longest one in the run. Scaled to the
+   run rather than to a fixed maximum: in a fast session every bar against a
+   fixed scale is a stub, and the question the bars answer — which one was
+   slow — is a relative one. */
+.traj-bar {
+  display: block;
+  height: 2px;
+  margin: var(--s-2) 0 var(--s-3);
+  background: var(--card2);
+  border-radius: var(--r-pill);
+  overflow: hidden;
+}
+.traj-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: var(--r-pill);
+}
+.traj-steps { display: flex; flex-direction: column; gap: 1px; }
+.traj-step {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-3);
+  padding: 2px 0 2px var(--s-2);
+  color: var(--muted);
+}
+.traj-mark {
+  flex: none;
+  width: 12px;
+  color: var(--faint);
+  font-family: var(--mono);
+}
+.traj-label { flex: none; color: var(--text); font-family: var(--mono); }
+.traj-detail {
+  flex: 1;
+  min-width: 0;
+  color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.traj-state {
+  flex: none;
+  font-size: var(--text-2xs);
+  color: var(--faint);
+}
+.traj-state.ok { color: var(--green); }
+.traj-state.failed, .traj-state.refused { color: var(--red); }
+.traj-step.bad .traj-label { color: var(--red); }
+/* The tool calls are what the column is scanned for, so they are the only
+   rows drawn at full strength. */
+.traj-tool .traj-mark { color: var(--accent); }
+
 /* ===== The turn rail =====
    One tick per question, down the right edge of the transcript. Collapsed it
    is a column of dashes; hovered it is the questions.

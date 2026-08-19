@@ -1068,10 +1068,18 @@
                getting back to one are the same decision, taken at the same
                moment, and the tab had only half of it. -->
           <button class="icon-btn" title="Earlier sessions" onclick="toggleCodeHistory()"><svg class="ico"><use href="#i-clock"/></svg></button>
+          <!-- What the run did, as turns rather than as a transcript. The
+               three questions you have about a session you did not watch —
+               how many times did it read a file, which turn took the minute,
+               did it search before or after it edited — are all answered by
+               scrolling and holding it in your head, or by this. -->
+          <button class="icon-btn" id="trajectory-btn" title="Trajectory — what this run did"
+                  onclick="toggleTrajectory()"><svg class="ico"><use href="#i-pulse"/></svg></button>
           <button class="icon-btn" title="New task" onclick="newAgentTask()"><svg class="ico"><use href="#i-plus"/></svg></button>
           <button class="icon-btn" title="Hide the agent" onclick="toggleAgentSide()"><svg class="ico"><use href="#i-x"/></svg></button>
         </div>
         <div id="code-history" class="code-history hidden"></div>
+        <div id="agent-trajectory" class="agent-trajectory hidden"></div>
         <div id="agent-log" class="agent-log">
           <div class="agent-hello">
             <p>Tell me what to build, fix or explain. I can see the files in

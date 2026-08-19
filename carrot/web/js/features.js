@@ -2624,6 +2624,171 @@ function newAgentTask() {
     document.getElementById('agent-input')?.focus();
 }
 
+// ===== Trajectory =====
+//
+// The transcript says what happened. It does not say where the run went, and
+// the three questions anybody has about a session they did not watch — how
+// many times did it read a file, which turn took the minute, did it search
+// before or after it edited — are answered today by scrolling the whole thing
+// and holding it in your head.
+//
+// So the same stored events, laid out as turns. Assembled on the server from
+// the traces that were already there (carrot/trajectory.py), which is why this
+// cannot disagree with the transcript beside it: there is one record and two
+// readings of it.
+
+let trajectoryOpen = false;
+
+// The mark in the left gutter. Glyphs rather than colour alone, because the
+// column is scanned down rather than read across — you are looking for the
+// tool calls among the thinking, and a row of identically-shaped lines in
+// different colours does not give you that at a glance.
+const TRAJECTORY_MARKS = {
+    route: '◈',
+    thinking: '◐',
+    plan: '☰',
+    tool: '→',
+    answer: '▸',
+    error: '!',
+    stopped: '■',
+};
+
+async function toggleTrajectory() {
+    const panel = document.getElementById('agent-trajectory');
+    const log = document.getElementById('agent-log');
+    if (!panel || !log) return;
+    trajectoryOpen = !trajectoryOpen;
+    panel.classList.toggle('hidden', !trajectoryOpen);
+    // It replaces the log rather than sitting above it: they are two readings
+    // of one run, and showing both at once means neither has the width.
+    log.classList.toggle('hidden', trajectoryOpen);
+    document.getElementById('trajectory-btn')?.classList.toggle('on', trajectoryOpen);
+    if (trajectoryOpen) await loadTrajectory();
+}
+
+async function loadTrajectory() {
+    const panel = document.getElementById('agent-trajectory');
+    if (!panel) return;
+    if (!agentConversationId) {
+        panel.innerHTML = '<div class="traj-empty">Nothing to plot yet — '
+            + 'ask for something and this fills in as it runs.</div>';
+        return;
+    }
+    panel.innerHTML = '<div class="traj-empty">Reading the run…</div>';
+    let data;
+    try {
+        data = await api(`/api/conversations/${encodeURIComponent(agentConversationId)}/trajectory`);
+    } catch (e) {
+        panel.innerHTML = `<div class="traj-empty">Could not read it: ${escHtml(e.message)}</div>`;
+        return;
+    }
+    renderTrajectory(data);
+}
+
+function renderTrajectory(data) {
+    const panel = document.getElementById('agent-trajectory');
+    if (!panel) return;
+    const turns = data.turns || [];
+    if (!turns.length) {
+        panel.innerHTML = '<div class="traj-empty">This session has no turns yet.</div>';
+        return;
+    }
+    const totals = data.totals || {};
+    // The longest turn sets the bar scale. Against a fixed maximum every bar
+    // in a fast session is a stub, and the question the bars answer is which
+    // turn was the slow one — a relative question.
+    const longest = Math.max(...turns.map(t => t.seconds || 0), 0);
+
+    panel.innerHTML = `
+        <div class="traj-totals">
+          ${trajCount(totals.turns, 'turn')} · ${trajCount(totals.tools, 'tool call')}
+          ${totals.seconds ? ' · ' + trajDuration(totals.seconds) : ''}
+          ${totals.tokens ? ' · ' + trajTokens(totals.tokens) : ''}
+        </div>
+        ${turns.map(turn => trajTurn(turn, longest)).join('')}`;
+}
+
+function trajTurn(turn, longest) {
+    const bar = longest && turn.seconds
+        ? `<span class="traj-bar"><span style="width:${Math.max(2, Math.round(turn.seconds / longest * 100))}%"></span></span>`
+        : '';
+    const cost = [
+        turn.seconds ? trajDuration(turn.seconds) : '',
+        turn.tokens ? trajTokens(turn.tokens) : '',
+        turn.model || '',
+    ].filter(Boolean).join(' · ');
+    return `
+      <div class="traj-turn">
+        <div class="traj-head">
+          <span class="traj-index">Turn ${turn.index}</span>
+          <span class="traj-question">${escHtml(turn.question || '(started on its own)')}</span>
+          <span class="traj-cost">${escHtml(cost)}</span>
+        </div>
+        ${bar}
+        <div class="traj-steps">${(turn.steps || []).map(trajStep).join('')}</div>
+      </div>`;
+}
+
+function trajStep(step) {
+    const mark = TRAJECTORY_MARKS[step.kind] || '·';
+    let label = '';
+    let detail = '';
+    let state = '';
+    if (step.kind === 'tool') {
+        label = step.name;
+        detail = step.args;
+        state = step.rejected ? 'refused' : step.ok === false ? 'failed' : step.ok ? 'ok' : '';
+    } else if (step.kind === 'route') {
+        label = step.label;
+        detail = step.local ? 'on this machine' : 'cloud';
+    } else if (step.kind === 'thinking') {
+        label = 'thought';
+        detail = trajChars(step.chars);
+    } else if (step.kind === 'plan') {
+        label = 'plan';
+        detail = `${step.done}/${step.goals}`;
+    } else if (step.kind === 'answer') {
+        label = 'answered';
+        detail = trajChars(step.chars);
+    } else if (step.kind === 'error') {
+        label = 'failed';
+        detail = step.detail;
+        state = 'failed';
+    } else if (step.kind === 'stopped') {
+        label = 'stopped';
+        detail = 'the turn did not finish';
+    }
+    return `
+      <div class="traj-step traj-${escHtml(step.kind)}${state === 'failed' ? ' bad' : ''}">
+        <span class="traj-mark" aria-hidden="true">${mark}</span>
+        <span class="traj-label">${escHtml(label)}</span>
+        <span class="traj-detail">${escHtml(detail || '')}</span>
+        ${state ? `<span class="traj-state ${escHtml(state)}">${escHtml(state)}</span>` : ''}
+      </div>`;
+}
+
+function trajCount(n, noun) {
+    const value = n || 0;
+    return `${value} ${noun}${value === 1 ? '' : 's'}`;
+}
+
+// Seconds under a minute, m:ss over it. "184s" is a number you have to convert
+// before it means anything.
+function trajDuration(seconds) {
+    if (seconds < 60) return `${Math.round(seconds)}s`;
+    const minutes = Math.floor(seconds / 60);
+    const rest = Math.round(seconds % 60);
+    return `${minutes}m ${String(rest).padStart(2, '0')}s`;
+}
+
+function trajTokens(tokens) {
+    return tokens >= 1000 ? `${(tokens / 1000).toFixed(1).replace(/\.0$/, '')}k tok` : `${tokens} tok`;
+}
+
+function trajChars(chars) {
+    return chars >= 1000 ? `${Math.round(chars / 1000)}k chars` : `${chars} chars`;
+}
+
 // ===== Code sessions you have had before =====
 //
 // The Code tab could start a session and never get back to one. Every other
