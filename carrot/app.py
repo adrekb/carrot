@@ -378,6 +378,23 @@ class AgentRunRequest(BaseModel):
     require_plan_approval: Optional[bool] = None
 
 
+class ScheduledTaskRequest(BaseModel):
+    prompt: str
+    schedule: Optional[str] = None
+    at: Optional[str] = None
+    weekday: Optional[str] = None
+
+
+class ScheduledTaskUpdate(BaseModel):
+    """Every field optional, because a PATCH here is usually one of them —
+    pausing a task should not also rewrite what it does."""
+    prompt: Optional[str] = None
+    schedule: Optional[str] = None
+    at: Optional[str] = None
+    weekday: Optional[str] = None
+    enabled: Optional[bool] = None
+
+
 class DomainRequest(BaseModel):
     domain: str
 
@@ -6234,6 +6251,52 @@ async def start_agent_run(req: AgentRunRequest):
         budget_overrides=overrides,
         require_plan_approval=req.require_plan_approval,
     ))
+
+
+# ===== Agent work that runs on a schedule =====
+#
+# `scheduled.py` had the whole engine — create, list, update, delete, is_due —
+# and `start_scheduler()` has been running at boot this whole time with no way
+# for anybody to put a task into it. These are that way.
+#
+# They live beside the agent routes rather than under settings because a
+# scheduled task *is* an agent run, one nobody is sitting in front of. The only
+# difference is when it starts.
+
+@app.get("/api/scheduled")
+def list_scheduled_tasks():
+    return {"tasks": scheduled_mod.list_tasks(),
+            "schedules": list(scheduled_mod.SCHEDULES),
+            "weekdays": list(scheduled_mod.WEEKDAYS)}
+
+
+@app.post("/api/scheduled")
+def create_scheduled_task(req: ScheduledTaskRequest):
+    try:
+        return scheduled_mod.create(req.prompt, schedule=req.schedule or scheduled_mod.EVERY_DAY,
+                                    at=req.at or "09:00", weekday=req.weekday or "monday")
+    except ValueError as exc:
+        # "a scheduled task needs something to do" — the engine's own words,
+        # which say more than a bare 422 would.
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.patch("/api/scheduled/{task_id}")
+def update_scheduled_task(task_id: str, req: ScheduledTaskUpdate):
+    # Only what was actually sent: a PATCH that carried every field would turn
+    # "pause this" into "and also reset its time to nine o'clock".
+    fields = {k: v for k, v in req.model_dump().items() if v is not None}
+    task = scheduled_mod.update(task_id, **fields)
+    if not task:
+        raise HTTPException(status_code=404, detail="No such scheduled task")
+    return task
+
+
+@app.delete("/api/scheduled/{task_id}")
+def delete_scheduled_task(task_id: str):
+    if not scheduled_mod.delete(task_id):
+        raise HTTPException(status_code=404, detail="No such scheduled task")
+    return {"deleted": True}
 
 
 @app.post("/api/agent/runs/{run_id}/stop")

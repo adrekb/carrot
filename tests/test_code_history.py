@@ -198,14 +198,24 @@ class TestTheCodeTabHasAHistory:
 
 
 class TestTheRailNamesItsSections:
-    """Small caps tracked out at 0.08em is a dashboard's voice. The rail is a
-    sidebar, and the thing it is actually like sets its headings in the same
-    case as the rows under them and tells them apart by weight."""
+    """Small caps tracked out at 0.08em is a dashboard's voice, and the rail is
+    a sidebar — so the headings are still set in the same face and weight as
+    the rows under them rather than shouted.
 
-    @pytest.mark.parametrize("label", [">recent</summary>", "'in progress'",
-                                       "'needs a look'"])
-    def test_the_headings_are_lowercase(self, label):
+    They are sentence case rather than all-lowercase. All-lowercase read as a
+    style being applied to them; these are the names of the two things the rail
+    is for, and a name takes a capital."""
+
+    @pytest.mark.parametrize("label", [">Recent</summary>", "'In progress'",
+                                       "'Needs a look'"])
+    def test_the_headings_are_sentence_case(self, label):
         assert label in read("js", "activity.js")
+
+    @pytest.mark.parametrize("label", [">recent</summary>", "'in progress'"])
+    def test_the_old_lowercase_headings_are_gone(self, label):
+        """Both spellings present would mean one of them is drawn somewhere
+        this did not look."""
+        assert label not in read("js", "activity.js")
 
     def test_the_style_matches(self):
         css = read("css", "style.css")
@@ -385,7 +395,7 @@ class TestTheRailIsAGlanceNotAList:
         assert ".nav-idle" in read("css", "style.css")
 
     def test_it_is_called_in_progress(self):
-        assert "'in progress'" in read("js", "activity.js")
+        assert "'In progress'" in read("js", "activity.js")
 
 
 class TestTheHistoryMenuHoldsBoth:

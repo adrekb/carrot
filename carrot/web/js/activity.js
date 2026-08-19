@@ -122,17 +122,34 @@ function renderActivity() {
     // unanswerable without opening a tab.
     const box = document.createElement('div');
     box.className = 'nav-running';
-    box.innerHTML = `<div class="nav-sec-head">${
-        running.length && !running.some(j => j.status === 'running')
-            ? 'needs a look' : 'in progress'}</div>`;
+    // Two counts, two questions. The accent one is work somebody is waiting
+    // on — chats, research, agent runs. The plain one is work that runs
+    // without anybody, which you check rather than watch, and clicking it
+    // opens what is on the schedule and when each last ran.
+    const scheduled = (typeof scheduledTasks !== 'undefined' ? scheduledTasks : []);
+    const activeScheduled = scheduled.filter(t => t.enabled).length;
+    box.innerHTML = `<div class="nav-sec-head">`
+        + `<span>${running.length && !running.some(j => j.status === 'running')
+            ? 'Needs a look' : 'In progress'}</span>`
+        + `<span class="nav-counts">`
+        +   `<button class="nav-count nav-count-live" data-zero="${running.length ? 0 : 1}"`
+        +     ` title="Running now — you are waiting on these">${running.length}</button>`
+        +   `<button class="nav-count nav-count-sched" data-zero="${activeScheduled ? 0 : 1}"`
+        +     ` onclick="toggleRailScheduled()"`
+        +     ` title="On a schedule — these run without you">${activeScheduled}</button>`
+        + `</span></div>`;
     if (running.length) {
         for (const job of running) box.appendChild(activityJobRow(job));
-    } else {
-        const idle = document.createElement('div');
-        idle.className = 'nav-idle';
-        idle.textContent = 'Nothing for now';
-        box.appendChild(idle);
     }
+    // A line that says what is actually true, in place of the one that used to
+    // say "nothing for now" while four tasks sat on the schedule. Nothing is
+    // running *and* nothing is scheduled is the only case where there is
+    // genuinely nothing, and only then does it say so.
+    const summary = document.createElement('div');
+    summary.className = 'nav-idle';
+    summary.textContent = activitySummaryLine(running, activeScheduled);
+    if (summary.textContent) box.appendChild(summary);
+    if (railScheduledOpen) box.appendChild(railScheduledList());
     host.appendChild(box);
 
     if (recent.length) {
@@ -140,7 +157,7 @@ function renderActivity() {
         details.className = 'nav-recents';
         details.open = activityRecentsOpen;
         details.addEventListener('toggle', () => { activityRecentsOpen = details.open; });
-        details.innerHTML = '<summary class="nav-sec-head">recent</summary>';
+        details.innerHTML = '<summary class="nav-sec-head">Recent</summary>';
         for (const item of recent.slice(0, RAIL_RECENTS)) {
             details.appendChild(activityRecentRow(item));
         }
@@ -265,3 +282,31 @@ window.addEventListener('DOMContentLoaded', () => {
         if (!document.hidden) loadActivity();
     });
 });
+
+
+// The rail's one-line answer to "what is going on". Running work is broken
+// down by kind, because "3 running" does not tell you whether to wait — three
+// chats and three research runs are different amounts of patience. Scheduled
+// work is counted rather than broken down: it is all the same kind of thing,
+// and the number is the whole answer.
+const ACTIVITY_KIND_NAMES = {
+    research: 'research', chat: 'chat', agent: 'agent',
+    code: 'code', deep_research: 'research',
+};
+
+function activitySummaryLine(running, activeScheduled) {
+    const parts = [];
+    if (running.length) {
+        const counts = {};
+        for (const job of running) {
+            const name = ACTIVITY_KIND_NAMES[job.kind] || job.kind || 'other';
+            counts[name] = (counts[name] || 0) + 1;
+        }
+        // Most of a thing first, so the biggest number is the one you read.
+        const kinds = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+        parts.push(kinds.map(([name, n]) => n + ' ' + name).join(', '));
+    }
+    if (activeScheduled) parts.push(activeScheduled + ' scheduled');
+    if (!parts.length) return 'Nothing for now';
+    return parts.join(' · ');
+}

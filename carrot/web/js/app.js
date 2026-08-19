@@ -147,6 +147,10 @@ const CHAT_MODES = {
 };
 
 function setChatMode(mode) {
+    // "When does this run" is a question only Agent mode has. Asked here so
+    // the strip appears and disappears with the mode it belongs to rather than
+    // being a control left over from a mode you have left.
+    if (typeof syncAgentWhenVisibility === 'function') syncAgentWhenVisibility(mode);
     for (const [name, spec] of Object.entries(CHAT_MODES)) {
         const active = name === mode;
         for (const id of spec.owns) {
