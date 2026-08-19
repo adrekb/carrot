@@ -127,10 +127,70 @@ function mdToHtml(md) {
         }
     });
     markCitations(tpl.content);
+    markRenderableBlocks(tpl.content);
     // After sanitising, so KaTeX's own markup is not stripped by the attribute
     // pass — and after citations, which only look at links.
     if (window.katex) restoreMath(tpl.content, math);
     return tpl.innerHTML;
+}
+
+// Fenced blocks that are a picture rather than a listing.
+//
+// A model asked for a diagram answers with ```mermaid, and a model asked for
+// an equation often answers with ```math — and both arrived as grey monospace,
+// which is the source code of the thing that was asked for rather than the
+// thing. They are marked here and drawn by `hydrateBlocks` once the HTML is in
+// the document, because both renderers need real elements to work on and this
+// function returns a string.
+//
+// A ```latex fence is left alone when it looks like a document — a
+// \documentclass preamble is a file somebody wants to read and copy, not an
+// expression to typeset, and KaTeX cannot render one anyway.
+function markRenderableBlocks(root) {
+    for (const code of root.querySelectorAll('pre > code')) {
+        const cls = code.className || '';
+        const lang = (cls.match(/language-([a-z]+)/) || [])[1];
+        if (!lang) continue;
+        const source = code.textContent || '';
+        if (lang === 'mermaid') {
+            code.parentElement.setAttribute('data-render', 'mermaid');
+        } else if (lang === 'math' || (lang === 'latex' && !isLatexDocument(source))) {
+            code.parentElement.setAttribute('data-render', 'math');
+        }
+    }
+}
+
+function isLatexDocument(source) {
+    return /\\documentclass|\\begin\{document\}|\\usepackage/.test(source || '');
+}
+
+// Called after a message's HTML is in the page. Both renderers need elements
+// that exist; `mdToHtml` only produces a string.
+function hydrateBlocks(root) {
+    if (!root) return;
+    for (const pre of root.querySelectorAll('pre[data-render]')) {
+        const kind = pre.getAttribute('data-render');
+        const source = pre.textContent || '';
+        pre.removeAttribute('data-render');
+        if (kind === 'mermaid') {
+            const host = document.createElement('div');
+            host.className = 'md-mermaid';
+            pre.replaceWith(host);
+            renderMermaid(source, host);
+        } else if (kind === 'math' && window.katex) {
+            const host = document.createElement('div');
+            host.className = 'md-math';
+            try {
+                window.katex.render(source.trim(), host, {
+                    displayMode: true, throwOnError: false, trust: false, strict: false,
+                });
+                pre.replaceWith(host);
+            } catch (_) {
+                // Left as the code block it already was. An expression KaTeX
+                // cannot parse is still readable as source.
+            }
+        }
+    }
 }
 
 // Inline citations as chips.
@@ -340,6 +400,7 @@ async function openNote(noteId) {
     if (note.format === 'latex' && typeof openLatexDoc === 'function') {
         hideWriteStart();
         openLatexDoc(note);
+        if (typeof noteOpened === 'function') noteOpened(note);
         return;
     }
     if (note.format === 'canvas' && typeof openCanvasDoc === 'function') {
@@ -347,6 +408,7 @@ async function openNote(noteId) {
         currentNoteId = noteId;
         renderNotesList();
         await openCanvasDoc(note);
+        if (typeof noteOpened === 'function') noteOpened(note);
         return;
     }
     if (note.format === 'slides' && typeof openSlidesDoc === 'function') {
@@ -354,6 +416,7 @@ async function openNote(noteId) {
         currentNoteId = noteId;
         renderNotesList();
         await openSlidesDoc(note);
+        if (typeof noteOpened === 'function') noteOpened(note);
         return;
     }
     hideWriteStart();
@@ -377,6 +440,7 @@ async function openNote(noteId) {
     if (typeof resetDocDestination === 'function') resetDocDestination();
     if (typeof refreshDocReferences === 'function') refreshDocReferences();
     if (typeof refreshBacklinks === 'function') refreshBacklinks(noteId);
+    if (typeof noteOpened === 'function') noteOpened(note);
     applyNoteReadonly(note);
 }
 
@@ -437,6 +501,11 @@ async function mountEditor(markdown) {
     host.classList.remove('hidden');
     try {
         crepeInstance = new Crepe({ root: host, defaultValue: markdown });
+        // Before `create()`, because a Milkdown plugin is registered on the
+        // editor rather than added to a running one. This is what draws the
+        // chip on a group: see js/docgroups.js for why it has to be a
+        // decoration and cannot be a pass over the editor's DOM.
+        if (typeof installGroupPlugin === 'function') installGroupPlugin(crepeInstance);
         try {
             crepeInstance.on((listener) => {
                 listener.markdownUpdated(() => scheduleNoteSave());
@@ -734,6 +803,15 @@ function noteAutosaveTick() {
     if (body !== lastSavedBody) scheduleNoteSave();
 }
 
+// Save now, and wait for it. Switching documents cancels the pending timer,
+// so without this the last 800ms of typing goes with it — which is precisely
+// the moment somebody clicks another tab.
+async function flushPendingNoteSave() {
+    clearTimeout(noteSaveTimer);
+    if (!currentNoteId || currentNoteReadonly) return;
+    try { await saveNoteNow(); } catch (_) {}
+}
+
 async function saveNoteNow() {
     if (!currentNoteId || currentNoteReadonly) return;
     // Same reasoning as the autosave tick: this writes the prose editor's
@@ -770,6 +848,7 @@ async function deleteCurrentNote() {
     if (!currentNoteId) return;
     if (!confirm('Delete this note?')) return;
     await api(`/api/notes/${currentNoteId}`, { method: 'DELETE' });
+    if (typeof forgetDoc === 'function') forgetDoc(currentNoteId);
     currentNoteId = null;
     if (crepeInstance) { try { crepeInstance.destroy(); } catch (_) {} crepeInstance = null; crepeReady = false; }
     document.getElementById('note-editor-host').innerHTML = '';
@@ -1773,15 +1852,19 @@ async function renderArtifact(id, host) {
     card.className = 'artifact';
     card.dataset.artifactId = id;
 
+    // The header carries a title and the three things you can do with the
+    // thing under it.
+    //
+    // It used to stamp the kind — "VIDEO" next to a video — which is a label
+    // naming what the reader is already looking at, and it made the figure
+    // read as a file attachment rather than as part of the answer. What it did
+    // *not* have was any way to keep what it was showing: Carrot would render
+    // a chart or a whole animation and the only thing you could do with it was
+    // look at it.
     const head = document.createElement('figcaption');
     head.className = 'artifact-head';
-    head.innerHTML = `<span class="artifact-title">${escHtml(artifact.title || artifact.kind)}</span>`
-                   + `<span class="artifact-kind">${escHtml(artifact.kind)}</span>`;
-    const expand = document.createElement('button');
-    expand.className = 'artifact-btn';
-    expand.textContent = 'Open';
-    expand.onclick = () => openArtifactFull(artifact);
-    head.appendChild(expand);
+    head.innerHTML = `<span class="artifact-title">${escHtml(artifact.title || artifact.kind)}</span>`;
+    head.appendChild(artifactActions(artifact));
     card.appendChild(head);
 
     if (artifact.kind === 'markdown') {
@@ -1801,10 +1884,10 @@ async function renderArtifact(id, host) {
         body.innerHTML = renderChart(artifact.content);
         card.appendChild(body);
     } else if (artifact.kind === 'mermaid') {
-        const body = document.createElement('pre');
+        const body = document.createElement('div');
         body.className = 'artifact-body artifact-mermaid';
-        body.textContent = artifact.content;
         card.appendChild(body);
+        renderMermaid(artifact.content, body);
     } else {
         card.appendChild(artifactFrame(artifact));
     }
@@ -1985,6 +2068,190 @@ function renderChart(source) {
 // somewhere below it, so the thing the reader asked for arrived last. This
 // inverts it: the figure is what you see, the source is one click away and
 // stays with the figure when the conversation is reopened.
+// ===== Diagrams =====
+//
+// A mermaid artifact was stored, listed, downloadable, editable — and drawn as
+// a <pre> full of `graph TD; A-->B`. The one kind whose entire purpose is to be
+// a picture was the only one shown as its source.
+//
+// Loaded on demand rather than in the page. The bundle is 3.3MB, most
+// conversations contain no diagram at all, and paying that on every launch to
+// be ready for the ones that do is the wrong trade — especially now that the
+// app is served to phones over a tailnet.
+let mermaidLoading = null;
+
+function ensureMermaid() {
+    if (window.mermaid) return Promise.resolve(window.mermaid);
+    if (mermaidLoading) return mermaidLoading;
+    mermaidLoading = new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = '/vendor/mermaid.js';
+        script.onload = () => resolve(window.mermaid);
+        script.onerror = () => reject(new Error('the diagram renderer could not be loaded'));
+        document.head.appendChild(script);
+    });
+    return mermaidLoading;
+}
+
+// Mermaid bakes the theme into the SVG it returns, so it has to be told which
+// one at render time rather than styled afterwards.
+function mermaidTheme() {
+    const scheme = getComputedStyle(document.documentElement)
+        .getPropertyValue('--scheme').trim();
+    return scheme === 'light' ? 'default' : 'dark';
+}
+
+let mermaidSeq = 0;
+
+async function renderMermaid(source, host) {
+    const text = String(source || '').trim();
+    if (!text) return;
+    try {
+        const mermaid = await ensureMermaid();
+        mermaid.initialize({
+            startOnLoad: false, theme: mermaidTheme(),
+            securityLevel: 'strict', fontFamily: 'inherit',
+        });
+        // `render` parses first and throws on a bad diagram, so a broken one
+        // never reaches the DOM half-drawn.
+        const { svg } = await mermaid.render('carrot-mermaid-' + (++mermaidSeq), text);
+        host.innerHTML = svg;
+    } catch (e) {
+        // The source, plus what was wrong with it. A diagram that fails to
+        // parse is usually one line away from working, and showing nothing
+        // hides both the mistake and the content.
+        host.innerHTML = '';
+        const note = document.createElement('div');
+        note.className = 'mermaid-error';
+        note.textContent = (e && e.message ? String(e.message) : 'That diagram could not be drawn.')
+            .split('\n')[0].slice(0, 200);
+        const pre = document.createElement('pre');
+        pre.className = 'artifact-mermaid-source';
+        pre.textContent = text;
+        host.appendChild(note);
+        host.appendChild(pre);
+    }
+}
+
+// ===== Keeping what an artifact showed you =====
+//
+// Which of the two makes sense depends on what the artifact *is*, and offering
+// both regardless is how you get a Copy button that puts four megabytes of
+// base64 video on somebody's clipboard.
+const ARTIFACT_BINARY = new Set(['image', 'video']);
+
+const ARTIFACT_EXTENSION = {
+    markdown: 'md', mermaid: 'mmd', chart: 'json',
+    html: 'html', svg: 'svg', code: 'txt',
+};
+
+function artifactFilename(artifact) {
+    const base = (artifact.title || artifact.kind || 'artifact')
+        .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48)
+        || 'artifact';
+    if (ARTIFACT_BINARY.has(artifact.kind)) {
+        // The extension is in the data URL's mime type, which is the only
+        // place that knows whether this is a png or an mp4.
+        const mime = (String(artifact.content || '').match(/^data:([^;,]+)/) || [])[1] || '';
+        const ext = (mime.split('/')[1] || 'bin').replace(/[^a-z0-9]/g, '') || 'bin';
+        return `${base}.${ext}`;
+    }
+    return `${base}.${ARTIFACT_EXTENSION[artifact.kind] || 'txt'}`;
+}
+
+// Which artifacts are text somebody could correct rather than output to look
+// at. Mirrors `EDITABLE_KINDS` in artifacts.py, and the server is the one that
+// enforces it — this only decides whether to draw the pencil.
+const ARTIFACT_EDITABLE = new Set(['html', 'svg', 'markdown', 'mermaid', 'code', 'chart']);
+
+// Icons, not words.
+//
+// Three words in a row above every figure is a toolbar, and a toolbar on a
+// figure inside a sentence is louder than the figure. The icons are the ones
+// the rest of the app already uses for these actions, each with a title and an
+// aria-label — an unlabelled icon button is a guess, which is the failure this
+// is otherwise fixing.
+function iconButton(icon, label, onClick) {
+    const button = document.createElement('button');
+    button.className = 'artifact-btn artifact-icon-btn';
+    button.title = label;
+    button.setAttribute('aria-label', label);
+    button.innerHTML = `<svg class="ico"><use href="#${icon}"/></svg>`;
+    button.onclick = onClick;
+    return button;
+}
+
+function artifactActions(artifact) {
+    const row = document.createElement('span');
+    row.className = 'artifact-actions';
+
+    if (!ARTIFACT_BINARY.has(artifact.kind)) {
+        const copy = iconButton('i-clipboard', 'Copy', async () => {
+            const ok = await copyToClipboard(artifact.content || '');
+            copy.title = ok ? 'Copied' : 'Could not copy';
+            copy.classList.toggle('is-done', ok);
+            setTimeout(() => { copy.title = 'Copy'; copy.classList.remove('is-done'); }, 1400);
+        });
+        row.appendChild(copy);
+    }
+    if (ARTIFACT_EDITABLE.has(artifact.kind)) {
+        row.appendChild(iconButton('i-edit', 'Edit the source',
+                                   () => openArtifactFull(artifact, { editing: true })));
+    }
+    row.appendChild(iconButton('i-download', 'Download',
+                               () => downloadArtifact(artifact)));
+    row.appendChild(iconButton('i-eye', 'Open', () => openArtifactFull(artifact)));
+    return row;
+}
+
+// The clipboard API needs a secure context, and Carrot over a tailnet is plain
+// HTTP — so on the exact devices this app was just taught to reach, the modern
+// call is undefined. The old selection trick still works there, and a Copy
+// button that silently does nothing on a phone is worse than no button.
+async function copyToClipboard(text) {
+    try {
+        if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(text);
+            return true;
+        }
+    } catch (_) { /* fall through to the old way */ }
+    try {
+        const pad = document.createElement('textarea');
+        pad.value = text;
+        pad.setAttribute('readonly', '');
+        pad.style.cssText = 'position:fixed;top:-1000px;opacity:0';
+        document.body.appendChild(pad);
+        pad.select();
+        const ok = document.execCommand('copy');
+        pad.remove();
+        return ok;
+    } catch (_) {
+        return false;
+    }
+}
+
+function downloadArtifact(artifact) {
+    const link = document.createElement('a');
+    // An image or a video is already a data URL and can be handed over as it
+    // is. Everything else is text, and goes out as a Blob so that a large
+    // document does not have to be re-encoded into a URL to be saved.
+    if (ARTIFACT_BINARY.has(artifact.kind)) {
+        link.href = artifact.content;
+    } else {
+        link.href = URL.createObjectURL(
+            new Blob([artifact.content || ''], { type: 'text/plain;charset=utf-8' }));
+    }
+    link.download = artifactFilename(artifact);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    if (!ARTIFACT_BINARY.has(artifact.kind)) {
+        // Revoked on the next tick rather than immediately: Chrome has not
+        // necessarily started reading the blob when click() returns.
+        setTimeout(() => URL.revokeObjectURL(link.href), 10_000);
+    }
+}
+
 function artifactCode(artifact) {
     const code = ((artifact.meta || {}).code || '').trim();
     if (!code) return null;
@@ -2018,6 +2285,87 @@ function artifactCode(artifact) {
     return wrap;
 }
 
+// How tall an artifact is allowed to make itself. Not a guess about content —
+// a bound on what a model-authored page may do to the page it is embedded in.
+const ARTIFACT_MIN_H = 120;
+const ARTIFACT_MAX_H = 720;
+
+// Two things injected into every artifact document, and neither is styling in
+// the decorative sense.
+//
+// The reset is why these looked bolted on: a document with a default `body`
+// margin sits inset from its own frame, and an image or video wider than the
+// frame gets a horizontal scrollbar *inside* the card — which is exactly what
+// the video artifact was showing, a picture letterboxed into a box with a
+// scrollbar under it. Nothing here can be authored around, because it is
+// appended after whatever the artifact brought.
+//
+// The measurer is what replaces the fixed heights. Those were three guesses
+// (320 for images, 460 for video, 380 for the rest) and every one of them is
+// wrong for something — a two-line chart got 380px of blank, a tall diagram
+// got a scrollbar. The frame is cross-origin by design, so it cannot be
+// measured from here; it has to say. `postMessage` works across an opaque
+// origin, and the sandbox stops it doing anything else.
+const ARTIFACT_SHIM = `
+<style>
+  /* Deliberately narrow. The wrapper in artifacts.py already sets the margin,
+     the padding and a light or dark ground chosen for the artifact — an
+     earlier version of this reset all three "to be safe" and turned every
+     dark artifact white, which is what happens when a fix-up sheet decides it
+     knows better than the thing it is fixing up.
+     What is left is only what stops content escaping the frame sideways. */
+  body { overflow-x: hidden; overflow-y: hidden; }
+  img, video, canvas, svg, iframe, table { max-width: 100%; }
+  img, video, canvas { height: auto; }
+  pre { overflow-x: auto; }
+</style>
+<script>
+(function () {
+  var last = 0;
+  function measure() {
+    // The body, not the documentElement. Its scrollHeight is
+    // floored by the viewport — which here is the iframe — so a two-line
+    // artifact in a 220px frame measures 220 and can never shrink itself.
+    var body = document.body;
+    if (!body) return 0;
+    var box = body.getBoundingClientRect().height;
+    return Math.ceil(Math.max(box, body.scrollHeight || 0));
+  }
+  function tell(force) {
+    var h = measure();
+    // The scheduled calls force a send. The first message can be posted
+    // before the parent has put this frame in the page, and a dedupe that
+    // suppressed the repeats left the frame stuck at its starting height —
+    // which is exactly how this looked correct in a re-render and wrong on
+    // the first paint.
+    if (h && (force === true || Math.abs(h - last) > 2)) {
+      last = h;
+      parent.postMessage({ carrotArtifactHeight: h }, '*');
+    }
+  }
+  addEventListener('load', function () { tell(true); });
+  addEventListener('resize', function () { tell(false); });
+  if (window.ResizeObserver && document.body) {
+    new ResizeObserver(function () { tell(false); }).observe(document.body);
+  }
+  // Kept trying until it gets a real number, rather than sampled at three
+  // hopeful moments.
+  //
+  // An artifact is very often built inside a view that is still hidden — a
+  // conversation renders and only then becomes the active tab — and a hidden
+  // element measures zero. Every fixed attempt landed in that window, the
+  // frame kept its placeholder height, and the layout only settled when
+  // something else happened to poke it. Polling stops as soon as it has
+  // something to report, so this costs nothing in the normal case.
+  var tries = 0;
+  var poll = setInterval(function () {
+    tries += 1;
+    if (measure() > 0) { tell(true); clearInterval(poll); }
+    else if (tries > 40) { clearInterval(poll); }
+  }, 120);
+})();
+</script>`;
+
 function artifactFrame(artifact) {
     const frame = document.createElement('iframe');
     frame.className = 'artifact-frame';
@@ -2025,18 +2373,104 @@ function artifactFrame(artifact) {
     // undo the sandbox entirely — the frame could reach into this document.
     frame.setAttribute('sandbox', 'allow-scripts');
     frame.setAttribute('referrerpolicy', 'no-referrer');
-    frame.loading = 'lazy';
-    frame.srcdoc = artifact.document;
-    // Images and charts vary wildly in height; grow to fit rather than
-    // scrolling a 200px window. Cross-origin means asking, not measuring.
-    // Video gets more room than a chart: it is 16:9 and it has a control bar
-    // under it, so at 380px the picture is letterboxed into about 300.
-    frame.style.height = artifact.kind === 'image' ? '320px'
-        : (artifact.kind === 'video' ? '460px' : '380px');
+    // Not lazy any more. A lazy frame does not parse until it is scrolled to,
+    // and a frame that has not parsed has not measured itself — so an artifact
+    // sat at its placeholder height through the first paint and then jumped
+    // when you scrolled past it. Laziness was saving parsing rather than
+    // bandwidth here (these are srcdoc, already in the page), which is a poor
+    // trade against the layout settling before it is looked at.
+    frame.srcdoc = String(artifact.document || '') + ARTIFACT_SHIM;
+    // A starting height only, replaced by the first measurement. Small enough
+    // not to leave a hole under a short chart, large enough that the common
+    // case does not visibly jump.
+    frame.style.height = '220px';
+    frame.dataset.autoHeight = '1';
     return frame;
 }
 
-function openArtifactFull(artifact) {
+// One listener for every artifact on the page.
+//
+// Validated by *source*, never by origin: these frames are sandboxed without
+// `allow-same-origin`, so they are in an opaque origin and their messages
+// arrive with `origin: "null"`. Matching that string would accept any other
+// opaque-origin frame on the page as well. Matching the window object is
+// exact — it can only be the frame we created.
+//
+// The height is clamped because it arrives from a document the model wrote. An
+// artifact that asks for a million pixels is not a tall artifact, it is one
+// pushing the conversation off the screen.
+window.addEventListener('message', (event) => {
+    const height = event.data && event.data.carrotArtifactHeight;
+    if (!height || typeof height !== 'number') return;
+    for (const frame of document.querySelectorAll('iframe.artifact-frame[data-auto-height]')) {
+        if (frame.contentWindow === event.source) {
+            frame.style.height =
+                Math.min(ARTIFACT_MAX_H, Math.max(ARTIFACT_MIN_H, height)) + 'px';
+            return;
+        }
+    }
+});
+
+// The source, in a box you can type in, with the rendered result underneath.
+//
+// The unrendered kinds are the reason this exists: LaTeX that did not compile,
+// a mermaid diagram with a typo on line four, a chart whose numbers are one
+// column short. All of them are text that is nearly right, and until now the
+// only thing to do with a nearly-right artifact was ask the model again and
+// hope.
+function artifactEditor(artifact, host) {
+    const wrap = document.createElement('div');
+    wrap.className = 'artifact-editor';
+
+    const area = document.createElement('textarea');
+    area.className = 'artifact-source';
+    area.spellcheck = false;
+    area.value = artifact.content || '';
+    wrap.appendChild(area);
+
+    const bar = document.createElement('div');
+    bar.className = 'artifact-editor-bar';
+    const note = document.createElement('span');
+    note.className = 'artifact-editor-note';
+    const save = document.createElement('button');
+    save.className = 'btn btn-primary small';
+    save.textContent = 'Save';
+    save.onclick = async () => {
+        save.disabled = true;
+        note.textContent = 'Saving…';
+        try {
+            const updated = await api(`/api/artifacts/${artifact.id}`, {
+                method: 'PATCH', body: JSON.stringify({ content: area.value }),
+            });
+            note.textContent = 'Saved';
+            // The copy in the conversation is redrawn from what the server
+            // stored, not from what was typed: a chart is re-normalised and an
+            // SVG re-sanitised on the way in, so what is now on screen has to
+            // be the version that survived that.
+            for (const card of document.querySelectorAll(
+                    `[data-artifact-id="${artifact.id}"]`)) {
+                const slot = card.parentElement;
+                card.remove();
+                if (slot) await renderArtifact(artifact.id, slot);
+            }
+            Object.assign(artifact, updated);
+        } catch (e) {
+            note.textContent = e.message || String(e);
+        }
+        save.disabled = false;
+    };
+    bar.appendChild(note);
+    bar.appendChild(save);
+    wrap.appendChild(bar);
+    // Ctrl+Enter saves. This is a box people will paste a corrected block into
+    // and expect to leave immediately.
+    area.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') save.click();
+    });
+    return wrap;
+}
+
+function openArtifactFull(artifact, opts = {}) {
     const host = document.createElement('div');
     host.className = 'artifact-modal';
     host.innerHTML = `
@@ -2047,7 +2481,12 @@ function openArtifactFull(artifact) {
           </div>
         </div>`;
     const card = host.querySelector('.artifact-modal-card');
-    if (artifact.kind === 'markdown') {
+    // Editing is the same window, not a second one. What you are correcting is
+    // the thing you are looking at, and a separate editor would mean holding
+    // the rendered version in your head while you type at the source.
+    if (opts.editing && ARTIFACT_EDITABLE.has(artifact.kind)) {
+        card.appendChild(artifactEditor(artifact, host));
+    } else if (artifact.kind === 'markdown') {
         const body = document.createElement('div');
         body.className = 'artifact-body md';
         body.innerHTML = mdToHtml(artifact.content);
@@ -2059,7 +2498,7 @@ function openArtifactFull(artifact) {
     }
     // The source travels with the figure here too — "Open" is where somebody
     // goes to read it properly, which is exactly when they want the working.
-    const source = artifactCode(artifact);
+    const source = opts.editing ? null : artifactCode(artifact);
     if (source) card.appendChild(source);
     const close = () => host.remove();
     host.querySelector('[data-close]').onclick = close;
@@ -2070,19 +2509,51 @@ function openArtifactFull(artifact) {
     document.body.appendChild(host);
 }
 
-// Called after a message finishes rendering: swap any markers the model's
-// tool results left behind for the rendered thing.
+// Markdown, with a hole left where each artifact goes.
+//
+// The marker sits in the middle of a sentence somebody wrote — "here is the
+// chart: [[…]] and the second one shows" — and the answer reads as one thing
+// only if the figure lands where the marker was. Stripping the markers and
+// appending every figure underneath, which is what this did, produced a
+// paragraph that referred to things below a timestamp in a stack of cards.
+//
+// Split on the marker, render the prose either side of it, and leave a slot.
+// Markers are written on their own line by every tool that emits one, so no
+// markdown construct spans the split.
+function mdWithArtifacts(content) {
+    const parts = String(content || '').split(/(\[\[carrot:artifact:[a-f0-9]{4,32}\]\])/g);
+    return parts.map(part => {
+        const found = part.match(/^\[\[carrot:artifact:([a-f0-9]{4,32})\]\]$/);
+        if (found) return `<div class="artifact-slot" data-artifact-slot="${found[1]}"></div>`;
+        return part.trim() ? mdToHtml(part) : '';
+    }).join('');
+}
+
+// Called after a message finishes rendering: fill the holes.
+//
+// A slot is used where the text left one. Anything without a slot — a tool
+// that reported an artifact outside the prose, or a conversation reopened
+// from before markers were kept — still lands under the message rather than
+// nowhere, because a figure in the wrong place beats a figure that vanished.
 async function mountArtifacts(messageEl, text) {
     const ids = artifactIdsIn(text);
     if (!ids.length) return;
-    let host = messageEl.querySelector('.artifact-host');
-    if (!host) {
-        host = document.createElement('div');
-        host.className = 'artifact-host';
-        messageEl.appendChild(host);
-    }
+    let host = null;
     for (const id of ids) {
-        if (host.querySelector(`[data-artifact-id="${id}"]`)) continue;   // already shown
+        if (messageEl.querySelector(`[data-artifact-id="${id}"]`)) continue;   // already shown
+        const slot = messageEl.querySelector(`[data-artifact-slot="${id}"]`);
+        if (slot) {
+            await renderArtifact(id, slot);
+            continue;
+        }
+        if (!host) {
+            host = messageEl.querySelector('.artifact-host');
+            if (!host) {
+                host = document.createElement('div');
+                host.className = 'artifact-host';
+                messageEl.appendChild(host);
+            }
+        }
         await renderArtifact(id, host);
     }
 }

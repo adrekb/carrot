@@ -383,6 +383,52 @@ def for_conversation(conversation_id: str) -> List[Dict[str, Any]]:
     return [_row_to_dict(row) for row in rows]
 
 
+# The kinds whose content is text a person could sensibly correct: markup,
+# source, a diagram's description, a chart's numbers. An image and a video are
+# the output of something rather than the something, so editing their content
+# would mean editing base64.
+EDITABLE_KINDS = {KIND_HTML, KIND_SVG, KIND_MARKDOWN, KIND_MERMAID,
+                  KIND_CODE, KIND_CHART}
+
+
+class ArtifactNotEditable(ArtifactError):
+    """Raised rather than silently ignored: a save that reports success and
+    changes nothing is worse than one that refuses."""
+
+
+def update(artifact_id: str, content: str) -> Optional[Dict[str, Any]]:
+    """Replace an artifact's content in place, keeping its id.
+
+    In place, and keeping the id, because the artifact is referred to by a
+    marker inside a message that has already been said. A correction that
+    created a new artifact would leave the old one still embedded in the
+    conversation and the new one belonging to nothing.
+
+    The content goes through the same validation `create` applies — a chart is
+    re-normalised, an SVG re-sanitised — because "the model wrote this" and
+    "the user edited it" are the same trust level, which is to say not one that
+    lets markup into the app document unchecked.
+    """
+    existing = get(artifact_id)
+    if existing is None:
+        return None
+    kind = existing["kind"]
+    if kind not in EDITABLE_KINDS:
+        raise ArtifactNotEditable(f"a {kind} artifact is not text you can edit")
+    content = content or ""
+    if len(content.encode("utf-8")) > MAX_CONTENT_BYTES:
+        raise ArtifactError("that is too long to store as an artifact")
+    if kind == KIND_CHART:
+        content = normalize_chart(content)
+    elif kind == KIND_SVG:
+        content = sanitize_svg(content)
+    conn = _db()
+    conn.execute("UPDATE artifacts SET content = ? WHERE id = ?",
+                 (content, artifact_id))
+    conn.commit()
+    return get(artifact_id)
+
+
 def delete(artifact_id: str) -> bool:
     conn = _db()
     cursor = conn.execute("DELETE FROM artifacts WHERE id = ?", (artifact_id,))

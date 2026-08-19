@@ -760,3 +760,176 @@ class TestTheDropdownArrowSurvivesItsOwnStylesheet:
         # is no background-image here, and would otherwise match.
         declarations = re.sub(r"/\*.*?\*/", "", light, flags=re.S)
         assert "background-image" not in declarations
+
+
+class TestThePhoneLayout:
+    """The app is reachable from a phone now, which makes 375px a real width
+    rather than a hypothetical one. It used to lay out at a 672px minimum and
+    get scaled down by the browser — legible, in the way a photograph of a
+    document is legible."""
+
+    @property
+    def phone_block(self):
+        css = read("css", "style.css")
+        start = css.index("@media (max-width: 640px)")
+        return css[start:]
+
+    def test_there_is_a_phone_breakpoint(self):
+        assert "@media (max-width: 640px)" in read("css", "style.css")
+
+    def test_the_rail_becomes_a_drawer(self):
+        """216px of sidebar on a 375px screen is not a sidebar. It holds what
+        is running and what failed, so it cannot simply be hidden either."""
+        block = self.phone_block
+        assert "--nav-w: 0px" in block
+        assert "body.nav-open .app-nav" in block
+        assert "translateX(-100%)" in block
+
+    def test_the_composer_is_pinned_to_the_bottom_even_when_blank(self):
+        """`body.chat-blank` centres it under the question, which is right for
+        a window and wrong for a phone: `top: 50%` is measured against the
+        layout viewport, so the keyboard opens over the box you are typing
+        into."""
+        assert "body.chat-blank #cmdbar" in self.phone_block
+
+    def test_the_composer_controls_wrap_by_the_id_they_actually_have(self):
+        """Written as `.cmd-row` first, which matches nothing: the element is
+        `#cmd-row`. A selector for a class no element has is invisible — the
+        rule is in the stylesheet, the row still overflows, and nothing
+        anywhere reports a problem."""
+        assert "#cmd-row { flex-wrap: wrap" in self.phone_block
+        assert 'id="cmd-row"' in read("index.html")
+
+    def test_the_drawer_closes_when_something_in_it_is_chosen(self):
+        """A drawer left covering the thing you just asked for is the single
+        most common way this gets built wrong."""
+        app_js = read("js", "app.js")
+        assert "closeNavDrawer" in app_js
+        assert "nav-item, .nav-job, .nav-recent" in app_js
+
+
+class TestDiagramsAndMathsAreDrawnNotPrinted:
+    """A mermaid artifact was stored, listed, downloadable, editable — and
+    rendered as a <pre> full of `graph TD; A-->B`. The one kind of artifact
+    whose entire purpose is to be a picture was the only one shown as its
+    source."""
+
+    def test_mermaid_is_bundled_offline(self):
+        """Not a CDN. The argument of this app is that it runs on your machine,
+        and a diagram that only draws when the network is up would be the one
+        part of a reply that depends on somebody else's server."""
+        assert (WEB / "vendor" / "mermaid.js").exists()
+        build = read_py("webvendor/build.mjs")
+        assert "mermaid-entry.js" in build
+
+    def test_it_is_loaded_only_when_something_needs_it(self):
+        """3.3MB, and most conversations contain no diagram at all."""
+        features = read("js", "features.js")
+        assert "'/vendor/mermaid.js'" in features
+        assert '<script src="/vendor/mermaid.js"' not in read("index.html")
+
+    def test_a_mermaid_artifact_renders(self):
+        features = read("js", "features.js")
+        branch = features[features.index("artifact.kind === 'mermaid'"):][:400]
+        assert "renderMermaid" in branch
+        assert "textContent = artifact.content" not in branch
+
+    def test_fenced_blocks_are_marked_for_rendering(self):
+        features = read("js", "features.js")
+        assert "data-render" in features
+        assert "hydrateBlocks" in features and "hydrateBlocks" in read("js", "app.js")
+
+    def test_a_latex_document_stays_source(self):
+        r"""A \documentclass preamble is a file somebody wants to read and
+        copy, not an expression to typeset — and KaTeX cannot render one."""
+        features = read("js", "features.js")
+        assert "isLatexDocument" in features
+        assert "documentclass" in features
+
+    def test_a_broken_diagram_shows_its_source_and_the_reason(self):
+        """One line away from working, usually. Showing nothing hides both the
+        mistake and the content."""
+        features = read("js", "features.js")
+        assert "mermaid-error" in features
+        assert "artifact-mermaid-source" in features
+
+
+class TestTheChatButtonStartsANewOne:
+    def test_it_is_its_own_handler(self):
+        """Pressing it from elsewhere navigates; pressing it while already in a
+        conversation starts a fresh one, which is what every app with a compose
+        button does and what people try here first."""
+        index = read("index.html")
+        assert 'data-tab="workspace" onclick="goToChat()"' in index
+        app_js = read("js", "app.js")
+        goto = app_js[app_js.index("function goToChat"):][:600]
+        assert "newChat()" in goto
+        # An empty new session is left alone: clearing a blank screen reads as
+        # a dead button.
+        assert "currentConversationId" in goto
+
+
+class TestSeveralDocumentsOpenAtOnce:
+    """Work held exactly one. Opening a second closed the first — not visibly,
+    it just stopped being on screen — so anything needing two documents at the
+    same time meant going back to the grid and losing your place in both."""
+
+    def test_the_strip_exists_and_is_loaded(self):
+        index = read("index.html")
+        assert 'id="doc-tabs"' in index
+        assert '<script src="/js/doctabs.js"></script>' in index
+
+    def test_switching_saves_the_one_being_left_first(self):
+        """Autosave is on an 800ms timer, so leaving a document within a second
+        of typing in it would drop the last thing typed — which is exactly when
+        somebody switches away."""
+        tabs = read("js", "doctabs.js")
+        switch = tabs[tabs.index("async function switchToDoc"):][:400]
+        assert "await flushPendingNoteSave()" in switch
+        assert switch.index("flushPendingNoteSave") < switch.index("openNote")
+        assert "async function flushPendingNoteSave" in read("js", "features.js")
+
+    def test_a_document_opens_once(self):
+        """Two tabs on one file is two editors on one autosave, and the second
+        one to save wins."""
+        tabs = read("js", "doctabs.js")
+        opened = tabs[tabs.index("function noteOpened"):][:600]
+        assert "openDocs.find(d => d.id === note.id)" in opened
+
+    def test_closing_the_last_one_goes_to_the_grid(self):
+        """Not to an empty editor pointed at no document."""
+        tabs = read("js", "doctabs.js")
+        close = tabs[tabs.index("async function closeDoc"):][:900]
+        assert "showWriteStart" in close
+
+    def test_a_deleted_document_loses_its_tab(self):
+        assert "forgetDoc" in read("js", "features.js")
+        assert "function forgetDoc" in read("js", "doctabs.js")
+
+    def test_one_document_shows_no_strip(self):
+        """A single tab is chrome that explains itself and nothing else."""
+        tabs = read("js", "doctabs.js")
+        assert "openDocs.length < 2" in tabs
+
+
+class TestTheWorkBadgeSaysWhatItCounts:
+    def test_it_names_notifications_rather_than_documents(self):
+        """A bare number beside the word "Work" reads as a count of the things
+        Work contains, which is documents. It counts unread notifications."""
+        index = read("index.html")
+        badge = index[index.index('id="notification-badge"'):][:220]
+        assert "Unread notifications" in badge
+        agentops = read("js", "agentops.js")
+        assert "unread notification" in agentops
+
+
+class TestTheSendControlSaysOneThingOnce:
+    def test_the_button_does_not_repeat_the_destination(self):
+        """The picker immediately to its left already says Chat. Printing the
+        same word in the button beside it reads as two controls that both do
+        something with chat, rather than one control and the place it points."""
+        docagent = read("js", "docagent.js")
+        assert "`Send to ${spec.label}`" not in docagent
+        assert "button.textContent = 'Send'" in docagent
+        # Where it goes is still said, on the hover.
+        assert "Send this note (or the selected text) to ${spec.label}" in docagent

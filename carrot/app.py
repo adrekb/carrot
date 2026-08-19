@@ -17,6 +17,7 @@ import re
 import json
 import uuid
 import contextlib
+import ipaddress
 from datetime import datetime
 from urllib.parse import urlparse
 import queue
@@ -37,6 +38,7 @@ from carrot import (
     goals as goals_mod,
     reminders as rem_mod,
     notes as notes_mod,
+    pairing as pairing_mod,
     doctext as doctext_mod,
     trajectory as trajectory_mod,
     links as links_mod,
@@ -571,6 +573,24 @@ async def require_session_token(request: Request, call_next):
     browser can reach 127.0.0.1. The token lives in the app's own HTML, which
     the same-origin policy keeps out of reach of other origins.
     """
+    # Where the connection came from, before what it is carrying.
+    #
+    # The bind is the real boundary — on the tailnet interface the socket does
+    # not exist on any other network — but this is cheap, and it is what stands
+    # between a hand-edited `server_host` and a shell on the school Wi-Fi. It
+    # is also the only check that applies to `/api/pair`, which has to be
+    # reachable without a token and would otherwise be the one door a stranger
+    # on the LAN could knock on.
+    #
+    # Only while actually exposed, though. Bound to loopback there is no
+    # untrusted network for this to filter, and the check would then be able to
+    # lock somebody out of their own desktop over an ASGI server that reports a
+    # peer this cannot parse — a bigger failure than the one it prevents, and
+    # one that would arrive without warning on a machine that was working.
+    if listening_off_machine() and not _from_an_allowed_network(request):
+        return JSONResponse(status_code=403,
+                            content={"detail": "Carrot does not accept connections "
+                                               "from this network."})
     if not security_mod.auth_enabled() or security_mod.is_public_path(request.url.path):
         return await call_next(request)
 
@@ -587,7 +607,12 @@ async def require_session_token(request: Request, call_next):
     presented = request.headers.get(security_mod.TOKEN_HEADER) or request.query_params.get(
         security_mod.TOKEN_QUERY_PARAM
     )
-    if not security_mod.token_valid(presented):
+    # Two kinds of key open this door. The session token is this machine's, and
+    # is handed to the shell only over loopback. A device token belongs to one
+    # paired phone, is stored hashed, and dies when that phone is revoked —
+    # which is the whole reason it is a second kind rather than a copy of the
+    # first.
+    if not security_mod.token_valid(presented) and not pairing_mod.device_token_valid(presented):
         return JSONResponse(
             status_code=401,
             content={"detail": "missing or invalid session token"},
@@ -622,15 +647,131 @@ _ASSET_RE = re.compile(r'(src|href)="(/(?:js|css)/[^"?]+)"')
 
 
 @app.get("/", response_class=HTMLResponse)
-async def index():
+async def index(request: Request):
     index_path = os.path.join(WEB_DIR, "index.html")
     if os.path.exists(index_path):
         with open(index_path, "r", encoding="utf-8") as handle:
             html = handle.read()
         version = _asset_fingerprint()
         html = _ASSET_RE.sub(lambda m: f'{m.group(1)}="{m.group(2)}?v={version}"', html)
-        return HTMLResponse(security_mod.inject_token(html))
+        # The session token goes to this machine and no further.
+        #
+        # `/` is public because the shell has to load before anything can
+        # authenticate, and it carries the token in a meta tag. That was safe
+        # for exactly as long as loopback was the only way to ask. The moment
+        # Carrot listens on a network, handing the token to whoever fetched the
+        # page hands the terminal to whoever fetched the page.
+        #
+        # Off-machine callers get the same shell with no token, and the shell
+        # asks to be paired. A device that is already paired sends its own
+        # token from storage on the next request, so this costs it nothing.
+        #
+        # While the socket is on loopback there is no such thing as an
+        # off-machine caller, so the peer check is skipped entirely rather
+        # than trusted to be right about an ASGI server that reports no peer
+        # at all. The check that matters is the one that starts mattering the
+        # moment the door is opened.
+        if not listening_off_machine() or _is_loopback(request):
+            return HTMLResponse(security_mod.inject_token(html))
+        return HTMLResponse(html)
     return HTMLResponse("<h1>Carrot</h1><p>Frontend not found. Run from project root.</p>")
+
+
+# The address this process actually bound, as opposed to the one the config
+# would like it to bind next time. Set by whatever calls uvicorn; the default
+# is the safe answer for anything that imports the app without serving it,
+# which includes the test suite.
+BOUND_HOST = "127.0.0.1"
+
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def note_bound_host(host: str) -> str:
+    global BOUND_HOST
+    BOUND_HOST = host or "127.0.0.1"
+    return BOUND_HOST
+
+
+# Why the app is not listening where the settings say it should be. Empty when
+# nothing went wrong, which is the normal case.
+BIND_FALLBACK_REASON = ""
+
+
+def resolve_bind_host() -> str:
+    """The address to actually bind, which is not always the one stored.
+
+    A tailnet address is only valid while Tailscale is up. Turn it off — or
+    reboot before it starts, which is the common one — and the address in the
+    config belongs to no interface on this machine, so binding to it fails and
+    uvicorn exits. That would mean *Carrot does not launch because a network
+    tool is not running*, which is an unacceptable way for an offline-first
+    app to fail.
+
+    So the stored host is checked against what exists, and anything unbindable
+    falls back to loopback with the reason recorded. The desktop app keeps
+    working; only the remote half is missing, and the settings panel says so
+    rather than leaving somebody to wonder why their phone stopped connecting.
+    """
+    global BIND_FALLBACK_REASON
+    BIND_FALLBACK_REASON = ""
+    wanted = str(config.get_config().get("server_host", "127.0.0.1"))
+    if wanted in LOOPBACK_HOSTS:
+        return wanted
+    if not config.get_config().get("remote_access", False):
+        # A stored address with the feature switched off is a leftover.
+        BIND_FALLBACK_REASON = "Remote access is off."
+        return "127.0.0.1"
+    if wanted != tailnet_address():
+        BIND_FALLBACK_REASON = (
+            "Tailscale is not running, so Carrot is only listening to this "
+            "computer. Start Tailscale and restart Carrot to reconnect your "
+            "other devices.")
+        return "127.0.0.1"
+    return wanted
+
+
+def listening_off_machine() -> bool:
+    return BOUND_HOST not in LOOPBACK_HOSTS
+
+
+def _from_an_allowed_network(request: Request) -> bool:
+    """This machine, or a device on your tailnet. Nothing else, ever.
+
+    Loopback is always fine — that is the desktop app talking to itself. The
+    only other source Carrot answers is 100.64/10, which is the range Tailscale
+    allocates from and nothing else on a normal machine uses.
+
+    A request with no peer address is refused rather than allowed. That case
+    should not arise under uvicorn, and "I could not tell where this came from"
+    is not a reason to hand over a terminal.
+    """
+    host = getattr(request.client, "host", "") if request.client else ""
+    if not host:
+        return False
+    try:
+        parsed = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    if parsed.is_loopback:
+        return True
+    return _is_tailnet_address(host)
+
+
+def _is_loopback(request: Request) -> bool:
+    """Whether this request came from the machine Carrot is running on.
+
+    Read off the socket rather than off a header: `X-Forwarded-For` and friends
+    are set by whatever is in front of the server, and in this design that is
+    sometimes a tunnel run by somebody else. A header that can be sent by the
+    caller cannot be the thing that decides the caller is trusted.
+    """
+    host = getattr(request.client, "host", "") if request.client else ""
+    if not host:
+        return False
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 # ===== Health / status =====
@@ -1277,6 +1418,30 @@ CONTEXT_TOGGLEABLE = {source for source, _, _, toggle in CONTEXT_SOURCES if togg
 CONTEXT_OFF_KEY = "context_off"
 
 
+# How much of each block the inspector shows.
+#
+# Not all of it. "This conversation" is the whole transcript, and a picker that
+# ships every turn to draw a popover is a second copy of the chat downloaded on
+# every keystroke. The cap is stated in the UI rather than hidden, because a
+# preview that silently stops is one that gets trusted about the wrong things.
+CONTEXT_PREVIEW_CHARS = 1200
+
+
+def _context_preview(parts: List[Dict[str, Any]]) -> str:
+    """What this source is putting into the prompt, as the model will read it."""
+    lines = []
+    for part in parts:
+        text = part.get("text") or ""
+        if not text:
+            continue
+        role = part.get("role")
+        lines.append(f"{role}: {text}" if role else text)
+    joined = "\n\n".join(lines)
+    if len(joined) <= CONTEXT_PREVIEW_CHARS:
+        return joined
+    return joined[:CONTEXT_PREVIEW_CHARS].rstrip()
+
+
 def context_disabled() -> set:
     """The sources the user has switched off, ignoring any that cannot be.
 
@@ -1296,7 +1461,12 @@ def _context_add(history, manifest, disabled, source, content):
     if not text:
         return
     off = source in disabled
-    manifest.append({"source": source, "chars": len(text), "included": not off})
+    # The text itself, not only its size. A row that says "Memory · 1.2k chars"
+    # answers "is it there" and nothing else, and the question people actually
+    # have — "*what* does it think it remembers about me" — was still only
+    # answerable by reading this file.
+    manifest.append({"source": source, "chars": len(text), "included": not off,
+                     "text": text})
     if not off:
         history.append({"role": "system", "content": text})
 
@@ -1402,7 +1572,9 @@ def _prepare_history(conv, message, skill_slug, extra_system=None, mode=None,
         else:
             manifest.append({"source": "recent",
                              "chars": len(str(turn.get("content", ""))),
-                             "included": True})
+                             "included": True,
+                             "role": turn.get("role", ""),
+                             "text": str(turn.get("content", ""))})
             history.append(turn)
     # On a rerun the question is already the last thing in the transcript —
     # only the answer was rewound — so appending it again would hand the model
@@ -4203,7 +4375,8 @@ async def chat(req: ChatRequest):
     mode = search_mode(req.search_mode)
     images, docs_system, note = _apply_attachments(req, resolved)
     history, skill = _prepare_history(conv, req.message, req.skill,
-                                      extra_system=docs_system, mode=mode, images=images,
+                                      extra_system=with_linked_documents(req.message, docs_system),
+                                      mode=mode, images=images,
                                       coder=bool(req.coder), memory=req.memory,
                                       replay=bool(getattr(req, "replay", False)))
     # A rerun runs an existing turn again, and the question is already in the
@@ -4299,7 +4472,8 @@ async def chat_stream(req: ChatRequest):
     mode = search_mode(req.search_mode)
     images, docs_system, note = _apply_attachments(req, resolved)
     history, skill = _prepare_history(conv, req.message, req.skill,
-                                      extra_system=docs_system, mode=mode, images=images,
+                                      extra_system=with_linked_documents(req.message, docs_system),
+                                      mode=mode, images=images,
                                       coder=bool(req.coder), memory=req.memory,
                                       replay=bool(getattr(req, "replay", False)))
     # A rerun runs an existing turn again, and the question is already in the
@@ -5140,6 +5314,91 @@ async def links_suggest(q: str = "", limit: int = 8):
     return links_mod.suggest(q, limit=limit)
 
 
+# ===== Linking a document into a message =====
+#
+# Typing `//` in the composer offers the documents you have, and the one you
+# pick is written into the message as `[[Title]]` — the same link syntax notes
+# already use, so a reference means the same thing wherever it is written.
+#
+# The workspace is a *filter*, not something you can link to. A workspace is
+# not a document and attaching one would mean attaching everything in it; what
+# it is good for is narrowing a list of two hundred documents to the four in
+# the project you are actually working on.
+@app.get("/api/link/candidates")
+async def link_candidates(q: str = "", workspace: str = "", limit: int = 12):
+    """Documents for the `//` picker, optionally narrowed to one workspace."""
+    found = links_mod.suggest(q, limit=200)
+    if workspace:
+        inside = {
+            item.get("item_id")
+            for item in (workspaces_mod.contents(workspace, limit=500)
+                         .get("items", {}).get(workspaces_mod.KIND_NOTE, []) or [])
+        }
+        found = [note for note in found if note.get("id") in inside]
+    spaces = []
+    try:
+        for space in workspaces_mod.tree().get("workspaces", []):
+            spaces.append({"id": space.get("id"), "name": space.get("name")})
+    except Exception:
+        spaces = []
+    return {"documents": found[:limit], "workspaces": spaces}
+
+
+# What a `[[Title]]` in a message is worth to the model.
+#
+# Nothing, until now: it rendered as a link and the turn was answered without
+# ever opening the thing being pointed at, which makes "have a look at [[Q3
+# plan]]" a sentence about a document the model cannot see.
+LINK_PATTERN = re.compile(r"\[\[([^\[\]|]{1,120})\]\]")
+# Two documents is a reference; ten is a way to fill the window by accident.
+MAX_LINKED_DOCS = 4
+MAX_LINKED_CHARS = 12000
+
+
+def linked_documents_prompt(message: str) -> str:
+    """The text of every document named in this message, or an empty string.
+
+    Silence on a miss is deliberate. `[[something]]` that matches no document
+    is a typo or a link to a page not written yet — both are ordinary, and
+    neither is worth an error on a turn that is otherwise fine.
+    """
+    seen, blocks = set(), []
+    for title in LINK_PATTERN.findall(message or ""):
+        title = title.strip()
+        if not title or title.lower() in seen or len(blocks) >= MAX_LINKED_DOCS:
+            continue
+        seen.add(title.lower())
+        try:
+            note = links_mod.resolve(title)
+            if not note:
+                continue
+            full = notes_mod.get_note(note["id"]) or {}
+            body = (full.get("body") or "").strip()
+        except Exception:
+            continue
+        if not body:
+            continue
+        blocks.append(f"--- {full.get('title') or title} ---\n{body[:MAX_LINKED_CHARS]}")
+    if not blocks:
+        return ""
+    return ("The user linked these documents in their message. Their contents "
+            "follow.\n\n" + "\n\n".join(blocks))
+
+
+def with_linked_documents(message: str, attached: Optional[str]) -> Optional[str]:
+    """Fold linked documents in beside anything attached to the turn.
+
+    The same context source as an attachment rather than a new one: to the
+    person reading the Context panel, "a document you sent" and "a document you
+    pointed at" are the same sentence, and a second row saying almost the same
+    thing is how that panel stops being read.
+    """
+    linked = linked_documents_prompt(message)
+    if not linked:
+        return attached
+    return f"{attached}\n\n{linked}" if attached else linked
+
+
 @app.get("/api/links/resolve")
 async def links_resolve(title: str):
     """Where a `[[title]]` goes when clicked.
@@ -5187,16 +5446,23 @@ async def context_preview(message: str = "", conversation_id: str = "",
     conv = conv_mod.get_conversation(conversation_id) if conversation_id else None
     manifest: List[Dict[str, Any]] = []
     try:
-        _prepare_history(conv, message, "", mode=mode or None, coder=coder,
-                         manifest=manifest)
+        # `extra_system` too, or the preview describes a prompt the model
+        # never gets. A linked document is part of the turn — that is the whole
+        # point of it — and the panel whose job is "what is Carrot being told"
+        # would have been the one place that did not know.
+        _prepare_history(conv, message, "",
+                         extra_system=with_linked_documents(message, None),
+                         mode=mode or None, coder=coder, manifest=manifest)
     except Exception:
         pass
     disabled = context_disabled()
     by_source: Dict[str, Dict[str, Any]] = {}
     for entry in manifest:
-        row = by_source.setdefault(entry["source"], {"chars": 0, "parts": 0})
+        row = by_source.setdefault(entry["source"],
+                                   {"chars": 0, "parts": 0, "entries": []})
         row["chars"] += entry["chars"]
         row["parts"] += 1
+        row["entries"].append(entry)
     sources = []
     for source, label, detail, toggleable in CONTEXT_SOURCES:
         found = by_source.get(source)
@@ -5212,6 +5478,9 @@ async def context_preview(message: str = "", conversation_id: str = "",
             "present": bool(found),
             "chars": found["chars"] if found else 0,
             "parts": found["parts"] if found else 0,
+            # What the model reads, verbatim, up to the cap.
+            "preview": _context_preview(found["entries"]) if found else "",
+            "truncated": bool(found and found["chars"] > CONTEXT_PREVIEW_CHARS),
         })
     chars = sum(s["chars"] for s in sources if s["enabled"])
     # Characters to tokens at four to one. A rough divisor rather than a real
@@ -5368,6 +5637,30 @@ async def list_conversation_artifacts(conversation_id: str):
     # The list view does not need the payloads, and a conversation with fifty
     # charts in it would be megabytes of JSON.
     return {"artifacts": [{k: v for k, v in a.items() if k != "content"} for a in items]}
+
+
+class ArtifactEditRequest(BaseModel):
+    content: str = ""
+
+
+@app.patch("/api/artifacts/{artifact_id}")
+async def edit_artifact(artifact_id: str, req: ArtifactEditRequest):
+    """Correct an artifact's source in place.
+
+    In place and under the same id, because the artifact is referred to by a
+    marker inside a message that has already been said — a correction that
+    minted a new one would leave the old still embedded and the new belonging
+    to nothing.
+    """
+    try:
+        artifact = artifacts_mod.update(artifact_id, req.content)
+    except artifacts_mod.ArtifactNotEditable as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except artifacts_mod.ArtifactError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="artifact not found")
+    return {**artifact, "document": artifacts_mod.html_document(artifact)}
 
 
 @app.delete("/api/artifacts/{artifact_id}")
@@ -6002,6 +6295,401 @@ async def activity_overview(limit: int = activity_mod.RECENT_LIMIT):
     500s is a strip of UI that disappears mid-session over a job list.
     """
     return activity_mod.overview(limit=limit)
+
+
+class ResumeBriefRequest(BaseModel):
+    conversation_id: str = ""
+
+
+# ===== Where you left off, in a paragraph =====
+#
+# "Resume" puts you back in the room; it does not tell you what was being said
+# in it. Coming back to a chat from Thursday means reading up the transcript
+# until you recognise your own reasoning, which is the part nobody does — so
+# the thread gets abandoned and asked again from scratch.
+#
+# Written from the transcript rather than from the rolling summary: the summary
+# covers the turns that have aged *out* of the window, so on a short thread it
+# is empty and on a long one it describes the beginning while the question is
+# about the end.
+#
+# The deterministic fallback is not a placeholder. This runs on machines where
+# the local model is exactly what is unavailable, and a button that answers
+# "Ollama is not running" is a button that gets pressed once. What it can
+# always say — which conversation, when, what the last exchange was, what is
+# still running — is most of the reconstruction anyway.
+BRIEF_TURNS = 12
+BRIEF_SYSTEM = (
+    "You are catching someone up on work they left. Write 3 to 5 sentences, "
+    "plain prose, no headings or bullets, addressed to them as 'you'. Say what "
+    "they were working on, where it got to, and what the obvious next step is. "
+    "Do not invent anything that is not in the transcript."
+)
+
+
+def _brief_target(conversation_id: str) -> Optional[Dict[str, Any]]:
+    """The thread to reconstruct: the one asked for, or the last one touched."""
+    if conversation_id:
+        return conv_mod.get_conversation(conversation_id)
+    try:
+        for item in activity_mod.overview()["recent"]:
+            if item.get("kind") in ("conversation", "code"):
+                found = conv_mod.get_conversation(item["id"])
+                if found:
+                    return found
+    except Exception:
+        pass
+    return None
+
+
+def _brief_without_a_model(conv, turns, running) -> str:
+    """The facts, in sentences, when no model is there to write the prose."""
+    title = (conv.get("title") or "an untitled conversation").strip()
+    said = [t for t in turns if t.get("role") == "user"]
+    answered = [t for t in turns if t.get("role") == "assistant"]
+    parts = [f"You were in {title}."]
+    if said:
+        parts.append("The last thing you asked was: "
+                     + _trim_for_brief(said[-1].get("content", "")) + ".")
+    if answered:
+        parts.append("Carrot's answer ended with: "
+                     + _trim_for_brief(answered[-1].get("content", ""), tail=True) + ".")
+    live = [j for j in running if j.get("status") == "running"]
+    if live:
+        parts.append(f"{len(live)} job"
+                     + ("s are" if len(live) != 1 else " is")
+                     + " still running from that session.")
+    parts.append("Written without the model — this is the transcript, not a summary of it.")
+    return " ".join(parts)
+
+
+def _trim_for_brief(text: str, limit: int = 180, tail: bool = False) -> str:
+    text = " ".join(str(text or "").split())
+    if len(text) <= limit:
+        return text
+    return ("..." + text[-limit:]) if tail else (text[:limit] + "...")
+
+
+@app.post("/api/resume/brief")
+async def resume_brief(req: ResumeBriefRequest):
+    """Three to five sentences on where you left off, before you go back in."""
+    conv = _brief_target(req.conversation_id)
+    if not conv:
+        raise HTTPException(status_code=404,
+                            detail="There is nothing to catch up on yet.")
+    turns = [t for t in (conv.get("messages") or [])
+             if t.get("role") in ("user", "assistant")][-BRIEF_TURNS:]
+    if not turns:
+        raise HTTPException(status_code=404,
+                            detail="That conversation has nothing in it yet.")
+    try:
+        running = activity_mod.overview()["running"]
+    except Exception:
+        running = []
+
+    transcript = "\n".join(
+        f"{turn['role']}: {str(turn.get('content', ''))[:1200]}" for turn in turns)
+    client = ollama_mod.OllamaClient()
+    try:
+        available = client.is_available()
+    except Exception:
+        available = False
+    if available:
+        try:
+            written = client.chat(
+                [{"role": "system", "content": BRIEF_SYSTEM},
+                 {"role": "user",
+                  "content": f"Conversation: {conv.get('title') or 'untitled'}"
+                             f"\n\n{transcript}"}],
+            )
+            if written and written.strip():
+                return {"brief": written.strip(), "written_by": "model",
+                        "conversation_id": conv["id"],
+                        "title": conv.get("title") or ""}
+        except Exception:
+            pass
+    return {"brief": _brief_without_a_model(conv, turns, running),
+            "written_by": "transcript",
+            "conversation_id": conv["id"],
+            "title": conv.get("title") or ""}
+
+
+# ===== Pairing a phone =====
+#
+# Everything here except `/api/pair` itself is behind the session token, which
+# means behind loopback, which means behind sitting at the computer. Opening
+# the window, seeing the code, listing what is paired and cutting one off are
+# all decisions that belong to the machine being let into — never to the device
+# asking to be let in, which is the one thing on this list that might not be
+# you.
+class PairClaimRequest(BaseModel):
+    code: str
+    name: str = ""
+    username: str = ""
+    password: str = ""
+
+
+class CredentialRequest(BaseModel):
+    username: str = ""
+    password: str = ""
+
+
+def require_host(request: Request) -> None:
+    """Refuse anything that is not the machine Carrot is running on.
+
+    The token check upstream treats a paired device and the desktop as equals,
+    which is right for using the app and wrong for administering it. Without
+    this, a stolen phone token could open a pairing window and enrol more
+    devices — surviving the revocation of the phone it came from, which is the
+    one thing revocation exists to prevent.
+
+    So the controls that decide *who may connect* answer only to the session
+    token, and the session token is only ever handed out over loopback.
+    """
+    presented = (request.headers.get(security_mod.TOKEN_HEADER)
+                 or request.query_params.get(security_mod.TOKEN_QUERY_PARAM))
+    if not security_mod.token_valid(presented):
+        raise HTTPException(
+            status_code=403,
+            detail="This can only be done on the computer running Carrot.")
+
+
+@app.get("/api/pair/state")
+async def pairing_state(request: Request):
+    """What the desktop shows while pairing: the code, and how long it lasts."""
+    require_host(request)
+    return {**pairing_mod.window_state(),
+            "credential": pairing_mod.credential_state(),
+            "devices": pairing_mod.list_devices(),
+            "remote": remote_access_state()}
+
+
+@app.post("/api/pair/open")
+async def pairing_open(request: Request):
+    require_host(request)
+    return pairing_mod.open_window()
+
+
+@app.post("/api/pair/close")
+async def pairing_close(request: Request):
+    require_host(request)
+    return pairing_mod.close_window()
+
+
+# The one public route in this file, and the only one that can be reached by
+# something that has never been trusted. It is rate-limited by the window
+# itself — five wrong codes and there is nothing here to guess at.
+@app.post("/api/pair")
+async def pairing_claim(req: PairClaimRequest, request: Request):
+    try:
+        paired = pairing_mod.claim(
+            req.code, name=req.name,
+            user_agent=request.headers.get("user-agent", ""),
+            username=req.username, password=req.password)
+    except pairing_mod.PairingRefused as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    return paired
+
+
+# What a device has to satisfy, asked by a device that has satisfied nothing
+# yet. Public of necessity: the pairing screen cannot know whether to show a
+# sign-in without asking, and it has no token to ask with.
+#
+# It reveals that a sign-in is required and the name it is under. That is a
+# deliberate trade — the alternative is a form that either always asks for
+# credentials nobody set, or fails after the fact with "wrong password" for a
+# password that was never wanted. Neither the password nor its hash is here.
+@app.get("/api/pair/requirements")
+async def pairing_requirements():
+    state = pairing_mod.credential_state()
+    return {"credentials_required": state["required"],
+            "username": state["username"]}
+
+
+@app.post("/api/pair/credentials")
+async def set_pairing_credentials(req: CredentialRequest, request: Request):
+    """Set the name and password a device must also present. Host only."""
+    require_host(request)
+    try:
+        return pairing_mod.set_credentials(req.username, req.password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/pair/qr")
+async def pairing_qr(request: Request, address: str = ""):
+    """A QR of the address to open, for the camera to read instead of a keyboard.
+
+    The address is *matched against* the ones this machine actually has rather
+    than trusted and echoed back. It arrives as a query parameter and ends up
+    inside an SVG the desktop injects into its own page; validating it against
+    a list we computed is what keeps that from being a way to put arbitrary
+    text there.
+
+    The pairing code is not in here. One scan instead of a scan and six
+    characters would mean writing a live credential into the phone's address
+    bar and history — the same thing this codebase already refused to do with
+    the SSE token. The QR says where; the code says you are the person sitting
+    in front of this screen. Only one of the two is a secret.
+    """
+    require_host(request)
+    known = {row["address"] for row in reachable_addresses()}
+    if address not in known:
+        raise HTTPException(status_code=400, detail="Not an address this machine has.")
+    port = config.get_config().get("server_port", 8181)
+    url = f"http://{address}:{port}"
+    return {"url": url, "svg": pairing_mod.qr_svg(url)}
+
+
+@app.get("/api/devices")
+async def list_paired_devices(request: Request):
+    require_host(request)
+    return {"devices": pairing_mod.list_devices()}
+
+
+@app.delete("/api/devices/{device_id}")
+async def revoke_paired_device(device_id: str, request: Request):
+    require_host(request)
+    if not pairing_mod.revoke(device_id):
+        raise HTTPException(status_code=404, detail="No such device")
+    return {"revoked": True}
+
+
+@app.delete("/api/devices")
+async def revoke_every_paired_device(request: Request):
+    """The panic button. One click, everything signed out, phones included."""
+    require_host(request)
+    return {"revoked": pairing_mod.revoke_all()}
+
+
+# ===== Being reachable at all =====
+#
+# Two separate facts, kept separate because they fail differently: what the
+# config asks for, and what the running process actually bound to. A setting
+# that says "on" next to a server still listening on loopback is the kind of
+# lie that costs somebody an afternoon.
+def remote_access_state() -> Dict[str, Any]:
+    cfg = config.get_config()
+    wanted = bool(cfg.get("remote_access", False))
+    return {
+        "enabled": wanted,
+        "bound_host": BOUND_HOST,
+        "listening_off_machine": listening_off_machine(),
+        # Whether this machine is on a tailnet *right now*, which is a
+        # different question from whether the setting is on and is the one
+        # that explains a phone that has stopped connecting.
+        "tailnet": tailnet_address(),
+        "fallback_reason": BIND_FALLBACK_REASON,
+        # The setting and the socket, compared rather than conflated. Writing
+        # the config does not move a listening socket, and a switch that says
+        # "on" over a server still on loopback is the kind of lie that costs
+        # somebody an afternoon of wondering why their phone cannot connect.
+        "restart_required": wanted != listening_off_machine(),
+        "addresses": reachable_addresses(),
+        "port": cfg.get("server_port", 8181),
+    }
+
+
+class RemoteAccessRequest(BaseModel):
+    enabled: bool = False
+
+
+@app.post("/api/remote-access")
+async def set_remote_access(req: RemoteAccessRequest, request: Request):
+    """Turn listening beyond this machine on or off. Takes effect on restart.
+
+    The bind address is the tailnet interface, never `0.0.0.0` and never
+    something typed into a field. Binding to one interface is what keeps the
+    port off every other network this machine is on — it is the operating
+    system refusing the connection rather than this file deciding to, which is
+    a much better place for that decision to live.
+
+    Refusing when there is no tailnet is the point rather than an inconvenience.
+    The alternative is a switch that says yes, binds to whatever is available,
+    and quietly puts a shell on the school Wi-Fi.
+    """
+    require_host(request)
+    if req.enabled:
+        address = tailnet_address()
+        if not address:
+            raise HTTPException(
+                status_code=409,
+                detail="This machine is not on a tailnet. Install Tailscale and "
+                       "sign in on both devices, then turn this on.")
+        config.set_config("server_host", address)
+    else:
+        config.set_config("server_host", "127.0.0.1")
+    config.set_config("remote_access", bool(req.enabled))
+    if not req.enabled:
+        # Nothing can reach the port any more, so a code still on screen is a
+        # code that cannot be used — but leaving it up implies otherwise.
+        pairing_mod.close_window()
+    return remote_access_state()
+
+
+# ===== One way in, and it is the tailnet =====
+#
+# The LAN was offered first and it should not have been. Two reasons, and the
+# second is the one that decided it:
+#
+# 1. It is unencrypted. Carrot speaks plain HTTP, so on a local network the
+#    device token crosses the air in the clear, and the app it opens runs shell
+#    commands. "Same Wi-Fi" sounds like a boundary and at a school, an office
+#    or a café it is not one.
+#
+# 2. It is the wrong shape for what people actually do. A Chromebook is used
+#    at school; a phone is used on mobile data. An address that only works in
+#    one building answers the easy half of the question and leaves the half
+#    that was asked.
+#
+# Tailscale answers both — WireGuard between the two devices, and only devices
+# you added to your own tailnet can reach the port at all — so it is the only
+# supported way in rather than the recommended one. The difference matters:
+# Carrot now *binds to that interface*, so the socket does not exist on the
+# local network. That is enforced by the operating system rather than by a
+# check in this file, which is the strongest version of this available.
+#
+# The dependency is real and worth naming: this is a third-party account for an
+# app whose argument is that it runs on your machine. It buys the property that
+# nothing else here can provide — a private, encrypted path between two devices
+# that are both yours — and Tailscale's own servers coordinate the connection
+# without carrying the traffic or holding the keys.
+TAILNET_V4_PREFIX = "100."
+
+
+def _is_tailnet_address(address: str) -> bool:
+    """100.64/10, the range Tailscale allocates from."""
+    try:
+        parts = address.split(".")
+        return (address.startswith(TAILNET_V4_PREFIX)
+                and 64 <= int(parts[1]) <= 127 and len(parts) == 4)
+    except (IndexError, ValueError):
+        return False
+
+
+def tailnet_address() -> str:
+    """This machine's tailnet address, or empty if it is not on one."""
+    import socket
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            address = info[4][0]
+            if _is_tailnet_address(address):
+                return address
+    except OSError:
+        pass
+    return ""
+
+
+def reachable_addresses() -> List[Dict[str, str]]:
+    """Where a paired device connects. At most one, and only over Tailscale."""
+    address = tailnet_address()
+    if not address:
+        return []
+    return [{
+        "address": address,
+        "kind": "tailscale",
+        "note": "Private and encrypted end to end. Works anywhere, on any network.",
+    }]
 
 
 @app.get("/api/workspaces")
@@ -6853,4 +7541,10 @@ async def import_backup(req: BackupImportRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8181)
+    # Read from the config rather than hardcoded, which is what it was — so
+    # `carrot start` served loopback however the setting was left, and turning
+    # remote access on did nothing at all unless you happened to be running
+    # the frozen build.
+    uvicorn.run(app,
+                host=note_bound_host(resolve_bind_host()),
+                port=int(config.get_config().get("server_port", 8181)))

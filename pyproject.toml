@@ -34,6 +34,11 @@ dependencies = [
     "numpy>=1.26.0",
     "psutil>=5.9.0",
     "pypdf>=4.0.0",
+    # Pairing a phone shows a QR of the address to open. Pure Python, no
+    # dependencies of its own, and imported defensively — a build that
+    # somehow lacks it falls back to typing the address by hand rather
+    # than losing the ability to pair.
+    "segno>=1.6.0",
 ]
 
 [project.scripts]

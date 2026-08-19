@@ -3,7 +3,9 @@ import '@milkdown/crepe/theme/common/style.css';
 import '@milkdown/crepe/theme/frame-dark.css';
 
 import { commandsCtx, editorViewCtx, schemaCtx } from '@milkdown/kit/core';
-import { callCommand } from '@milkdown/kit/utils';
+import { $prose, callCommand } from '@milkdown/kit/utils';
+import { Plugin, PluginKey } from '@milkdown/kit/prose/state';
+import { Decoration, DecorationSet } from '@milkdown/kit/prose/view';
 import {
   createCodeBlockCommand,
   insertHrCommand,
@@ -37,9 +39,19 @@ window.CarrotCrepe = Crepe;
 // `ctx` slices come along for the ride because "is the cursor bold" is not a
 // command — it is a question about the current selection, answered from the
 // view and the schema.
+// Groups draw their chip as a ProseMirror decoration rather than as classes on
+// the editor's nodes. That is not a style preference: a class put on
+// ProseMirror's own DOM survives about 120ms, because the editor rebuilds that
+// DOM from its document state and drops anything it did not put there. A
+// decoration is part of the state, so the editor redraws the chip instead of
+// discarding it — which means these four have to cross the bundle boundary.
+// `$prose` is how a bare ProseMirror plugin becomes something `editor.use()`
+// accepts.
 window.CarrotMilkdownKit = {
   ctx: { commandsCtx, editorViewCtx, schemaCtx },
   callCommand,
+  $prose,
+  prose: { Plugin, PluginKey, Decoration, DecorationSet },
   commands: {
     undo: undoCommand,
     redo: redoCommand,

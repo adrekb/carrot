@@ -69,21 +69,84 @@ function renderContext() {
         // cannot learn, and "memory: nothing this turn" is information.
         const off = !source.enabled;
         const idle = source.present ? '' : ' idle';
+        // Two controls per row, because they answer different questions. The
+        // tick is "should this go" — that was the whole row before. The eye is
+        // "what *is* this", which had no answer at all: a row reading
+        // "Memory · 1.2k chars" tells you something is being sent about you
+        // and not one word of what.
+        //
+        // The text opens in a window rather than in the row. Ten rows that can
+        // each grow four hundred words is a list that reorders itself under
+        // the hand every time you look at one — and the picker is a thing you
+        // glance at over the composer, not a page.
         return `
-          <button class="context-row${off ? ' off' : ''}${idle}"
-                  ${source.toggleable ? '' : 'disabled'}
-                  data-source="${escHtml(source.id)}"
-                  title="${escHtml(source.detail)}${source.toggleable ? '' : ' — always sent'}">
-            <span class="context-check">${off ? '' : '✓'}</span>
-            <span class="context-name">${escHtml(source.label)}</span>
-            <span class="context-size">${source.present ? contextSize(source.chars) : '—'}</span>
-          </button>`;
+          <div class="context-item${off ? ' off' : ''}${idle}">
+            <div class="context-row">
+              <button class="context-check${source.toggleable ? '' : ' fixed'}"
+                      ${source.toggleable ? '' : 'disabled'}
+                      data-toggle="${escHtml(source.id)}"
+                      aria-pressed="${!off}"
+                      title="${source.toggleable
+                                ? (off ? 'Switch this back on' : 'Leave this out of the prompt')
+                                : 'Always sent — this is what you just asked'}">${off ? '' : '✓'}</button>
+              <span class="context-name" title="${escHtml(source.detail)}">${escHtml(source.label)}</span>
+              <span class="context-size">${source.present ? contextSize(source.chars) : '—'}</span>
+              ${source.present ? `
+              <button class="context-peek" data-open="${escHtml(source.id)}"
+                      title="See exactly what this sends">
+                <svg class="ico"><use href="#i-eye"/></svg>
+              </button>` : '<span class="context-peek-gap"></span>'}
+            </div>
+          </div>`;
     }).join('');
-    for (const row of list.querySelectorAll('.context-row:not([disabled])')) {
-        row.onclick = () => setContextSource(row.dataset.source);
+    for (const cell of list.querySelectorAll('.context-check:not([disabled])')) {
+        cell.onclick = () => setContextSource(cell.dataset.toggle);
+    }
+    for (const cell of list.querySelectorAll('.context-peek')) {
+        cell.onclick = () => openContextSource(cell.dataset.open);
     }
     renderContextMeter(foot);
 }
+
+// The block itself, in a window, as the model receives it.
+//
+// Verbatim rather than described: "your calendar" is a category, and the
+// question behind opening a row is which four events, spelled how. The cap is
+// stated rather than silent — a preview that quietly stops is one that gets
+// trusted about the wrong things.
+function openContextSource(id) {
+    const source = (contextData?.sources || []).find(s => s.id === id);
+    if (!source || !source.present) return;
+    // Where it comes from, for the sources that come from somewhere you can
+    // go. Showing somebody something they object to and offering no way to
+    // change it makes the problem worse.
+    const where = CONTEXT_SOURCE_HOME[source.id];
+    closeContextPop();
+    openReaderPage({
+        title: source.label,
+        sub: source.detail + ' · ' + contextSize(source.chars),
+        text: source.preview || '',
+        cut: source.truncated
+            ? 'Showing the first ' + (source.preview || '').length.toLocaleString()
+              + ' of ' + source.chars.toLocaleString() + ' characters.'
+            : '',
+        // Going on to the settings replaces this page rather than returning to
+        // it — you are leaving, not coming back through.
+        action: where && { label: where.label, onClick: () => switchTab(where.tab) },
+    });
+}
+
+// Only the ones with a home. A skill's instructions and the document you sent
+// are properties of this turn, not settings — there is nowhere to send you.
+const CONTEXT_SOURCE_HOME = {
+    style:    { tab: 'settings', label: 'Change how answers are written' },
+    search:   { tab: 'settings', label: 'Change search settings' },
+    calendar: { tab: 'settings', label: 'Change calendar settings' },
+    screen:   { tab: 'ambient',  label: 'Manage screen history' },
+    memory:   { tab: 'memory',   label: 'Manage what Carrot remembers' },
+    coder:    { tab: 'code',     label: 'Open the Code tab' },
+};
+
 
 // How full the window is.
 //

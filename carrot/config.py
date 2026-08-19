@@ -48,6 +48,10 @@ DEFAULTS = {
     "goals_dir": os.path.join(CARROT_DIR, "goals"),
     "db_path": os.path.join(CARROT_DIR, "carrot.db"),
     "server_host": "127.0.0.1",
+    # Whether Carrot listens beyond this machine. Off is not a default so
+    # much as a boundary: with it off, `server_host` above is what keeps
+    # the API — and the terminal behind it — off the network entirely.
+    "remote_access": False,
     "server_port": 8181,
     "web_ui": True,
     # First run shows the onboarding flow once; skipping still sets this.

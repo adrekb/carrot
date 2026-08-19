@@ -35,11 +35,20 @@ def test_every_class_it_builds_is_styled(cls):
 
 
 def test_the_menu_sits_above_every_other_layer():
-    """A menu opened from a settings modal must not render behind it."""
-    others = [int(z) for z in re.findall(r"z-index: *([0-9]+)", CSS)]
+    """A menu opened from a settings modal must not render behind it.
+
+    The pairing gate is the one thing allowed above it, and it is not a layer
+    of the app: it is the app being unavailable to this device. A dropdown
+    rendering over a screen that means "you are not signed in here" would be a
+    control floating above the reason it cannot be used.
+    """
+    gate = CSS[CSS.index(".pair-gate {"):]
+    gate_z = int(re.search(r"z-index: *([0-9]+)", gate).group(1))
+    others = [int(z) for z in re.findall(r"z-index: *([0-9]+)", CSS) if int(z) != gate_z]
     menu = CSS[CSS.index(".dd-menu {"):]
     top = int(re.search(r"z-index: *([0-9]+)", menu).group(1))
     assert top == max(others)
+    assert gate_z > top
 
 
 def test_option_text_is_never_written_as_html():

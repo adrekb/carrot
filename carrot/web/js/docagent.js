@@ -85,10 +85,18 @@ function renderDestinationPicker() {
         <option value="${escHtml(option.value)}" title="${escHtml(option.help)}"
                 ${option.value === current ? 'selected' : ''}>${escHtml(option.label)}</option>`).join('');
 
+    // "Send", not "Send to Chat". The picker immediately to its left already
+    // says Chat; printing the same word again in the button next to it reads
+    // as two controls that both do something with chat, rather than as one
+    // control and the place it points. Where it goes stays on the hover, for
+    // the button and the picker both.
     const button = document.getElementById('doc-send-btn');
     if (button) {
         const spec = docDestinations.find(d => d.id === docDestination);
-        button.textContent = spec ? `Send to ${spec.label}` : 'Send';
+        button.textContent = 'Send';
+        button.title = spec
+            ? `Send this note (or the selected text) to ${spec.label}`
+            : 'Send this note (or the selected text)';
     }
 }
 
@@ -178,14 +186,22 @@ async function sendDocToAgent() {
 
     const title = document.getElementById('note-title').value.trim() || 'Untitled note';
     const label = partial ? `${title} (selection)` : title;
-    const payload = {
+    await dispatchDoc({
         text,
         note_id: currentNoteId,
         title: label,
         conversation_id: currentConversationId,
         destination: docDestination,
         option: docOption,
-    };
+    }, label);
+}
+
+// Where a piece of a document goes, given a destination. Split out of
+// `sendDocToAgent` so that a *group* — a marked region with its own route —
+// travels the same three paths as the whole note rather than growing a second
+// implementation that drifts from this one.
+async function dispatchDoc(payload, label) {
+    const docDestination = payload.destination;
 
     if (docDestination === 'research') {
         switchTab('research');
@@ -202,7 +218,7 @@ async function sendDocToAgent() {
 
     switchTab('workspace');
     clearChatEmpty();
-    appendMessage('user', text);
+    appendMessage('user', payload.text);
     if (!currentConversationId) {
         document.getElementById('chat-title').textContent = label.slice(0, 42);
     }

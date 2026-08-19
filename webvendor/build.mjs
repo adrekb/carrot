@@ -83,6 +83,16 @@ await esbuild.build({
   assetNames: '[name]-[hash]',
 });
 
+// 6b. Mermaid — exposed as window.mermaid
+//
+// Big, and worth it: a mermaid artifact is a diagram, and until this was here
+// the app rendered the diagram's source code instead of the diagram.
+await esbuild.build({
+  ...common,
+  entryPoints: [path.join(here, 'src', 'mermaid-entry.js')],
+  outfile: path.join(outDir, 'mermaid.js'),
+});
+
 // 7. Monaco web workers (served from /vendor/workers/)
 const workers = {
   'editor.worker': 'monaco-editor/esm/vs/editor/editor.worker.js',

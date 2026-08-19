@@ -57,6 +57,38 @@ class TestPuttingSomethingOnTheSchedule:
         assert made["schedule"] == scheduled.EVERY_DAY
 
 
+class TestWhatItSaid:
+    """The list is the only way the report ever reaches a screen.
+
+    A run leaves two traces: a notification carrying the first 1500 characters,
+    which is dismissed and gone, and `last_output`, which is the copy that
+    lasts. The rail reads the second one out of this payload — so a route that
+    quietly stopped sending it would leave the panel rendering nothing, with
+    every scheduled task still running perfectly and reporting into a void.
+    """
+
+    def test_the_list_carries_what_the_last_run_said(self, client):
+        made = make(client, "summarise the week")
+        scheduled.run_task(scheduled.get(made["id"]),
+                           runner=lambda t: "three commits, no failing tests")
+
+        listed = client.get("/api/scheduled").json()["tasks"][0]
+        assert listed["last_status"] == "ok"
+        assert "three commits" in listed["last_output"]
+
+    def test_a_failed_run_says_so_in_the_same_field(self, client):
+        """The rail opens the same line for both, and labels it from the
+        status — so the failure has to arrive by the same route as the report,
+        not go missing because nothing succeeded."""
+        made = make(client, "check the deploy")
+        scheduled.run_task(scheduled.get(made["id"]),
+                           runner=lambda t: (_ for _ in ()).throw(RuntimeError("provider was down")))
+
+        listed = client.get("/api/scheduled").json()["tasks"][0]
+        assert listed["last_status"] == "failed"
+        assert "provider was down" in listed["last_output"]
+
+
 class TestChangingOne:
 
     def test_pausing_changes_only_enabled(self, client):

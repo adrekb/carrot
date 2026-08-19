@@ -36,14 +36,39 @@ function escHtml(str) {
     return d.innerHTML;
 }
 
-// The backend injects the session token into this page's <head>. It is the
-// only way to obtain it, and the same-origin policy is what keeps another
-// origin from reading it — so every API call has to carry it.
+// The backend injects the session token into this page's <head> — but only
+// for a request that came from this machine. The same-origin policy is what
+// keeps another origin from reading it.
 const CARROT_TOKEN = (document.querySelector('meta[name="carrot-token"]') || {}).content || '';
+
+// The other kind of key: this device's own, kept in local storage because it
+// has to survive the app being closed on a phone, which is most of the time.
+// It is only ever present when the page arrived without a session token —
+// which is to say, on something that is not this computer.
+const DEVICE_TOKEN_KEY = 'carrot-device-token';
+
+function deviceToken() {
+    try { return localStorage.getItem(DEVICE_TOKEN_KEY) || ''; } catch (_) { return ''; }
+}
+
+function setDeviceToken(token) {
+    try {
+        if (token) localStorage.setItem(DEVICE_TOKEN_KEY, token);
+        else localStorage.removeItem(DEVICE_TOKEN_KEY);
+    } catch (_) {}
+}
+
+// The session token wins where it exists, so the desktop app never touches any
+// of this. Off-machine there is no session token and the device's own is the
+// only thing that opens the API.
+function carrotToken() {
+    return CARROT_TOKEN || deviceToken();
+}
 
 function authHeaders(extra = {}) {
     const headers = { 'Content-Type': 'application/json', ...extra };
-    if (CARROT_TOKEN) headers['X-Carrot-Token'] = CARROT_TOKEN;
+    const token = carrotToken();
+    if (token) headers['X-Carrot-Token'] = token;
     return headers;
 }
 
@@ -56,7 +81,8 @@ function authHeaders(extra = {}) {
 // valid for thirty seconds. The copy left in the log is dead before anyone
 // could read it.
 async function tokenUrl(path) {
-    if (!CARROT_TOKEN) return path;
+    const token = carrotToken();
+    if (!token) return path;
     let ticket;
     try {
         ticket = (await api('/api/auth/sse-ticket', { method: 'POST' })).ticket;
@@ -65,16 +91,30 @@ async function tokenUrl(path) {
         // works, and a stream that does not open at all is worse than one
         // whose credential is in a local log file.
         return path + (path.includes('?') ? '&' : '?')
-             + 'carrot_token=' + encodeURIComponent(CARROT_TOKEN);
+             + 'carrot_token=' + encodeURIComponent(token);
     }
     return path + (path.includes('?') ? '&' : '?') + 'ticket=' + encodeURIComponent(ticket);
 }
 
 async function api(path, options = {}) {
+    // Nothing goes out while this device is unpaired. Every module in this app
+    // opens with a fetch on a timer, and behind the pairing screen they would
+    // all be firing requests that cannot succeed — twenty failures a second,
+    // a console full of 401s, and a page that reads as broken rather than
+    // locked. Refusing here stops it at one place instead of twenty.
+    if (typeof needsPairing === 'function' && needsPairing()) {
+        throw new Error('This device is not paired yet.');
+    }
     const resp = await fetch(path, {
         ...options,
         headers: authHeaders(options.headers || {}),
     });
+    // A device token that was revoked on the desktop looks exactly like a
+    // broken app from a phone: everything 401s and nothing says why.
+    if (resp.status === 401 && typeof handleDeviceTokenRejected === 'function'
+        && handleDeviceTokenRejected()) {
+        throw new Error('This device was signed out.');
+    }
     if (!resp.ok) {
         let detail = resp.statusText;
         let raw = null;
@@ -220,6 +260,7 @@ function switchTab(tab) {
     const HOME_TAB = { hub: 'settings', extensions: 'settings', memory: 'settings',
                        leaderboard: 'settings', help: 'settings',
                        research: 'workspace', chats: 'workspace', search: 'workspace',
+                       scheduled: 'workspace', reader: 'workspace',
                        files: 'notes', workspaces: 'notes', inbox: 'notes',
                        goals: 'notes', reminders: 'notes', assignments: 'notes',
                        planner: 'notes', ambient: 'workspace' };
@@ -251,9 +292,53 @@ function switchTab(tab) {
         memory: () => loadMemory(),
         files: () => loadIndex(),
         inbox: () => refreshNotifications(),
+        scheduled: () => loadScheduledPage(),
     };
     if (loaders[tab]) loaders[tab]();
 }
+
+
+// ===== The reader =====
+//
+// One page for "this text was too long for the place it was mentioned". The
+// context picker's blocks and a scheduled run's report both land here, because
+// to the person reading they are the same thing, and two pages that differ
+// only in their heading is two things to maintain and one of them going stale.
+//
+// It is a page rather than a dialog for a reason that cost a round of this:
+// a floating panel over the composer opens *under* the context popover and the
+// command bar, both of which sit high in the stack, and no z-index worth
+// having fixes a thing that is simply the wrong shape. Closing returns you
+// exactly where you were.
+let readerReturnTab = 'workspace';
+
+function openReaderPage({ title, sub, text, cut, action }) {
+    if (!document.getElementById('view-reader')) return;
+    readerReturnTab = (typeof currentTab === 'string' && currentTab
+                       && currentTab !== 'reader') ? currentTab : 'workspace';
+    document.getElementById('reader-title').textContent = title || 'Reading';
+    document.getElementById('reader-sub').textContent = sub || '';
+    document.getElementById('reader-text').textContent = text || '';
+    const cutLine = document.getElementById('reader-cut');
+    cutLine.textContent = cut || '';
+    cutLine.classList.toggle('hidden', !cut);
+    const go = document.getElementById('reader-go');
+    go.classList.toggle('hidden', !action);
+    if (action) {
+        go.textContent = action.label;
+        go.onclick = action.onClick;
+    }
+    switchTab('reader');
+}
+
+function closeReaderPage() {
+    if (!document.getElementById('view-reader')?.classList.contains('active')) return;
+    switchTab(readerReturnTab || 'workspace');
+}
+
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeReaderPage();
+});
 
 
 // ===== Undo, everywhere =====
@@ -289,6 +374,13 @@ async function loadSkillCatalog() {
 }
 
 function cmdKeydown(event) {
+    // The `//` document picker gets the keys first, and only while it is open.
+    // Enter has to send the message every other time, which is why this asks
+    // rather than the picker binding its own listener on the input.
+    if (typeof linkMenuKeydown === 'function' && linkMenuKeydown(event)) {
+        event.preventDefault();
+        return;
+    }
     const pop = document.getElementById('skill-pop');
     const popOpen = !pop.classList.contains('hidden');
     if (event.key === 'Escape' && popOpen) { hideSkillPop(); return; }
@@ -365,30 +457,107 @@ async function showBuildVersion() {
     } catch (_) { /* leave the placeholder */ }
 }
 
+// What the local AI is doing, said to somebody who did not install it.
+//
+// This read "Server unreachable · Ollama", which fails twice over: "Ollama" is
+// the name of software the user never chose and cannot be expected to know,
+// and "server unreachable" describes our plumbing rather than their situation.
+// Worse, that particular string is the one case that is *not* about the local
+// engine at all — it is Carrot's own backend not answering, printed next to
+// the word Ollama, which sends people to restart the wrong thing.
+//
+// So the strip says what is true of their machine in four words, and the panel
+// behind it holds the names, the endpoint and the reason. Same bargain as the
+// privacy chip at the foot of the rail, which is the one status in this app
+// nobody has ever had to ask about.
+let engineStatus = null;
+
 async function refreshStatus() {
     const dot = document.getElementById('engine-dot');
     const label = document.getElementById('engine-label');
     try {
         const s = await api('/api/status');
+        engineStatus = s;
         const ok = s.ollama_available && s.model_loaded;
         dot.className = 'dot ' + (ok ? 'ok' : (s.ollama_available ? 'warn' : 'err'));
-        // The name "Ollama" already sits next to this, so the label is its
-        // state and nothing else. It used to read "Local Engine Active",
-        // which was both louder than the fact and wrong about it: Ollama
-        // being up says nothing about where *this chat* runs, and next to a
-        // conversation routed to a hosted model it read as a claim that the
-        // answers were local. The empty state is what says where answers
-        // come from; this says whether the local engine is there.
-        label.textContent = ok ? 'Ready'
-            : (s.ollama_available ? 'No model' : 'Offline');
+        label.textContent = ok ? 'Local AI ready'
+            : (s.ollama_available ? 'No local model' : 'Local AI unavailable');
         renderEngineCard(s);
+        fillEnginePop();
         return s;
     } catch (e) {
+        engineStatus = { unreachable: true, error: (e && e.message) || String(e) };
         dot.className = 'dot err';
-        label.textContent = 'Server unreachable';
+        // Not "server unreachable": the thing that stopped answering is Carrot
+        // itself, and saying so is both more accurate and more actionable than
+        // naming a component.
+        label.textContent = 'Carrot is not responding';
+        fillEnginePop();
         return null;
     }
 }
+
+function toggleEnginePop() {
+    const pop = document.getElementById('engine-pop');
+    const button = document.getElementById('engine-status');
+    if (!pop) return;
+    const opening = pop.classList.contains('hidden');
+    pop.classList.toggle('hidden', !opening);
+    button?.setAttribute('aria-expanded', String(opening));
+    if (opening) { fillEnginePop(); refreshStatus(); }
+}
+
+// The technical half, one click down. Everything that used to be in the strip
+// is here — the name, whether it is running, which model, and the actual error
+// — plus the sentence that says what to do about it.
+function fillEnginePop() {
+    const body = document.getElementById('engine-pop-body');
+    if (!body) return;
+    const s = engineStatus;
+    if (!s) {
+        body.innerHTML = '<div class="engine-row"><span class="dot"></span>'
+                       + '<span class="name">Checking…</span></div>';
+        return;
+    }
+    if (s.unreachable) {
+        body.innerHTML = '<div class="engine-row"><span class="dot err"></span>'
+            + '<span class="name">Carrot backend</span><span class="val">not answering</span></div>'
+            + '<div class="engine-why">The app is open but its own server is not '
+            + 'responding, so nothing here is about the local model yet. Restarting '
+            + 'Carrot is the fix.</div>'
+            + (s.error ? '<div class="engine-err">' + escHtml(s.error) + '</div>' : '');
+        return;
+    }
+    const model = currentModel || s.default_model || '—';
+    body.innerHTML =
+        '<div class="engine-row"><span class="dot ' + (s.ollama_available ? 'ok' : 'err') + '"></span>'
+      + '<span class="name">Ollama</span>'
+      + '<span class="val">' + (s.ollama_available ? 'running' : 'not running') + '</span></div>'
+      + '<div class="engine-row"><span class="dot ' + (s.model_loaded ? 'ok' : 'warn') + '"></span>'
+      + '<span class="name">Model</span><span class="val">' + escHtml(model) + '</span></div>'
+      + '<div class="engine-why">' + escHtml(engineAdvice(s)) + '</div>';
+}
+
+function engineAdvice(s) {
+    if (!s.ollama_available) {
+        return 'Ollama is the program that runs models on your machine. It is not '
+             + 'running, so Carrot can only use whichever cloud providers you have '
+             + 'set up. Start Ollama and this goes green on its own.';
+    }
+    if (!s.model_loaded) {
+        return 'Ollama is running but has no model pulled yet. Pick one in Settings '
+             + 'and Carrot will download it once.';
+    }
+    return 'Answers can be produced entirely on this machine. Which model a given '
+         + 'chat actually uses is shown at the foot of the rail.';
+}
+
+document.addEventListener('mousedown', (e) => {
+    if (!e.target.closest('#engine-picker')) {
+        document.getElementById('engine-pop')?.classList.add('hidden');
+        document.getElementById('engine-status')?.setAttribute('aria-expanded', 'false');
+    }
+});
 
 function renderEngineCard(s) {
     const el = document.getElementById('card-engine');
@@ -1108,7 +1277,23 @@ let navCollapsed = false;
 let historyFilter = 'all';
 let historyCache = [];
 
+// Narrow enough that the sidebar is a drawer rather than a column. Matches the
+// phone block at the foot of the stylesheet; asked of the browser rather than
+// duplicated as a number, so the two cannot drift apart.
+const PHONE = '(max-width: 640px)';
+
+function onPhone() {
+    return window.matchMedia && window.matchMedia(PHONE).matches;
+}
+
 function toggleNavCollapsed() {
+    // The same button, two jobs, because they are the same intention: give the
+    // page the width back. On a desktop that means a narrower rail; on a phone
+    // there is no width to narrow to, so it slides away entirely.
+    if (onPhone()) {
+        document.body.classList.toggle('nav-open');
+        return;
+    }
     navCollapsed = !navCollapsed;
     document.body.classList.toggle('nav-collapsed', navCollapsed);
     try { localStorage.setItem('carrot-nav-collapsed', navCollapsed ? '1' : '0'); } catch (_) {}
@@ -1116,7 +1301,32 @@ function toggleNavCollapsed() {
     if (btn) btn.title = navCollapsed ? 'Expand the sidebar' : 'Collapse the sidebar';
 }
 
+function closeNavDrawer() {
+    document.body.classList.remove('nav-open');
+}
+
+// Choosing something is the end of the reason the drawer was open. Leaving it
+// covering the thing you just asked for is the single most common way a phone
+// drawer gets this wrong.
+document.addEventListener('click', (e) => {
+    if (!onPhone() || !document.body.classList.contains('nav-open')) return;
+    const nav = e.target.closest('.app-nav');
+    if (!nav) {
+        // The scrim is a pseudo-element, so a tap on it lands on <body> — and
+        // that is also every tap on the page behind it.
+        if (!e.target.closest('#nav-collapse')) closeNavDrawer();
+        return;
+    }
+    if (e.target.closest('.nav-item, .nav-job, .nav-recent, .nav-sched-head, .privacy-chip')) {
+        closeNavDrawer();
+    }
+});
+
 function restoreNavCollapsed() {
+    // Not on a phone. The stored value is a desktop preference, and replaying
+    // it here would either open the drawer over the app on every launch or
+    // toggle a class that means nothing at this width.
+    if (onPhone()) return;
     let stored = '0';
     try { stored = localStorage.getItem('carrot-nav-collapsed') || '0'; } catch (_) {}
     if (stored === '1') toggleNavCollapsed();
@@ -1303,6 +1513,9 @@ async function selectRemoteModel(provider, model) {
         autoModel = false;
         currentModel = model;
         currentProvider = provider;
+        // A group that pins no model names the one Carrot is set to, so the
+        // chips have to hear about this — see js/docgroups.js.
+        if (typeof refreshGroupChips === 'function') refreshGroupChips();
         document.getElementById('model-label').textContent = model;
         renderEmptyStateLine();
         document.getElementById('model-pop').classList.add('hidden');
@@ -1324,6 +1537,9 @@ async function selectModel(name) {
         autoModel = false;
         currentModel = name;
         currentProvider = 'ollama';
+        // A group that pins no model names the one Carrot is set to, so the
+        // chips have to hear about this — see js/docgroups.js.
+        if (typeof refreshGroupChips === 'function') refreshGroupChips();
         document.getElementById('model-label').textContent = name;
         renderEmptyStateLine();
         document.getElementById('model-pop').classList.add('hidden');
@@ -1508,11 +1724,23 @@ function appendMessage(role, content, messageId, extra = {}) {
     // When it was said and what it cost, for the line under it.
     if (extra.at) div.dataset.at = extra.at;
     if (extra.metrics) div.dataset.metrics = JSON.stringify(extra.metrics);
+    // The marker is a placeholder, not prose. It reached the screen as
+    // literal `[[carrot:artifact:acb1e38…]]` above the thing it was standing
+    // in for — because the streaming path strips it and this one, which draws
+    // every message on reload, never did. Six months of saved conversations
+    // have it sitting in their text.
+    //
+    // Stripped for display only: `dataset.raw` above keeps what was actually
+    // said, so Copy still hands back the real message.
     const body = role === 'assistant' && content
-        ? `<div class="content md">${mdToHtml(content)}</div>`
-        : `<div class="content">${escHtml(content)}</div>`;
+        ? `<div class="content md">${mdWithArtifacts(content)}</div>`
+        : `<div class="content">${escHtml(
+              typeof stripArtifactMarkers === 'function'
+                  ? stripArtifactMarkers(content) : content)}</div>`;
     div.innerHTML = `<div class="role-label">${role === 'user' ? 'You' : 'Carrot'}</div>${body}`;
     messagesEl.appendChild(div);
+    // Diagrams and equations become elements once the HTML is in the page.
+    if (typeof hydrateBlocks === 'function') hydrateBlocks(div);
     attachMessageActions(div);
     messagesEl.scrollTop = messagesEl.scrollHeight;
     return div;
@@ -2325,7 +2553,11 @@ async function streamTurn(url, payload, skill) {
                 if (payload.chunk) {
                     if (!full) finishThink();
                     full += payload.chunk;
-                    contentEl.innerHTML = mdToHtml(full);
+                    // Stripped as it streams too. A marker arriving mid-answer
+                    // would flash on screen as literal text and then be
+                    // replaced, which is a worse first impression than either
+                    // of the two states it sits between.
+                    contentEl.innerHTML = mdToHtml(stripArtifactMarkers(full));
                     box.scrollTop = box.scrollHeight;
                 }
                 // The turn ended by asking. The backend has already cut off
@@ -2362,13 +2594,13 @@ async function streamTurn(url, payload, skill) {
         if (askedQuestions && !full) {
             contentEl.innerHTML = '';
         } else if (wasStopped) {
-            contentEl.innerHTML = mdToHtml(full || '');
+            contentEl.innerHTML = mdToHtml(stripArtifactMarkers(full || ''));
             const note = document.createElement('div');
             note.className = 'stopped-note';
             note.textContent = 'Stopped.';
             contentEl.appendChild(note);
         } else {
-            contentEl.innerHTML = full ? mdToHtml(full) : mdToHtml(
+            contentEl.innerHTML = full ? mdToHtml(stripArtifactMarkers(full)) : mdToHtml(
                 'The connection to Carrot ended before any answer arrived. The '
                 + 'backend may have restarted — check that it is running, then ask '
                 + 'again. Anything the turn found is in the trace above.');
@@ -2377,6 +2609,10 @@ async function streamTurn(url, payload, skill) {
             chatQuestions(assistantEl, askedQuestions.questions,
                           askedQuestions.blocking);
         }
+        // Once, at the end. A ```mermaid fence is incomplete for most of the
+        // time it is streaming, and drawing it per chunk would be redrawing a
+        // half-written diagram sixty times to arrive at the one that parses.
+        if (typeof hydrateBlocks === 'function') hydrateBlocks(contentEl);
         // Charts and diagrams land under the finished answer, in the order the
         // model produced them.
         if (pendingArtifacts.length && typeof mountArtifacts === 'function') {
@@ -2607,6 +2843,25 @@ async function submitChatQuestions(box, questions, chosen) {
     await sendChat();
 }
 
+// The Chat button in the rail.
+//
+// Away from Chat it navigates, which is what a nav item does. Already on Chat
+// it starts a new session — the second press of a button whose first press
+// already put you where it goes should do the next obvious thing, and the next
+// obvious thing after "go to chat" is "a fresh one".
+//
+// An empty new session is left alone. Pressing it twice would otherwise clear
+// a blank screen and read as a dead button.
+function goToChat() {
+    const alreadyThere = currentTab === 'workspace'
+        && document.getElementById('view-workspace')?.classList.contains('active');
+    if (alreadyThere && currentConversationId) {
+        newChat();
+        return;
+    }
+    switchTab('workspace');
+}
+
 function newChat() {
     currentConversationId = null;
     document.getElementById('chat-title').textContent = 'New session';
@@ -2824,11 +3079,16 @@ async function openConversation(convId) {
     if (typeof mountArtifacts === 'function') {
         try {
             const { artifacts } = await api(`/api/conversations/${convId}/artifacts`);
-            const last = rendered[rendered.length - 1];
-            const host = last && last.querySelector('.content');
-            if (host && artifacts && artifacts.length) {
-                mountArtifacts(host.parentElement,
-                    artifacts.map(a => `[[carrot:artifact:${a.id}]]`).join(' '));
+            // Every message, not only the last. Each one's own text says which
+            // artifacts belong to it, so the figures land back in the answers
+            // they were part of — they used to be dumped in a stack under
+            // whatever had been said most recently.
+            const byId = new Map((artifacts || []).map(a => [a.id, a]));
+            for (const el of rendered) {
+                const raw = el && el.dataset ? el.dataset.raw : '';
+                if (raw && artifactIdsIn(raw).some(id => byId.has(id))) {
+                    mountArtifacts(el, raw);
+                }
             }
         } catch (_) { /* older conversation, or none stored */ }
     }

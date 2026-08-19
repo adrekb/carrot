@@ -101,56 +101,92 @@ function scheduleActivity() {
 // up: an unbounded recents section pushed "in progress" off the bottom.
 const RAIL_RECENTS = 5;
 
+// Three questions, three sections.
+//
+// This was one box called "In progress" holding all of it, with two counters
+// in the header doing the separating. That reads as one list of
+// things-going-on, and it is not: a research run that is working, a run that
+// died when Carrot was last killed, and a brief that fires on Friday are three
+// different demands on you — watch it, fix it, forget about it. Mixed
+// together, the failed one is the one you miss, because it looks exactly like
+// the scheduled one sitting next to it.
+//
+// So each gets a heading and its own count:
+//
+//   Running          — happening now, you are waiting on it
+//   Needs attention  — stopped, or failed on its own; the only section that
+//                      asks anything of you, and absent whenever nothing is
+//                      wrong
+//   Scheduled        — will happen without you; the calmest thing here
+//
+// Running stays on screen when empty, because it is *where you look* to find
+// out and an absent section answers nothing. The other two are absent when
+// empty: a permanent "nothing has failed" is a box that is right about
+// nothing, and people stop reading those.
 function renderActivity() {
     const host = document.getElementById('nav-activity');
     if (!host) return;
-    const running = activityData.running || [];
+    const jobs = activityData.running || [];
     const recent = activityData.recent || [];
+    const running = jobs.filter(j => j.status === 'running');
+    const stalled = jobs.filter(j => j.status !== 'running');
+    const scheduled = (typeof scheduledTasks !== 'undefined' ? scheduledTasks : []);
+    const active = scheduled.filter(t => t.enabled);
+    const failed = scheduled.filter(t => t.last_status === 'failed');
     host.innerHTML = '';
 
-    // In progress, first, and always — even with nothing in it.
-    //
-    // It moved to the foot on the argument that a moving thing is not missed
-    // there, and moved back because the section that replaced it should not
-    // have existed: the top bar already has a workspace picker, and a second
-    // list of the same workspaces in the rail was two controls for one thing.
-    //
-    // Kept on screen when empty, which is the opposite of what this section
-    // used to do. An empty state that says "nothing running" trains people to
-    // stop reading a panel — unless the panel is *where you look* to find out,
-    // and disappearing entirely is what made "is that research still going?"
-    // unanswerable without opening a tab.
-    const box = document.createElement('div');
-    box.className = 'nav-running';
-    // Two counts, two questions. The accent one is work somebody is waiting
-    // on — chats, research, agent runs. The plain one is work that runs
-    // without anybody, which you check rather than watch, and clicking it
-    // opens what is on the schedule and when each last ran.
-    const scheduled = (typeof scheduledTasks !== 'undefined' ? scheduledTasks : []);
-    const activeScheduled = scheduled.filter(t => t.enabled).length;
-    box.innerHTML = `<div class="nav-sec-head">`
-        + `<span>${running.length && !running.some(j => j.status === 'running')
-            ? 'Needs a look' : 'In progress'}</span>`
-        + `<span class="nav-counts">`
-        +   `<button class="nav-count nav-count-live" data-zero="${running.length ? 0 : 1}"`
-        +     ` title="Running now — you are waiting on these">${running.length}</button>`
-        +   `<button class="nav-count nav-count-sched" data-zero="${activeScheduled ? 0 : 1}"`
-        +     ` onclick="toggleRailScheduled()"`
-        +     ` title="On a schedule — these run without you">${activeScheduled}</button>`
-        + `</span></div>`;
-    if (running.length) {
-        for (const job of running) box.appendChild(activityJobRow(job));
+    // ----- Running -----
+    const live = document.createElement('div');
+    live.className = 'nav-running';
+    live.appendChild(railSectionHead('Running', running.length, {
+        title: 'Happening now — you are waiting on these',
+        accent: true,
+    }));
+    for (const job of running) live.appendChild(activityJobRow(job));
+    if (!running.length) {
+        const idle = document.createElement('div');
+        idle.className = 'nav-idle';
+        idle.textContent = 'Nothing running';
+        live.appendChild(idle);
     }
-    // A line that says what is actually true, in place of the one that used to
-    // say "nothing for now" while four tasks sat on the schedule. Nothing is
-    // running *and* nothing is scheduled is the only case where there is
-    // genuinely nothing, and only then does it say so.
-    const summary = document.createElement('div');
-    summary.className = 'nav-idle';
-    summary.textContent = activitySummaryLine(running, activeScheduled);
-    if (summary.textContent) box.appendChild(summary);
-    if (railScheduledOpen) box.appendChild(railScheduledList());
-    host.appendChild(box);
+    host.appendChild(live);
+
+    // ----- Needs attention -----
+    //
+    // Two unrelated failures in one section on purpose: a job that died when
+    // Carrot was killed and a scheduled run that threw are the same sentence
+    // to the person reading — something did not finish and nobody said so.
+    if (stalled.length || failed.length) {
+        const attention = document.createElement('div');
+        attention.className = 'nav-running nav-attention';
+        attention.appendChild(railSectionHead(
+            'Needs attention', stalled.length + failed.length,
+            { title: 'Stopped or failed — these did not finish', warn: true }));
+        for (const job of stalled) attention.appendChild(activityJobRow(job));
+        for (const task of failed) attention.appendChild(railFailedScheduledRow(task));
+        host.appendChild(attention);
+    }
+
+    // ----- Scheduled -----
+    if (scheduled.length) {
+        const box = document.createElement('div');
+        box.className = 'nav-running nav-scheduled';
+        box.appendChild(railSectionHead('Scheduled', active.length, {
+            title: 'Runs without you — open it to read what they said',
+            onClick: toggleRailScheduled,
+            open: railScheduledOpen,
+        }));
+        if (railScheduledOpen) {
+            box.appendChild(railScheduledList());
+            box.appendChild(activityMoreRow('edit these…', () => switchTab('scheduled')));
+        } else {
+            const line = document.createElement('div');
+            line.className = 'nav-idle';
+            line.textContent = railScheduledSummary(scheduled);
+            box.appendChild(line);
+        }
+        host.appendChild(box);
+    }
 
     if (recent.length) {
         const details = document.createElement('details');
@@ -171,6 +207,56 @@ function renderActivity() {
     }
 
     renderChatResume();
+}
+
+// One heading, one number. The number sits on the heading rather than in a
+// strip of counters at the top, because a count kept away from the thing it
+// counts is a number you have to be taught to read.
+function railSectionHead(label, count, opts = {}) {
+    const head = document.createElement(opts.onClick ? 'button' : 'div');
+    head.className = 'nav-sec-head'
+        + (opts.onClick ? ' is-toggle' : '')
+        + (opts.open ? ' is-open' : '');
+    if (opts.title) head.title = opts.title;
+    head.innerHTML = '<span>' + escHtml(label) + '</span>'
+        + '<span class="nav-count'
+        + (opts.accent ? ' nav-count-live' : '')
+        + (opts.warn ? ' nav-count-warn' : '')
+        + '" data-zero="' + (count ? 0 : 1) + '">' + count + '</span>';
+    if (opts.onClick) head.onclick = opts.onClick;
+    return head;
+}
+
+// A scheduled run that threw, sitting among the jobs that stopped — the same
+// shape as those, because it is the same news.
+//
+// It opens the task itself, like every other row in this rail: a row naming
+// one thing that failed should land on that thing. It used to expand the
+// Scheduled section instead, which answered a question nobody had asked — you
+// clicked a specific failure and got handed the list it was in, with the
+// finding still to do by eye.
+function railFailedScheduledRow(task) {
+    const row = document.createElement('button');
+    row.className = 'nav-job stalled';
+    row.title = task.prompt + ' — this scheduled run failed. Click to open it.';
+    row.innerHTML = `
+        <svg class="ico"><use href="#i-clock"/></svg>
+        <span class="nav-job-text">
+          <span class="nav-job-label">${escHtml(task.prompt)}</span>
+          <span class="nav-job-sub">scheduled run failed</span>
+        </span>`;
+    row.onclick = () => openScheduledTask(task.id);
+    return row;
+}
+
+// The collapsed line. Not the count — that is in the heading beside it, and
+// saying it twice tells you nothing the second time.
+function railScheduledSummary(tasks) {
+    const active = tasks.filter(t => t.enabled);
+    if (!active.length) return 'All paused';
+    const ran = active.filter(t => t.last_run).length;
+    return ran ? active.length + ' waiting · ' + ran + ' have run'
+               : active.length + ' waiting · none have run yet';
 }
 
 // The row at the foot of a capped section. A row rather than a link, because
@@ -217,25 +303,82 @@ function renderChatResume() {
             live: false,
         };
     }
-    if (!what) { host.classList.add('hidden'); host.innerHTML = ''; return; }
+    const standing = chatStandingLine();
+    if (!what && !standing) { host.classList.add('hidden'); host.innerHTML = ''; return; }
     host.classList.remove('hidden');
-    host.innerHTML = `
-        ${what.live ? '<span class="chat-resume-pulse" aria-hidden="true"></span>' : ''}
-        <span class="chat-resume-lead">${escHtml(what.lead)}</span>
-        <span class="chat-resume-label">${escHtml(what.label)}</span>
-        <button class="chat-resume-go">${escHtml(what.action)}</button>`;
-    host.querySelector('.chat-resume-go').onclick =
-        () => (ACTIVITY_OPEN[what.kind] || (() => {}))(what.id);
+    // "Brief me" only where there is a transcript to reconstruct. Resuming a
+    // *running* job is going to watch it happen — there is nothing to be caught
+    // up on, and a button offering to summarise something that has not
+    // finished would be summarising the first half of it.
+    const canBrief = what && !what.live
+                     && (what.kind === 'conversation' || what.kind === 'code');
+    host.innerHTML = (what ? `
+        <div class="chat-resume-row">
+          ${what.live ? '<span class="chat-resume-pulse" aria-hidden="true"></span>' : ''}
+          <span class="chat-resume-lead">${escHtml(what.lead)}</span>
+          <span class="chat-resume-label">${escHtml(what.label)}</span>
+          ${canBrief ? '<button class="chat-resume-brief">Brief me</button>' : ''}
+          <button class="chat-resume-go">${escHtml(what.action)}</button>
+        </div>` : '')
+        + (standing ? `<button class="chat-standing">${escHtml(standing)}</button>` : '')
+        + '<div class="chat-brief hidden" id="chat-brief"></div>';
+    if (what) {
+        host.querySelector('.chat-resume-go').onclick =
+            () => (ACTIVITY_OPEN[what.kind] || (() => {}))(what.id);
+    }
+    if (canBrief) host.querySelector('.chat-resume-brief').onclick = () => briefMe(what);
+    if (standing) host.querySelector('.chat-standing').onclick = () => switchTab('scheduled');
 }
 
-// The row at the foot of a capped section. A row rather than a link, because
-// it is in a column of rows and the hand is already there.
-function activityMoreRow(label, onClick) {
-    const row = document.createElement('button');
-    row.className = 'nav-recent nav-seemore';
-    row.innerHTML = `<span class="nav-recent-label">${escHtml(label)}</span>`;
-    row.onclick = onClick;
-    return row;
+// The one quiet line under it: what is waiting on you, whether or not you were
+// in the middle of anything.
+//
+// The blank screen knew what you were last *doing* and nothing about what is
+// standing — so three scheduled tasks and a failed run were invisible from the
+// exact screen you sit on while deciding what to do next. Counts only, and
+// only when they are non-zero: this sits under the composer, and a line that
+// is always there is a line nobody reads.
+function chatStandingLine() {
+    const scheduled = (typeof scheduledTasks !== 'undefined' ? scheduledTasks : []);
+    const active = scheduled.filter(t => t.enabled).length;
+    const failed = scheduled.filter(t => t.last_status === 'failed').length
+                 + (activityData.running || []).filter(j => j.status !== 'running').length;
+    const parts = [];
+    if (active) parts.push(active + ' scheduled task' + (active === 1 ? '' : 's'));
+    if (failed) parts.push(failed === 1 ? '1 thing needs attention'
+                                        : failed + ' things need attention');
+    return parts.join(' · ');
+}
+
+// Where you left off, before you go back in.
+//
+// Resume puts you back in the room; it does not tell you what was being said
+// in it. The reconstruction is written server-side from the transcript — see
+// /api/resume/brief — and lands in place rather than in a dialog, because it
+// is three sentences and a dialog would be a thing to dismiss.
+async function briefMe(what) {
+    const box = document.getElementById('chat-brief');
+    const button = document.querySelector('.chat-resume-brief');
+    if (!box) return;
+    box.classList.remove('hidden');
+    box.textContent = 'Reading back through it…';
+    if (button) button.disabled = true;
+    try {
+        const data = await api('/api/resume/brief', {
+            method: 'POST',
+            body: JSON.stringify({ conversation_id: what.id }),
+        });
+        box.innerHTML = '<p>' + escHtml(data.brief) + '</p>'
+            // Said, not hidden: a catch-up assembled from the transcript
+            // because no model was there to write one is a different thing
+            // from a summary, and reading it as a summary is the mistake.
+            + (data.written_by === 'transcript'
+                ? '<span class="chat-brief-note">from the transcript — the local model was not available to summarise it</span>'
+                : '');
+    } catch (e) {
+        box.textContent = 'Could not read it back: ' + (e.message || e);
+    }
+    if (button) button.disabled = false;
 }
 
 function activityJobRow(job) {
@@ -283,30 +426,7 @@ window.addEventListener('DOMContentLoaded', () => {
     });
 });
 
-
-// The rail's one-line answer to "what is going on". Running work is broken
-// down by kind, because "3 running" does not tell you whether to wait — three
-// chats and three research runs are different amounts of patience. Scheduled
-// work is counted rather than broken down: it is all the same kind of thing,
-// and the number is the whole answer.
-const ACTIVITY_KIND_NAMES = {
-    research: 'research', chat: 'chat', agent: 'agent',
-    code: 'code', deep_research: 'research',
-};
-
-function activitySummaryLine(running, activeScheduled) {
-    const parts = [];
-    if (running.length) {
-        const counts = {};
-        for (const job of running) {
-            const name = ACTIVITY_KIND_NAMES[job.kind] || job.kind || 'other';
-            counts[name] = (counts[name] || 0) + 1;
-        }
-        // Most of a thing first, so the biggest number is the one you read.
-        const kinds = Object.entries(counts).sort((a, b) => b[1] - a[1]);
-        parts.push(kinds.map(([name, n]) => n + ' ' + name).join(', '));
-    }
-    if (activeScheduled) parts.push(activeScheduled + ' scheduled');
-    if (!parts.length) return 'Nothing for now';
-    return parts.join(' · ');
-}
+// The one-line summary that used to sit under the counters is gone with them.
+// It existed to say "2 chat, 1 research · 3 scheduled" because one box held
+// all of it and the shape had to be described in words; three headed sections
+// with their own counts are the same sentence, drawn.

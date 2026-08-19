@@ -494,12 +494,9 @@ body {
 
 .menubar-right { display: flex; align-items: center; gap: 12px; }
 
-#engine-status {
-  display: flex; align-items: center; gap: 7px;
-  font-size: var(--text-base); color: var(--muted); white-space: nowrap;
-}
-.engine-sep { color: var(--faint); }
-.engine-name { color: var(--muted); }
+/* `#engine-status` is styled with the rest of the local-AI picker further
+   down. `.engine-sep` and `.engine-name` went with the "· Ollama" they set:
+   the product name lives in the panel now, not in the strip. */
 
 .dot {
   width: 8px; height: 8px; border-radius: 50%;
@@ -1176,7 +1173,14 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 .search-row { display: flex; gap: 8px; }
 .search-row input { flex: 1; }
 
-.editor { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
+/* The gap is a token because a group's highlight has to cancel it: three
+   blocks that each paint a background come out as three stripes across a
+   flex gap, and the space belongs to this container rather than to them.
+   Declared here, next to the `gap` it feeds, so the two cannot drift. */
+.editor {
+  --doc-block-gap: 10px;
+  display: flex; flex-direction: column; gap: var(--doc-block-gap); margin-top: 14px;
+}
 .editor textarea { resize: vertical; font-family: var(--sans); line-height: 1.6; }
 .row { display: flex; gap: 8px; }
 
@@ -2617,7 +2621,10 @@ body.nav-collapsed .privacy-chip { justify-content: center; padding: 8px 0; }
 @media (max-width: 900px) {
   #ws-left { display: none; }
   .brand-sub { display: none; }
-  #engine-status { display: none; }
+  /* The whole picker, not just its button — the button now sits in a wrapper
+     that owns the popover, and hiding only the button would leave a panel
+     that can never be opened but can still be on screen. */
+  #engine-picker { display: none; }
   .split-side { width: 180px; }
 }
 
@@ -4927,13 +4934,25 @@ td, th, .si-sub, .small, .editor-status {
   border: 1px solid var(--surface-card-edge);
   box-shadow: var(--shadow-sm);
 }
+/* Quieter than it was. This sits inside an answer, so it is a caption on a
+   figure rather than the title bar of a document — and the Open button only
+   needs to be findable once somebody is already looking at the figure. */
 .artifact-head {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 12px;
+  padding: 7px 12px;
   border-bottom: 1px solid var(--border);
 }
+/* Visible, not hover-revealed. These were hidden until the pointer was over
+   the card, on the argument that they are secondary — and the first thing
+   anybody asked was where the download button was. A control nobody can find
+   is not a quiet control. */
+.artifact-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+.artifact-head .artifact-btn { opacity: 0.75; transition: opacity var(--dur-1) var(--ease); }
+.artifact:hover .artifact-head .artifact-btn,
+.artifact-head .artifact-btn:hover,
+.artifact-head .artifact-btn:focus-visible { opacity: 1; }
 
 /* The working, folded under the answer. Closed by default and quiet when
    closed: it is a footnote to the figure, not a second thing competing with
@@ -5005,7 +5024,14 @@ td, th, .si-sub, .small, .editor-status {
 .artifact-btn:hover { background: var(--card3); border-color: var(--border-hi); }
 /* The frame is a separate origin, so it cannot inherit the page's styling —
    the document it loads carries its own, themed at render time. */
-.artifact-frame { display: block; width: 100%; border: 0; background: transparent; }
+/* The frame sizes itself: the document inside measures its own content and
+   posts the height out (see ARTIFACT_SHIM in features.js). The three fixed
+   heights this replaced were each wrong for something — a two-line chart got
+   380px of empty card, a video got a scrollbar. */
+.artifact-frame {
+  display: block; width: 100%; border: 0; background: transparent;
+  transition: height var(--dur-2) var(--ease);
+}
 .artifact-body { padding: 12px 14px; }
 .artifact-mermaid {
   margin: 0;
@@ -8371,7 +8397,16 @@ select.dd-open { border-color: var(--accent-line); }
    reaches the composer first — it is an offer, not an instruction. Hidden
    entirely when there is nothing to resume, because a row that says "nothing
    yet" is a row that teaches people to stop reading the space. */
+/* The pill moved down a level: this is now a small column — the pill, then the
+   quiet standing line, then the brief when one has been asked for. */
 .chat-resume {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-2);
+  max-width: 100%;
+}
+.chat-resume-row {
   display: flex;
   align-items: center;
   gap: var(--s-3);
@@ -8383,6 +8418,58 @@ select.dd-open { border-color: var(--accent-line); }
   font-size: var(--text-xs);
 }
 .chat-resume.hidden { display: none; }
+/* Secondary to Resume, deliberately. Going back in is the common move; being
+   caught up first is the one you reach for on the thread you have lost the
+   thread of. */
+.chat-resume-brief {
+  flex: none;
+  padding: 3px 10px;
+  border: 1px solid var(--border-hi);
+  border-radius: var(--r-pill);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-2xs);
+  cursor: pointer;
+}
+.chat-resume-brief:hover:not(:disabled) { background: var(--card2); }
+.chat-resume-brief:disabled { opacity: 0.6; cursor: default; }
+/* One line, no box, no icon. It sits under the composer on an empty screen, so
+   anything with a border around it becomes a card, and a card becomes the
+   thing the screen is about — which is meant to be the question you came to
+   ask. */
+.chat-standing {
+  border: 0;
+  background: none;
+  padding: 2px 4px;
+  font: inherit;
+  font-size: var(--text-2xs);
+  color: var(--muted);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--border-hi);
+  text-underline-offset: 3px;
+}
+.chat-standing:hover { color: var(--text); }
+.chat-brief {
+  max-width: 62ch;
+  padding: var(--s-3) var(--s-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--card);
+  font-size: var(--text-xs);
+  line-height: 1.55;
+  color: var(--text);
+  text-align: left;
+}
+.chat-brief.hidden { display: none; }
+.chat-brief p { margin: 0; }
+.chat-brief-note {
+  display: block;
+  margin-top: 6px;
+  font-size: var(--text-2xs);
+  color: var(--faint);
+}
 .chat-resume-lead { color: var(--faint); flex: none; }
 .chat-resume-label {
   color: var(--text);
@@ -9464,33 +9551,242 @@ body.nav-collapsed .nav-job-pulse { left: 6px; }
   box-shadow: var(--shadow);
 }
 #context-pop.hidden { display: none; }
+/* One row, two controls. The tick decides whether the block goes; the name
+   opens it. They were one button, which meant the only thing you could do to
+   a source was silence it — you could never find out what it was you had
+   silenced. */
+.context-item { border-radius: var(--r-xs); }
+.context-item:hover { background: var(--card2); }
 .context-row {
   display: flex; align-items: center; gap: var(--s-3);
   width: 100%;
   padding: 6px 8px;
-  border: 0;
-  border-radius: var(--r-xs);
-  background: none;
   color: var(--text);
-  font: inherit;
   font-size: var(--text-xs);
   text-align: left;
-  cursor: pointer;
 }
-.context-row:hover:not([disabled]) { background: var(--card2); }
 /* Switched off: struck through as well as dimmed, because on a list of ten
    rows a colour change alone reads as "less important" rather than "not
    going". */
-.context-row.off .context-name { text-decoration: line-through; color: var(--faint); }
+.context-item.off .context-name { text-decoration: line-through; color: var(--faint); }
 /* On, but with nothing to contribute this turn. Shown rather than hidden — a
    list that changes length as you type is a list you cannot learn. */
-.context-row.idle .context-name { color: var(--muted); }
-.context-row[disabled] { cursor: default; opacity: 0.75; }
+.context-item.idle .context-name { color: var(--muted); }
 .context-check {
-  width: 12px; flex: none;
+  width: 16px; height: 16px; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0;
+  border: 1px solid var(--border-hi);
+  border-radius: var(--r-xs);
+  background: none;
   color: var(--accent);
+  font: inherit;
+  font-size: var(--text-2xs);
+  cursor: pointer;
+}
+.context-check:hover:not([disabled]) { border-color: var(--accent); }
+/* Not a checkbox at all — this is what you just asked, and offering to leave
+   it out would be offering to ignore the question. */
+.context-check.fixed { border-style: dashed; opacity: 0.7; cursor: default; }
+/* The eye. Quiet until the row is under the pointer — every row has one, and
+   ten of them at full strength would out-shout the ticks, which are the
+   controls that actually change what happens. */
+.context-peek {
+  flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-xs);
+  background: none;
+  color: var(--faint);
+  cursor: pointer;
+  opacity: 0;
+}
+.context-peek .ico { width: 13px; height: 13px; }
+.context-item:hover .context-peek, .context-peek:focus-visible { opacity: 1; }
+.context-peek:hover { color: var(--accent); background: var(--card); }
+.context-peek-gap { width: 20px; flex: none; }
+
+/* ===== Pairing =====
+   The gate covers everything, including the command bar and the popovers,
+   because behind it the app is loaded but not allowed to do anything. */
+.pair-gate {
+  position: fixed; inset: 0; z-index: 9000;
+  display: flex; align-items: center; justify-content: center;
+  padding: var(--s-5);
+  background: var(--bg);
+}
+.pair-gate.hidden { display: none; }
+.pair-card {
+  width: min(420px, 100%);
+  display: flex; flex-direction: column; gap: var(--s-4);
+  padding: var(--s-6);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--card);
+  text-align: center;
+}
+.pair-card h1 { font-size: var(--text-xl); }
+.pair-lead { font-size: var(--text-sm); line-height: 1.6; color: var(--muted); }
+/* Big, spaced and monospaced: this is six characters copied off another
+   screen, and the whole job of the field is to make a mistyped one obvious. */
+.pair-code {
+  padding: var(--s-4);
+  border: 1px solid var(--border-hi);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: var(--text-xl);
+  letter-spacing: 0.28em;
+  text-align: center;
+  text-transform: uppercase;
+}
+.pair-code:focus { outline: none; border-color: var(--accent); }
+.pair-field {
+  display: flex; flex-direction: column; gap: var(--s-2);
+  font-size: var(--text-2xs); color: var(--muted); text-align: left;
+}
+.pair-field input {
+  padding: var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background-color: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+}
+.pair-go { padding: var(--s-3); font-size: var(--text-sm); }
+.pair-note {
+  padding: var(--s-3);
+  border-radius: var(--r-sm);
+  background: var(--card2);
+  font-size: var(--text-xs);
+  color: var(--red);
+}
+.pair-note.hidden { display: none; }
+.pair-fine { font-size: var(--text-2xs); line-height: 1.5; color: var(--faint); }
+
+/* The desktop half. */
+.remote-addresses { display: flex; flex-direction: column; gap: var(--s-2); margin: var(--s-4) 0; }
+.remote-address {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background-color: var(--card2);
+}
+/* The tailnet address, marked because the difference is not cosmetic: over
+   WireGuard the traffic is encrypted between the two devices and the machine
+   is reachable only by things you added to your own network. */
+.remote-address.is-private { border-color: var(--green); }
+.remote-address code { font-family: var(--mono); font-size: var(--text-xs); color: var(--text); }
+.remote-note { font-size: var(--text-2xs); color: var(--muted); }
+.pair-strip {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--s-4);
+  padding: var(--s-3) 0;
+}
+/* Two numbered steps and the things they refer to, in the order they are
+   done: scan, then type. */
+.pair-open {
+  display: flex; flex-direction: column; align-items: center; gap: var(--s-4);
+  margin-top: var(--s-4);
+  padding-top: var(--s-4);
+  border-top: 1px solid var(--border);
+}
+.pair-steps { display: flex; flex-direction: column; align-items: center; gap: var(--s-3); }
+.pair-step {
+  display: flex; align-items: flex-start; gap: var(--s-3);
+  max-width: 44ch;
+  font-size: var(--text-xs);
+  color: var(--text);
+}
+.pair-step-n {
+  flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px;
+  border-radius: var(--r-pill);
+  background: var(--accent-fill, var(--accent));
+  color: var(--on-accent);
   font-size: var(--text-2xs);
 }
+.pair-step-sub { display: block; margin-top: 2px; font-size: var(--text-2xs); color: var(--muted); }
+.pair-step-sub code { font-family: var(--mono); }
+/* White surround, always. A QR needs its quiet zone to be light whatever the
+   app's theme is doing, and a scanner is not a place to express a palette. */
+.pair-qr {
+  display: flex; align-items: center; justify-content: center;
+  padding: var(--s-3);
+  border-radius: var(--r-sm);
+  background: #ffffff;
+  line-height: 0;
+}
+.pair-qr svg { width: 168px; height: 168px; }
+.pair-qr-none {
+  padding: var(--s-4);
+  font-size: var(--text-2xs);
+  color: #555555;
+  line-height: 1.5;
+  max-width: 20ch;
+  text-align: center;
+}
+.pair-qr-pick { display: flex; gap: var(--s-2); flex-wrap: wrap; justify-content: center; }
+.pair-qr-choice {
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--text-2xs);
+  cursor: pointer;
+}
+.pair-qr-choice.on { border-color: var(--accent); color: var(--accent); }
+.pair-showing-code {
+  font-family: var(--mono);
+  font-size: var(--text-xl);
+  letter-spacing: 0.22em;
+  color: var(--accent);
+}
+.pair-showing-sub { font-size: var(--text-2xs); color: var(--muted); }
+.device-list { display: flex; flex-direction: column; gap: var(--s-2); margin-top: var(--s-3); }
+.device-row {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--s-4);
+  padding: var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background-color: var(--card2);
+}
+.device-name { font-size: var(--text-sm); color: var(--text); }
+.device-seen { font-size: var(--text-2xs); color: var(--muted); }
+
+/* One block of the prompt, at reading size, on its own page. */
+.source-sub { margin-top: 2px; font-size: var(--text-xs); color: var(--muted); }
+/* Monospaced, because this is what the model reads: prose type quietly
+   reflows it into something more readable than what is actually being sent. */
+.source-text {
+  margin: 0;
+  max-width: 90ch;
+  padding: var(--s-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow-y: auto;
+}
+.source-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--s-4);
+  margin-top: var(--s-3);
+  min-height: 24px;
+}
+.source-cut { font-size: var(--text-2xs); color: var(--faint); }
+.source-cut.hidden, #reader-go.hidden { display: none; }
 .context-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .context-size {
   flex: none;
@@ -10025,6 +10321,33 @@ body.nav-collapsed .nav-job-pulse { left: 6px; }
 .nav-count-live[data-zero="1"] { background: var(--card2); color: var(--muted); }
 .nav-count-sched[data-zero="1"] { background: var(--card2); color: var(--muted); }
 .nav-count:hover { filter: brightness(1.12); }
+/* Three sections, told apart by their heading rather than by a border each:
+   four boxed panels in a 220px rail is a stack of frames with three or four
+   words inside them. */
+.nav-sec-head.is-toggle {
+  width: 100%;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: var(--text-xs);
+  font-weight: var(--w-bold);
+  color: var(--muted);
+  cursor: pointer;
+  text-align: left;
+}
+.nav-sec-head.is-toggle:hover { color: var(--text); }
+.nav-sec-head.is-toggle > span:first-child::after {
+  content: ' ▸'; color: var(--faint); font-weight: var(--w-body);
+}
+.nav-sec-head.is-open > span:first-child::after { content: ' ▾'; }
+/* The only count that is a colour rather than a number. Nothing else in the
+   rail is red, so this is the one thing that can be found without reading. */
+.nav-count-warn { background: var(--red); color: var(--on-accent); }
+.nav-count-warn[data-zero="1"] { background: var(--card2); color: var(--muted); }
+/* The section itself stays plain. The rows inside it are already marked as
+   stopped, and tinting the container as well says the same thing twice at
+   twice the volume. */
+.nav-attention .nav-sec-head { color: var(--red); }
 .nav-sched-list { margin: 4px 0 2px; display: flex; flex-direction: column; gap: 3px; }
 .nav-sched-item { padding: 5px 8px; border-radius: var(--r-xs); background: var(--card2); }
 .nav-sched-what {
@@ -10033,3 +10356,658 @@ body.nav-collapsed .nav-job-pulse { left: 6px; }
 }
 .nav-sched-when { font-size: var(--text-2xs); color: var(--muted); }
 .nav-sched-item.is-off { opacity: 0.6; }
+/* The head is a button only so the whole row is the target — it keeps the two
+   lines it already had, and gives back everything a <button> would impose. */
+.nav-sched-head {
+  display: block; width: 100%; text-align: left;
+  background: none; border: 0; padding: 0; margin: 0;
+  font: inherit; color: inherit; cursor: pointer;
+}
+.nav-sched-report { color: var(--accent); }
+.nav-sched-item.is-failed .nav-sched-report { color: var(--red); }
+/* The report itself is no longer drawn here. A morning brief is several
+   paragraphs, and unfolding one inside a 220px column pushed the rest of
+   the rail off the bottom — so the row opens it on the reader page and the
+   rail goes back to being a glance. */
+
+/* ===== Local AI, in the menu bar =====
+   A button now, not a label, because the four plain words on it are a summary
+   of three technical facts and somebody eventually wants the facts. */
+#engine-picker { position: relative; }
+#engine-status {
+  display: flex; align-items: center; gap: 7px;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--r-pill);
+  background: none;
+  font: inherit;
+  font-size: var(--text-base);
+  color: var(--muted);
+  white-space: nowrap;
+  cursor: pointer;
+}
+#engine-status:hover { border-color: var(--border-hi); color: var(--text); }
+#engine-pop {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 300px;
+  background: var(--card2);
+  border: 1px solid var(--border-hi);
+  border-radius: var(--r-lg);
+  box-shadow: 0 16px 50px rgba(0, 0, 0, 0.6);
+  padding: 8px;
+  z-index: 800;
+}
+#engine-pop.hidden { display: none; }
+#engine-pop .engine-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 6px;
+  font-size: var(--text-xs);
+}
+#engine-pop .engine-row .name { flex: 1; color: var(--text); }
+#engine-pop .engine-row .val { color: var(--muted); font-size: var(--text-2xs); }
+/* The sentence that says what to do, which is the part the strip cannot hold
+   and the part that actually helps. */
+.engine-why {
+  padding: 6px;
+  margin-top: 4px;
+  border-top: 1px solid var(--border);
+  font-size: var(--text-2xs);
+  line-height: 1.5;
+  color: var(--muted);
+}
+.engine-err {
+  margin: 4px 6px 2px;
+  padding: 5px 6px;
+  border-radius: var(--r-xs);
+  background: var(--bg);
+  font-family: var(--mono);
+  font-size: var(--text-2xs);
+  color: var(--red);
+  overflow-wrap: anywhere;
+}
+
+/* ===== The Scheduled page ===== */
+.page-note {
+  margin: -4px 0 var(--s-5);
+  max-width: 62ch;
+  font-size: var(--text-xs);
+  line-height: 1.55;
+  color: var(--muted);
+}
+.sched-card {
+  padding: var(--s-4);
+  margin-bottom: var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--card);
+}
+.sched-card.is-off { opacity: 0.72; }
+/* A failed run marks its card as well as its report line: on a page of four,
+   the one that needs you should be findable without reading any of them. */
+.sched-card.is-failed { border-color: var(--red); }
+/* Which one you just clicked, for as long as that is a question. */
+.sched-card.is-target {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft, rgba(255, 255, 255, 0.08));
+  transition: box-shadow var(--dur-2) var(--ease), border-color var(--dur-2) var(--ease);
+}
+.sched-card-top {
+  display: flex; align-items: center; gap: var(--s-3);
+  margin-bottom: var(--s-3);
+}
+.sched-state {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
+  background: var(--accent-soft, var(--card2));
+  color: var(--accent);
+  font-size: var(--text-2xs);
+  font-weight: var(--w-semi);
+}
+.sched-state.is-off { background: var(--card2); color: var(--muted); }
+.sched-lastrun { flex: 1; font-size: var(--text-2xs); color: var(--muted); }
+/* The task gets room. It is a sentence somebody wrote for a machine to act on
+   unattended, and a one-line input showing eight words of it is how a mistake
+   in the other forty survives being read. */
+.sched-prompt {
+  width: 100%;
+  padding: var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  resize: vertical;
+}
+.sched-prompt:focus { outline: none; border-color: var(--accent); }
+.sched-fields {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-4);
+  margin-top: var(--s-3);
+}
+.sched-fields label {
+  display: flex; align-items: center; gap: var(--s-2);
+  font-size: var(--text-2xs);
+  color: var(--muted);
+}
+.sched-fields select, .sched-fields input {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background-color: var(--card2);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-xs);
+}
+.sched-report-toggle {
+  margin-top: var(--s-3);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--text-2xs);
+  cursor: pointer;
+}
+.sched-report-toggle.is-failed { color: var(--red); }
+.sched-report {
+  margin-top: var(--s-2);
+  padding: var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+  font-size: var(--text-xs);
+  line-height: 1.55;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+/* ===== Phones =====
+ *
+ * Last in the file on purpose. Everything above is written for a window with
+ * a sidebar in it, and several of those rules are restated further down for
+ * themes and for the Electron shell — a phone block placed earlier would win
+ * some of those arguments and lose others, which is how you get a layout that
+ * is correct in the stylesheet and wrong on the glass.
+ *
+ * The one structural change is the rail. At 375px a 216px sidebar is not a
+ * sidebar, it is most of the screen; and it holds the thing this app is for
+ * on a phone — what is running, what failed, what is scheduled — so hiding it
+ * outright is not an option either. It becomes a drawer: off-canvas, opened
+ * by the button that already collapses it on a desktop, closed by choosing
+ * something or tapping the page.
+ *
+ * Everything else here is a width or a piece of chrome that only earns its
+ * place on a large screen.
+ */
+@media (max-width: 640px) {
+  /* The sidebar stops taking part in the layout, so everything measured from
+     it — the composer especially — measures from the edge instead. */
+  :root { --nav-w: 0px; }
+
+  .app-nav {
+    position: fixed;
+    top: 48px; bottom: 0; left: 0;
+    width: 272px;
+    z-index: 700;
+    transform: translateX(-100%);
+    transition: transform var(--dur-2) var(--ease);
+    box-shadow: 12px 0 40px rgba(0, 0, 0, 0.45);
+  }
+  body.nav-open .app-nav { transform: none; }
+  /* The scrim is what makes "tap anywhere else" work, and it only exists
+     while the drawer is open — a permanent overlay with zero opacity still
+     eats every tap on the page underneath. */
+  body.nav-open::after {
+    content: ""; position: fixed; inset: 48px 0 0 0;
+    background: var(--scrim, rgba(0, 0, 0, 0.5));
+    z-index: 690;
+  }
+  /* On a phone the collapsed rail is meaningless — there is no column to
+     narrow — so the desktop's 60px mode must not survive into the drawer. */
+  body.nav-collapsed .app-nav { width: 272px; }
+  body.nav-collapsed .nav-label,
+  body.nav-collapsed .nav-group,
+  body.nav-collapsed .privacy-text { display: revert; }
+
+  /* The header keeps what it needs to: the drawer button, who this is, and
+     where the answers come from. Search has Ctrl+K and the palette. */
+  #menubar { gap: 8px; padding: 0 8px; }
+  .top-search { display: none; }
+  .brand-sub { display: none; }
+  #ws-label { display: none; }
+  #ws-btn { padding: 4px 8px; }
+  #ws-pop { width: min(300px, calc(100vw - 24px)); }
+
+  /* The composer, edge to edge and pinned to the bottom. On a desktop the
+     blank screen centres it under the question, which is the right shape for
+     a window; on a phone `top: 50%` is measured against the layout viewport,
+     so the moment the keyboard opens the box you are typing into is behind
+     it. Bottom-anchored is also simply where a phone keyboard expects the
+     thing it is attached to. */
+  #cmdbar,
+  body.chat-blank #cmdbar {
+    left: 8px; right: 8px; bottom: 8px;
+    top: auto;
+    width: auto;
+    margin-inline: 0;
+  }
+  /* The control row is six chips and a model name. At 333px they do not fit
+     on one line, and a row that overflows its own rounded box takes the last
+     control off the edge of the screen — which here was the model picker. */
+  #cmd-row { flex-wrap: wrap; row-gap: 6px; }
+  #model-label { max-width: 12ch; overflow: hidden; text-overflow: ellipsis; }
+
+  /* Pages stop being a column inside a column. */
+  .page { padding: var(--s-4) var(--s-4) 96px; }
+  .page-head { flex-wrap: wrap; gap: var(--s-3); }
+  .page-head h2 { font-size: var(--text-lg); }
+
+  /* The one line under the composer wraps rather than pushing the screen
+     sideways, which is what it was doing at 375px. */
+  .chat-resume { max-width: 100%; }
+  .chat-resume-row { flex-wrap: wrap; justify-content: center; }
+  .chat-resume-label { max-width: 100%; }
+
+  /* Long text, in the two places this app puts it. */
+  .source-text { max-width: 100%; font-size: var(--text-2xs); }
+  .sched-fields { gap: var(--s-3); }
+  .sched-card { padding: var(--s-3); }
+
+  /* Settings was a two-column grid of cards. */
+  .settings-tabs { overflow-x: auto; }
+  .remote-address code { font-size: var(--text-2xs); }
+}
+
+/* ===== The shared sign-in, on the host ===== */
+.cred-block {
+  margin: var(--s-4) 0;
+  padding: var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background-color: var(--card2);
+}
+.cred-head { font-size: var(--text-sm); color: var(--text); }
+.cred-head code { font-family: var(--mono); color: var(--accent); }
+.cred-sub { margin: 2px 0 var(--s-3); font-size: var(--text-2xs); line-height: 1.5; color: var(--muted); }
+.cred-form { display: flex; flex-wrap: wrap; gap: var(--s-2); align-items: center; }
+.cred-form input {
+  flex: 1; min-width: 130px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background-color: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-xs);
+}
+.cred-note { flex-basis: 100%; font-size: var(--text-2xs); color: var(--red); }
+/* The switch is unusable until Tailscale is there, and a control that looks
+   available and refuses is worse than one that looks unavailable. */
+.switch-row.is-blocked { opacity: 0.6; }
+
+/* An artifact that sits inside the answer rather than after it.
+   The slot is where the marker was, so the figure keeps the prose's column
+   and the spacing of a paragraph — the whole point being that it reads as
+   part of what was said rather than as an attachment underneath it. */
+.artifact-slot { display: block; margin: 12px 0; }
+.artifact-slot:first-child { margin-top: 0; }
+.artifact-slot:last-child { margin-bottom: 0; }
+.artifact-slot .artifact { width: 100%; }
+
+/* Icon actions on an artifact. Small, quiet, and labelled for anything that
+   is not a pointer — an unlabelled icon button is a guess. */
+.artifact-icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 24px; padding: 0;
+}
+.artifact-icon-btn .ico { width: 14px; height: 14px; }
+.artifact-icon-btn.is-done { color: var(--green); border-color: var(--green); }
+
+/* Correcting the source, with the result redrawn underneath on save. */
+.artifact-editor { display: flex; flex-direction: column; gap: var(--s-3); padding: var(--s-4); }
+.artifact-source {
+  width: 100%;
+  min-height: 46vh;
+  padding: var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  line-height: 1.55;
+  resize: vertical;
+  white-space: pre;
+  overflow-wrap: normal;
+  overflow-x: auto;
+}
+.artifact-source:focus { outline: none; border-color: var(--accent); }
+.artifact-editor-bar { display: flex; align-items: center; justify-content: flex-end; gap: var(--s-3); }
+.artifact-editor-note { font-size: var(--text-2xs); color: var(--muted); }
+
+/* Diagrams and equations that came out of a fenced block, sitting in prose.
+   No card and no border: they are part of the sentence around them, which is
+   the whole reason for rendering them instead of printing their source. */
+.md-mermaid, .artifact-mermaid {
+  display: flex; justify-content: center;
+  padding: var(--s-3) 0;
+  overflow-x: auto;
+}
+.md-mermaid svg, .artifact-mermaid svg { max-width: 100%; height: auto; }
+.md-math { padding: var(--s-3) 0; overflow-x: auto; }
+/* A diagram one line away from working. The message first, then the source it
+   came from — hiding both would hide the mistake and the content. */
+.mermaid-error {
+  font-size: var(--text-2xs);
+  color: var(--red);
+  margin-bottom: var(--s-2);
+}
+.artifact-mermaid-source {
+  font-family: var(--mono);
+  font-size: var(--text-2xs);
+  color: var(--muted);
+  white-space: pre-wrap;
+  margin: 0;
+}
+.artifact-mermaid { flex-direction: column; align-items: stretch; padding: var(--s-4); }
+
+/* ===== Open documents =====
+   A browser's strip, because that is the one everybody already has. It sits
+   above the document's own toolbar so the order on screen matches the order in
+   your head: which document, then what to do with it. */
+.doc-tabs {
+  display: flex; align-items: stretch; gap: 2px;
+  padding: 6px 8px 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+}
+.doc-tabs.hidden { display: none; }
+.doc-tab {
+  display: flex; align-items: center; gap: 6px;
+  max-width: 190px; min-width: 96px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
+  background: none;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  user-select: none;
+}
+.doc-tab:hover { background: var(--card2); color: var(--text); }
+/* The active one is the page it is attached to: same ground as the editor
+   under it, so the tab and the document read as one surface. */
+.doc-tab.on {
+  background: var(--bg);
+  border-color: var(--border);
+  color: var(--text);
+}
+.doc-tab .ico { width: 13px; height: 13px; flex: none; opacity: 0.75; }
+.doc-tab-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.doc-tab-close {
+  flex: none;
+  width: 16px; height: 16px;
+  padding: 0;
+  border: 0; border-radius: var(--r-xs);
+  background: none;
+  color: var(--faint);
+  font-size: var(--text-sm);
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+}
+.doc-tab:hover .doc-tab-close, .doc-tab.on .doc-tab-close { opacity: 1; }
+.doc-tab-close:hover { background: var(--card3); color: var(--text); }
+
+/* ===== The `//` document picker =====
+   Above the composer, because the composer is pinned to the bottom of the
+   window and there is never room underneath it. */
+.link-menu {
+  position: fixed;
+  z-index: 820;
+  max-height: 320px;
+  display: flex; flex-direction: column;
+  border: 1px solid var(--border-hi);
+  border-radius: var(--r-lg);
+  background: var(--card2);
+  box-shadow: 0 16px 50px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+.link-menu.hidden { display: none; }
+/* The filter row stays even when the list under it is empty: it is very often
+   the reason the list is empty. */
+.link-filters {
+  display: flex; gap: 4px; flex-wrap: wrap;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.link-filter {
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--text-2xs);
+  cursor: pointer;
+}
+.link-filter:hover { color: var(--text); }
+.link-filter.on { border-color: var(--accent); color: var(--accent); }
+.link-list { overflow-y: auto; padding: 4px; }
+.link-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--r-xs);
+  font-size: var(--text-xs);
+  color: var(--text);
+  cursor: pointer;
+}
+.link-item .ico { width: 13px; height: 13px; color: var(--faint); flex: none; }
+.link-item.active, .link-item:hover { background: var(--card3); }
+.link-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.link-empty { padding: 10px; font-size: var(--text-2xs); color: var(--faint); }
+
+/* ===== Groups =====
+   A marked region of a document that carries its own destination and model.
+
+   Everything here is applied by a ProseMirror decoration rather than by a pass
+   over the editor's DOM — see docgroups.js for the measurement that forced
+   that. The consequence for this file is that the chip is a real element:
+   `.cg-chip` and its two buttons, not a `::before` with a `content:` string
+   and a guess about which end of it was clicked.
+
+   **A group is a highlight, not a bracket.** The first drawing was a tab above
+   the text and a rule below it, which is how a *boundary* is drawn: it says
+   where the group starts and stops and leaves you to infer that the prose
+   between them is the thing. A group with two paragraphs in it read as two
+   paragraphs that happened to have a label nearby. It is one region, so it is
+   drawn as one — a filled box in the group's own colour at low alpha, with the
+   chip sitting in it at full strength. Same hue twice, because it is the same
+   fact stated twice: this is where that text goes.
+
+   Everything here needs `.milkdown` in front of it. Crepe styles the prose with
+   `.milkdown .ProseMirror p`, and a bare `.ProseMirror .cg-body` loses to it on
+   specificity — silently, and only for the properties it also sets, which is
+   how the padding here went missing while the colours applied. */
+
+/* The markers keep their real text, because it is the file's text. Milkdown
+   renders a comment as `span[data-type="html"]`, so that is what gets hidden;
+   the `font-size: 0` underneath catches a marker still being typed, which is
+   plain text until the editor re-parses it. The chip sets its own type size,
+   so hiding the paragraph's does not reach it. */
+.milkdown .ProseMirror .cg-marker {
+  font-size: 0;
+  line-height: 0;
+  user-select: none;
+  caret-color: transparent;
+}
+.milkdown .ProseMirror .cg-marker > span[data-type="html"] { display: none; }
+
+/* The box. Three kinds of block share it — the opening marker that carries the
+   chip, the prose between, the closing marker that is only the bottom edge —
+   so the fill and the gutter are set once on all of them, and the corners are
+   rounded only where the region actually ends.
+
+   The negative left/right margin cancels the padding, so text inside the
+   highlight sits on the same left edge as text outside it. A region that
+   indents its contents reads as a quote, which is a different claim about the
+   text.
+
+   The negative *bottom* margin cancels something else: the document is a flex
+   column with a gap between blocks, so three blocks that each paint a
+   background come out as three stripes rather than one box, and no amount of
+   margin-zeroing closes it — the space belongs to the container, not to them.
+   `--doc-block-gap` is declared on `.editor` alongside the `gap` it feeds, so
+   the two cannot drift apart; the literal here is only a fallback for a group
+   drawn outside that container. */
+.milkdown .ProseMirror .cg-open,
+.milkdown .ProseMirror .cg-body,
+.milkdown .ProseMirror .cg-close {
+  margin-left: -14px;
+  margin-right: -14px;
+  padding-left: 14px;
+  padding-right: 14px;
+  margin-top: 0;
+}
+.milkdown .ProseMirror .cg-open,
+.milkdown .ProseMirror .cg-body {
+  margin-bottom: calc(-1 * var(--doc-block-gap, 10px));
+}
+.milkdown .ProseMirror .cg-open {
+  margin-top: 8px;
+  padding-top: 8px;
+  padding-bottom: 0;
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
+}
+.milkdown .ProseMirror .cg-body { padding-top: 5px; padding-bottom: 5px; }
+.milkdown .ProseMirror .cg-close {
+  height: 8px;
+  margin-bottom: 8px;
+  padding: 0 14px;
+  border-radius: 0 0 var(--r-lg) var(--r-lg);
+}
+
+.milkdown .ProseMirror .cg-chip {
+  display: inline-flex;
+  align-items: stretch;
+  margin-bottom: 5px;
+  border-radius: var(--r-pill);
+  overflow: hidden;
+  font-size: var(--text-2xs);
+  line-height: 1.6;
+  font-family: var(--sans);
+  letter-spacing: 0;
+  vertical-align: bottom;
+}
+.milkdown .ProseMirror .cg-chip button {
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.milkdown .ProseMirror .cg-chip-route {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 6px 3px 11px;
+}
+/* 🖥 or ☁ — where the model runs, which is the one thing about a route you
+   cannot read off its name. */
+.milkdown .ProseMirror .cg-chip-icon { font-size: var(--text-xs); line-height: 1; }
+.milkdown .ProseMirror .cg-chip-arrow { opacity: 0.6; }
+/* A model the group did not choose is drawn as what it is: the answer, but
+   borrowed from the app rather than pinned here. Same text, less weight — the
+   alternative was a blank, which reads as unanswered. */
+.milkdown .ProseMirror .cg-chip-model.cg-inherited { opacity: 0.72; font-style: italic; }
+.milkdown .ProseMirror .cg-chip-files { opacity: 0.85; }
+.milkdown .ProseMirror .cg-chip-edit {
+  padding: 3px 5px;
+  opacity: 0.72;
+  font-size: var(--text-xs);
+}
+.milkdown .ProseMirror .cg-chip-send {
+  padding: 3px 10px 3px 5px;
+  opacity: 0.85;
+}
+.milkdown .ProseMirror .cg-chip-edit:hover,
+.milkdown .ProseMirror .cg-chip-send:hover { opacity: 1; }
+.milkdown .ProseMirror .cg-chip-route:hover { filter: brightness(1.08); }
+
+/* Six colours, cycled, so neighbouring groups are told apart. Each is stated
+   twice at two strengths: solid on the chip, and at 12% behind the prose it
+   governs. `color-mix` rather than six more hex literals, because the tint has
+   to stay the chip's colour when the palette changes. */
+.milkdown .ProseMirror .cg-chip.cg-c0 { background: var(--series-1); color: var(--on-accent); }
+.milkdown .ProseMirror .cg-chip.cg-c1 { background: var(--series-2); color: var(--on-accent); }
+.milkdown .ProseMirror .cg-chip.cg-c2 { background: var(--series-3); color: var(--on-accent); }
+.milkdown .ProseMirror .cg-chip.cg-c3 { background: var(--series-4); color: var(--on-accent); }
+.milkdown .ProseMirror .cg-chip.cg-c4 { background: var(--series-5); color: var(--on-accent); }
+.milkdown .ProseMirror .cg-chip.cg-c5 { background: var(--series-6); color: var(--on-accent); }
+.milkdown .ProseMirror .cg-c0.cg-open, .milkdown .ProseMirror .cg-c0.cg-body, .milkdown .ProseMirror .cg-c0.cg-close {
+  background: color-mix(in srgb, var(--series-1) 12%, transparent);
+}
+.milkdown .ProseMirror .cg-c1.cg-open, .milkdown .ProseMirror .cg-c1.cg-body, .milkdown .ProseMirror .cg-c1.cg-close {
+  background: color-mix(in srgb, var(--series-2) 12%, transparent);
+}
+.milkdown .ProseMirror .cg-c2.cg-open, .milkdown .ProseMirror .cg-c2.cg-body, .milkdown .ProseMirror .cg-c2.cg-close {
+  background: color-mix(in srgb, var(--series-3) 12%, transparent);
+}
+.milkdown .ProseMirror .cg-c3.cg-open, .milkdown .ProseMirror .cg-c3.cg-body, .milkdown .ProseMirror .cg-c3.cg-close {
+  background: color-mix(in srgb, var(--series-4) 12%, transparent);
+}
+.milkdown .ProseMirror .cg-c4.cg-open, .milkdown .ProseMirror .cg-c4.cg-body, .milkdown .ProseMirror .cg-c4.cg-close {
+  background: color-mix(in srgb, var(--series-5) 12%, transparent);
+}
+.milkdown .ProseMirror .cg-c5.cg-open, .milkdown .ProseMirror .cg-c5.cg-body, .milkdown .ProseMirror .cg-c5.cg-close {
+  background: color-mix(in srgb, var(--series-6) 12%, transparent);
+}
+
+.group-menu {
+  position: fixed; z-index: 900;
+  width: 260px; max-height: 320px;
+  display: flex; flex-direction: column;
+  border: 1px solid var(--border-hi);
+  border-radius: var(--r-lg);
+  background: var(--card2);
+  box-shadow: 0 16px 50px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+.group-menu-head {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-2xs);
+  color: var(--muted);
+}
+.group-menu-list { overflow-y: auto; padding: 4px; }
+.group-menu-item, .group-menu-skip {
+  display: block; width: 100%;
+  padding: 6px 8px;
+  border: 0; border-radius: var(--r-xs);
+  background: none;
+  color: var(--text);
+  font: inherit; font-size: var(--text-xs);
+  text-align: left;
+  cursor: pointer;
+}
+.group-menu-item:hover, .group-menu-skip:hover { background: var(--card3); }
+/* Already attached. The same row both attaches and detaches, so it has to
+   say which of the two a click would do. */
+.group-menu-item.on { color: var(--accent); }
+.group-menu-item.on::before { content: "¹3  "; }
+.group-menu-skip {
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  color: var(--muted);
+  font-size: var(--text-2xs);
+}

@@ -13,6 +13,56 @@
 </head>
 <body>
 
+<!-- What a phone sees before it is allowed in.
+
+     The page loads for anyone who can reach the port; the session token does
+     not travel with it unless the request came from this machine. So an
+     unpaired device gets the whole app and none of the access, and this covers
+     it until a code has been typed.
+
+     The code is showing on the computer running Carrot, which means whoever is
+     pairing is whoever is sitting at it. That is the entire authentication
+     story and it is deliberately a short one — behind this screen is a
+     terminal, and anything more elaborate would be inventing an account
+     system for an app that has no server and no users. -->
+<div id="pair-gate" class="pair-gate hidden">
+  <div class="pair-card">
+    <h1>Pair this device</h1>
+    <p class="pair-lead">Carrot is running on your computer. Open
+      <strong>Settings → Your phone</strong> there, start pairing, and type the
+      six characters it shows.</p>
+    <input type="text" id="pair-code" class="pair-code" maxlength="6"
+           autocomplete="off" autocapitalize="characters" autocorrect="off"
+           spellcheck="false" inputmode="text" placeholder="ABC123"
+           aria-label="Pairing code">
+    <!-- Shown only when the computer has a sign-in set. Asking for a password
+         nobody chose is how a form teaches people that its fields are
+         optional. -->
+    <div id="pair-credentials" class="hidden">
+      <label class="pair-field">
+        <span>Name</span>
+        <input type="text" id="pair-username" autocomplete="username"
+               autocapitalize="none" autocorrect="off" spellcheck="false">
+      </label>
+      <label class="pair-field">
+        <span>Password</span>
+        <input type="password" id="pair-password" autocomplete="current-password">
+      </label>
+    </div>
+    <label class="pair-field">
+      <span>Call this device</span>
+      <input type="text" id="pair-name" maxlength="60" autocomplete="off"
+             placeholder="My phone">
+    </label>
+    <button id="pair-submit" class="btn btn-primary pair-go"
+            onclick="submitPairingCode()">Pair</button>
+    <p id="pair-note" class="pair-note hidden"></p>
+    <p class="pair-fine">This device gets its own key. You can sign it out from
+      the computer at any time, and it will stop working immediately.</p>
+  </div>
+</div>
+
+
 <!-- SVG icon sprite -->
 <svg xmlns="http://www.w3.org/2000/svg" style="display:none">
   <!-- One 24x24 grid, 1.7px strokes, round caps and joins, 2px optical
@@ -358,12 +408,25 @@
         </div>
       </div>
     </div>
-        <span id="engine-status">
-      <span id="engine-dot" class="dot"></span>
-      <span id="engine-label">Connecting</span>
-      <span class="engine-sep">·</span>
-      <span class="engine-name">Ollama</span>
-    </span>
+    <!-- What the local AI is doing, in words a person can act on.
+         It used to read "Server unreachable · Ollama", which names a piece of
+         software the user never installed on purpose and a failure mode that
+         is ours, not theirs. The name and the reason are still here — one
+         click down, in the panel, where the people who want them look. Same
+         shape as the privacy chip at the foot of the rail: a dot, two words,
+         and the technical detail behind them. -->
+    <div id="engine-picker">
+      <button id="engine-status" onclick="toggleEnginePop()"
+              aria-haspopup="dialog" aria-expanded="false"
+              title="Local AI — click for the detail">
+        <span id="engine-dot" class="dot"></span>
+        <span id="engine-label">Checking…</span>
+      </button>
+      <div id="engine-pop" class="hidden" role="dialog" aria-label="Local AI status">
+        <div class="pop-section">Local AI</div>
+        <div id="engine-pop-body"></div>
+      </div>
+    </div>
   </div>
 </header>
 
@@ -404,12 +467,23 @@
          Work      documents, files, workspaces, maps, the things you owe
          Code      the editor and its tree
          Settings  extensions, memory, help, leaderboard, the model hub -->
-  <button class="nav-item active" data-tab="workspace" onclick="switchTab('workspace')">
+  <!-- Chat is the only nav item that is also a verb. Pressing it from
+       somewhere else means "take me to my conversation"; pressing it while
+       already in one means "start a new one" — which is what every other app
+       with a compose button does, and what people try here first. -->
+  <button class="nav-item active" data-tab="workspace" onclick="goToChat()">
     <svg class="ico"><use href="#i-chat"/></svg><span class="nav-label">Chat</span>
   </button>
   <button class="nav-item" data-tab="notes" onclick="switchTab('notes')">
     <svg class="ico"><use href="#i-folder"/></svg><span class="nav-label">Work</span>
-    <span id="notification-badge" class="notif-badge hidden">0</span>
+    <!-- Unread notifications, not documents.
+         It sits on Work because Inbox lives under Work, and an unexplained
+         number beside the word "Work" reads as a count of the things Work
+         contains — which is documents. It says what it is now, on hover and
+         to a screen reader, and `renderNotificationBadge` keeps that current
+         as the count changes. -->
+    <span id="notification-badge" class="notif-badge hidden"
+          title="Unread notifications" aria-label="Unread notifications">0</span>
   </button>
   <button class="nav-item" data-tab="code" onclick="switchTab('code')">
     <svg class="ico"><use href="#i-terminal"/></svg><span class="nav-label">Code</span>
@@ -711,12 +785,17 @@
          Editing is then the whole width. -->
     <div class="split">
       <div class="split-main">
+        <!-- Several documents open at once, in the one arrangement everybody
+             already knows. Absent while only one is open: a single tab is
+             chrome that explains itself and nothing else. -->
+        <div id="doc-tabs" class="doc-tabs hidden"></div>
         <div class="editor-toolbar" id="note-toolbar">
           <!-- The way back, now that there is no list down the side. First in
                the toolbar, in the same place in every format. -->
           <button class="icon-btn write-back" title="All documents" onclick="showWriteStart()">
             <svg class="ico"><use href="#i-grid"/></svg></button>
-          <input type="text" id="note-title" class="title-input" placeholder="Untitled note" oninput="scheduleNoteSave()">
+          <input type="text" id="note-title" class="title-input" placeholder="Untitled note"
+                 oninput="scheduleNoteSave(); if (typeof docTabTitleChanged === 'function') docTabTitleChanged(currentNoteId, this.value)">
           <span id="note-status" class="editor-status"></span>
           <span id="note-words" class="editor-words"></span>
           <select id="doc-destination" class="doc-destination"
@@ -1316,6 +1395,61 @@
         <button class="btn btn-primary" onclick="scanAssignments()">Scan files</button>
       </div>
       <div id="assignments-list" class="list"></div>
+    </div>
+  </section>
+
+  <!-- One long text, full size — a block of the prompt, or what a scheduled
+       run reported.
+
+       A layer over the composer was the wrong shape twice over: it landed
+       under the context popover and the command bar, both of which sit far
+       higher in the stack, and a floating panel is the wrong container for
+       something you read rather than answer. So it is a page — you go to it,
+       and closing it puts you back exactly where you were, which is what
+       every other detour in this app does.
+
+       One page rather than one per caller. These are the same thing to the
+       person reading: text that was too long for the place it was mentioned.
+       What differs is the one button at the foot, which is where whoever
+       opened it says what to do next — a page that shows you something you
+       want to act on and offers no way to is worse than no page. -->
+  <section id="view-reader" class="view">
+    <div class="page">
+      <div class="page-head">
+        <div>
+          <h2 id="reader-title">Reading</h2>
+          <div id="reader-sub" class="source-sub"></div>
+        </div>
+        <button class="btn btn-ghost" onclick="closeReaderPage()">Close</button>
+      </div>
+      <pre id="reader-text" class="source-text"></pre>
+      <div class="source-foot">
+        <span id="reader-cut" class="source-cut hidden"></span>
+        <button id="reader-go" class="btn btn-ghost small hidden"></button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Scheduled work.
+
+       The rail answers "did it run"; this answers "and I want it to run at
+       eight, not nine". Editing lived nowhere before: the panel by the
+       composer could pause or delete a task and that was the whole of it, so
+       changing the time on a daily brief meant deleting it and writing it out
+       again from memory.
+
+       Creating still happens at the composer, and this page says so rather
+       than growing a second box to write a task in — a scheduled task is an
+       agent task, and there should be one place you describe the work. -->
+  <section id="view-scheduled" class="view">
+    <div class="page">
+      <div class="page-head">
+        <h2>Scheduled</h2>
+        <button class="btn btn-primary" onclick="newScheduledFromComposer()">Write a new one</button>
+      </div>
+      <p class="page-note">Work Carrot does with nobody at the keyboard. These
+        runs read, search and report — they never write or change anything.</p>
+      <div id="scheduled-page-list" class="list"></div>
     </div>
   </section>
 
@@ -2146,6 +2280,26 @@
       <!-- Ambient capture rules. These exist before ambient capture does, on
            purpose: written the other way round, the exclusions become a patch
            on a system that already recorded your banking session. -->
+      <!-- Reaching Carrot from your phone.
+
+           Filed under Privacy rather than Connections because that is what the
+           setting is. Everywhere else in this app the answer to "can anything
+           else reach my data" is "it is not listening"; this is the switch
+           that changes that answer, and it belongs beside the other things
+           that decide what leaves the machine. -->
+      <div class="settings-card" data-settings-tab="privacy" data-host-only>
+        <div class="settings-head">
+          <svg class="ico"><use href="#i-computer"/></svg>
+          <h3>Your other devices</h3>
+        </div>
+        <p class="muted small">
+          Carrot listens only to this computer unless you say otherwise. Turn this
+          on and it will also accept connections from devices you have paired —
+          and only those. Each phone gets its own key, which you can revoke here.
+        </p>
+        <div id="remote-access-panel"></div>
+      </div>
+
       <div class="settings-card" data-settings-tab="privacy">
         <div class="settings-head">
           <svg class="ico"><use href="#i-eye"/></svg>
@@ -2367,7 +2521,7 @@
        inch, and the fix on top of the fix was a container query that hid the
        labels one breakpoint at a time. None of that is needed once the thing
        you type in is not competing with anything. -->
-  <input type="text" id="cmd-input" placeholder="Ask anything — Ctrl+K to focus, / for skills" onkeydown="cmdKeydown(event)" oninput="cmdInputChanged()">
+  <input type="text" id="cmd-input" placeholder="Ask anything — / for skills, [[ to link a document" onkeydown="cmdKeydown(event)" oninput="cmdInputChanged()">
   <input type="file" id="attach-input" class="hidden" multiple
          accept="image/*,.pdf,.txt,.md,.csv,.json,.py,.js,.ts,.html,.css,.yaml,.yml,.log"
          onchange="addAttachments(this.files); this.value='';">
@@ -2557,8 +2711,14 @@
 <script src="/vendor/katex.js"></script>
 <script src="/js/search.js"></script>
 <script src="/js/features.js"></script>
+<script src="/js/doctabs.js"></script>
+<script src="/js/linkpicker.js"></script>
+<script src="/js/docgroups.js"></script>
 <script src="/js/dashboard.js"></script>
 <script src="/js/app.js"></script>
+<!-- Straight after app.js, which is where the token helpers live, and before
+     every module that opens with a fetch. -->
+<script src="/js/pair.js"></script>
 <script src="/js/agentops.js"></script>
 <script src="/js/workspaces.js"></script>
 <script src="/js/agents.js"></script>
