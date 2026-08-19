@@ -100,12 +100,12 @@ def _resolve_tool(recipe: Recipe) -> Optional[str]:
     # the app instead of running the script.
     if recipe.language == "Python":
         if getattr(sys, "frozen", False):
-            return _find_python()
-        return sys.executable or _find_python()
+            return find_python()
+        return sys.executable or find_python()
     return shutil.which(recipe.tool)
 
 
-def _find_python() -> Optional[str]:
+def find_python() -> Optional[str]:
     """Locate a real Python interpreter, the way each platform actually names it.
 
     `python3` is the Linux and macOS name and is usually absent on Windows,

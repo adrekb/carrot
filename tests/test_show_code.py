@@ -142,7 +142,7 @@ class TestAddOnsInsteadOfTerminalCommands:
         about, and leaving it out makes "installed" a lie told politely."""
         from carrot import components
         browser = next(c for c in components.COMPONENTS if c["id"] == "browser")
-        assert browser["post"]["argv"][1:4] == ["-m", "playwright", "install"]
+        assert browser["post"]["argv"]()[1:4] == ["-m", "playwright", "install"]
 
     def test_playwright_counts_as_missing_until_the_browser_is_there(self):
         from carrot import components

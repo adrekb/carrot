@@ -9404,9 +9404,25 @@ body.nav-collapsed .nav-job-pulse { left: 6px; }
  * whole app: chasing them individually is a rule per scroll container and a
  * missed one every time a pane is added. Monaco, Excalidraw and reveal draw
  * their own scrollbars as ordinary elements, so they are untouched by this
- * and keep whatever they decided to show. */
-* { scrollbar-width: none; }
-*::-webkit-scrollbar { width: 0; height: 0; }
+ * and keep whatever they decided to show.
+ *
+ * Vertical only. That claim above — wheel, trackpad, keyboard — is true down
+ * the page and false across it: a plain wheel does not scroll sideways, and
+ * the horizontal gesture is shift-and-wheel, which is not something you find
+ * unless you already know it. So on a pane that overflows sideways the bar
+ * was not decoration, it was the only visible way across, and hiding it left
+ * content clipped at the edge with no way to reach it — which is the
+ * "it removed scrolling itself" this rule caused.
+ *
+ * On `::-webkit-scrollbar`, `width` is the vertical bar and `height` is the
+ * horizontal one — so setting only `width` hides the bar down the side and
+ * leaves the one across the bottom at whatever the rules above gave it. The
+ * original `width: 0; height: 0` set both, which is how one line took away
+ * every horizontal scrollbar in the app.
+ *
+ * `scrollbar-width` is deliberately not used: it has no axis, so it would take
+ * the horizontal bar with it again. */
+*::-webkit-scrollbar { width: 0; }
 
 /* ===== The Context chip =====
    Sits with the model pill, because both answer "what is this turn made of".

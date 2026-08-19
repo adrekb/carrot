@@ -204,14 +204,68 @@ def get_run(run_id: str) -> Optional[Dict[str, Any]]:
 
 # ===== Planning =====
 
-def make_plan(task: str, surface: str) -> str:
+# How much of the conversation a run arrives knowing. Enough to resolve what
+# the task is talking about, clipped because a previous agent run's answer can
+# be pages long and this is context, not the work.
+PRIOR_TURNS = 6
+PRIOR_MESSAGE_CHARS = 1200
+
+
+def prior_turns(conversation_id: Optional[str]) -> str:
+    """What was already said in this session, for a task that refers to it.
+
+    A run used to start from the task string alone. In a session that is a
+    conversation — and Agent mode sits in one, under the same composer as chat
+    — the second task is very often about the first: "format that into a nice
+    answer", "now do the same for the other one", "try again without the
+    login". With no prior turns the model cannot see what "that" is, so it
+    plans against the words in front of it, finds an empty browser and asks
+    the user to paste in the thing it produced a minute ago.
+
+    Read rather than assumed: `conversation_id` was already being stored on the
+    run row, and nothing ever read it back.
+    """
+    if not conversation_id:
+        return ""
+    try:
+        # Imported here rather than at module scope: `conversation` reaches
+        # back into this module's neighbours, and the agent is imported early.
+        from .conversation import get_conversation
+        conv = get_conversation(conversation_id)
+    except Exception:
+        return ""
+    messages = (conv or {}).get("messages") or []
+    lines: List[str] = []
+    for message in messages[-PRIOR_TURNS:]:
+        if not isinstance(message, dict):
+            continue
+        content = str(message.get("content") or "").strip()
+        if not content:
+            continue
+        if len(content) > PRIOR_MESSAGE_CHARS:
+            content = content[:PRIOR_MESSAGE_CHARS].rstrip() + " …"
+        who = "User" if message.get("role") == "user" else "You"
+        lines.append(f"{who}: {content}")
+    return "\n\n".join(lines)
+
+
+def _with_prior(prior: str) -> str:
+    """The prior turns as a prompt block, or nothing at all."""
+    if not prior:
+        return ""
+    return ("EARLIER IN THIS CONVERSATION (what the task may be referring to):\n"
+            f"{prior}\n\n")
+
+
+def make_plan(task: str, surface: str, prior: str = "") -> str:
     """A short, human-readable plan the user approves before anything runs."""
     prompt = (
         "Write a short plan for this task: how you would carry it out, in 3-6 numbered "
         "steps. Name the specific sites or applications you expect to use. Say up front "
         "if the task will need something you do not have — a login, a file you cannot "
         "find, a decision only the user can make.\n\n"
-        f"Task: {task}\n"
+        + _with_prior(prior)
+        + f"Task: {task}\n"
         f"You will be working through: {surface}\n\n"
         "Plain text, no JSON, no preamble."
     )
@@ -303,7 +357,8 @@ def revise_plan(task: str, plan: str, history: List[Dict[str, str]]) -> List[str
 
 # ===== Deciding =====
 
-def decide(task: str, surface: str, plan: str, history: List[Dict[str, str]]) -> Dict[str, Any]:
+def decide(task: str, surface: str, plan: str, history: List[Dict[str, str]],
+           prior: str = "") -> Dict[str, Any]:
     """Ask the model for exactly one next action.
 
     A response that cannot be parsed becomes an explicit ``finish`` rather than
@@ -318,7 +373,8 @@ def decide(task: str, surface: str, plan: str, history: List[Dict[str, str]]) ->
         transcript.append(f"Result:\n{observation}")
 
     prompt = (
-        f"TASK: {task}\n\n"
+        _with_prior(prior)
+        + f"TASK: {task}\n\n"
         f"YOUR PLAN:\n{plan}\n\n"
         f"{render_actions(surface)}\n\n"
         + ("HISTORY:\n" + "\n\n".join(transcript) if transcript else "You have not acted yet.")
@@ -558,7 +614,8 @@ def run_agent_stream(
 
     def work():
         try:
-            _drive(task, surface, run_id, context, executor, events.put, require_plan_approval, outcome)
+            _drive(task, surface, run_id, context, executor, events.put,
+                   require_plan_approval, outcome, prior_turns(conversation_id))
         except Exception as exc:  # a crash in the loop must still close the stream
             outcome.update({"status": "failed", "error": str(exc)})
             events.put({"error": str(exc)})
@@ -595,7 +652,8 @@ def run_agent_stream(
     }
 
 
-def _drive(task, surface, run_id, context, executor, emit, require_plan_approval, outcome):
+def _drive(task, surface, run_id, context, executor, emit, require_plan_approval,
+           outcome, prior=""):
     """The loop body, on its own thread so approvals can block it."""
     from . import agent_tools
 
@@ -603,7 +661,7 @@ def _drive(task, surface, run_id, context, executor, emit, require_plan_approval
     if require_plan_approval is None:
         require_plan_approval = settings.get("agent_require_plan_approval", True)
 
-    plan = make_plan(task, surface)
+    plan = make_plan(task, surface, prior)
     set_plan(run_id, plan)
     emit({"plan": plan})
 
@@ -667,7 +725,7 @@ def _drive(task, surface, run_id, context, executor, emit, require_plan_approval
             emit({"error": str(exc)})
             return
 
-        step = decide(task, surface, plan, history)
+        step = decide(task, surface, plan, history, prior)
         action, arguments = step["action"], step["arguments"]
         ordinal += 1
         context.steps += 1

@@ -176,8 +176,32 @@ class TestNoNativeScrollbarsAnywhere:
     def test_it_is_one_rule_at_the_root(self):
         """Pane by pane is a rule per scroll container and a missed one every
         time a pane is added. There are 71 of them."""
-        assert "* { scrollbar-width: none; }" in CSS
-        assert "*::-webkit-scrollbar { width: 0; height: 0; }" in CSS
+        assert "*::-webkit-scrollbar { width: 0; }" in CSS
+
+    def test_only_the_vertical_bar_goes(self):
+        """The claim in this class's docstring — wheel, trackpad, keyboard —
+        is true down the page and false across it. A plain wheel does not
+        scroll sideways; the gesture is shift-and-wheel, which nobody finds
+        unless they already know it. So on a pane that overflows sideways the
+        bar is not decoration, it is the only visible way across, and taking it
+        away leaves content clipped at the edge with no way to reach it.
+
+        On `::-webkit-scrollbar`, `width` is the vertical bar and `height` is
+        the horizontal one. Setting `height: 0` at the root is what did it."""
+        root = re.search(r"^\*::-webkit-scrollbar \{([^}]*)\}", CSS, re.MULTILINE)
+        assert root, "the root scrollbar rule is not where this test expects it"
+        assert "height" not in root.group(1)
+
+    def test_scrollbar_width_is_not_used_because_it_has_no_axis(self):
+        """`scrollbar-width: none` cannot be limited to one direction, so it
+        takes the horizontal bar with it — which is the same bug by another
+        spelling.
+
+        At the root, that is. A single pane may still hide both of its own
+        bars deliberately — `.turn-rail` and `.format-bar` do — because that is
+        a decision about one pane whose scrolling has another affordance, not a
+        rule applied to all 71 of them at once."""
+        assert "* { scrollbar-width: none; }" not in CSS
 
     def test_scrolling_itself_is_untouched(self):
         """The drawing is hidden, not the behaviour — wheel, trackpad, keyboard

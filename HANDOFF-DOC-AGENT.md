@@ -203,9 +203,48 @@ and a round trip through prose would erase all of it. `doctext.py` says this
 explicitly in its module docstring — that is the constraint, not an
 implementation detail.
 
-You will need a small, tested applier — `carrot/docedit.py` or similar — that
-takes a document and a list of operations and returns a new document. Test it
-the way `trajectory.py` is tested: pure function, no UI.
+**`carrot/docedit.py` now exists** — the applier this step needed. Pure
+function, no UI: `apply_operations(body, doc_format, operations)` returns a new
+body or raises `DocEditError` having changed nothing. Tests in
+`tests/test_docedit.py`.
+
+Deck operations: `set_text`, `set_notes`, `add_element`, `delete_element`,
+`move_element`, `add_slide`, `delete_slide`. Canvas: `set_text`,
+`delete_element`, `move_element`.
+
+Two things about it are load-bearing and should survive whatever is built on
+top:
+
+**Every address resolves against the original document, before anything
+moves.** A model writes `[2] on slide 1` after reading the rendering of the
+document as it now is. Applying operations in order against a document the
+earlier ones have already changed means one delete silently shifts the meaning
+of every later address — the edit lands on the wrong element, raises nothing,
+and reads as a success. So addresses are resolved to element and slide *ids* in
+one pass up front, and a second pass mutates by id. `test_a_delete_does_not_
+shift_a_later_address` is the test that holds this; if you refactor, keep it.
+
+**A canvas address skips tombstones.** Excalidraw keeps deleted elements in the
+scene with `isDeleted` set, and `canvas_as_text` numbers only the live ones —
+so `[3]` on a canvas is the fourth *live* element, not the fourth in the array.
+Deletion tombstones rather than removes, and every edit bumps `version`, because
+Excalidraw reconciles by merging and would otherwise treat the change as stale
+and overwrite it.
+
+What it deliberately does not do: **add** an element to a canvas. A labelled
+shape there is two elements bound to each other by id (`containerId` one way,
+`boundElements` the other), and a scene where that linkage is wrong renders in
+ways a unit test cannot see. Decks take the full set because their boxes are
+Carrot's own. If you need canvas add, build it against a real scene in a
+browser, not against a fixture.
+
+The deck shape registry is duplicated in Python (`DECK_SHAPES`), and a test
+parses `SLIDE_SHAPES` out of `slides.js` and asserts the two agree — so a shape
+added to the editor and not to the applier fails the suite rather than being
+accepted here and silently rendered as a rectangle there.
+
+Still to do for this step: wiring it up. Nothing calls `apply_operations` yet —
+there is no endpoint and no UI. That is the next piece.
 
 ### Step 5 — context of everything
 

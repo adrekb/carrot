@@ -105,8 +105,15 @@ COMPONENTS: List[Dict[str, Any]] = [
                    "for it to drive. Carrot installs both."),
         "pip": ["playwright"],
         # The step that was a second terminal command nobody was told about.
+        # Built when the button is pressed, not when this module is imported.
+        # `sys.executable` inside the frozen desktop build is carrot-backend
+        # itself, and running that with `-m playwright` re-launches the app:
+        # a second backend that tries to bind the port the first is already
+        # holding, fails with "only one usage of each socket address", and
+        # downloads no browser. `packages.python_executable` finds a real one.
         "post": {
-            "argv": [sys.executable, "-m", "playwright", "install", "chromium"],
+            "argv": lambda: [packages.python_executable(), "-m", "playwright",
+                             "install", "chromium"],
             "label": "Downloading Chromium",
         },
         "check": _playwright_ready,
@@ -243,9 +250,19 @@ def _run_install(component: Dict[str, Any]):
     post = component.get("post")
     if post:
         note("installing", post["label"] + "…")
+        argv = post["argv"]() if callable(post["argv"]) else post["argv"]
+        # Said plainly rather than discovered as a failure to spawn. With no
+        # interpreter anywhere, `python_executable` falls back to the bare name
+        # "python3", which on Windows is nothing at all — and "could not start
+        # downloading chromium" does not tell anybody what to go and fix.
+        # `shutil.which` answers for an absolute path too.
+        if not shutil.which(argv[0]):
+            note("failed", f"{post['label']} needs Python, and there is no "
+                           "Python on this computer for Carrot to use.")
+            return
         try:
             done = subprocess.run(
-                post["argv"], capture_output=True, text=True,
+                argv, capture_output=True, text=True,
                 timeout=POST_STEP_TIMEOUT,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
