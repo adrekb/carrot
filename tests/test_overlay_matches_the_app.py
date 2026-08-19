@@ -11,8 +11,8 @@ changed too.
 **The app's palette is not what the top of its stylesheet says.** style.css
 declares `--card` and `--accent` in more than one `:root` block, and the later
 one wins — read top-down it looks like a cool slate theme (#1e2027 cards,
-#eceef4 text) that the app has never actually rendered. What it renders is warm
-(#22201a, #f2ece0). So the expectations here come from resolving the cascade,
+#eceef4 text) that the app has never actually rendered. What it renders is the
+black theme (#151517, #f4f4f6). So the expectations here come from resolving the cascade,
 and `test_the_resolver_agrees_with_a_running_window` pins the resolver against
 values read out of a live one — a resolver that quietly went wrong would
 otherwise make every test below agree with it and mean nothing.
@@ -35,12 +35,12 @@ OVERLAY = ROOT / "gui" / "public" / "overlay.html"
 # Read out of a running window (data-theme + data-accent stamped, computed
 # style on :root). The resolver below has to reproduce these exactly.
 MEASURED_DARK = {
-    "--card": "#22201a",
-    "--card2": "#2b2921",
-    "--border": "rgba(232, 222, 200, 0.08)",
-    "--border-hi": "rgba(232, 222, 200, 0.15)",
-    "--text": "#f2ece0",
-    "--muted": "#a89f8d",
+    "--card": "#151517",
+    "--card2": "#1f1f23",
+    "--border": "rgba(255, 255, 255, 0.08)",
+    "--border-hi": "rgba(255, 255, 255, 0.15)",
+    "--text": "#f4f4f6",
+    "--muted": "#a0a0a8",
     "--accent": "#ff7a2b",
     "--accent-fill": "#e0620f",
     "--on-accent": "#1a1208",
@@ -146,10 +146,10 @@ class TestTheResolverIsTrustworthy:
 
     def test_the_top_of_the_stylesheet_is_not_what_renders(self, app):
         """The trap this resolver exists for: the first `:root` says #1e2027
-        and the window draws #22201a."""
+        and the window draws #151517."""
         first = re.search(r":root\s*\{(.*?)\n\}", app, re.DOTALL).group(1)
         assert "--card: #1e2027;" in first
-        assert app_palette(app, "dark")["--card"] == "#22201a"
+        assert app_palette(app, "dark")["--card"] == "#151517"
 
 
 # The overlay's name for a colour, and the app's name for the same one.

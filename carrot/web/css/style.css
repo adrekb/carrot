@@ -4735,60 +4735,74 @@ code, pre, .kbd { font-family: var(--mono); }
 }
 
 /* =====================================================================
-   Charcoal & cream
+   Black
    =====================================================================
-   An editorial pass, not a hue swap. The type roles are the app's, set
-   once at the top of this file — one face for the interface, DM Mono for
-   code. This theme changes what they sit on, not which they are.
+   The ground is #000000. Not a very dark grey that photographs as black —
+   actual black, which on an OLED panel is the pixel switched off, and on
+   any panel is the only value a dark theme cannot be accused of missing.
 
-   It used to pair Playfair Display with Vollkorn, and the editorial feel
-   was doing real work — but a serif inside a dark tool UI reads as a
-   magazine pastiche rather than as reading material, and neither face was
-   ever committed, so both silently fell back to Georgia. The distinction
-   that mattered (announcing vs reading vs operating) survives; the serifs
-   do not.
+   This replaced a warm charcoal (#16150f, cream #f2ece0) that was a
+   considered thing: pressed ink rather than screen-black, surfaces
+   separating by a few percent of luminance. Two of its ideas survive and
+   one does not.
 
-   All four are SIL OFL, which is why they can ship inside a public
-   installer. License texts: /assets/fonts/*-OFL.txt */
+   **Kept: separation by luminance, never by a line.** The five ground
+   steps are picked to reproduce the charcoal ramp's own contrast ratios
+   almost exactly — 1.07, 1.07, 1.11, 1.17 against its 1.05, 1.07, 1.12,
+   1.14 — so a card still lifts off the page by the same amount it always
+   did. Starting from black does not mean flattening everything into it.
+
+   **Kept: the warm accent.** Orange on a neutral black is the pairing the
+   old theme was reaching for with its warm ground, and it works better
+   here: #ff7a2b reads at 8.07:1 on #000 against 7.19:1 on the charcoal.
+
+   **Gone: cream text.** #f2ece0 is right on a warm ground and wrong on a
+   neutral one, where it reads as a brown haze rather than as white. The
+   ink is near-white and very slightly cool, which is what keeps true
+   black from looking like a fault. */
 :root {
 
-  /* Charcoal: warm and slightly green-black, the colour of pressed ink
-     rather than the blue-black of a screen. Surfaces separate by a few
-     percent of luminance, never by a line. */
-  --bg: #16150f;
-  --bg2: #1b1a13;
-  --card: #22201a;
-  --card2: #2b2921;
-  --card3: #35322a;
-  --border: rgba(232, 222, 200, 0.08);
-  --border-hi: rgba(232, 222, 200, 0.15);
+  /* Black, and four steps off it. The ratios between them are the
+     charcoal theme's, transposed — see the note above. */
+  --bg: #000000;
+  --bg2: #0c0c0e;
+  --card: #151517;
+  --card2: #1f1f23;
+  --card3: #2b2b31;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-hi: rgba(255, 255, 255, 0.15);
 
-  /* Cream, not white. #fff on a warm charcoal reads blue and buzzes. */
-  --text: #f2ece0;
-  --muted: #a89f8d;
-  --faint: #96907f;   /* 5.11:1 on --card */
+  /* Near-white, not #fff. A flat white on a flat black is the one pairing
+     that buzzes at the edges of type; a couple of points off each end
+     settles it without anybody being able to name the difference. */
+  --text: #f4f4f6;
+  --muted: #a0a0a8;   /* 7.21:1 on --card */
+  --faint: #8a8a93;   /* 5.33:1 on --card */
 
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow: 0 8px 24px rgba(0, 0, 0, 0.38);
-  --shadow-lg: 0 24px 64px rgba(0, 0, 0, 0.55);
+  /* A shadow on black is nearly invisible, so the ground steps and the
+     borders carry the separation. These stay for the surfaces that float
+     over *content* rather than over the page. */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+  --shadow-lg: 0 24px 64px rgba(0, 0, 0, 0.75);
 
-  --surface-bar: #1b1a13;
-  --surface-nav: #131209;
-  --surface-card: #22201a;
-  --surface-card-hi: #2b2921;
-  --surface-pop: #272520;
-  --surface-bar-edge: rgba(232, 222, 200, 0.10);
-  --surface-nav-edge: rgba(232, 222, 200, 0.08);
-  --surface-card-edge: rgba(232, 222, 200, 0.10);
-  --surface-card-edge-hi: rgba(232, 222, 200, 0.16);
-  --surface-pop-edge: rgba(232, 222, 200, 0.14);
-  --surface-hover: rgba(255, 246, 226, 0.05);
-  --veil: rgba(22, 21, 15, 0.6);
-  --scrim: rgba(12, 11, 8, 0.66);
+  --surface-bar: #0c0c0e;
+  --surface-nav: #000000;
+  --surface-card: #151517;
+  --surface-card-hi: #1f1f23;
+  --surface-pop: #1a1a1e;
+  --surface-bar-edge: rgba(255, 255, 255, 0.10);
+  --surface-nav-edge: rgba(255, 255, 255, 0.08);
+  --surface-card-edge: rgba(255, 255, 255, 0.10);
+  --surface-card-edge-hi: rgba(255, 255, 255, 0.16);
+  --surface-pop-edge: rgba(255, 255, 255, 0.14);
+  --surface-hover: rgba(255, 255, 255, 0.05);
+  --veil: rgba(0, 0, 0, 0.66);
+  --scrim: rgba(0, 0, 0, 0.78);
 
-  --opt-bg: #26241d;
-  --opt-text: #f2ece0;
-  --opt-sel: #333027;
+  --opt-bg: #1a1a1e;
+  --opt-text: #f4f4f6;
+  --opt-sel: #2b2b31;
 }
 
 /* Cream ground, charcoal ink — the same relationship inverted, so light
