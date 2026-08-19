@@ -123,12 +123,14 @@ class TestWhatEachTurnDid:
         """The trace view beside this is where you read it. Here the question
         is whether it thought and roughly how much."""
         out = trajectory.for_conversation(conv(ask(), answered(trace=[{"thinking": "x" * 500}])))
-        assert out["turns"][0]["steps"][0] == {"kind": "thinking", "chars": 500}
+        step = out["turns"][0]["steps"][0]
+        assert step["kind"] == "thinking" and step["chars"] == 500
 
     def test_a_plan_reports_its_progress(self):
         out = trajectory.for_conversation(conv(ask(), answered(
             trace=[{"plan": {"goals": ["a", "b", "c"], "done": ["a"]}}])))
-        assert out["turns"][0]["steps"][0] == {"kind": "plan", "goals": 3, "done": 1}
+        step = out["turns"][0]["steps"][0]
+        assert (step["kind"], step["goals"], step["done"]) == ("plan", 3, 1)
 
     def test_an_interrupted_turn_says_so(self):
         out = trajectory.for_conversation(conv(ask(), answered(interrupted=True)))
@@ -217,6 +219,113 @@ class TestItSurvivesWhatIsOnDisk:
         assert len(turn["steps"][0]["args"]) <= trajectory.MAX_ARGS_CHARS + 2
 
 
+class TestOpeningAStep:
+    """The row is scanned; the expansion is read. A tool row says which tool
+    and whether it failed — the thing you go looking for next is what it was
+    given and what came back."""
+
+    def test_a_tool_carries_its_full_call_and_result(self):
+        out = trajectory.for_conversation(conv(ask(), answered(
+            trace=tool("t", args={"command": "pytest -q"},
+                       result="[exit 1]\nline one\nline two"))))
+        step = out["turns"][0]["steps"][0]
+        assert step["args_full"] == "command=pytest -q"
+        assert step["result_full"] == "[exit 1]\nline one\nline two"
+
+    def test_the_expansion_keeps_the_lines(self):
+        """A command's output is its lines. The row flattens them because it is
+        one line; flattening them in the expansion too would leave nowhere to
+        read it."""
+        out = trajectory.for_conversation(conv(ask(), answered(
+            trace=tool("t", result="one\ntwo"))))
+        step = out["turns"][0]["steps"][0]
+        assert "\n" in step["result_full"]
+        assert "\n" not in step["result"]
+
+    def test_a_plan_says_which_goals_not_just_how_many(self):
+        """"2/3" tells you it did not finish. This tells you what it did not
+        finish."""
+        out = trajectory.for_conversation(conv(ask(), answered(
+            trace=[{"plan": {"goals": ["find it", "add backoff", "run tests"],
+                             "done": ["find it"]}}])))
+        detail = out["turns"][0]["steps"][0]["detail"]
+        assert "[x] find it" in detail
+        assert "[ ] run tests" in detail
+
+    def test_thinking_is_capped_for_the_panel(self):
+        """A turn may hold 12,000 characters of it, and a wall of reasoning in
+        the middle of a trajectory hides the four tool calls underneath. The
+        transcript is where you read it whole."""
+        out = trajectory.for_conversation(conv(ask(), answered(trace=[{"thinking": "x" * 9000}])))
+        step = out["turns"][0]["steps"][0]
+        assert step["chars"] == 9000
+        assert len(step["detail"]) <= trajectory.MAX_THINKING_CHARS + 2
+
+    def test_a_step_with_nothing_more_has_no_detail(self):
+        """A `<details>` that opens onto nothing is the worst of the three
+        states a disclosure can be in."""
+        out = trajectory.for_conversation(conv(ask(), answered(
+            trace=[{"route": {"provider": "ollama", "model": "m"}}])))
+        route = out["turns"][0]["steps"][0]
+        assert "detail" not in route
+
+    def test_the_panel_only_makes_a_disclosure_when_there_is_one(self):
+        features = (WEB / "js" / "features.js").read_text(encoding="utf-8")
+        body = re.search(r"function trajStep\(step\)\s*\{(.*?)\n\}", features, re.DOTALL).group(1)
+        assert "if (!full) return" in body
+
+    def test_the_expansion_wraps_rather_than_scrolling_sideways(self):
+        """A horizontal scrollbar inside a panel you opened to read something
+        is a second thing to operate before you can read it."""
+        css = (WEB / "css" / "style.css").read_text(encoding="utf-8")
+        rule = re.search(r"\.traj-full \{([^}]*)\}", css).group(1)
+        assert "white-space: pre-wrap" in rule
+
+
+class TestBothSurfacesShowIt:
+    """An agent run in chat is the same shape of thing as one in the Code tab —
+    turns, tools, time — and "which turn took the minute" does not become a
+    different question because of which tab it was started in."""
+
+    def test_chat_has_a_control_and_a_panel(self):
+        index = (WEB / "index.html").read_text(encoding="utf-8")
+        assert 'onclick="toggleChatTrajectory()"' in index
+        assert 'id="chat-trajectory"' in index
+
+    def test_the_code_tab_still_has_its_own(self):
+        index = (WEB / "index.html").read_text(encoding="utf-8")
+        assert 'onclick="toggleTrajectory()"' in index
+        assert 'id="agent-trajectory"' in index
+
+    def test_they_share_one_renderer(self):
+        """Two views of one run that are drawn by two functions are two views
+        that will drift."""
+        features = (WEB / "js" / "features.js").read_text(encoding="utf-8")
+        assert features.count("function renderTrajectory(") == 1
+        assert "toggleTrajectoryIn(" in features
+
+    def test_each_reads_its_own_conversation(self):
+        """The Code tab's session and the chat's are different conversations,
+        and a shared panel that forgets which is which shows the wrong run."""
+        features = (WEB / "js" / "features.js").read_text(encoding="utf-8")
+        assert "() => agentConversationId" in features
+        assert "() => currentConversationId" in features
+
+    def test_it_reads_the_id_when_it_loads_not_when_it_opens(self):
+        """Captured as a value it goes stale the moment a run starts after the
+        panel was opened — which is the normal case, because you open a
+        trajectory to watch a run rather than after one."""
+        features = (WEB / "js" / "features.js").read_text(encoding="utf-8")
+        assert "trajectoryConversationOf = conversationOf;" in features
+        assert "const conversationId = trajectoryConversationOf();" in features
+
+    def test_toggling_the_other_surface_does_not_close_it(self):
+        """`trajectoryOpen` is one flag for two panels: opening the second while
+        the first is open must not read as a close."""
+        features = (WEB / "js" / "features.js").read_text(encoding="utf-8")
+        assert "trajectoryOpen = !(trajectoryOpen && trajectoryHostId === hostId);" in features
+
+
 class TestTheEndpoint:
     def test_it_returns_the_trajectory(self, client):
         from carrot import conversation as conv_mod
@@ -244,7 +353,7 @@ class TestThePanel:
         features = (WEB / "js" / "features.js").read_text(encoding="utf-8")
         body = re.search(r"async function toggleTrajectory\(\)\s*\{(.*?)\n\}",
                          features, re.DOTALL).group(1)
-        assert "log.classList.toggle('hidden', trajectoryOpen)" in body
+        assert "log.classList.toggle('hidden', trajectoryOpen)" in features
 
     def test_the_bars_are_scaled_to_the_run(self):
         """Against a fixed maximum every bar in a fast session is a stub, and

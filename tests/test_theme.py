@@ -347,10 +347,15 @@ class TestTheDarkThemeIsActuallyBlack:
         reaching for, and it reads better here than it did there."""
         assert _ratio("#ff7a2b", "#000000") > _ratio("#ff7a2b", "#16150f")
 
-    def test_the_wash_was_left_alone(self):
-        """It looked like it needed turning down on black and the measurement
-        said otherwise: the strongest pool lifts the ground 1.21x on black
-        against 1.30x on the charcoal, so it is quieter relative to what it
-        sits on, not louder. It only *reads* as colour now that the ground is
-        not warm enough to absorb it."""
-        assert "--wash-strength: 1;" in CSS
+    def test_the_wash_is_turned_down(self):
+        """I left this alone first, on a measurement: the strongest pool lifts
+        the ground 1.21x on black against 1.30x on the charcoal, so it is
+        quieter relative to what it sits on, not louder.
+
+        That answered the wrong question. "Is it louder than it was" is not
+        "does it belong on a theme whose whole point is #000000" — and on a
+        black ground a coloured pool does not read as depth, it reads as the
+        reason the app is not black. Not zero, because at this strength it is
+        still a lit edge under the composer, which is where it was working."""
+        strength = re.search(r"--wash-strength:\s*([0-9.]+);", CSS).group(1)
+        assert 0 < float(strength) <= 0.5, strength

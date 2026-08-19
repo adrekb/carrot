@@ -632,12 +632,18 @@ body {
 .engine-row .val { font-family: var(--mono); font-size: var(--text-sm); color: var(--text); }
 
 /* ===== Workspace center ===== */
+/* The chat column is the ground, not a card.
+   It was `--card`, which on a warm charcoal read as a panel the conversation
+   sat in and on black reads as the reason the app is not black: the page
+   behind it *is* #000, and this covered every pixel of it. The things that
+   should lift off a black page are the bubbles, the composer and the popovers
+   — a container the size of the window is not one of them. */
 #ws-center {
   flex: 1;
   display: flex;
   flex-direction: column;
   min-width: 0;
-  background: var(--card);
+  background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow: hidden;
@@ -4264,7 +4270,16 @@ select option:checked { background-color: #2f333d; }
   --select-chevron: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2399a0ae' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9l6 6 6-6'/></svg>");
 
   --wash-sat: 125%;
-  --wash-strength: 1;
+  /* Turned down for the black theme, and this overrules a measurement.
+     I checked whether the wash had got louder on black and it had not — the
+     strongest pool lifts the ground 1.21x against the charcoal's 1.30x, so it
+     is quieter relative to what it sits on. That answered the wrong question.
+     "Is it louder than it was" is not "does it belong on a theme whose whole
+     point is #000000", and on a black ground a coloured pool does not read as
+     depth, it reads as the reason the app is not black.
+     Not zero: at this strength it is still a lit edge under the composer,
+     which is the one place the glow was doing work. */
+  --wash-strength: 0.35;
 }
 
 /* ---- Light ----
@@ -9128,6 +9143,14 @@ body.nav-collapsed .nav-job-pulse { left: 6px; }
   font-style: italic;
 }
 
+/* The trajectory control belongs to Agent mode, not to chat.
+   A plain conversation has turns and no tools, so its trajectory is a list of
+   questions with nothing under them — a control that is present and pointless
+   most of the time. Gated on the attribute `setChatMode` already sets, rather
+   than by a second line of JS that can fall out of step with it. */
+#chat-trajectory-btn { display: none; }
+#view-workspace[data-chat-mode="agent"] #chat-trajectory-btn { display: flex; }
+
 /* ===== Trajectory =====
    The same run the transcript shows, as turns. Dense on purpose: the whole
    point is fitting a session on one screen, which is what makes "which turn
@@ -9186,12 +9209,38 @@ body.nav-collapsed .nav-job-pulse { left: 6px; }
   border-radius: var(--r-pill);
 }
 .traj-steps { display: flex; flex-direction: column; gap: 1px; }
-.traj-step {
+.traj-step { color: var(--muted); }
+.traj-line {
   display: flex;
   align-items: baseline;
   gap: var(--s-3);
   padding: 2px 0 2px var(--s-2);
+}
+/* A step with more to say is a `<details>`; one without stays a plain row, so
+   a click never lands on something that has nothing to open. The marker is
+   suppressed because the row already has a glyph in its left gutter and two
+   would be one too many. */
+.traj-step.traj-open > summary { cursor: pointer; list-style: none; }
+.traj-step.traj-open > summary::-webkit-details-marker { display: none; }
+.traj-step.traj-open > summary:hover { background: var(--card2); border-radius: var(--r-xs); }
+.traj-step.traj-open[open] > summary .traj-detail { color: var(--muted); }
+.traj-full {
+  margin: var(--s-2) 0 var(--s-3) 24px;
+  padding: var(--s-3);
+  max-height: 260px;
+  overflow: auto;
+  background: var(--card);
+  border-left: 2px solid var(--border-hi);
+  border-radius: 0 var(--r-xs) var(--r-xs) 0;
   color: var(--muted);
+  font-family: var(--mono);
+  font-size: var(--text-2xs);
+  line-height: 1.5;
+  /* Wrapped, not scrolled sideways: a command's output is lines, and a
+     horizontal scrollbar inside a panel you opened to read something is a
+     second thing to operate before you can read it. */
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 .traj-mark {
   flex: none;

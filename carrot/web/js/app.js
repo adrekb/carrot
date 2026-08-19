@@ -173,6 +173,9 @@ function setChatMode(mode) {
             ? 'Give Carrot a task — it will work in a real browser and report back'
             : 'Ask anything — Ctrl+K to focus, / for skills';
     }
+    // Leaving Agent mode with the trajectory open would hide the transcript
+    // behind a panel whose button is no longer on screen to close it.
+    if (mode !== 'agent' && typeof closeChatTrajectory === 'function') closeChatTrajectory();
     if (typeof syncChatBlank === 'function') syncChatBlank();
     if (mode === 'agent' && typeof loadAgent === 'function') loadAgent();
 }

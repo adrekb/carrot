@@ -165,3 +165,52 @@ class TestEveryPathThatPostsMessagesUsesIt:
         assert "merge_system_messages(messages)" in source, (
             f"{method} posts the caller's message list unchanged"
         )
+
+
+class TestToolsAreOnlyOfferedToModelsThatTakeThem:
+    """Ollama refuses the whole request when a model cannot do function
+    calling — HTTP 400, "registry.ollama.ai/library/phi4:14b does not support
+    tools" — so offering them is not a suggestion the model can decline. The
+    turn dies before its first token, and what the user sees is the fallback
+    answer: written from no evidence, saying the notes contain nothing.
+
+    Found by the trajectory view on a real run: 1 turn, 0 tool calls, one
+    `failed` step reading `400 Client Error`. `supports_thinking` had been
+    checked all along; this was the same fact nobody had asked for.
+    """
+
+    def test_the_capability_is_checked(self):
+        import inspect
+
+        from carrot import ollama_client
+
+        source = inspect.getsource(ollama_client.OllamaClient.chat_stream_events)
+        assert "supports_tools(model)" in source
+
+    def test_it_reads_the_advertised_capabilities(self):
+        import inspect
+
+        from carrot import ollama_client
+
+        source = inspect.getsource(ollama_client.OllamaClient.supports_tools)
+        assert '"tools" in self.capabilities(model)' in source
+
+    def test_it_is_cached_like_the_others(self):
+        """`/api/show` is a round trip, and this is asked once per turn."""
+        import inspect
+
+        from carrot import ollama_client
+
+        source = inspect.getsource(ollama_client.OllamaClient.supports_tools)
+        assert "_tool_support" in source
+
+    def test_a_model_without_tools_still_gets_its_turn(self, monkeypatch):
+        """The point of the fix: a toolless model answers without tools rather
+        than not answering."""
+        from carrot import ollama_client
+
+        client = ollama_client.OllamaClient.__new__(ollama_client.OllamaClient)
+        client._capabilities = {"toolless": ["completion"], "toolful": ["completion", "tools"]}
+        client._tool_support = {}
+        assert client.supports_tools("toolless") is False
+        assert client.supports_tools("toolful") is True

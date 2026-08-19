@@ -381,6 +381,24 @@ class OllamaClient:
         self._thinking_support[model] = supported
         return supported
 
+    def supports_tools(self, model: str) -> bool:
+        """Whether the model advertises function calling.
+
+        Ollama refuses the whole request when it does not — HTTP 400,
+        "phi4:14b does not support tools" — so a turn that offers tools to a
+        model without them does not degrade to a toolless answer, it dies
+        before the first token. What the user sees is the fallback: an answer
+        written from no evidence, saying the notes contain nothing.
+
+        Checked the same way `supports_thinking` is, because it is the same
+        kind of fact and was the only one of the two nobody had asked for.
+        """
+        if not hasattr(self, "_tool_support"):
+            self._tool_support: Dict[str, bool] = {}
+        if model not in self._tool_support:
+            self._tool_support[model] = "tools" in self.capabilities(model)
+        return self._tool_support[model]
+
     def supports_vision(self, model: str) -> bool:
         """Whether the model can accept images."""
         from carrot.attachments import model_supports_vision
@@ -403,7 +421,11 @@ class OllamaClient:
         model = model or self.default_model
         body = {"model": model, "messages": merge_system_messages(messages),
                 "stream": True, "options": self._options(model)}
-        if tools:
+        # Offered only to a model that can take them. A model without the
+        # capability rejects the request outright rather than ignoring the
+        # field, so this is the difference between a turn that answers without
+        # tools and a turn that does not happen.
+        if tools and self.supports_tools(model):
             body["tools"] = tools
         if self.supports_thinking(model):
             body["think"] = True

@@ -567,10 +567,17 @@
           <button class="mode-opt" id="chat-mode-agent" onclick="setChatMode('agent')"
                   title="Give Carrot a task and let it work">Agent</button>
         </div>
+        <!-- The same trajectory the Code tab has. An agent run in chat is the
+             same shape of thing — turns, tools, time — and the question "which
+             turn took the minute" does not become a different question because
+             of which tab it was started in. -->
+        <button class="icon-btn" id="chat-trajectory-btn" title="Trajectory — what this run did"
+                onclick="toggleChatTrajectory()"><svg class="ico"><use href="#i-pulse"/></svg></button>
         <!-- The Panels control and its rail are gone. Four panels nobody
              chose, on the page you open most, plus a settings button for
              them in the strip above the conversation. -->
       </div>
+      <div id="chat-trajectory" class="agent-trajectory hidden"></div>
       <div id="chat-messages">
         <!-- One question, at the size of a question. The logo and the line
              telling you the box below is a box were decoration in front of an

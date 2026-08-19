@@ -29,12 +29,23 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
-# A tool result kept in the trace is already clipped to 400 characters by the
-# recorder. This clips again for the *list*, where the point is which tools ran
-# in which order rather than what each one returned — the trace view beside it
-# is where you read a result.
+# Two lengths for the same thing.
+#
+# The row is scanned: which tools ran, in which order, and did any fail. A
+# result on that line is a hint, not a reading, so it is short enough that
+# twenty rows still fit on a screen.
+#
+# The expansion is read. It carries as much as the trace actually kept — the
+# recorder already clipped results to 400 characters — so opening a row shows
+# everything there is rather than a second, longer summary of it.
 MAX_RESULT_CHARS = 160
 MAX_ARGS_CHARS = 120
+
+# Thinking is the one field big enough to matter: a single turn may hold 12,000
+# characters of it. Capped for the expansion because this is a panel you open
+# to see the shape of a run, and a wall of reasoning in the middle of it hides
+# the four tool calls underneath. The transcript is where you read it whole.
+MAX_THINKING_CHARS = 2000
 
 
 def _clip(text: Any, limit: int) -> str:
@@ -126,23 +137,33 @@ def _fill_turn(turn: Dict[str, Any], message: Dict[str, Any]) -> None:
             if not turn["model"]:
                 turn["model"] = str(route.get("model") or "")
         elif "thinking" in event:
+            thought = str(event["thinking"] or "")
             turn["steps"].append({"kind": "thinking",
-                                  "chars": len(str(event["thinking"] or ""))})
+                                  "chars": len(thought),
+                                  "detail": _clip(thought, MAX_THINKING_CHARS)})
         elif "plan" in event and isinstance(event["plan"], dict):
             plan = event["plan"]
+            goals = [str(g) for g in (plan.get("goals") or [])]
+            done = {str(g) for g in (plan.get("done") or [])}
             turn["steps"].append({
                 "kind": "plan",
-                "goals": len(plan.get("goals") or []),
-                "done": len(plan.get("done") or []),
+                "goals": len(goals),
+                "done": len(done),
+                # Which ones, not just how many. "2/3" tells you it did not
+                # finish; this tells you what it did not finish.
+                "detail": "\n".join(("[x] " if g in done else "[ ] ") + g for g in goals),
             })
         elif "tool" in event and isinstance(event["tool"], dict):
             tool = event["tool"]
+            spelled = _args(tool.get("args"))
             pending_tool = {
                 "kind": "tool",
                 "name": _bare(tool.get("name")),
-                "args": _clip(_args(tool.get("args")), MAX_ARGS_CHARS),
+                "args": _clip(spelled, MAX_ARGS_CHARS),
+                "args_full": spelled,
                 "rejected": bool(tool.get("rejected")),
                 "result": "",
+                "result_full": "",
                 "ok": None,
             }
             turn["steps"].append(pending_tool)
@@ -154,6 +175,10 @@ def _fill_turn(turn: Dict[str, Any], message: Dict[str, Any]) -> None:
             # its result: the backend runs one tool at a time.
             if pending_tool is not None:
                 pending_tool["result"] = _clip(result, MAX_RESULT_CHARS)
+                # Newlines kept here and flattened in the row. A command's
+                # output is its lines, and joining them into a paragraph is
+                # what made the trace unreadable before the cards existed.
+                pending_tool["result_full"] = result
                 pending_tool["ok"] = not _failed(result)
                 pending_tool = None
         elif "provider_error" in event or "error" in event:
@@ -164,7 +189,8 @@ def _fill_turn(turn: Dict[str, Any], message: Dict[str, Any]) -> None:
 
     text = str(message.get("content") or "")
     if text.strip():
-        turn["steps"].append({"kind": "answer", "chars": len(text)})
+        turn["steps"].append({"kind": "answer", "chars": len(text),
+                              "detail": _clip(text, MAX_THINKING_CHARS)})
     if metadata.get("interrupted"):
         turn["steps"].append({"kind": "stopped"})
 

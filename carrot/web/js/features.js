@@ -2638,6 +2638,15 @@ function newAgentTask() {
 // readings of it.
 
 let trajectoryOpen = false;
+// Which panel the trajectory is currently drawn into, and for which
+// conversation. Two surfaces show it — the Code tab's agent side and chat's
+// Agent mode — and they are the same run rendered by the same function, not
+// two views that will drift.
+let trajectoryHostId = 'agent-trajectory';
+// The *getter*, not the id. Captured as a value it goes stale the moment a run
+// starts after the panel was opened — which is the normal case, because you
+// open the trajectory to watch a run rather than after one.
+let trajectoryConversationOf = () => null;
 
 // The mark in the left gutter. Glyphs rather than colour alone, because the
 // column is scanned down rather than read across — you are looking for the
@@ -2653,23 +2662,49 @@ const TRAJECTORY_MARKS = {
     stopped: '■',
 };
 
+// The Code tab's agent side.
 async function toggleTrajectory() {
-    const panel = document.getElementById('agent-trajectory');
-    const log = document.getElementById('agent-log');
+    return toggleTrajectoryIn('agent-trajectory', 'agent-log', 'trajectory-btn',
+                              () => agentConversationId);
+}
+
+// Chat's Agent mode. Same run, same renderer, a different panel to draw into —
+// the trajectory is a property of the conversation, and both surfaces have one.
+async function toggleChatTrajectory() {
+    return toggleTrajectoryIn('chat-trajectory', 'chat-messages', 'chat-trajectory-btn',
+                              () => currentConversationId);
+}
+
+// Put the transcript back. Called when Agent mode is left, because the button
+// that would close this goes with it.
+function closeChatTrajectory() {
+    if (!trajectoryOpen || trajectoryHostId !== 'chat-trajectory') return;
+    trajectoryOpen = false;
+    document.getElementById('chat-trajectory')?.classList.add('hidden');
+    document.getElementById('chat-messages')?.classList.remove('hidden');
+    document.getElementById('chat-trajectory-btn')?.classList.remove('on');
+}
+
+async function toggleTrajectoryIn(hostId, logId, buttonId, conversationOf) {
+    const panel = document.getElementById(hostId);
+    const log = document.getElementById(logId);
     if (!panel || !log) return;
-    trajectoryOpen = !trajectoryOpen;
+    trajectoryOpen = !(trajectoryOpen && trajectoryHostId === hostId);
+    trajectoryHostId = hostId;
+    trajectoryConversationOf = conversationOf;
     panel.classList.toggle('hidden', !trajectoryOpen);
-    // It replaces the log rather than sitting above it: they are two readings
-    // of one run, and showing both at once means neither has the width.
+    // It replaces the transcript rather than sitting above it: they are two
+    // readings of one run, and showing both at once means neither has the width.
     log.classList.toggle('hidden', trajectoryOpen);
-    document.getElementById('trajectory-btn')?.classList.toggle('on', trajectoryOpen);
+    document.getElementById(buttonId)?.classList.toggle('on', trajectoryOpen);
     if (trajectoryOpen) await loadTrajectory();
 }
 
 async function loadTrajectory() {
-    const panel = document.getElementById('agent-trajectory');
+    const panel = document.getElementById(trajectoryHostId);
     if (!panel) return;
-    if (!agentConversationId) {
+    const conversationId = trajectoryConversationOf();
+    if (!conversationId) {
         panel.innerHTML = '<div class="traj-empty">Nothing to plot yet — '
             + 'ask for something and this fills in as it runs.</div>';
         return;
@@ -2677,7 +2712,7 @@ async function loadTrajectory() {
     panel.innerHTML = '<div class="traj-empty">Reading the run…</div>';
     let data;
     try {
-        data = await api(`/api/conversations/${encodeURIComponent(agentConversationId)}/trajectory`);
+        data = await api(`/api/conversations/${encodeURIComponent(conversationId)}/trajectory`);
     } catch (e) {
         panel.innerHTML = `<div class="traj-empty">Could not read it: ${escHtml(e.message)}</div>`;
         return;
@@ -2686,7 +2721,7 @@ async function loadTrajectory() {
 }
 
 function renderTrajectory(data) {
-    const panel = document.getElementById('agent-trajectory');
+    const panel = document.getElementById(trajectoryHostId);
     if (!panel) return;
     const turns = data.turns || [];
     if (!turns.length) {
@@ -2758,13 +2793,42 @@ function trajStep(step) {
         label = 'stopped';
         detail = 'the turn did not finish';
     }
-    return `
-      <div class="traj-step traj-${escHtml(step.kind)}${state === 'failed' ? ' bad' : ''}">
+    // What opening the row shows. A step with nothing more to say stays a
+    // row rather than becoming a control that does nothing when clicked —
+    // which is the worst of the three states a disclosure can be in.
+    const full = trajExpansion(step);
+    const row = `
+      <div class="traj-line">
         <span class="traj-mark" aria-hidden="true">${mark}</span>
         <span class="traj-label">${escHtml(label)}</span>
         <span class="traj-detail">${escHtml(detail || '')}</span>
         ${state ? `<span class="traj-state ${escHtml(state)}">${escHtml(state)}</span>` : ''}
       </div>`;
+    const classes = `traj-step traj-${escHtml(step.kind)}${state === 'failed' ? ' bad' : ''}`;
+    if (!full) return `<div class="${classes}">${row}</div>`;
+    return `
+      <details class="${classes} traj-open">
+        <summary>${row}</summary>
+        <pre class="traj-full">${escHtml(full)}</pre>
+      </details>`;
+}
+
+// The long form of a step, or nothing.
+//
+// A tool shows its arguments and what came back — the result the trace kept,
+// which is 400 characters, so this is everything there is rather than a second
+// summary of it. Thinking, a plan and an answer each carry their own text.
+function trajExpansion(step) {
+    if (step.kind === 'tool') {
+        const parts = [];
+        if (step.args_full) parts.push(step.args_full);
+        if (step.result_full) parts.push(step.result_full);
+        // Two blank lines between the call and its result: they are different
+        // things, and a command's output often starts with a blank line of its
+        // own that would otherwise read as the separator.
+        return parts.join('\n\n');
+    }
+    return step.detail || '';
 }
 
 function trajCount(n, noun) {
