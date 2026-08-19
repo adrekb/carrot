@@ -9114,6 +9114,117 @@ body.nav-collapsed .nav-job-pulse { left: 6px; }
   font-style: italic;
 }
 
+/* ===== The turn rail =====
+   One tick per question, down the right edge of the transcript. Collapsed it
+   is a column of dashes; hovered it is the questions.
+
+   Not a proportional minimap: that makes a three-line question and a
+   two-screen answer different sizes, so the thing you are looking for is the
+   smallest mark on the rail. Every question gets the same tick. */
+.turn-rail {
+  position: absolute;
+  top: 50%;
+  right: var(--s-4);
+  transform: translateY(-50%);
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  max-height: 60%;
+  overflow-y: auto;
+  padding: var(--s-2);
+  border: 1px solid transparent;
+  border-radius: var(--r-lg);
+  scrollbar-width: none;
+  /* Out of the way until wanted. The ticks are legible at this opacity and
+     the labels are not shown at all, so nothing here competes with the text
+     it sits beside. */
+  transition: background var(--dur-2) var(--ease), border-color var(--dur-2) var(--ease);
+}
+.turn-rail::-webkit-scrollbar { display: none; }
+.turn-rail.hidden { display: none; }
+.turn-rail:hover {
+  background: var(--surface-pop);
+  border-color: var(--border-hi);
+  box-shadow: var(--shadow);
+}
+
+.turn-tick {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--s-3);
+  width: 100%;
+  padding: 3px 4px;
+  border: 0;
+  border-radius: var(--r-xs);
+  background: none;
+  color: var(--faint);
+  font: inherit;
+  font-size: var(--text-2xs);
+  text-align: right;
+  cursor: pointer;
+}
+.turn-rail:hover .turn-tick:hover { background: var(--card2); color: var(--text); }
+
+/* The label exists in the DOM at all times — it is what a screen reader reads
+   and what the tick means — and is laid out only while the rail is open. */
+.turn-tick-label {
+  display: none;
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.turn-rail:hover .turn-tick-label { display: block; }
+.turn-tick.on { color: var(--accent); }
+
+/* The dash. Short by default, longer for the turn you are reading — length
+   rather than colour alone, so the current position is findable at a glance
+   down a column of twenty. */
+.turn-tick-mark {
+  flex: none;
+  width: 14px;
+  height: 2px;
+  /* Fully rounded rather than a 1px corner: on a 2px bar those are the same
+     drawing, and the pill token is on the scale where 1px is not. */
+  border-radius: var(--r-pill);
+  background: var(--faint);
+  opacity: 0.55;
+  transition: width var(--dur-2) var(--ease), opacity var(--dur-2) var(--ease);
+}
+.turn-tick:hover .turn-tick-mark { opacity: 1; }
+.turn-tick.on .turn-tick-mark { width: 20px; background: var(--accent); opacity: 1; }
+
+/* The rail is a sibling of the transcript — inside it, it would scroll away
+   with the text it navigates — so the column holding both is what positions
+   it. Without this it anchors to the page and sits over the sidebar on a
+   narrow window. */
+#ws-center { position: relative; }
+
+/* ===== No native scrollbars, anywhere =====
+ *
+ * A scrollbar does two things: it says where you are, and it lets you drag.
+ * In this app the first is answered better by what is on screen — the turn
+ * rail marks questions rather than a proportion of pixels, the film strip
+ * shows slides, the tree shows files — and the second is a gesture almost
+ * nobody reaches for when a wheel, a trackpad and the keyboard all do it.
+ * What was left in every pane was a grey bar down the edge of the content.
+ *
+ * The drawing is hidden, not the behaviour. Every one of these still scrolls
+ * by wheel, trackpad, keyboard, and by the controls built for it — this is
+ * `scrollbar-width`, not `overflow: hidden`, and the difference is that the
+ * second one would break all four while looking identical in a screenshot.
+ *
+ * Applied at the root rather than pane by pane, because the panes are the
+ * whole app: chasing them individually is a rule per scroll container and a
+ * missed one every time a pane is added. Monaco, Excalidraw and reveal draw
+ * their own scrollbars as ordinary elements, so they are untouched by this
+ * and keep whatever they decided to show. */
+* { scrollbar-width: none; }
+*::-webkit-scrollbar { width: 0; height: 0; }
+
 /* ===== The Context chip =====
    Sits with the model pill, because both answer "what is this turn made of".
    Quieter than the model: the model is a choice you make every turn, and this
