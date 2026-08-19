@@ -9151,6 +9151,34 @@ body.nav-collapsed .nav-job-pulse { left: 6px; }
 #chat-trajectory-btn { display: none; }
 #view-workspace[data-chat-mode="agent"] #chat-trajectory-btn { display: flex; }
 
+/* Settings groups. A row of tabs rather than a column: there are five, they
+   are short, and a sidebar inside a page that already has one is two columns
+   of navigation arguing about which is the way back. */
+.settings-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  margin-bottom: var(--s-5);
+  padding-bottom: var(--s-4);
+  border-bottom: 1px solid var(--border);
+}
+.settings-tab {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--card2);
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+.settings-tab:hover { color: var(--text); border-color: var(--border-hi); }
+.settings-tab.on {
+  background: var(--accent-fill, var(--accent));
+  color: var(--on-accent);
+  border-color: transparent;
+}
+
 /* ===== Trajectory =====
    The same run the transcript shows, as turns. Dense on purpose: the whole
    point is fitting a session on one screen, which is what makes "which turn

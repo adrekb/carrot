@@ -1728,6 +1728,13 @@
     <div class="page">
       <div class="page-head"><h2>Settings</h2></div>
 
+      <!-- Twenty-one cards in one scroll is a page you search rather than
+           read: everything is on it, so nothing is anywhere in particular,
+           and the way to change the model was to remember roughly how far
+           down it lived. Five groups, and the group is the thing you know
+           before you know the setting's name. -->
+      <div class="settings-tabs" id="settings-tabs" role="tablist"></div>
+
       <!-- Four tabs that were four entries in a sidebar nobody could
            read. They are still whole pages — they are just reached from
            the place you go when you want to change something, and they
@@ -1759,7 +1766,7 @@
            already running in the interpreter that needs them, so it can put
            them there — telling somebody to open a shell and work out which
            Python to point at is the end of the road for most people. -->
-      <div class="settings-card">
+      <div class="settings-card" data-settings-tab="tools">
         <div class="settings-head">
           <svg class="ico"><use href="#i-download"/></svg>
           <h3>Add-ons</h3>
@@ -1771,7 +1778,7 @@
         <div id="components-list" class="components-list"></div>
       </div>
 
-      <div class="settings-card">
+      <div class="settings-card" data-settings-tab="general">
         <div class="settings-head">
           <svg class="ico"><use href="#i-palette"/></svg>
           <h3>Appearance</h3>
@@ -1794,7 +1801,7 @@
         </p>
       </div>
 
-      <div class="settings-card">
+      <div class="settings-card" data-settings-tab="general">
         <div class="settings-head">
           <svg class="ico"><use href="#i-chat"/></svg>
           <h3>How answers are written</h3>
@@ -1814,7 +1821,7 @@
         <p class="muted small">Applies to every answer, and overrides the choices above.</p>
       </div>
 
-      <div class="settings-card">
+      <div class="settings-card" data-settings-tab="models">
         <div class="settings-head">
           <svg class="ico"><use href="#i-chip"/></svg>
           <h3>How much a local model holds in mind</h3>
@@ -1858,7 +1865,7 @@
         </details>
       </div>
 
-      <div class="settings-card">
+      <div class="settings-card" data-settings-tab="tools">
         <div class="settings-head">
           <svg class="ico"><use href="#i-search"/></svg>
           <h3>Where web results come from</h3>
@@ -1891,7 +1898,7 @@
         </p>
       </div>
 
-      <div class="settings-card">
+      <div class="settings-card" data-settings-tab="tools">
         <div class="settings-head">
           <svg class="ico"><use href="#i-search"/></svg>
           <h3>When a page won't open</h3>
@@ -1914,7 +1921,7 @@
         </label>
       </div>
 
-      <div class="settings-card">
+      <div class="settings-card" data-settings-tab="connections">
         <div class="settings-head">
           <svg class="ico"><use href="#i-calendar"/></svg>
           <h3>Google Calendar</h3>
@@ -1953,7 +1960,7 @@
         </div>
       </div>
 
-      <div class="settings-card">
+      <div class="settings-card" data-settings-tab="connections">
         <div class="settings-head">
           <svg class="ico"><use href="#i-note"/></svg>
           <h3>Your apps — Obsidian &amp; your code editor</h3>
@@ -1975,7 +1982,7 @@
         </div>
       </div>
 
-      <div class="settings-card">
+      <div class="settings-card" data-settings-tab="connections">
         <div class="settings-head">
           <svg class="ico"><use href="#i-github"/></svg>
           <h3>GitHub Contributions</h3>
@@ -1996,7 +2003,7 @@
         </div>
       </div>
 
-      <div class="settings-card">
+      <div class="settings-card" data-settings-tab="models">
         <div class="settings-head">
           <svg class="ico"><use href="#i-cloud"/></svg>
           <h3>Providers</h3>
@@ -2028,7 +2035,7 @@
         </details>
       </div>
 
-      <div class="settings-card">
+      <div class="settings-card" data-settings-tab="models">
         <div class="settings-head">
           <svg class="ico"><use href="#i-key"/></svg>
           <h3>How you sign in</h3>
@@ -2043,7 +2050,7 @@
         <div id="auth-panel"><div class="skeleton" aria-busy="true" aria-label="Loading"><div class="skeleton-row"></div><div class="skeleton-row"></div><div class="skeleton-row"></div></div></div>
       </div>
 
-      <div class="settings-card">
+      <div class="settings-card" data-settings-tab="models">
         <div class="settings-head">
           <svg class="ico"><use href="#i-image"/></svg>
           <h3>Image &amp; video generation</h3>
@@ -2062,7 +2069,7 @@
         <div id="media-preview" class="media-preview"></div>
       </div>
 
-      <div class="settings-card">
+      <div class="settings-card" data-settings-tab="models">
         <div class="settings-head">
           <svg class="ico"><use href="#i-chip"/></svg>
           <h3>Consensus &amp; debate</h3>
@@ -2096,7 +2103,7 @@
       <!-- Ambient capture rules. These exist before ambient capture does, on
            purpose: written the other way round, the exclusions become a patch
            on a system that already recorded your banking session. -->
-      <div class="settings-card">
+      <div class="settings-card" data-settings-tab="privacy">
         <div class="settings-head">
           <svg class="ico"><use href="#i-eye"/></svg>
           <h3>What Carrot is allowed to see</h3>
@@ -2138,7 +2145,7 @@
            It lives here rather than on the Ambient screen because this is
            where the other privacy decisions are, and because recall belongs in
            chat: there is no third place to visit. -->
-      <div class="settings-card">
+      <div class="settings-card" data-settings-tab="privacy">
         <div class="settings-head">
           <svg class="ico"><use href="#i-eye"/></svg>
           <h3>Asking about what you saw</h3>
@@ -2158,7 +2165,7 @@
         <div id="ambient-agent-aware-note" class="muted small"></div>
       </div>
 
-      <div class="settings-card">
+      <div class="settings-card" data-settings-tab="tools">
         <div class="settings-head">
           <svg class="ico"><use href="#i-pulse"/></svg>
           <h3>Local webhooks</h3>
@@ -2200,7 +2207,7 @@
         </details>
       </div>
 
-      <div class="settings-card">
+      <div class="settings-card" data-settings-tab="models">
         <div class="settings-head">
           <svg class="ico"><use href="#i-chip"/></svg>
           <h3>Task Routing</h3>
@@ -2233,7 +2240,7 @@
         </div>
       </div>
 
-      <div class="settings-card">
+      <div class="settings-card" data-settings-tab="general">
         <div class="settings-head">
           <svg class="ico"><use href="#i-download"/></svg>
           <h3>Backup &amp; Restore</h3>
@@ -2250,7 +2257,7 @@
         <div id="backup-list" class="list"></div>
       </div>
 
-      <div class="settings-card">
+      <div class="settings-card" data-settings-tab="connections">
         <div class="settings-head">
           <svg class="ico"><use href="#i-activity"/></svg>
           <h3>Fitness Sync</h3>
@@ -2260,7 +2267,7 @@
         <pre class="settings-code">{ "move": 420, "exercise_minutes": 35, "stand_hours": 10 }</pre>
       </div>
 
-      <div class="settings-card">
+      <div class="settings-card" data-settings-tab="general">
         <div class="settings-head">
           <svg class="ico"><use href="#i-gear"/></svg>
           <h3>Profile</h3>
@@ -2271,7 +2278,7 @@
         </div>
       </div>
 
-      <div class="settings-card">
+      <div class="settings-card" data-settings-tab="general">
         <div class="settings-head">
           <svg class="ico"><use href="#i-news"/></svg>
           <h3>Overnight Recap</h3>

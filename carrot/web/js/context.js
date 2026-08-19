@@ -169,3 +169,69 @@ window.addEventListener('DOMContentLoaded', () => {
     if (input) input.addEventListener('input', scheduleContextCount);
     loadContext();
 });
+
+// ===== Settings, in groups =====
+//
+// Twenty-one cards in one scroll is a page you search rather than read:
+// everything is on it, so nothing is anywhere in particular, and the way to
+// change your model was to remember roughly how far down it lived.
+//
+// Five groups, ordered by how often you go looking: what the app looks like
+// and how it answers, then models, then the things it can reach, then what it
+// is connected to, then what it may see. The group is the thing you know
+// before you know the setting's name — "it's a model thing" arrives before
+// "it's called Task Routing".
+//
+// The cards are tagged in the markup rather than moved. Reordering twenty-one
+// blocks of HTML to group them would be a diff nobody can review, and the tag
+// is the same fact in one attribute.
+const SETTINGS_TABS = [
+    ['general',     'General'],
+    ['models',      'Models'],
+    ['tools',       'Tools'],
+    ['connections', 'Connections'],
+    ['privacy',     'Privacy'],
+];
+
+let settingsTab = 'general';
+
+function renderSettingsTabs() {
+    const host = document.getElementById('settings-tabs');
+    if (!host) return;
+    host.innerHTML = SETTINGS_TABS.map(([id, label]) => {
+        // The count is drawn from the page rather than kept in a list here,
+        // so a card added to a group is counted without anybody remembering.
+        const cards = document.querySelectorAll(`.settings-card[data-settings-tab="${id}"]`).length;
+        if (!cards) return '';
+        return `<button class="settings-tab${id === settingsTab ? ' on' : ''}"
+                        role="tab" aria-selected="${id === settingsTab}"
+                        data-tab="${id}" onclick="setSettingsTab('${id}')">${escHtml(label)}</button>`;
+    }).join('');
+}
+
+function setSettingsTab(id) {
+    settingsTab = id;
+    for (const card of document.querySelectorAll('.settings-card[data-settings-tab]')) {
+        card.classList.toggle('hidden', card.dataset.settingsTab !== id);
+    }
+    for (const tab of document.querySelectorAll('.settings-tab')) {
+        const on = tab.dataset.tab === id;
+        tab.classList.toggle('on', on);
+        tab.setAttribute('aria-selected', String(on));
+    }
+    // Back to the top: the tabs are above the cards, and switching group while
+    // scrolled halfway down the last one lands you in the middle of the new
+    // one with no idea you have moved.
+    document.querySelector('#view-settings .page')?.scrollTo({ top: 0 });
+    try { localStorage.setItem('carrot-settings-tab', id); } catch (_) {}
+}
+
+function restoreSettingsTab() {
+    let stored = 'general';
+    try { stored = localStorage.getItem('carrot-settings-tab') || 'general'; } catch (_) {}
+    if (!SETTINGS_TABS.some(([id]) => id === stored)) stored = 'general';
+    renderSettingsTabs();
+    setSettingsTab(stored);
+}
+
+window.addEventListener('DOMContentLoaded', restoreSettingsTab);
