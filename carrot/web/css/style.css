@@ -6016,6 +6016,12 @@ td, th, .si-sub, .small, .editor-status {
 }
 .tour-item.highlight .tour-what { color: var(--on-accent); }
 .tour-why { font-size: var(--text-base); line-height: 1.55; color: var(--muted); }
+/* The row that is filled with the accent needs both halves off `--muted`, not
+   just the label. `--muted` is tuned to sit quietly on `--bg`; on the accent
+   fill it is the wrong grey against the wrong ground, and the sentence that
+   actually tells you where Help lives was the least readable thing in the
+   dialog. `--on-accent` is the colour that pairs with this fill. */
+.tour-item.highlight .tour-why { color: var(--on-accent); }
 @media (max-width: 640px) {
   .tour-item { grid-template-columns: 1fr; gap: 2px; }
 }
