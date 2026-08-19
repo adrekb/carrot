@@ -4482,11 +4482,22 @@ async def analyze_screenshot(req: dict):
 # ===== Terminal =====
 
 @app.post("/api/terminal/execute")
-async def execute_command(req: CommandRequest):
+def execute_command(req: CommandRequest):
     """Run a shell command, screening destructive ones for confirmation first.
 
     A 428 means "this needs a second look" — the client re-sends with
     confirm=true once the user has agreed.
+
+    `def`, deliberately, not `async def`. `terminal.execute_command` is a
+    blocking `subprocess.run`, and an `async def` handler runs *on* the event
+    loop — so a command that takes thirty seconds is thirty seconds in which
+    uvicorn serves nothing else at all. Every other request in the app queues
+    behind `pip install`, and what the user sees is not a slow terminal but a
+    dead one: unrelated panes failing with "Failed to fetch" while the install
+    they started is still running perfectly well.
+
+    A plain `def` hands the same function to FastAPI's threadpool instead,
+    where blocking is what it is for. Nothing else about the endpoint changes.
     """
     verdict = security_mod.check_command(req.command, confirmed=bool(req.confirm))
     if not verdict["allowed"]:
