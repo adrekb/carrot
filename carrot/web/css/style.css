@@ -838,6 +838,19 @@ body {
   white-space: pre-wrap;
   word-wrap: break-word;
 }
+/* Rendered markdown is elements, not text, and `pre-wrap` was turning the
+ * newlines *between* those elements into real blank lines. Six of them in one
+ * answer, 196px of nothing, in every markdown reply this app has ever drawn —
+ * hidden for as long as there was a bubble whose background made it read as
+ * generous padding rather than as a hole.
+ *
+ * On `.md` only. A question you typed across three lines is text, `pre-wrap`
+ * is what keeps those lines, and the user's own message never gets this class.
+ */
+.message .content.md { white-space: normal; }
+/* And nothing hanging off the bottom. A paragraph's 8px margin under the last
+ * line of an answer pushes the actions away from the thing they act on. */
+.message .content.md > :last-child { margin-bottom: 0; }
 
 .message.user { align-self: flex-end; }
 .message.user .role-label { text-align: right; }
@@ -3404,31 +3417,114 @@ body.nav-collapsed .privacy-chip { justify-content: center; padding: 8px 0; }
 
 .agent-steps { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
 
+/* A step is a line, not a card.
+ *
+ * Every one of them was a filled panel with a coloured bar down its left edge,
+ * so a run of twenty steps was twenty boxes and twenty stripes stacked between
+ * the question and the answer. That is a lot of furniture for a record you are
+ * meant to glance at — and the colour was spent on the wrong axis: an orange
+ * bar on every action makes *action* the emphasis, when actions are the
+ * ordinary case and the thing worth spotting is the one that went wrong.
+ *
+ * So the ordinary steps are plain text at a quiet weight, and the palette is
+ * kept for the two states that are genuinely exceptional. A log where nothing
+ * is highlighted is one where something highlighted is worth looking at.
+ */
 .agent-step {
-  font-size: var(--text-base);
-  padding: 8px 12px;
-  border-radius: var(--r-sm);
-  background: var(--card);
-  border-left: 2px solid var(--border-hi);
+  font-size: var(--text-sm);
+  padding: 3px 0;
   word-break: break-word;
 }
-.agent-step.thought { background: transparent; color: var(--muted); font-style: italic; padding: 2px 12px; }
-.agent-step.action { border-left-color: var(--accent); }
-.agent-step.observation { border-left-color: var(--border-hi); color: var(--muted); font-family: var(--mono); font-size: var(--text-sm); }
-.agent-step.denied { border-left-color: var(--red); background: rgba(255, 93, 93, 0.07); }
-.agent-step.question { border-left-color: var(--yellow); background: rgba(245, 196, 81, 0.07); }
-/* An injection attempt is the one event the user must not be able to scroll
-   past without noticing. */
+.agent-step.thought { color: var(--muted); font-style: italic; }
+.agent-step.observation { color: var(--muted); font-family: var(--mono); font-size: var(--text-2xs); }
+/* Refused, and asked. Colour on the words rather than a bar beside them —
+   the same move as a failed answer, which is red text and no longer a red
+   border, because there is no box left to put a border on. */
+.agent-step.denied { color: var(--red); }
+.agent-step.question { color: var(--yellow); }
+/* An injection attempt keeps everything the others gave up. It is the one
+   event the user must not be able to scroll past without noticing, and that
+   is exactly the argument for it being the only thing on the page still
+   drawn as a box. */
 .agent-step.injection {
-  border-left-color: var(--red);
-  background: rgba(255, 93, 93, 0.12);
+  padding: 8px 12px;
+  border-radius: var(--r-sm);
   border: 1px solid var(--red);
+  background: rgba(255, 93, 93, 0.12);
+  color: var(--text);
 }
 
+/* The action's name, in mono and in the theme's accent, so the log has a column
+   you can read down and find `navigate` in without reading the sentences. The
+   accent belongs *here* rather than on a bar beside the row: one word carries
+   it, the whole step used to. `--accent-hi` is a token, so it is whichever
+   colour the current theme calls its own. */
 .agent-action { font-family: var(--mono); color: var(--accent-hi); margin-right: 8px; }
 .agent-args { color: var(--muted); font-family: var(--mono); font-size: var(--text-sm); }
 .agent-verdict { color: var(--faint); font-size: var(--text-xs); margin-top: 4px; }
 .agent-observation { display: block; margin-top: 4px; white-space: pre-wrap; }
+
+/* A step that carries more than a line of text.
+ *
+ * The log is a record of what happened; the answer under it is the thing being
+ * read. So a step that would print a whole page — or a `finish` whose arguments
+ * are the entire summary — is one line, and the line says how much is behind
+ * it. Folded is the default and expanded is the ask, which is the only way
+ * round that works: a run with forty steps in it cannot open forty of them and
+ * still be a log. */
+.agent-fold-line {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.agent-fold-chev {
+  width: 11px; height: 11px;
+  flex: 0 0 auto;
+  color: var(--faint);
+  transform: rotate(-90deg);
+  transition: transform var(--dur-2) var(--ease);
+}
+.agent-step.open .agent-fold-chev { transform: rotate(0deg); }
+/* The head is the line, so it must not become two. */
+.agent-fold-head {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-fold-head .agent-observation { display: inline; margin: 0; white-space: nowrap; }
+.agent-fold-size {
+  flex: 0 0 auto;
+  color: var(--faint);
+  font-size: var(--text-2xs);
+  font-family: var(--mono);
+}
+/* Opened. Capped and scrolled — a page read is thousands of lines, and the
+   point of opening one is to look at it, not to lose the log below it. */
+.agent-fold-body {
+  margin: var(--s-3) 0 0;
+  padding: var(--s-3);
+  max-height: 40vh;
+  overflow: auto;
+  border-radius: var(--r-sm);
+  background: var(--bg2);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: var(--text-2xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.agent-fold-body.hidden { display: none; }
 
 .agent-result {
   border-radius: var(--radius);

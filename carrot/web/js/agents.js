@@ -473,6 +473,78 @@ function agentStep(html, kind) {
     step.innerHTML = html;
     host.appendChild(step);
     step.scrollIntoView({ block: 'nearest' });
+    return step;
+}
+
+// ===== A step is one line until you ask for the rest =====
+//
+// Two of the events a run emits carry an arbitrary amount of text, and both
+// were being printed in full:
+//
+//   * an **action**, whose arguments fall back to `JSON.stringify` when the
+//     server sends no label — so `finish` arrived as its entire summary,
+//     escaped, on one unwrapped line of mono;
+//   * an **observation**, which for a page read is the whole page. A car
+//     specification site came through as four hundred lines of nav links
+//     before the answer that mentioned none of them.
+//
+// The run log is a record of what happened, not the thing you are reading; the
+// answer underneath is. So each step is a line, and the line says what kind of
+// thing it is and how much of it there is. What was on screen is one click
+// away rather than in front of the answer.
+//
+// Folded only when there is something to fold. A step whose whole content fits
+// on the line gets no chevron, because a disclosure that opens onto the text
+// already showing is a control that does nothing.
+
+const AGENT_LINE_CHARS = 110;
+
+function agentSize(text) {
+    const n = (text || '').length;
+    if (n < 1000) return n + ' chars';
+    return (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k chars';
+}
+
+/** A step whose body may be any length.
+ *
+ * `label` names what happened and is always on the line. `body` is the text of
+ * arbitrary size — the arguments, or what a page said. It goes on the line too
+ * when it fits there, and behind a chevron when it does not.
+ *
+ * The caller passes the body once and never previews it itself: the first
+ * version had the call sites building the preview *and* this function
+ * appending the body, which put the same sentence on the line twice for every
+ * short step.
+ */
+function agentFoldedStep(label, body, kind, bodyClass) {
+    const text = String(body == null ? '' : body);
+    const cls = bodyClass || 'agent-args';
+    const preview = text ? `<span class="${cls}">${escHtml(agentFirstLine(text))}</span>` : '';
+    if (!text.includes('\n') && text.length <= AGENT_LINE_CHARS) {
+        return agentStep(label + preview, kind);
+    }
+    const step = agentStep(
+        `<button type="button" class="agent-fold-line">`
+        + `<svg class="ico agent-fold-chev"><use href="#i-chevron"/></svg>`
+        + `<span class="agent-fold-head">${label}${preview}</span>`
+        + `<span class="agent-fold-size">${escHtml(agentSize(text))}</span>`
+        + `</button>`
+        + `<pre class="agent-fold-body hidden">${escHtml(text)}</pre>`,
+        kind);
+    const line = step.querySelector('.agent-fold-line');
+    const full = step.querySelector('.agent-fold-body');
+    line.onclick = () => {
+        const opening = full.classList.contains('hidden');
+        full.classList.toggle('hidden', !opening);
+        step.classList.toggle('open', opening);
+    };
+    return step;
+}
+
+/** The first line of something, flattened, for the line of a folded step. */
+function agentFirstLine(text, limit = 90) {
+    const flat = String(text || '').replace(/\s+/g, ' ').trim();
+    return flat.length <= limit ? flat : flat.slice(0, limit).trimEnd() + '…';
 }
 
 // ===== The work log =====
@@ -579,10 +651,15 @@ async function runAgentStream(url, payload) {
                 if (event.approval_resolved) dismissApprovalPrompt(event.approval_resolved.id);
                 if (event.thought) agentStep(`<span class="agent-thought">${escHtml(event.thought)}</span>`, 'thought');
                 if (event.action) {
-                    agentStep(
-                        `<span class="agent-action">${escHtml(event.action.action)}</span>` +
-                        `<span class="agent-args">${escHtml(event.action.label || JSON.stringify(event.action.arguments))}</span>`,
-                        'action');
+                    // A label when the server sent one — it is written for a
+                    // person. Otherwise the arguments, which are JSON and
+                    // occasionally the whole answer, so they get a preview on
+                    // the line and the rest behind the chevron.
+                    const detail = event.action.label
+                        || JSON.stringify(event.action.arguments || {}, null, 2);
+                    agentFoldedStep(
+                        `<span class="agent-action">${escHtml(event.action.action)}</span>`,
+                        detail, 'action');
                 }
                 if (event.denied) {
                     agentStep(
@@ -590,7 +667,10 @@ async function runAgentStream(url, payload) {
                         'denied');
                 }
                 if (event.observation) {
-                    agentStep(`<span class="agent-observation">${escHtml(event.observation.result)}</span>`, 'observation');
+                    // What the page or the tool actually said. For a read that
+                    // is the whole page, which used to go on screen entire.
+                    const seen = String(event.observation.result || '');
+                    agentFoldedStep('', seen, 'observation', 'agent-observation');
                 }
                 if (event.injection_warning) {
                     agentStep(

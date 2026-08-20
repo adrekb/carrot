@@ -976,3 +976,141 @@ class TestOnlyTheQuestionIsInABox:
         rules = self.content_rules(".message.assistant .content.error {")
         assert "color: var(--red)" in rules
         assert "border-left:" in rules
+
+
+class TestRenderedMarkdownIsNotPreformattedText:
+    """`.content` is `white-space: pre-wrap`, which is right while an answer is
+    still arriving as text and wrong the moment it becomes elements: the
+    newlines *between* those elements start rendering as real blank lines.
+
+    Six of them in one answer — 196px of nothing, measured — in every markdown
+    reply this app has ever drawn. It went unnoticed for as long as there was a
+    bubble whose background made the hole read as generous padding.
+    """
+
+    def test_rendered_markdown_drops_pre_wrap(self):
+        css = read("css", "style.css")
+        assert ".message .content.md { white-space: normal; }" in css
+
+    def test_a_typed_message_keeps_its_line_breaks(self):
+        # The rule is on `.md`, and only the assistant's content gets that
+        # class — a question typed across three lines is text, and pre-wrap is
+        # what keeps those lines.
+        app = read("js", "app.js")
+        assert '<div class="content md">' in app
+        css = read("css", "style.css")
+        block = css[css.index(".message .content {"):]
+        assert "white-space: pre-wrap" in block[:block.index("}")]
+
+    def test_the_class_arrives_with_the_first_chunk(self):
+        # It was added when the turn landed, so an answer streamed with a blank
+        # line between every block and then jumped shorter by a couple of
+        # hundred pixels the instant it finished.
+        app = read("js", "app.js")
+        block = app[app.index("if (payload.chunk) {"):]
+        block = block[:block.index("box.scrollTop")]
+        assert "contentEl.classList.add('md')" in block
+
+    def test_nothing_hangs_off_the_bottom_of_an_answer(self):
+        # A paragraph's margin under the last line pushes the Copy/Rerun row
+        # away from the thing it acts on.
+        css = read("css", "style.css")
+        assert ".message .content.md > :last-child { margin-bottom: 0; }" in css
+
+
+class TestARunLogIsALogNotTheAnswer:
+    """Two of the events a run emits carry arbitrary text, and both printed in
+    full: an action whose arguments fall back to `JSON.stringify` — so `finish`
+    arrived as its entire summary on one unwrapped line — and an observation,
+    which for a page read is the whole page. A car specification site came
+    through as four hundred lines of nav links above the answer."""
+
+    def test_a_long_step_is_one_line_with_the_rest_behind_a_chevron(self):
+        agents = read("js", "agents.js")
+        assert "function agentFoldedStep(" in agents
+        assert "agent-fold-line" in agents
+        assert "agent-fold-body hidden" in agents
+
+    def test_folded_is_the_default(self):
+        # A run with forty steps cannot open forty of them and still be a log.
+        agents = read("js", "agents.js")
+        body = agents[agents.index("function agentFoldedStep("):]
+        body = body[:body.index("\nfunction ", 1)]
+        assert 'class="agent-fold-body hidden"' in body
+
+    def test_a_step_that_fits_on_the_line_gets_no_chevron(self):
+        # A disclosure that opens onto the text already showing is a control
+        # that does nothing.
+        agents = read("js", "agents.js")
+        body = agents[agents.index("function agentFoldedStep("):]
+        body = body[:body.index("\nfunction ", 1)]
+        assert "text.length <= AGENT_LINE_CHARS" in body
+        assert "return agentStep(label + preview, kind);" in body
+
+    def test_the_preview_is_built_in_one_place(self):
+        # It was built at the call sites *and* appended here, which put the
+        # same sentence on the line twice for every short step.
+        agents = read("js", "agents.js")
+        calls = []
+        for match in re.finditer(r"(?<!function )agentFoldedStep\(", agents):
+            calls.append(agents[match.end():match.end() + 200])
+        assert calls, "nothing calls it"
+        for call in calls:
+            assert "agentFirstLine" not in call, \
+                "a call site previews the body that agentFoldedStep already previews"
+
+    def test_both_unbounded_events_go_through_it(self):
+        agents = read("js", "agents.js")
+        assert "agentFoldedStep(\n" in agents or "agentFoldedStep(" in agents
+        # The action's raw arguments, and the observation's whole result.
+        assert "JSON.stringify(event.action.arguments || {}, null, 2)" in agents
+        assert "agentFoldedStep('', seen, 'observation'" in agents
+        # And neither is printed unbounded any more.
+        assert "escHtml(event.observation.result)" not in agents
+        assert "escHtml(event.action.label || JSON.stringify" not in agents
+
+    def test_an_opened_step_cannot_bury_the_log_under_it(self):
+        css = read("css", "style.css")
+        block = css[css.index(".agent-fold-body {"):]
+        block = block[:block.index("}")]
+        assert "max-height" in block and "overflow: auto" in block
+
+    def test_a_step_is_a_line_and_not_a_card(self):
+        """Twenty steps were twenty filled panels with twenty coloured bars,
+        stacked between the question and the answer. A lot of furniture for a
+        record you glance at."""
+        css = read("css", "style.css")
+        block = css[css.index(".agent-step {"):]
+        block = block[:block.index("}")]
+        assert "background:" not in block
+        assert "border-left:" not in block
+        assert "border-radius:" not in block
+
+    def test_the_accent_is_on_the_word_and_not_on_a_bar_beside_it(self):
+        # A stripe down every step colours the whole row; the accent is worth
+        # more spent on the one word you scan the column for. It is a token, so
+        # it is whatever the current theme calls its own.
+        css = read("css", "style.css")
+        assert ".agent-step.action { border-left-color: var(--accent); }" not in css
+        block = css[css.index(".agent-action {"):]
+        block = block[:block.index("}")]
+        assert "color: var(--accent-hi)" in block
+
+    def test_the_two_exceptional_states_keep_their_colour(self):
+        css = read("css", "style.css")
+        assert ".agent-step.denied { color: var(--red); }" in css
+        assert ".agent-step.question { color: var(--yellow); }" in css
+
+    def test_an_injection_attempt_is_still_a_box(self):
+        # The one event the user must not be able to scroll past, which is
+        # exactly the argument for it being the only one still drawn as one.
+        css = read("css", "style.css")
+        block = css[css.index(".agent-step.injection {"):]
+        block = block[:block.index("}")]
+        assert "border: 1px solid var(--red)" in block
+        assert "background:" in block
+
+    def test_the_line_says_how_much_is_behind_it(self):
+        agents = read("js", "agents.js")
+        assert "function agentSize(" in agents
+        assert "agent-fold-size" in agents

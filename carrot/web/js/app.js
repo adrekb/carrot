@@ -2674,6 +2674,13 @@ async function streamTurn(url, payload, skill) {
                     // replaced, which is a worse first impression than either
                     // of the two states it sits between.
                     contentEl.innerHTML = mdToHtml(stripArtifactMarkers(full));
+                    // `.md` from the first chunk, not at the end. It is what
+                    // takes `white-space: pre-wrap` off rendered markdown, and
+                    // adding it only when the turn landed meant the whole
+                    // answer streamed with a blank line between every block
+                    // and then collapsed by a couple of hundred pixels the
+                    // instant it finished.
+                    contentEl.classList.add('md');
                     box.scrollTop = box.scrollHeight;
                 }
                 // The turn ended by asking. The backend has already cut off
