@@ -644,7 +644,9 @@
 
           <div class="policy-card">
             <h4>Limits</h4>
-            <div id="policy-budget" class="muted small"></div>
+            <!-- Four numbers, drawn from the bounds the kernel enforces. This
+                 was a sentence stating them, with no way to disagree. -->
+            <div id="policy-budget" class="budget-limits"></div>
             <label class="inline-check">
               <input type="checkbox" id="policy-desktop-control" onchange="setPolicyFlag('agent_desktop_control_enabled', this.checked)">
               Let Carrot control the mouse and keyboard directly

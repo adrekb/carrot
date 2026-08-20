@@ -405,17 +405,82 @@ function renderPolicy(policy) {
             : '<span class="muted small">No stored credentials.</span>';
     }
 
-    const budget = document.getElementById('policy-budget');
-    if (budget) {
-        budget.textContent =
-            `A run stops after ${policy.budget.max_steps} steps, ${policy.budget.max_seconds}s, ` +
-            `${policy.budget.max_navigations} navigations, or ${policy.budget.max_domains} distinct sites.`;
-    }
+    renderBudget(policy);
 
     const desktopToggle = document.getElementById('policy-desktop-control');
     if (desktopToggle) desktopToggle.checked = !!policy.desktop_control_enabled;
     const criticalToggle = document.getElementById('policy-critical');
     if (criticalToggle) criticalToggle.checked = !!policy.critical_actions_enabled;
+}
+
+// ===== The limits, as four numbers you can change =====
+//
+// They were a sentence: "A run stops after 40 steps, 900s, 30 navigations, or
+// 10 distinct sites." Every one of those was already read from config, so the
+// only thing missing between reading that sentence and disagreeing with it was
+// somewhere to type — and the only way to actually change one was to edit the
+// database by hand.
+//
+// The fields are built from the server's own `budget_limits` rather than from a
+// list here, so the bounds on the input are the bounds the kernel enforces. A
+// second copy in the browser is a copy that drifts, and the direction it drifts
+// in is an input that happily accepts a number the run will quietly ignore.
+
+function renderBudget(policy) {
+    const host = document.getElementById('policy-budget');
+    if (!host) return;
+    const limits = policy.budget_limits || {};
+    const fields = Object.keys(limits);
+    if (!fields.length) {
+        // An older backend. Say the numbers rather than drawing controls that
+        // would write keys it does not read.
+        host.textContent = `A run stops after ${policy.budget.max_steps} steps, `
+            + `${policy.budget.max_seconds}s, ${policy.budget.max_navigations} navigations, `
+            + `or ${policy.budget.max_domains} distinct sites.`;
+        return;
+    }
+    host.innerHTML = '<p class="muted small budget-lead">A run stops at whichever '
+        + 'of these it reaches first.</p>'
+        + '<div class="budget-grid">'
+        + fields.map(field => {
+            const spec = limits[field];
+            return `
+              <label class="budget-field" title="${escHtml(spec.help || '')}">
+                <span class="budget-label">${escHtml(spec.label)}</span>
+                <input type="number" class="budget-input" data-field="${escHtml(field)}"
+                       value="${Number(policy.budget[field])}"
+                       min="${Number(spec.min)}" max="${Number(spec.max)}" step="1">
+                <span class="budget-unit">${escHtml(spec.unit || '')}</span>
+                <span class="budget-range">${Number(spec.min)}–${Number(spec.max)}</span>
+              </label>`;
+        }).join('')
+        + '</div>';
+    for (const input of host.querySelectorAll('.budget-input')) {
+        input.onchange = () => saveBudgetField(input, limits[input.dataset.field]);
+    }
+}
+
+/** Write one limit, having first put it inside the range it is allowed.
+ *
+ * Clamped here as well as on the server — not instead of. The server is what
+ * makes the bound real; this is what stops the box showing 9999 next to a run
+ * that will stop at 500 and leaving the reader to wonder which is true.
+ */
+async function saveBudgetField(input, spec) {
+    if (!spec) return;
+    // An emptied box is "put it back", not "make it as small as possible".
+    // `Number('')` is 0, which is finite and clamps to the floor — so clearing
+    // the field gave 30 seconds while typing gibberish gave the default 900,
+    // from the same gesture meaning the same thing.
+    const typed = String(input.value).trim();
+    let value = typed === '' ? spec.default : Math.round(Number(typed));
+    if (!Number.isFinite(value)) value = spec.default;
+    value = Math.max(spec.min, Math.min(spec.max, value));
+    input.value = value;
+    await api(`/api/config/${spec.key}`, {
+        method: 'PUT', body: JSON.stringify(value),
+    });
+    loadAgent();
 }
 
 async function setPolicyFlag(key, value) {

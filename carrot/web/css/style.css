@@ -1380,6 +1380,40 @@ details.trace[open] > .trace-summary::before { transform: rotate(90deg); }
   font-size: var(--text-2xs);
 }
 
+/* The agent's limits. Four numbers on their own rows, because they are read
+   as a set — "which of these will it hit first" is the only question anybody
+   brings to this card. */
+.budget-lead { margin: 0 0 var(--s-3); }
+.budget-grid { display: flex; flex-direction: column; gap: var(--s-2); }
+.budget-field {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  font-size: var(--text-sm);
+  color: var(--text);
+}
+.budget-label { flex: 0 0 108px; }
+.budget-input {
+  flex: 0 0 84px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-hi);
+  border-radius: var(--r-sm);
+  background: var(--card2);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: var(--text-sm);
+}
+.budget-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.budget-unit { flex: 1 1 auto; color: var(--muted); font-size: var(--text-xs); }
+/* What it may be set to, beside the box rather than only in a validation
+   message somebody sees after being refused. */
+.budget-range {
+  flex: 0 0 auto;
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: var(--text-2xs);
+}
+
 .tag {
   display: inline-block;
   font-size: var(--text-xs);
