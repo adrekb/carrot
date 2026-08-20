@@ -345,6 +345,11 @@ async function detachGroupFile(index, path) {
 const groupRuns = new Map();
 let groupRunPending = null;
 let groupRunTimer = null;
+// The two kinds `/api/activity/run` answers for. A chat group is watched too,
+// but it has no row anywhere — its answer arrives in the transcript, and the
+// send itself is the whole of its progress — so polling one would 404 on the
+// first tick and turn a working group into "no longer there".
+const WATCHABLE_RUNS = ['research', 'agent'];
 // Whether a poll is either running or scheduled. Without it, `pollGroupRuns`
 // could only ever be restarted by itself, so anything that momentarily left no
 // run in the `running` state — a 404 blip, a dismissed row — ended the loop for
@@ -366,9 +371,13 @@ function groupRunStarted(kind, runId) {
 }
 
 /** Start watching, if anything is being watched and nothing is watching yet. */
+function watchable(run) {
+    return run && run.status === 'running' && run.id && WATCHABLE_RUNS.includes(run.kind);
+}
+
 function ensureGroupRunPolling() {
     if (groupRunPolling) return;
-    if (![...groupRuns.values()].some(run => run.status === 'running')) return;
+    if (![...groupRuns.values()].some(watchable)) return;
     groupRunPolling = true;
     groupRunTimer = setTimeout(pollGroupRuns, 0);
 }
@@ -377,33 +386,53 @@ function ensureGroupRunPolling() {
 async function pollGroupRuns() {
     clearTimeout(groupRunTimer);
     groupRunPolling = true;
-    const live = [...groupRuns.entries()].filter(([, run]) => run.status === 'running');
+    const live = [...groupRuns.entries()].filter(([, run]) => watchable(run));
     if (!live.length) { groupRunPolling = false; return; }
     let changed = false;
     for (const [key, run] of live) {
-        try {
-            const next = await api('/api/activity/run?kind=' + encodeURIComponent(run.kind)
-                                   + '&id=' + encodeURIComponent(run.id));
-            if (next.status !== run.status || next.done !== run.done || next.total !== run.total) {
-                changed = true;
-            }
-            groupRuns.set(key, { ...run, ...next });
-        } catch (_) {
-            // A 404 means the row is gone — deleted, or a database swapped out
-            // underneath a stale id. Either way there is nothing left to watch,
-            // and a bar that polls a missing run for ever is a worse answer
-            // than admitting it.
-            groupRuns.set(key, { ...run, status: 'gone' });
+        // Through `settleGroupRun`, so the request and its 404 handling exist
+        // once. Two copies of "ask after a run" is how one of them ends up
+        // knowing something about the answer that the other does not.
+        await settleGroupRun(key);
+        const next = groupRuns.get(key) || {};
+        if (next.status !== run.status || next.done !== run.done || next.total !== run.total) {
             changed = true;
         }
     }
     if (changed) refreshGroupChips();
     // Two seconds while something is live. The runs being watched take minutes,
     // and this is a poll on top of the rail's own.
-    if ([...groupRuns.values()].some(run => run.status === 'running')) {
+    if ([...groupRuns.values()].some(watchable)) {
         groupRunTimer = setTimeout(pollGroupRuns, 2000);
     } else {
         groupRunPolling = false;
+    }
+}
+
+/** Ask after one run once, now.
+ *
+ * The poll is on a two-second timer, which is right for a bar somebody is
+ * watching and wrong for a queue deciding whether to start the next group:
+ * the stream has ended, the row already says how it ended, and waiting two
+ * seconds to read it would put a stale "working…" under every finished group
+ * in a batch. Returns the settled status.
+ */
+async function settleGroupRun(key) {
+    const run = groupRuns.get(key);
+    if (!run) return 'gone';
+    if (!run.id || !WATCHABLE_RUNS.includes(run.kind)) return run.status;
+    try {
+        const next = await api('/api/activity/run?kind=' + encodeURIComponent(run.kind)
+                               + '&id=' + encodeURIComponent(run.id));
+        groupRuns.set(key, { ...run, ...next });
+        return next.status;
+    } catch (_) {
+        // A 404 means the row is gone — deleted, or a database swapped out
+        // underneath a stale id. Either way there is nothing left to watch, and
+        // a bar that polls a missing run for ever is a worse answer than
+        // admitting it.
+        groupRuns.set(key, { ...run, status: 'gone' });
+        return 'gone';
     }
 }
 
@@ -434,6 +463,16 @@ function groupRunElement(info, run) {
     wrap.className = 'cg-run cg-c' + info.colour + ' cg-run-' + run.status;
     wrap.contentEditable = 'false';
 
+    // Waiting its turn in a batch. Drawn before it starts rather than left
+    // blank, so pressing Run all shows the whole plan at once instead of
+    // revealing it one group at a time — which is the difference between a
+    // queue and a document that keeps surprising you.
+    if (run.status === 'queued') {
+        wrap.appendChild(chipPart('cg-run-note', 'queued',
+                                  'waiting for the groups above it'));
+        return wrap;
+    }
+
     if (run.status === 'running') {
         const track = document.createElement('span');
         track.className = 'cg-run-track' + (run.total ? '' : ' cg-run-unknown');
@@ -460,7 +499,12 @@ function groupRunElement(info, run) {
                     cancelled: 'stopped', interrupted: 'interrupted',
                     gone: 'no longer there' };
     wrap.appendChild(chipPart('cg-run-note', words[run.status] || run.status, run.label || ''));
-    if (run.status !== 'gone') {
+    // Only where there is something to open. A group whose *send* failed has
+    // no run and no id — `openGroupRun` looks the kind up in the rail's
+    // openers, finds nothing and returns — so offering View there is a button
+    // that does nothing at all, on the one chip whose reader most wants to
+    // press something.
+    if (run.status !== 'gone' && run.id) {
         wrap.appendChild(chipButton('cg-run-view', 'View', 'Open what this produced',
                                     () => openGroupRun(run)));
     }
@@ -566,6 +610,9 @@ function groupDecorations(doc) {
         }
     });
 
+    // How many there are is the same walk, so Run all is told here rather than
+    // by a second scan that could disagree with the chips about what exists.
+    syncRunAllButton(index);
     return DecorationSet.create(doc, decorations);
 }
 
@@ -687,12 +734,13 @@ function groupsInDocument() {
 
 // ===== Sending one =====
 
-async function sendGroup(group, index) {
+async function sendGroup(group, index, options = {}) {
     if (!group || !group.text.trim()) return;
     await saveNoteNow();
+    const key = typeof index === 'number' ? groupRunKey(index) : null;
     // Claimed before the send, because the run's id arrives on the stream the
     // send opens and there is no other moment at which the two are connected.
-    if (typeof index === 'number') groupRunPending = groupRunKey(index);
+    if (key) groupRunPending = key;
     const [destination, option] = (group.attrs.to || 'chat').split('/');
     // The route travels as the directives the document format already speaks,
     // so the server resolves a group exactly as it resolves a note — including
@@ -706,14 +754,205 @@ async function sendGroup(group, index) {
         ...(group.files || []).map(path => `@/file/${/\s/.test(path) ? `"${path}"` : path}`),
     ].filter(Boolean).join('\n');
     const title = document.getElementById('note-title')?.value.trim() || 'Untitled note';
-    await dispatchDoc({
-        text: directives ? `${group.text}\n\n${directives}` : group.text,
-        note_id: currentNoteId,
-        title: `${title} (group)`,
-        conversation_id: currentConversationId,
-        destination: destination || 'chat',
-        option: option || '',
-    }, `${title} (group)`);
+    // A chat group has no run row: its answer is a turn in the transcript, and
+    // the send is the whole of its progress. Marked by hand at both ends so a
+    // chat group in a batch is not the one chip in the document sitting blank
+    // while it works.
+    const chatty = (destination || 'chat') === 'chat';
+    const watched = key && options.quiet && chatty;
+    if (watched) {
+        groupRuns.set(key, { kind: 'conversation', id: currentConversationId,
+                             status: 'running', done: 0, total: 0 });
+        refreshGroupChips();
+    }
+    try {
+        await dispatchDoc({
+            text: directives ? `${group.text}\n\n${directives}` : group.text,
+            note_id: currentNoteId,
+            title: `${title} (group)`,
+            conversation_id: currentConversationId,
+            destination: destination || 'chat',
+            option: option || '',
+        }, `${title} (group)`, { quiet: !!options.quiet });
+    } finally {
+        // Released whether or not a run claimed it. `groupRunStarted` clears
+        // the slot when a stream reports an id, and a destination that reports
+        // none — chat — used to leave it set: the *next* group's run id then
+        // arrived and was filed against this group, so one bar showed another
+        // group's progress and the real one showed nothing.
+        groupRunPending = null;
+    }
+    if (watched) {
+        // The conversation only exists once the turn has landed, when the send
+        // was the thing that created it.
+        groupRuns.set(key, { kind: 'conversation', id: currentConversationId,
+                             status: 'complete', done: 0, total: 0 });
+        refreshGroupChips();
+    }
+}
+
+
+// ===== Running the whole document =====
+//
+// One group at a time was the only way to run a plan, which meant a document
+// with six groups in it was six presses spread over however long the slowest
+// of them took — and the sixth press happened when you remembered, not when
+// the fifth finished.
+//
+// **Top to bottom, one at a time, and that is a decision rather than an
+// implementation detail.** These are jobs on one machine: a local model can
+// serve one agent run at a time, and firing six at once would have them
+// queueing inside Ollama where nothing in this document can see the queue.
+// Order is the document's order because that is the only order the document
+// states — a plan is written down the page, and the paragraph above is the one
+// you meant to happen first.
+//
+// **A failure does not stop the rest.** Groups are independent routes, not
+// steps in a pipeline: the third paragraph failing to research says nothing
+// about whether the fourth can. So the run continues and the failure stays on
+// its own chip, where it is attached to the thing that failed. Stopping is a
+// decision, and it has a button.
+//
+// **Stop stops the queue, not the run.** The group in flight keeps going,
+// because cancelling a research or agent run is that run's own business and
+// its tab has the control for it. What this button promises is that nothing
+// further will be started, which is the thing you actually want when you press
+// it in a hurry.
+
+let batchRun = null;
+
+/** The whole document, in order. */
+async function runAllGroups() {
+    if (batchRun) return;
+    const runnable = groupsInDocument()
+        .map((group, index) => ({ group, index }))
+        .filter(item => item.group.text.trim());
+    if (!runnable.length) {
+        setNoteStatus('there are no groups to run — select some text and group it first');
+        return;
+    }
+    await saveNoteNow();
+
+    batchRun = { total: runnable.length, at: 0, done: 0, failed: 0, stop: false };
+    setRunAllBusy(true);
+    // Queued up front, so the document shows the whole plan the moment you
+    // press the button rather than one group at a time as it gets there.
+    for (const item of runnable) {
+        groupRuns.set(groupRunKey(item.index), { kind: '', id: null, status: 'queued' });
+    }
+    refreshGroupChips();
+    renderBatchBar();
+
+    // `finally`, because a batch that dies on an unexpected throw would
+    // otherwise leave `batchRun` set for the rest of the session — and the
+    // first thing `runAllGroups` does is refuse to start when one is already
+    // running, so the button would be dead until a reload with nothing on
+    // screen saying why.
+    try {
+        for (const item of runnable) {
+            if (batchRun.stop) break;
+            batchRun.at += 1;
+            renderBatchBar();
+            const key = groupRunKey(item.index);
+            let status = '';
+            try {
+                await sendGroup(item.group, item.index, { quiet: true });
+                status = await settleGroupRun(key);
+            } catch (_) {
+                // The send itself failed — a 400 from the router, a stream that
+                // never opened. There is no run to ask about, so the chip is
+                // told directly; it is the only place this stays visible once
+                // the batch bar has moved on.
+                groupRuns.set(key, { kind: '', id: null, status: 'failed' });
+                status = 'failed';
+            }
+            if (status === 'complete' || status === 'completed') batchRun.done += 1;
+            else batchRun.failed += 1;
+            refreshGroupChips();
+            renderBatchBar();
+        }
+    } finally {
+        // Anything still queued was never reached. Left saying "queued" it
+        // would describe a queue that no longer exists.
+        for (const item of runnable) {
+            const key = groupRunKey(item.index);
+            if (groupRuns.get(key)?.status === 'queued') groupRuns.delete(key);
+        }
+        const finished = batchRun;
+        batchRun = null;
+        setRunAllBusy(false);
+        refreshGroupChips();
+        renderBatchBar(finished);
+    }
+}
+
+/** Run all, while it is already running. Pressing it again does nothing, and
+ * a button that does nothing should not look like one that does. */
+function setRunAllBusy(busy) {
+    const button = document.getElementById('doc-runall-btn');
+    if (button) button.disabled = busy;
+}
+
+function stopBatchRun() {
+    if (!batchRun) return;
+    batchRun.stop = true;
+    renderBatchBar();
+}
+
+/** The strip under the toolbar: where the queue has got to, and a way out. */
+function renderBatchBar(finished) {
+    const bar = document.getElementById('doc-batch');
+    if (!bar) return;
+    if (!batchRun) {
+        if (!finished) {
+            bar.classList.add('hidden');
+            bar.innerHTML = '';
+            return;
+        }
+        // The tally, once. Named plainly: "4 done, 1 failed" is the sentence
+        // somebody who walked away wants, and the failed one is still marked
+        // on its own chip for anybody who wants to know which.
+        const parts = [`Ran ${finished.at} of ${finished.total}`];
+        if (finished.done) parts.push(`${finished.done} done`);
+        if (finished.failed) parts.push(`${finished.failed} failed`);
+        bar.classList.remove('hidden');
+        bar.innerHTML = '<span class="doc-batch-note'
+            + (finished.failed ? ' bad' : '') + '">' + escHtml(parts.join(' · ')) + '</span>'
+            + '<button class="doc-batch-stop" data-act="dismiss">Dismiss</button>';
+        bar.querySelector('[data-act="dismiss"]').onclick = () => {
+            bar.classList.add('hidden');
+            bar.innerHTML = '';
+        };
+        return;
+    }
+    bar.classList.remove('hidden');
+    const label = batchRun.stop
+        ? `Finishing group ${batchRun.at} — nothing further will start`
+        : `Running group ${batchRun.at} of ${batchRun.total}`;
+    const failed = batchRun.failed ? ` · ${batchRun.failed} failed` : '';
+    bar.innerHTML = '<span class="doc-batch-note">' + escHtml(label + failed) + '</span>'
+        + (batchRun.stop ? ''
+            : '<button class="doc-batch-stop" data-act="stop"'
+              + ' title="Stop starting new groups. The one running now carries on —'
+              + ' stop that from its own tab.">Stop</button>');
+    const stop = bar.querySelector('[data-act="stop"]');
+    if (stop) stop.onclick = () => stopBatchRun();
+}
+
+/** Show Run all only when there is more than nothing to run.
+ *
+ * Called from the decoration builder because that is the one function that
+ * runs on every change to the document, and "how many groups are there" is
+ * already the question it is answering.
+ */
+function syncRunAllButton(count) {
+    const button = document.getElementById('doc-runall-btn');
+    if (!button) return;
+    button.classList.toggle('hidden', !count);
+    button.textContent = count > 1 ? `Run all ${count}` : 'Run';
+    button.title = count > 1
+        ? `Run all ${count} groups, top to bottom, one at a time`
+        : 'Run this document\u2019s group';
 }
 
 // ===== The menu on a group, and on a selection =====

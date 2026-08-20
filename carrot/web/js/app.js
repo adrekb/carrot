@@ -2749,6 +2749,10 @@ async function streamTurn(url, payload, skill) {
         // after reopening the conversation. So the ids are collected as soon
         // as the turn lands rather than on the next load.
         await syncMessageIds();
+        // The summary, if there is one, was written before this turn — which
+        // is exactly the state its dot exists to report. Also the moment the
+        // first turn of a new chat gives the icon something to summarise.
+        if (typeof syncDigestButton === 'function') syncDigestButton();
     } catch (e) {
         // An abort is the user pressing stop, not a failure, and painting it
         // red is telling them their own action went wrong. It only gets here
@@ -2990,6 +2994,8 @@ function newChat() {
     renderEmptyStateLine();
     switchTab('workspace');
     syncChatBlank();
+    // Nothing to summarise yet, so the icon goes away with the transcript.
+    if (typeof syncDigestButton === 'function') syncDigestButton();
     focusCmd();
 }
 
@@ -3168,6 +3174,10 @@ async function deleteFolder(folderId) {
 
 async function openConversation(convId) {
     currentConversationId = convId;
+    // Before the transcript, because it is a question about the conversation
+    // rather than about anything in it, and awaiting the messages first would
+    // leave the icon a beat behind the title it sits next to.
+    if (typeof syncDigestButton === 'function') syncDigestButton();
     const conv = await api(`/api/conversations/${convId}`);
     const messagesEl = document.getElementById('chat-messages');
     messagesEl.innerHTML = '';

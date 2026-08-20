@@ -200,17 +200,31 @@ async function sendDocToAgent() {
 // `sendDocToAgent` so that a *group* — a marked region with its own route —
 // travels the same three paths as the whole note rather than growing a second
 // implementation that drifts from this one.
-async function dispatchDoc(payload, label) {
+// `quiet` is what a batch run passes, and it changes two things.
+//
+// **It does not leave the document.** Sending one group is a decision to go
+// and watch it; running twenty is a decision to stay where you are. Flipping
+// the tab per group would drag the user through research, agent and chat and
+// back, and the whole reason a group carries its own progress bar is so the
+// document can be the place you watch from.
+//
+// **Chat sends rather than stages.** Staging is the right answer for one
+// document — it becomes a chip and you type the question that goes with it.
+// In a batch it is the wrong answer twice: nobody is there to type twenty
+// questions, and a "Run all" that finishes by putting twenty chips in the tray
+// has run nothing at all.
+async function dispatchDoc(payload, label, options = {}) {
     const docDestination = payload.destination;
+    const quiet = !!options.quiet;
 
     if (docDestination === 'research') {
-        switchTab('research');
+        if (!quiet) switchTab('research');
         prepareResearchPanes(label);
         await streamResearchInto(payload);
         return;
     }
     if (docDestination === 'agent') {
-        switchTab('agent');
+        if (!quiet) switchTab('agent');
         prepareAgentPanes();
         await streamAgentInto(payload);
         return;
@@ -221,8 +235,8 @@ async function dispatchDoc(payload, label) {
     // composer and the box is left empty and focused for the question. The
     // other two fire immediately because "send this to Research" is already
     // the whole instruction.
-    switchTab('workspace');
-    if (typeof stageDocument === 'function' && stageDocument(label, payload.text)) {
+    if (!quiet) switchTab('workspace');
+    if (!quiet && typeof stageDocument === 'function' && stageDocument(label, payload.text)) {
         const input = document.getElementById('cmd-input');
         if (input) input.focus();
         return;

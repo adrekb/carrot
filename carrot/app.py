@@ -6108,6 +6108,48 @@ async def summarize_conversation(conv_id: str):
     return summarize_mod.maybe_summarize(conv_id) or {"conversation_id": conv_id, "summary": ""}
 
 
+# The conversation as an attachable document, rather than as context for itself.
+#
+# Two endpoints and not one, because reading and writing are different costs.
+# The button beside the chat title asks the GET on every conversation you open
+# — it has to know whether a summary exists and whether it is out of date — and
+# a GET that quietly ran a model would put a model call behind every click on a
+# thread in the history list. Writing one is the POST, and only ever a press.
+
+
+@app.get("/api/conversations/{conv_id}/digest")
+async def conversation_digest(conv_id: str):
+    """What summary this conversation has, if any, and whether it is current."""
+    conv = conv_mod.get_conversation(conv_id)
+    if conv is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return summarize_mod.digest_state(conv_id, title=conv.get("title") or "")
+
+
+@app.post("/api/conversations/{conv_id}/digest")
+async def write_conversation_digest(conv_id: str):
+    """Write (or rewrite) the conversation's summary document.
+
+    Routed as a ``summarize`` task, so it lands on whatever model the user
+    assigned to summarising rather than on their chat model — and if no model
+    answers, `build_digest` falls back to the transcript's own shape rather
+    than to an error, because the machines most likely to have no model running
+    are the ones this feature is for.
+    """
+    conv = conv_mod.get_conversation(conv_id)
+    if conv is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    try:
+        return summarize_mod.build_digest(
+            conv_id,
+            title=conv.get("title") or "",
+            route=router_mod.route(task=router_mod.TASK_SUMMARIZE),
+            complete=router_mod.complete,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 # ===== Vectors =====
 
 @app.get("/api/vectors/stats")

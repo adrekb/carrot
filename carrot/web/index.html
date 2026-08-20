@@ -565,6 +565,29 @@
           <span id="chat-title">New session</span>
         </div>
         <button class="ws-tab-action" title="New chat" onclick="newChat()"><svg class="ico"><use href="#i-plus"/></svg></button>
+        <!-- The conversation as a document. Beside the title because that is
+             what it summarises, and absent until there is a conversation to
+             summarise. The dot means the file is older than the thread. -->
+        <div id="digest-picker">
+          <button id="digest-btn" class="ws-tab-action hidden" onclick="toggleDigestPop()"
+                  title="Summary — a short .md of this chat you can attach to another one">
+            <svg class="ico"><use href="#i-note"/></svg>
+            <span id="digest-dot" class="digest-dot hidden"></span>
+          </button>
+          <div id="digest-pop" class="hidden">
+            <div class="pop-section digest-head">
+              <span>Summary</span>
+              <!-- What the icon means, where somebody wondering what the icon
+                   means will look. -->
+              <span class="digest-info"
+                    title="A short markdown summary of this conversation — what it was about, what was decided, what is still open. Attach it to another chat instead of pasting the transcript in.">
+                <svg class="ico"><use href="#i-info"/></svg>
+              </span>
+            </div>
+            <div id="digest-body" class="digest-body"></div>
+            <div id="digest-foot" class="digest-foot"></div>
+          </div>
+        </div>
         <!-- Chat and Agent are two ways of using the same conversation, not two
              places. Agent was its own tab, which made "ask about this" and "go
              and do this" feel like different applications rather than the same
@@ -803,6 +826,11 @@
                   onchange="destinationChanged()"></select>
           <button class="btn btn-primary" id="doc-send-btn" onclick="sendDocToAgent()"
                   title="Send this note (or the selected text)">Send</button>
+          <!-- The document's own groups, in the order they are written. Absent
+               until there is one, because a Run all on a document with nothing
+               to run is a button that only ever tells you off. -->
+          <button class="btn btn-ghost hidden" id="doc-runall-btn" onclick="runAllGroups()"
+                  title="Run every group, top to bottom, one at a time">Run all</button>
           <button class="btn btn-ghost" onclick="sendNoteToObsidian()" title="Save this note into your Obsidian vault as a Markdown file">→ Obsidian</button>
           <button class="btn btn-ghost" onclick="deleteCurrentNote()">Delete</button>
         </div>
@@ -815,6 +843,7 @@
              does: there is no font, no size, no colour and no alignment here,
              because none of those survive the save. -->
         <div id="note-format" class="format-bar hidden"></div>
+        <div id="doc-batch" class="doc-batch hidden"></div>
         <div id="doc-refs" class="doc-refs hidden"></div>
         <div id="note-editor-host" class="milkdown-host"></div>
         <textarea id="note-fallback" class="note-fallback hidden" placeholder="Write your note…" oninput="scheduleNoteSave()"></textarea>
@@ -2744,6 +2773,7 @@
 <!-- After app.js and agents.js: the rail's rows open conversations and runs
      through the same functions the history menu uses. -->
 <script src="/js/context.js"></script>
+<script src="/js/digest.js"></script>
 <script src="/js/turnrail.js"></script>
 <script src="/js/activity.js"></script>
 <script src="/js/scheduled.js"></script>

@@ -676,6 +676,107 @@ body {
 .ws-tab-action:hover { color: var(--text); background: rgba(255, 255, 255, 0.05); }
 .ws-tab-action .ico { width: 13px; height: 13px; }
 
+/* The summary — this conversation as a document.
+ *
+ * Anchored to its own box rather than to the strip, so the popover hangs from
+ * the icon wherever the title before it pushes it to. */
+#digest-picker { position: relative; display: flex; }
+#digest-btn { position: relative; }
+#digest-btn.on { color: var(--text); }
+#digest-btn.hidden { display: none; }
+/* Out of date. A dot rather than a colour change on the glyph: the glyph is
+   13px of line art and recolouring it says "different", not "stale". */
+.digest-dot {
+  position: absolute; top: 4px; right: 4px;
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--yellow);
+}
+.digest-dot.hidden { display: none; }
+#digest-pop {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 3400;
+  width: 340px;
+  max-height: 62vh;
+  overflow-y: auto;
+  padding: var(--s-2);
+  background: var(--surface-pop);
+  border: 1px solid var(--surface-pop-edge);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow);
+}
+#digest-pop.hidden { display: none; }
+.digest-head { display: flex; align-items: center; gap: var(--s-3); }
+.digest-info { color: var(--faint); display: flex; cursor: help; }
+.digest-info .ico { width: 12px; height: 12px; }
+.digest-body { padding: var(--s-2) var(--s-3); }
+.digest-empty { color: var(--muted); font-size: var(--text-xs); line-height: 1.5; }
+/* Said before the document rather than after it, because the whole question
+   the reader has open is whether to attach this. */
+.digest-stale {
+  margin-bottom: var(--s-3);
+  padding: 6px 8px;
+  border-radius: var(--r-sm);
+  background: var(--accent-soft);
+  color: var(--text);
+  font-size: var(--text-2xs);
+}
+.digest-name {
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: var(--text-2xs);
+  margin-bottom: var(--s-2);
+}
+/* The document itself, rendered. Capped and scrolled: this is a preview of a
+   file you are deciding about, not a place to read it — and a popover that
+   grows to four hundred words pushes its own buttons off the screen. */
+.digest-md {
+  max-height: 34vh;
+  overflow-y: auto;
+  font-size: var(--text-xs);
+  line-height: 1.55;
+  color: var(--text);
+}
+/* `#digest-pop` in front of every one of these, because `.md` sets the same
+   properties at the same specificity and wins on source order alone — a
+   page-sized h1 in a 340px popover, from a rule that looked like it applied. */
+#digest-pop .digest-md h1 { font-size: var(--text-base); }
+#digest-pop .digest-md h2,
+#digest-pop .digest-md h3 { font-size: var(--text-sm); }
+#digest-pop .digest-md h1,
+#digest-pop .digest-md h2,
+#digest-pop .digest-md h3 {
+  margin: var(--s-4) 0 var(--s-2);
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+#digest-pop .digest-md h1:first-child,
+#digest-pop .digest-md h2:first-child { margin-top: 0; }
+#digest-pop .digest-md ul { margin: 0; padding-left: var(--s-5); }
+#digest-pop .digest-md p { margin: 0 0 var(--s-3); }
+.digest-foot {
+  display: flex; flex-wrap: wrap; gap: var(--s-2);
+  padding: var(--s-2) var(--s-3) var(--s-3);
+}
+.digest-act {
+  padding: 5px 10px;
+  border: 1px solid var(--border-hi);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text);
+  font-size: var(--text-2xs);
+  cursor: pointer;
+}
+.digest-act:hover { background: var(--surface-hover); }
+.digest-act.primary {
+  background: var(--accent-fill);
+  border-color: transparent;
+  color: var(--on-accent);
+  font-weight: var(--w-semi);
+}
+.digest-act.primary:hover { background: var(--accent-hi); }
+
 /* Chat */
 #chat-messages {
   flex: 1;
@@ -2883,6 +2984,37 @@ body.nav-collapsed .privacy-chip { justify-content: center; padding: 8px 0; }
 }
 
 /* Doc to agent — reference chips under the note toolbar */
+/* Where a batch has got to. In the document's own column, above the
+   references, because the whole promise of Run all is that you do not have to
+   leave the document to watch it. */
+.doc-batch {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: 6px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--accent-soft);
+  font-size: var(--text-sm);
+}
+.doc-batch.hidden { display: none; }
+.doc-batch-note { color: var(--text); }
+.doc-batch-note.bad { color: var(--red); }
+.doc-batch-stop {
+  margin-left: auto;
+  padding: 2px 10px;
+  border: 1px solid var(--border-hi);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text);
+  font-size: var(--text-2xs);
+  cursor: pointer;
+}
+.doc-batch-stop:hover { background: var(--surface-hover); }
+
+/* A group waiting its turn. The same muted weight the finished note uses —
+   it is a word, not a bar, because there is nothing yet to measure. */
+.milkdown .ProseMirror .cg-run-queued .cg-run-note { color: var(--faint); }
+
 .doc-refs {
   display: flex;
   flex-wrap: wrap;
