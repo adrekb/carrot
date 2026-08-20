@@ -4088,6 +4088,8 @@ async function showSplash(s) {
     else if (!s.model_pulled) status.textContent = 'Ollama is ready — pick a model that fits your machine.';
     document.getElementById('splash-btn').classList.remove('hidden');
     document.getElementById('splash-skip').classList.remove('hidden');
+    // Nothing is chosen for you, and the button says so until you choose.
+    syncSplashSetupButton();
     // Hardware-based picks from the Hub. New users shouldn't have to know
     // which model or quantization suits their specs — show what fits, let
     // experienced users skip, and link the full daily catalog.
@@ -4095,6 +4097,35 @@ async function showSplash(s) {
         const hub = await api('/api/hub');
         renderSplashPicks(hub);
     } catch (_) { /* no picks — the default-model path still works */ }
+    // Asked for immediately rather than behind "Find models for my machine".
+    //
+    // That button was one press away from the only list on this screen that is
+    // current, and a first-run screen with an empty picks row and a button
+    // reads as a screen with nothing on it. The round trip costs a second and
+    // it is a second spent while somebody is reading the specs line above it.
+    // `splashFindForMachine` already falls back to the bundled catalog when
+    // there is no network, and says which one it is showing.
+    await splashFindForMachine();
+}
+
+/** "Set up now" is not pressable until a model has been named.
+ *
+ * Nothing is preselected. The old screen chose the first card for you, which
+ * is a decision made on your behalf and then hidden inside a button labelled
+ * "Set up now" — you could press it having read nothing and get whatever
+ * happened to rank first. Skip is still there and still sizes to the machine,
+ * so the way to not choose is a button that says it is not choosing.
+ *
+ * The exception is a screen with no cards on it at all: with nothing to pick,
+ * refusing to proceed would be a dead end rather than a choice.
+ */
+function syncSplashSetupButton() {
+    const btn = document.getElementById('splash-btn');
+    if (!btn) return;
+    const cards = document.querySelectorAll('#splash-picks .splash-pick').length;
+    const ready = !!splashModel || !cards;
+    btn.disabled = !ready;
+    btn.textContent = ready ? 'Set up now' : 'Pick a model to continue';
 }
 
 function renderSplashPicks(hub) {
@@ -4134,6 +4165,9 @@ function renderSplashPicks(hub) {
     // So the screen offers to go and look instead, and the answer comes from
     // Hugging Face. The bundle stays in the build for one job — being the
     // fallback when there is no network — and when it is used it says so.
+    // Kept as the retry. The search now runs on open, so this is only pressed
+    // when the first attempt found nothing — `splashFindForMachine` relabels
+    // it "Try again" in exactly that case.
     const find = document.getElementById('splash-find');
     find.textContent = 'Find models for my machine →';
     find.onclick = splashFindForMachine;
@@ -4161,14 +4195,13 @@ function renderSplashCards(picks) {
             splashModel = p.m.id;
             picksEl.querySelectorAll('.splash-pick').forEach(el =>
                 el.classList.toggle('selected', el.dataset.model === splashModel));
+            syncSplashSetupButton();
         };
         picksEl.appendChild(card);
     }
-    // Preselect the first so plain "Set up now" does the right thing.
-    if (picks.length) {
-        splashModel = picks[0].m.id;
-        picksEl.querySelector('.splash-pick').classList.add('selected');
-    }
+    // Nothing preselected. See `syncSplashSetupButton` for why the first card
+    // is no longer chosen on the user's behalf.
+    syncSplashSetupButton();
 }
 
 // "Find models for my machine" — the only way a model gets named on this
@@ -4283,6 +4316,7 @@ function pickSplashModel(id) {
             (splashHub.models.find(m => m.id === id) || {}).label || id)));
     const status = document.getElementById('splash-status');
     if (status) status.textContent = `${id} selected — press Set up now.`;
+    syncSplashSetupButton();
 }
 
 function skipModelChoice() {
