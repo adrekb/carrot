@@ -3189,6 +3189,33 @@ body.nav-collapsed .privacy-chip { justify-content: center; padding: 8px 0; }
 /* Where a batch has got to. In the document's own column, above the
    references, because the whole promise of Run all is that you do not have to
    leave the document to watch it. */
+/* The document is showing its own syntax. Amber rather than red: nothing is
+   lost — the markers are still correct and still route — but the document is
+   unreadable until either the build is fixed or they come out. */
+.doc-note {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: 6px 18px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(245, 196, 81, 0.10);
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+.doc-note.hidden { display: none; }
+.doc-note-text { flex: 1 1 auto; }
+.doc-note-act {
+  flex: 0 0 auto;
+  padding: 2px 10px;
+  border: 1px solid var(--border-hi);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text);
+  font-size: var(--text-2xs);
+  cursor: pointer;
+}
+.doc-note-act:hover { background: var(--surface-hover); }
+
 .doc-batch {
   display: flex;
   align-items: center;
@@ -9166,13 +9193,36 @@ body.nav-collapsed .nav-job-pulse { left: 6px; }
 .history-dot.chip-chat { background: var(--accent); }
 .history-dot.chip-agent { background: var(--green); }
 .history-chip.chip-chat.active { border-color: var(--accent); }
-.history-chip.chip-agent.active { border-color: var(--green); background: color-mix(in srgb, var(--green) 14%, transparent); }
+/* `.active` sets a solid accent fill *and* `--on-accent` — a near-black chosen
+   to sit on solid orange. These two rules are more specific, so they replaced
+   the fill with a 14% tint and left the near-black behind on it: the selected
+   Agent chip was black text on a dark green wash at 1.64:1, which is the
+   "illegible" in the report. Whatever overrides the background has to override
+   the ink with it; they are one decision and were written as two.
+ *
+ * `--text` rather than the status colour. The obvious repair is to make the
+ * label green, and it reads well in three of the four cases — but the light
+ * theme's yellow on its own 14% tint measures 4.35:1, under the floor, on the
+ * lightest surface it can sit on and worse on the others. The ring and the
+ * dots already say which filter is on; the label only has to be readable, and
+ * the ink that is readable everywhere is the one the theme uses for reading.
+ * Measured across both themes and every surface a chip can land on: worst case
+ * 9.44:1. */
+.history-chip.chip-agent.active {
+  border-color: var(--green);
+  background: color-mix(in srgb, var(--green) 14%, transparent);
+  color: var(--text);
+}
 /* Code sessions. Yellow because the two kinds already here are the accent and
    the green, and a third that is either of those is a third that cannot be
    told from the other two at 6px. */
 .chip-code { --chip: var(--yellow); }
 .history-dot.chip-code { background: var(--yellow); }
-.history-chip.chip-code.active { border-color: var(--yellow); background: color-mix(in srgb, var(--yellow) 14%, transparent); }
+.history-chip.chip-code.active {
+  border-color: var(--yellow);
+  background: color-mix(in srgb, var(--yellow) 14%, transparent);
+  color: var(--text);
+}
 /* `</>` beside the title. The dot already carries the colour; this carries the
    meaning, for anyone who has not learned what yellow means yet. */
 .history-tag {

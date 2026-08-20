@@ -517,6 +517,10 @@ async function mountEditor(markdown) {
         await crepeInstance.create();
         crepeReady = true;
         showNoteFormatBar();
+        // A beat after the first render, because the chips are decorations and
+        // they are drawn by the editor rather than by us — asking before it has
+        // painted would report every document as broken.
+        if (typeof checkGroupChips === 'function') setTimeout(checkGroupChips, 250);
     } catch (e) {
         crepeInstance = null;
         crepeReady = false;
