@@ -252,3 +252,71 @@ def overview(limit: int = RECENT_LIMIT) -> Dict[str, Any]:
         # watch, rather than asking every two seconds for ever.
         "any_running": any(j["status"] == "running" for j in jobs),
     }
+
+
+# ===== One run, watched =====
+#
+# The rail answers "is anything running"; a group in a document asks something
+# narrower and more demanding — *how far along is the run I started, and is it
+# finished yet*. `running()` cannot answer it: it drops a job the moment it
+# stops, so the one transition the asker cares about is the one that looks
+# exactly like the run never existing.
+#
+# So this reads the run's own row, and keeps answering after it finishes.
+#
+# The fraction is real on both kinds rather than a spinner dressed up as a
+# number. Research plans its sub-questions up front and writes a finding per
+# sub-question, so the denominator is the plan and the numerator is how much of
+# it has been answered. An agent run carries a step budget and counts the steps
+# it has used. Neither is a guess, and where there is genuinely nothing to
+# count — a plan not yet written — `total` is 0 and the caller is expected to
+# draw an indeterminate bar rather than invent a percentage.
+def run_progress(kind: str, run_id: str) -> Optional[Dict[str, Any]]:
+    """How far one research or agent run has got, or None if there is no such run."""
+    conn = get_db()
+    try:
+        if kind == "research":
+            row = conn.execute(
+                "SELECT id, question AS label, status, plan, created_at, finished_at "
+                "FROM research_runs WHERE id = ?", (run_id,)).fetchone()
+            if row is None:
+                return None
+            try:
+                total = len(json.loads(row["plan"] or "[]"))
+            except (ValueError, TypeError):
+                total = 0
+            done = conn.execute(
+                "SELECT COUNT(DISTINCT subquestion) AS n FROM research_findings WHERE run_id = ?",
+                (run_id,)).fetchone()["n"]
+        elif kind == "agent":
+            row = conn.execute(
+                "SELECT id, task AS label, status, budget, steps_used, created_at, finished_at "
+                "FROM agent_runs WHERE id = ?", (run_id,)).fetchone()
+            if row is None:
+                return None
+            try:
+                total = int((json.loads(row["budget"] or "{}") or {}).get("max_steps") or 0)
+            except (ValueError, TypeError):
+                total = 0
+            done = int(row["steps_used"] or 0)
+        else:
+            return None
+    finally:
+        conn.close()
+
+    status = row["status"]
+    # The same correction `running()` makes, for the same reason: a row still
+    # saying "running" from before this process started cannot be running in
+    # it, and a bar that fills for ever is worse than one that stops and says
+    # what happened.
+    if status == "running" and not _is_live(row["created_at"]):
+        status = "interrupted"
+    return {
+        "kind": kind,
+        "id": row["id"],
+        "label": _truncate(row["label"] or "", 46),
+        "status": status,
+        "done": min(done, total) if total else done,
+        "total": total,
+        "finished_at": row["finished_at"],
+    }

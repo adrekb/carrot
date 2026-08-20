@@ -30,7 +30,7 @@ from pathlib import Path
 
 import pytest
 
-from carrot import doc_agent
+from carrot import activity, agent, database, doc_agent, policy, research
 
 ROOT = Path(__file__).resolve().parents[1]
 WEB = ROOT / "carrot" / "web"
@@ -162,8 +162,17 @@ class TestWhatTheChipSays:
     def test_it_names_where_the_model_runs(self, groups_js):
         """Local or not is the one thing about a route you cannot read off its
         name, and the reason the chip had to be a real element."""
-        assert "🖥" in groups_js and "☁" in groups_js
+        # The app's own glyphs, not emoji: the empty state already draws this
+        # exact fact with this exact pair, and an emoji renders as whatever the
+        # platform feels like.
+        assert "#i-computer" in groups_js and "#i-cloud" in groups_js
         assert "'local'" in groups_js
+
+    def test_the_glyphs_it_names_exist(self, index_html):
+        """An icon id that does not resolve draws nothing at all, and draws it
+        silently."""
+        for symbol in ("i-computer", "i-cloud"):
+            assert f'id="{symbol}"' in index_html, f"no {symbol} symbol in the sprite"
 
     def test_an_unpinned_group_still_names_its_model(self, groups_js):
         """A group with no `model=` is not a group with no model — it runs on
@@ -252,3 +261,113 @@ class TestAGroupTravelsAsTheDirectivesTheFormatAlreadySpeaks:
         (tmp_path / "my paper.md").write_text("MARKER_WITH_A_SPACE", encoding="utf-8")
         resolved = doc_agent.resolve('read it\n\n@/to/chat\n@/file/"my paper.md"')
         assert "MARKER_WITH_A_SPACE" in resolved.context
+
+
+class TestAGroupWatchesItsOwnRun:
+    """Sending used to be a one-way door: the arrow threw the paragraph at
+    Research, the app changed tabs, and the document lost track of the thing it
+    had started. A group is a subtask, so it keeps its own progress — which
+    means something has to be able to answer "how far along is run X", and
+    keep answering after the run stops."""
+
+    def test_an_unknown_run_is_not_a_zero(self, isolated_db):
+        """None rather than an empty progress: a bar for a run that does not
+        exist is worse than no bar."""
+        assert activity.run_progress("research", "no-such-run") is None
+        assert activity.run_progress("agent", "no-such-run") is None
+        assert activity.run_progress("weather", "anything") is None
+
+    def test_research_counts_answered_subquestions_against_the_plan(self, isolated_db):
+        run_id = research.create_run("what changed?", "quick")
+        research.save_plan(run_id, [{"question": "a"}, {"question": "b"}, {"question": "c"}])
+
+        progress = activity.run_progress("research", run_id)
+        assert (progress["done"], progress["total"]) == (0, 3)
+
+        conn = database.get_db()
+        for sub in ("a", "b"):
+            conn.execute(
+                "INSERT INTO research_findings (run_id, subquestion, claim, source_ids, "
+                "confidence, verdict, tier, created_at) "
+                "VALUES (?, ?, 'c', '[]', 1.0, 'supported', 1, ?)",
+                (run_id, sub, "2026-08-19T12:00:00+00:00"))
+        conn.commit()
+        conn.close()
+
+        progress = activity.run_progress("research", run_id)
+        assert (progress["done"], progress["total"]) == (2, 3)
+
+    def test_the_plan_is_written_before_the_run_ends(self, isolated_db):
+        """It used to be persisted only by `finish_run`, so the denominator
+        arrived one instant after anybody could have used it — every research
+        bar would have swept indeterminately for the whole run and then jumped
+        straight to full."""
+        run_id = research.create_run("what changed?", "quick")
+        assert activity.run_progress("research", run_id)["total"] == 0
+        research.save_plan(run_id, [{"question": "a"}, {"question": "b"}])
+        live = activity.run_progress("research", run_id)
+        assert live["total"] == 2
+        assert live["status"] == "running", "writing the plan must not end the run"
+        assert live["finished_at"] is None
+
+    def test_an_agent_counts_steps_against_its_budget(self, isolated_db):
+        run_id = agent.create_run("do the thing", "browser", policy.Budget(max_steps=12))
+        conn = database.get_db()
+        conn.execute("UPDATE agent_runs SET steps_used = 5 WHERE id = ?", (run_id,))
+        conn.commit()
+        conn.close()
+        progress = activity.run_progress("agent", run_id)
+        assert (progress["done"], progress["total"]) == (5, 12)
+
+    def test_it_keeps_answering_after_the_run_is_over(self, isolated_db):
+        """The whole reason this is not `/api/activity`: that one drops a job
+        the moment it stops, so "finished" and "never existed" look identical
+        to anything waiting on one run."""
+        run_id = research.create_run("what changed?", "quick")
+        research.finish_run(run_id, "complete", report="done", plan=[{"question": "a"}])
+        progress = activity.run_progress("research", run_id)
+        assert progress["status"] == "complete"
+        assert progress["finished_at"]
+
+    def test_the_word_for_success_is_one_the_chip_knows(self, groups_js, isolated_db):
+        """Both kinds write `complete`. A label map that only knows `completed`
+        fails by printing a database value at the reader — which is exactly
+        what it did until somebody looked at it."""
+        run_id = research.create_run("q", "quick")
+        research.finish_run(run_id, "complete", report="r", plan=[])
+        assert activity.run_progress("research", run_id)["status"] == "complete"
+        words = re.search(r"const words = \{(.*?)\};", groups_js, re.DOTALL)
+        assert words, "no label map"
+        assert "complete:" in words.group(1)
+
+
+class TestTheRunReachesTheGroupThatStartedIt:
+    def test_both_streams_report_the_run_id(self):
+        """The stream is the only place a run's id exists before the run is
+        over, so it is the only place the connection can be made."""
+        agents_js = read(WEB / "js" / "agents.js")
+        assert agents_js.count("groupRunStarted(") == 2, (
+            "research and agent should each report their run"
+        )
+
+    def test_the_chip_watches_the_endpoint_that_outlives_the_run(self, groups_js):
+        assert "/api/activity/run" in groups_js
+
+    def test_a_finished_run_offers_to_be_opened(self, groups_js):
+        assert "cg-run-view" in groups_js
+        assert "ACTIVITY_OPEN" in groups_js, "reuse the rail's openers rather than a second set"
+
+    def test_the_poll_can_be_restarted_from_outside_itself(self, groups_js):
+        """It could only ever restart itself, so a moment with nothing in the
+        running state — a 404 blip, a dismissed row — ended it for good and
+        froze every other bar at whatever it last said."""
+        assert "function ensureGroupRunPolling" in groups_js
+        assert "groupRunPolling" in groups_js
+
+    def test_run_state_is_not_written_into_the_document(self, groups_js):
+        """A run id is a fact about this afternoon; the marker is a fact about
+        the document. Putting one in the other is how a note committed to git
+        carries yesterday's job ids."""
+        marker = groups_js[groups_js.index("function groupMarkerLine"):]
+        marker = marker[:marker.index("\n}")]
+        assert "run" not in marker

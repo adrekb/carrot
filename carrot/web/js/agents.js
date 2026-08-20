@@ -212,7 +212,13 @@ function makeResearchHandler() {
     let report = '';
 
     return event => {
-        if (event.run_id) researchRunId = event.run_id;
+        if (event.run_id) {
+            researchRunId = event.run_id;
+            // A group in a document that sent this needs the run's id to watch
+            // it — see js/docgroups.js. Reported here because this is the only
+            // place the id exists before the run is over.
+            if (typeof groupRunStarted === 'function') groupRunStarted('research', event.run_id);
+        }
         if (event.stage) traceLine('research-trace', `${event.stage}: ${event.detail || ''}`, 'stage');
         // The same checklist chat uses. Sub-questions run in parallel, so
         // they tick out of order as each thread lands — which is honest about
@@ -546,7 +552,13 @@ async function runAgentStream(url, payload) {
     try {
         await streamTrace(url, payload,
             event => {
-                if (event.run_id) agentRunId = event.run_id;
+                if (event.run_id) {
+                    agentRunId = event.run_id;
+                    // A group in a document that sent this needs the run's id to watch
+                    // it — see js/docgroups.js. Reported here because this is the only
+                    // place the id exists before the run is over.
+                    if (typeof groupRunStarted === 'function') groupRunStarted('agent', event.run_id);
+                }
                 if (event.plan) {
                     const plan = document.getElementById('agent-plan');
                     plan.classList.remove('hidden');

@@ -440,6 +440,9 @@ async function openNote(noteId) {
     if (typeof resetDocDestination === 'function') resetDocDestination();
     if (typeof refreshDocReferences === 'function') refreshDocReferences();
     if (typeof refreshBacklinks === 'function') refreshBacklinks(noteId);
+    // What the last note's groups were doing is not what this one's are doing:
+    // the runs are keyed by note and ordinal, so they go with the note.
+    if (typeof resetGroupRuns === 'function') resetGroupRuns();
     if (typeof noteOpened === 'function') noteOpened(note);
     applyNoteReadonly(note);
 }

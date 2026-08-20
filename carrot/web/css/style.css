@@ -10929,9 +10929,13 @@ body.nav-collapsed .nav-job-pulse { left: 6px; }
   gap: 5px;
   padding: 3px 6px 3px 11px;
 }
-/* 🖥 or ☁ — where the model runs, which is the one thing about a route you
-   cannot read off its name. */
-.milkdown .ProseMirror .cg-chip-icon { font-size: var(--text-xs); line-height: 1; }
+/* Where the model runs, which is the one thing about a route you cannot read
+   off its name. The app's own glyph, the same pair the empty state uses. */
+.milkdown .ProseMirror .cg-chip-icon {
+  width: 12px;
+  height: 12px;
+  flex: none;
+}
 .milkdown .ProseMirror .cg-chip-arrow { opacity: 0.6; }
 /* A model the group did not choose is drawn as what it is: the answer, but
    borrowed from the app rather than pinned here. Same text, less weight — the
@@ -10987,6 +10991,74 @@ body.nav-collapsed .nav-job-pulse { left: 6px; }
    governs. `color-mix` rather than six more hex literals, because the tint has
    to stay the chip's colour when the palette changes. */
 .milkdown .ProseMirror .cg-chip.cg-c0 { background: var(--series-1); color: var(--on-accent); }
+/* What a group is doing, under the files and along the bottom of its box.
+   A group is a subtask, so its progress belongs on it — not in whichever tab
+   the send happened to open and then left you to find your way back from. */
+.milkdown .ProseMirror .cg-run {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0 8px;
+  font-size: var(--text-2xs);
+  line-height: 1.6;
+  font-family: var(--sans);
+  letter-spacing: 0;
+}
+.milkdown .ProseMirror .cg-run-track {
+  position: relative;
+  flex: 1;
+  height: 4px;
+  min-width: 60px;
+  border-radius: var(--r-pill);
+  background: color-mix(in srgb, var(--text) 14%, transparent);
+  overflow: hidden;
+}
+.milkdown .ProseMirror .cg-run-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: var(--r-pill);
+  transition: width 400ms ease;
+}
+/* No denominator yet — research has not finished planning its sub-questions.
+   A sweep says "working" without inventing a percentage, which is what a bar
+   filling to a made-up number would be doing. */
+.milkdown .ProseMirror .cg-run-track.cg-run-unknown .cg-run-fill {
+  width: 35%;
+  animation: cg-run-sweep 1.4s ease-in-out infinite;
+}
+@keyframes cg-run-sweep {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+.milkdown .ProseMirror .cg-run-note { color: var(--muted); white-space: nowrap; }
+/* `--yellow`, which is what the rail already uses to say a job stopped without
+   finishing. The same fact should not have two colours. */
+.milkdown .ProseMirror .cg-run-failed .cg-run-note,
+.milkdown .ProseMirror .cg-run-cancelled .cg-run-note,
+.milkdown .ProseMirror .cg-run-interrupted .cg-run-note { color: var(--yellow); }
+.milkdown .ProseMirror .cg-run-view,
+.milkdown .ProseMirror .cg-run-clear {
+  border: 0;
+  border-radius: var(--r-xs);
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.milkdown .ProseMirror .cg-run-view { padding: 2px 9px; }
+.milkdown .ProseMirror .cg-run-clear { padding: 2px 6px; opacity: 0.55; }
+.milkdown .ProseMirror .cg-run-clear:hover { opacity: 1; }
+/* A finished run's View is the thing to press, so it is the only part of the
+   row drawn as a button rather than as text. */
+.milkdown .ProseMirror .cg-run-view:hover { filter: brightness(1.12); }
+.milkdown .ProseMirror .cg-run.cg-c0 .cg-run-fill, .milkdown .ProseMirror .cg-run.cg-c0 .cg-run-view { background: var(--series-1); color: var(--on-accent); }
+.milkdown .ProseMirror .cg-run.cg-c1 .cg-run-fill, .milkdown .ProseMirror .cg-run.cg-c1 .cg-run-view { background: var(--series-2); color: var(--on-accent); }
+.milkdown .ProseMirror .cg-run.cg-c2 .cg-run-fill, .milkdown .ProseMirror .cg-run.cg-c2 .cg-run-view { background: var(--series-3); color: var(--on-accent); }
+.milkdown .ProseMirror .cg-run.cg-c3 .cg-run-fill, .milkdown .ProseMirror .cg-run.cg-c3 .cg-run-view { background: var(--series-4); color: var(--on-accent); }
+.milkdown .ProseMirror .cg-run.cg-c4 .cg-run-fill, .milkdown .ProseMirror .cg-run.cg-c4 .cg-run-view { background: var(--series-5); color: var(--on-accent); }
+.milkdown .ProseMirror .cg-run.cg-c5 .cg-run-fill, .milkdown .ProseMirror .cg-run.cg-c5 .cg-run-view { background: var(--series-6); color: var(--on-accent); }
+
 /* Each cited file, in the group's own colour a step stronger than the box
    tint, so a chip reads as an object sitting in the region. */
 .milkdown .ProseMirror .cg-file.cg-c0 { background: color-mix(in srgb, var(--series-1) 26%, transparent); }

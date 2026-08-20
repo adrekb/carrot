@@ -45,9 +45,9 @@
 // decoration draws the chip in the same place.
 //
 // Being a real element rather than a `::before` is also what lets the chip
-// carry more than a string: 🖥 or ☁ for where the model runs, a pencil, a
-// paperclip with a count, and a send arrow, each a button that knows what it
-// is instead of a region of a pseudo-element identified by arithmetic on the
+// carry more than a string: the app's own computer/cloud glyph for where the
+// model runs, a pencil, and a send arrow, each a button that knows what it is
+// instead of a region of a pseudo-element identified by arithmetic on the
 // click's x coordinate.
 //
 // **What a group's route means.** It is written back into the text as the very
@@ -187,6 +187,32 @@ function chipButton(cls, text, title, handler) {
     return el;
 }
 
+// The app's own glyphs rather than an emoji.
+//
+// `#i-computer` and `#i-cloud` are the pair the empty state already uses to
+// say where an answer comes from, and the same fact should not be drawn two
+// ways in one app — an emoji also renders as whatever the platform feels like,
+// which for 🖥 is a beige CRT.
+//
+// `setAttribute` rather than `.className`, because on an SVG element that
+// property is a read-only `SVGAnimatedString` and assigning to it silently
+// does nothing.
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+function chipIcon(symbol, title) {
+    const svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('class', 'ico cg-chip-icon');
+    if (title) {
+        const label = document.createElementNS(SVG_NS, 'title');
+        label.textContent = title;
+        svg.appendChild(label);
+    }
+    const use = document.createElementNS(SVG_NS, 'use');
+    use.setAttribute('href', symbol);
+    svg.appendChild(use);
+    return svg;
+}
+
 function chipPart(cls, text, title) {
     const el = document.createElement('span');
     el.className = cls;
@@ -206,8 +232,8 @@ function groupChipElement(info) {
     const route = chipButton('cg-chip-route', '', 'Change where this group goes',
                              () => openGroupMenu(chip, { mode: 'edit', index: info.index }));
     if (info.model) {
-        route.appendChild(chipPart('cg-chip-icon', info.model.local ? '🖥' : '☁',
-                                   info.model.local ? 'runs on this machine' : 'runs in the cloud'));
+        route.appendChild(chipIcon(info.model.local ? '#i-computer' : '#i-cloud',
+                                   info.model.local ? 'runs on this computer' : 'runs in the cloud'));
     }
     route.appendChild(chipPart('cg-chip-where', info.where));
     if (info.model) {
@@ -225,7 +251,7 @@ function groupChipElement(info) {
                    () => openGroupMenu(chip, { mode: 'edit', index: info.index })),
         chipButton('cg-chip-send', '➤', 'Send this group', () => {
             const group = groupsInDocument()[info.index];
-            if (group) sendGroup(group);
+            if (group) sendGroup(group, info.index);
         }),
     );
     return chip;
@@ -267,6 +293,172 @@ async function detachGroupFile(index, path) {
     await rewriteGroupMarker(index, attrs);
 }
 
+// ===== Watching what a group is doing =====
+//
+// Sending a group used to be a one-way door: the arrow threw the paragraph at
+// Research or the agent, the app changed tabs, and the document you were
+// writing lost track of the thing it had started. Come back to the note ten
+// minutes later and there is nothing on the group to say a run exists, let
+// alone whether it finished — the only way to find out is to remember which
+// tab it went to and go look.
+//
+// A group is a subtask, so it keeps its own progress. Send it and the chip
+// becomes a bar; when the bar fills, it becomes a button that opens the
+// result. That is the whole of it, and it is why the run has to be watched
+// from here rather than from the tab that happens to be showing it.
+//
+// **Where the run's identity comes from.** The stream that answers a send is
+// the only place a run's id exists before the run is over, so the two stream
+// handlers report it (see js/agents.js) and `groupRunStarted` catches it for
+// whichever group is mid-send. A slot rather than a return value, because
+// `dispatchDoc` hands off to three different streams and threading a value
+// back through all of them to reach one caller is more wiring than the fact is
+// worth.
+//
+// **Where progress comes from.** `/api/activity/run`, which reads the run's
+// own row and keeps answering after it finishes — `/api/activity` drops a job
+// the moment it stops, and "stopped" is the one transition this is waiting for.
+//
+// **What it is keyed by.** The note and the group's ordinal, held in memory
+// and dropped when the note changes. Deliberately not written into the marker:
+// a run id is a fact about this afternoon, and the marker is a fact about the
+// document. Editing a note heavily enough to renumber its groups while one is
+// running will point a bar at its neighbour; that is the honest cost of not
+// putting ephemeral state in the user's file.
+
+const groupRuns = new Map();
+let groupRunPending = null;
+let groupRunTimer = null;
+// Whether a poll is either running or scheduled. Without it, `pollGroupRuns`
+// could only ever be restarted by itself, so anything that momentarily left no
+// run in the `running` state — a 404 blip, a dismissed row — ended the loop for
+// good and froze every other bar at whatever it last said.
+let groupRunPolling = false;
+
+function groupRunKey(index) {
+    return `${currentNoteId || ''}:${index}`;
+}
+
+/** A run has started for whichever group was mid-send. Called from the streams. */
+function groupRunStarted(kind, runId) {
+    if (!groupRunPending || !runId) return;
+    const key = groupRunPending;
+    groupRunPending = null;
+    groupRuns.set(key, { kind, id: runId, status: 'running', done: 0, total: 0 });
+    refreshGroupChips();
+    ensureGroupRunPolling();
+}
+
+/** Start watching, if anything is being watched and nothing is watching yet. */
+function ensureGroupRunPolling() {
+    if (groupRunPolling) return;
+    if (![...groupRuns.values()].some(run => run.status === 'running')) return;
+    groupRunPolling = true;
+    groupRunTimer = setTimeout(pollGroupRuns, 0);
+}
+
+/** Ask after every run still working, and stop asking when none is. */
+async function pollGroupRuns() {
+    clearTimeout(groupRunTimer);
+    groupRunPolling = true;
+    const live = [...groupRuns.entries()].filter(([, run]) => run.status === 'running');
+    if (!live.length) { groupRunPolling = false; return; }
+    let changed = false;
+    for (const [key, run] of live) {
+        try {
+            const next = await api('/api/activity/run?kind=' + encodeURIComponent(run.kind)
+                                   + '&id=' + encodeURIComponent(run.id));
+            if (next.status !== run.status || next.done !== run.done || next.total !== run.total) {
+                changed = true;
+            }
+            groupRuns.set(key, { ...run, ...next });
+        } catch (_) {
+            // A 404 means the row is gone — deleted, or a database swapped out
+            // underneath a stale id. Either way there is nothing left to watch,
+            // and a bar that polls a missing run for ever is a worse answer
+            // than admitting it.
+            groupRuns.set(key, { ...run, status: 'gone' });
+            changed = true;
+        }
+    }
+    if (changed) refreshGroupChips();
+    // Two seconds while something is live. The runs being watched take minutes,
+    // and this is a poll on top of the rail's own.
+    if ([...groupRuns.values()].some(run => run.status === 'running')) {
+        groupRunTimer = setTimeout(pollGroupRuns, 2000);
+    } else {
+        groupRunPolling = false;
+    }
+}
+
+/** Drop the runs belonging to other notes. Called when a note is opened.
+ *
+ * Pruning rather than clearing, so that re-opening the note you are already in
+ * — which happens on every retarget — does not throw away the bar you are
+ * watching.
+ */
+function resetGroupRuns() {
+    const mine = `${currentNoteId || ''}:`;
+    for (const key of [...groupRuns.keys()]) {
+        if (!key.startsWith(mine)) groupRuns.delete(key);
+    }
+    groupRunPending = null;
+    ensureGroupRunPolling();
+}
+
+// The bar, and what it becomes.
+//
+// A determinate bar only where there is something real to count: research
+// knows its sub-questions once it has planned them, an agent run knows its
+// step budget. Before the plan exists there is no denominator, and a bar that
+// invents one is a bar that lies smoothly for thirty seconds — so that case is
+// drawn as an indeterminate sweep instead.
+function groupRunElement(info, run) {
+    const wrap = document.createElement('span');
+    wrap.className = 'cg-run cg-c' + info.colour + ' cg-run-' + run.status;
+    wrap.contentEditable = 'false';
+
+    if (run.status === 'running') {
+        const track = document.createElement('span');
+        track.className = 'cg-run-track' + (run.total ? '' : ' cg-run-unknown');
+        const fill = document.createElement('span');
+        fill.className = 'cg-run-fill';
+        if (run.total) fill.style.width = Math.round((run.done / run.total) * 100) + '%';
+        track.appendChild(fill);
+        wrap.appendChild(track);
+        wrap.appendChild(chipPart('cg-run-note',
+            run.total ? `${run.done} of ${run.total}` : 'working…',
+            run.label || ''));
+        wrap.appendChild(chipButton('cg-run-view', 'Watch', 'Open the run and watch it',
+                                    () => openGroupRun(run)));
+        return wrap;
+    }
+
+    // Finished, one way or another. The word is the run's own status rather
+    // than a cheerful "done" over a run that failed.
+    // `complete` is the word both a research run and an agent run write to
+    // their row; `completed` is here because a map that only knows one spelling
+    // of success fails by printing a database value at the reader, which is
+    // exactly what this did before anybody looked.
+    const words = { complete: 'done', completed: 'done', failed: 'failed',
+                    cancelled: 'stopped', interrupted: 'interrupted',
+                    gone: 'no longer there' };
+    wrap.appendChild(chipPart('cg-run-note', words[run.status] || run.status, run.label || ''));
+    if (run.status !== 'gone') {
+        wrap.appendChild(chipButton('cg-run-view', 'View', 'Open what this produced',
+                                    () => openGroupRun(run)));
+    }
+    wrap.appendChild(chipButton('cg-run-clear', '×', 'Stop showing this run',
+                                () => { groupRuns.delete(groupRunKey(info.index)); refreshGroupChips(); }));
+    return wrap;
+}
+
+/** Open a run where it actually lives — the rail's own openers, reused. */
+function openGroupRun(run) {
+    const open = typeof ACTIVITY_OPEN !== 'undefined' ? ACTIVITY_OPEN[run.kind] : null;
+    if (open) open(run.id);
+}
+
 // Every decoration the document currently wants: a hidden marker and a chip at
 // each opening, a bottom edge at each closing, and the group's tint behind
 // everything between them.
@@ -289,6 +481,7 @@ function groupDecorations(doc) {
                 where: groupDestinationLabel(attrs),
                 model: groupModelDisplay(attrs),
                 files: groupFiles(attrs),
+                run: groupRuns.get(groupRunKey(index)) || null,
             };
             open = info;
             index += 1;
@@ -318,7 +511,7 @@ function groupDecorations(doc) {
             if (open) {
                 decorations.push(Decoration.node(offset, offset + node.nodeSize, {
                     class: 'cg-marker cg-close cg-c' + open.colour
-                           + (open.files.length ? ' cg-has-files' : ''),
+                           + (open.files.length || open.run ? ' cg-has-files' : ''),
                 }));
                 // The closing marker is otherwise just the bottom edge of the
                 // box, which makes it where the cited files belong: they
@@ -329,6 +522,19 @@ function groupDecorations(doc) {
                     decorations.push(Decoration.widget(offset + 1, () => groupFilesElement(closing), {
                         side: -1,
                         key: `cg-files:${closing.index}:${closing.files.join('|')}`,
+                        stopEvent: () => true,
+                        ignoreSelection: true,
+                    }));
+                }
+                // And what it is doing, under them: a group is a subtask, so
+                // its progress belongs on it rather than in whichever tab the
+                // send happened to open.
+                if (open.run) {
+                    const closing = open;
+                    const run = closing.run;
+                    decorations.push(Decoration.widget(offset + 1, () => groupRunElement(closing, run), {
+                        side: 1,
+                        key: `cg-run:${closing.index}:${run.id}:${run.status}:${run.done}/${run.total}`,
                         stopEvent: () => true,
                         ignoreSelection: true,
                     }));
@@ -380,6 +586,9 @@ function groupProsePlugin() {
  * using.
  */
 function refreshGroupChips() {
+    // Any redraw is also a chance to notice that something is being watched and
+    // nothing is watching it.
+    ensureGroupRunPolling();
     const kit = window.CarrotMilkdownKit;
     if (!groupPluginKey || !crepeInstance || !crepeReady || !kit) return;
     try {
@@ -462,9 +671,12 @@ function groupsInDocument() {
 
 // ===== Sending one =====
 
-async function sendGroup(group) {
+async function sendGroup(group, index) {
     if (!group || !group.text.trim()) return;
     await saveNoteNow();
+    // Claimed before the send, because the run's id arrives on the stream the
+    // send opens and there is no other moment at which the two are connected.
+    if (typeof index === 'number') groupRunPending = groupRunKey(index);
     const [destination, option] = (group.attrs.to || 'chat').split('/');
     // The route travels as the directives the document format already speaks,
     // so the server resolves a group exactly as it resolves a note — including

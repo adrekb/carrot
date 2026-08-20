@@ -1238,6 +1238,28 @@ def create_run(question: str, depth: str, conversation_id: Optional[str] = None)
     return run_id
 
 
+def save_plan(run_id: str, plan: Any) -> None:
+    """Write the plan down as soon as there is one, rather than at the end.
+
+    It used to be persisted only by `finish_run`, which meant the column was
+    empty for the whole of the run and populated one instant after anybody
+    could have used it. Two things wanted it earlier. A run killed halfway kept
+    no record of what it had set out to do, so an interrupted run could not say
+    what it was doing when it stopped. And nothing watching a run could tell
+    how far along it was: the findings land one at a time and are written as
+    they land, so the numerator was always live and the denominator arrived
+    after the finish line.
+
+    Cheap enough to call on every revision — this is a handful of rows an hour,
+    not a hot path.
+    """
+    conn = get_db()
+    conn.execute("UPDATE research_runs SET plan = ? WHERE id = ?",
+                 (json.dumps(plan or []), run_id))
+    conn.commit()
+    conn.close()
+
+
 def finish_run(run_id: str, status: str, report: str = "", error: str = "", plan: Any = None):
     conn = get_db()
     conn.execute(
@@ -1317,6 +1339,7 @@ def run_research_stream(
 
         yield {"stage": "plan", "detail": "decomposing the question"}
         subquestions = plan_subquestions(question, depth, emit)
+        save_plan(run_id, subquestions)
         yield {"plan": subquestions}
 
         # --- parallel research, drained as it happens ---
@@ -1409,6 +1432,7 @@ def run_research_stream(
                 yield {"stage": "plan", "detail": "the findings raise nothing the plan misses"}
                 break
             subquestions.extend(extra)
+            save_plan(run_id, subquestions)
             room -= len(extra)
             for item in extra:
                 yield {"stage": "plan",

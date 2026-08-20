@@ -6297,6 +6297,22 @@ async def activity_overview(limit: int = activity_mod.RECENT_LIMIT):
     return activity_mod.overview(limit=limit)
 
 
+@app.get("/api/activity/run")
+async def activity_run(kind: str, id: str):
+    """How far one run has got — for a group in a document watching its own.
+
+    Separate from `/api/activity` because it answers a different question. That
+    one lists what is running and forgets a job the instant it stops, which is
+    precisely the transition a caller waiting on one run needs to see; this
+    reads the run's own row and keeps answering after it finishes, so "done"
+    and "never existed" stop looking identical.
+    """
+    progress = activity_mod.run_progress(kind, id)
+    if progress is None:
+        raise HTTPException(status_code=404, detail="No such run")
+    return progress
+
+
 class ResumeBriefRequest(BaseModel):
     conversation_id: str = ""
 
