@@ -149,6 +149,52 @@ function groupMarkerText(node) {
     return (node.textContent || '').trim();
 }
 
+// On `pointerdown`, and only `pointerdown`.
+//
+// Three attempts, each of which looked right and did nothing under a real
+// mouse. `click` never fires, because a click needs its press and release
+// on the same element and these buttons sit in a contenteditable that
+// re-renders on the press. `mousedown` never fires either — something in
+// the editor stack calls `preventDefault()` on the pointer event, and that
+// suppresses the whole compatibility sequence: mousedown, mouseup and
+// click all stop existing. Instrumenting the chip with a listener for each
+// of the four is what settled it: `pointerdown` arrives, nothing else does.
+//
+// Worth naming because it is invisible from a test: a synthesised
+// `dispatchEvent(new MouseEvent('click'))` runs the handler perfectly well,
+// so a button dead under every real mouse can pass a test that clicks it.
+// Only driving the actual pane found this.
+function chipButton(cls, text, title, handler) {
+    const el = document.createElement('button');
+    el.type = 'button';
+    el.className = cls;
+    if (text) el.textContent = text;
+    el.title = title;
+    el.addEventListener('pointerdown', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        handler();
+    });
+    el.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        // Keyboard reaches it by the ordinary route: `detail` is 0 for a click
+        // a button raised from Enter or Space, and non-zero for a pointer one,
+        // which is what keeps this from firing twice on a browser that does
+        // deliver both.
+        if (event.detail === 0) handler();
+    });
+    return el;
+}
+
+function chipPart(cls, text, title) {
+    const el = document.createElement('span');
+    el.className = cls;
+    el.textContent = text;
+    if (title) el.title = title;
+    return el;
+}
+
 // The chip itself. A real element, so each thing it offers is a button rather
 // than a guess about which end of a pseudo-element was clicked.
 function groupChipElement(info) {
@@ -157,58 +203,68 @@ function groupChipElement(info) {
     chip.contentEditable = 'false';
     chip.dataset.groupIndex = String(info.index);
 
-    const part = (cls, text, title) => {
-        const el = document.createElement('span');
-        el.className = cls;
-        el.textContent = text;
-        if (title) el.title = title;
-        return el;
-    };
-    const button = (cls, text, title, handler) => {
-        const el = document.createElement('button');
-        el.type = 'button';
-        el.className = cls;
-        if (text) el.textContent = text;
-        el.title = title;
-        el.addEventListener('click', (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            handler();
-        });
-        return el;
-    };
-
-    const route = button('cg-chip-route', '', 'Change where this group goes',
-                         () => openGroupMenu(chip, { mode: 'edit', index: info.index }));
-    route.textContent = '';
+    const route = chipButton('cg-chip-route', '', 'Change where this group goes',
+                             () => openGroupMenu(chip, { mode: 'edit', index: info.index }));
     if (info.model) {
-        route.appendChild(part('cg-chip-icon', info.model.local ? '🖥' : '☁',
-                               info.model.local ? 'runs on this machine' : 'runs in the cloud'));
+        route.appendChild(chipPart('cg-chip-icon', info.model.local ? '🖥' : '☁',
+                                   info.model.local ? 'runs on this machine' : 'runs in the cloud'));
     }
-    route.appendChild(part('cg-chip-where', info.where));
+    route.appendChild(chipPart('cg-chip-where', info.where));
     if (info.model) {
-        route.appendChild(part('cg-chip-arrow', '→'));
-        route.appendChild(part(
+        route.appendChild(chipPart('cg-chip-arrow', '→'));
+        route.appendChild(chipPart(
             'cg-chip-model' + (info.model.pinned ? '' : ' cg-inherited'),
             info.model.name,
             info.model.pinned ? 'pinned to this group'
                               : 'not pinned — this is the model Carrot is set to'));
     }
-    if (info.files.length) {
-        route.appendChild(part('cg-chip-files', '📎 ' + info.files.length,
-                               info.files.join('\n')));
-    }
 
     chip.append(
         route,
-        button('cg-chip-edit', '✎', 'Edit this group — route, model, files',
-               () => openGroupMenu(chip, { mode: 'edit', index: info.index })),
-        button('cg-chip-send', '➤', 'Send this group', () => {
+        chipButton('cg-chip-edit', '✎', 'Edit this group — route, model, files',
+                   () => openGroupMenu(chip, { mode: 'edit', index: info.index })),
+        chipButton('cg-chip-send', '➤', 'Send this group', () => {
             const group = groupsInDocument()[info.index];
             if (group) sendGroup(group);
         }),
     );
     return chip;
+}
+
+// The evidence a group cites, drawn along the bottom edge of its box.
+//
+// This was a paperclip and a count on the chip, which is the wrong shape twice
+// over: it says how many files there are without saying which, and it puts
+// them in the header, where the one thing you cannot do is take one off. Files
+// are contents, so they go inside — the box grows downward to hold them, the
+// way the composer's own attachments grow it upward, and each one is a chip
+// you can read and remove.
+function groupFilesElement(info) {
+    const row = document.createElement('span');
+    row.className = 'cg-files';
+    row.contentEditable = 'false';
+    for (const path of info.files) {
+        const item = document.createElement('span');
+        item.className = 'cg-file cg-c' + info.colour;
+        // The basename, with the full path on hover. A rail of half-elided
+        // directory names says less about a file than its name does.
+        item.appendChild(chipPart('cg-file-name', path.split(/[\\/]/).pop() || path, path));
+        item.appendChild(chipButton('cg-file-drop', '×', 'Stop citing ' + path,
+                                    () => detachGroupFile(info.index, path)));
+        row.appendChild(item);
+    }
+    return row;
+}
+
+/** Take one file off a group, leaving everything else about it alone. */
+async function detachGroupFile(index, path) {
+    const group = groupsInDocument()[index];
+    if (!group) return;
+    const attrs = { ...group.attrs };
+    const files = group.files.filter(one => one !== path);
+    if (files.length) attrs.files = files.map(encodeURIComponent).join(',');
+    else delete attrs.files;
+    await rewriteGroupMarker(index, attrs);
 }
 
 // Every decoration the document currently wants: a hidden marker and a chip at
@@ -261,8 +317,22 @@ function groupDecorations(doc) {
         if (GROUP_CLOSE.test(text)) {
             if (open) {
                 decorations.push(Decoration.node(offset, offset + node.nodeSize, {
-                    class: 'cg-marker cg-close cg-c' + open.colour,
+                    class: 'cg-marker cg-close cg-c' + open.colour
+                           + (open.files.length ? ' cg-has-files' : ''),
                 }));
+                // The closing marker is otherwise just the bottom edge of the
+                // box, which makes it where the cited files belong: they
+                // extend the region downward rather than being counted in its
+                // header.
+                if (open.files.length) {
+                    const closing = open;
+                    decorations.push(Decoration.widget(offset + 1, () => groupFilesElement(closing), {
+                        side: -1,
+                        key: `cg-files:${closing.index}:${closing.files.join('|')}`,
+                        stopEvent: () => true,
+                        ignoreSelection: true,
+                    }));
+                }
             }
             open = null;
             return;
@@ -548,12 +618,21 @@ async function applyGroupRoute() {
         return;
     }
     // Retargeting one that exists: rewrite its opening marker in place.
-    const markdown = getEditorMarkdown();
+    await rewriteGroupMarker(state.index, state.attrs);
+}
+
+/** Replace the nth group's opening marker, and remount on the result.
+ *
+ * One place, because detaching a file and changing a destination are the same
+ * edit to the same line — and two copies of it is how the second one ends up
+ * knowing about an attribute the first has never heard of.
+ */
+async function rewriteGroupMarker(index, attrs) {
     let seen = 0;
-    const rewritten = markdown.split('\n').map(line => {
+    const rewritten = getEditorMarkdown().split('\n').map(line => {
         if (!GROUP_OPEN.test(line.trim())) return line;
-        if (seen++ !== state.index) return line;
-        return groupMarkerLine(state.attrs);
+        if (seen++ !== index) return line;
+        return groupMarkerLine(attrs);
     }).join('\n');
     await mountEditor(rewritten);
     scheduleNoteSave();

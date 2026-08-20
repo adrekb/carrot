@@ -10892,9 +10892,16 @@ body.nav-collapsed .nav-job-pulse { left: 6px; }
 .milkdown .ProseMirror .cg-body { padding-top: 5px; padding-bottom: 5px; }
 .milkdown .ProseMirror .cg-close {
   height: 8px;
+  overflow: hidden;
   margin-bottom: 8px;
   padding: 0 14px;
   border-radius: 0 0 var(--r-lg) var(--r-lg);
+}
+/* Unless it is holding them, in which case it stops being an edge and becomes
+   the bottom of the box. */
+.milkdown .ProseMirror .cg-close.cg-has-files {
+  height: auto;
+  overflow: visible;
 }
 
 .milkdown .ProseMirror .cg-chip {
@@ -10930,7 +10937,38 @@ body.nav-collapsed .nav-job-pulse { left: 6px; }
    borrowed from the app rather than pinned here. Same text, less weight — the
    alternative was a blank, which reads as unanswered. */
 .milkdown .ProseMirror .cg-chip-model.cg-inherited { opacity: 0.72; font-style: italic; }
-.milkdown .ProseMirror .cg-chip-files { opacity: 0.85; }
+/* The evidence a group cites, along the bottom edge of its box.
+   This was a paperclip and a count up in the chip, which says how many files
+   there are without saying which, and puts them in the one place you cannot
+   take one off. Files are contents, so the box grows downward to hold them —
+   the way the composer's own attachments grow it upward. */
+.milkdown .ProseMirror .cg-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 3px 0 8px;
+  font-size: var(--text-2xs);
+  line-height: 1.6;
+  font-family: var(--sans);
+  letter-spacing: 0;
+}
+.milkdown .ProseMirror .cg-file {
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--r-xs);
+  overflow: hidden;
+}
+.milkdown .ProseMirror .cg-file-name { padding: 2px 4px 2px 8px; }
+.milkdown .ProseMirror .cg-file-drop {
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  padding: 2px 7px 2px 3px;
+  opacity: 0.6;
+  cursor: pointer;
+}
+.milkdown .ProseMirror .cg-file-drop:hover { opacity: 1; }
 .milkdown .ProseMirror .cg-chip-edit {
   padding: 3px 5px;
   opacity: 0.72;
@@ -10949,6 +10987,14 @@ body.nav-collapsed .nav-job-pulse { left: 6px; }
    governs. `color-mix` rather than six more hex literals, because the tint has
    to stay the chip's colour when the palette changes. */
 .milkdown .ProseMirror .cg-chip.cg-c0 { background: var(--series-1); color: var(--on-accent); }
+/* Each cited file, in the group's own colour a step stronger than the box
+   tint, so a chip reads as an object sitting in the region. */
+.milkdown .ProseMirror .cg-file.cg-c0 { background: color-mix(in srgb, var(--series-1) 26%, transparent); }
+.milkdown .ProseMirror .cg-file.cg-c1 { background: color-mix(in srgb, var(--series-2) 26%, transparent); }
+.milkdown .ProseMirror .cg-file.cg-c2 { background: color-mix(in srgb, var(--series-3) 26%, transparent); }
+.milkdown .ProseMirror .cg-file.cg-c3 { background: color-mix(in srgb, var(--series-4) 26%, transparent); }
+.milkdown .ProseMirror .cg-file.cg-c4 { background: color-mix(in srgb, var(--series-5) 26%, transparent); }
+.milkdown .ProseMirror .cg-file.cg-c5 { background: color-mix(in srgb, var(--series-6) 26%, transparent); }
 .milkdown .ProseMirror .cg-chip.cg-c1 { background: var(--series-2); color: var(--on-accent); }
 .milkdown .ProseMirror .cg-chip.cg-c2 { background: var(--series-3); color: var(--on-accent); }
 .milkdown .ProseMirror .cg-chip.cg-c3 { background: var(--series-4); color: var(--on-accent); }
