@@ -132,27 +132,46 @@ class TestTheWindowProbeIsNotRepaid:
     """`OllamaClient` caches a model's ceiling per instance, and a fresh
     instance was being built for every turn — so the cache was always empty
     and every local turn paid an HTTP round trip to /api/show before it could
-    send its first token."""
+    send its first token.
+
+    The module-level cache that first fixed this is gone, and the property it
+    protected is not. `_window_tokens` now asks for `context_length` — the
+    window the turn will actually run in rather than the model's ceiling — and
+    that is cached on the *class*, so the round trip still happens once per
+    process however many client instances a turn builds.
+    """
 
     def test_the_probe_happens_once_per_model(self, monkeypatch):
         from carrot import app as A, ollama_client
 
         calls = []
 
-        class FakeClient:
-            def context_limit(self, model):
-                calls.append(model)
-                return 32768
+        real = ollama_client.OllamaClient.context_length
+        cache = ollama_client.OllamaClient._context_length
 
-        monkeypatch.setattr(ollama_client, "OllamaClient", lambda *a, **k: FakeClient())
-        A._PROBED_WINDOWS.clear()
+        def counted(self, model):
+            if model not in cache:
+                calls.append(model)
+            return 32768
+
+        monkeypatch.setattr(ollama_client.OllamaClient, "context_length", counted)
+        cache.pop("gemma4:e4b", None)
 
         class Local:
             provider, model, local = "ollama", "gemma4:e4b", True
 
+        # A fresh client per call, which is what the turn does.
         for _ in range(5):
             assert A._window_tokens(Local()) > 0
+            cache["gemma4:e4b"] = 32768
         assert calls == ["gemma4:e4b"]
+
+    def test_the_cache_that_makes_that_true_is_shared(self):
+        from carrot.ollama_client import OllamaClient
+
+        # On the class, not the instance. If this ever became per-instance the
+        # test above would still pass and every turn would pay the round trip.
+        assert OllamaClient()._context_length is OllamaClient()._context_length
 
     def test_a_hosted_route_never_probes_at_all(self, monkeypatch):
         from carrot import app as A, ollama_client

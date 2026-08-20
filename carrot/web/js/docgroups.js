@@ -665,16 +665,90 @@ function refreshGroupChips() {
  * Returns false rather than throwing when the vendor bundle predates the
  * export it needs: the rest of the Write tab works without a chip, and an
  * exception here would take the editor down with it.
+ *
+ * It also *records* which of those things went wrong. Failing quietly here is
+ * how a document ends up showing an opening group marker as literal text in
+ * the middle of somebody's prose: the marker is still in the file, correctly,
+ * and the thing that was supposed to hide it and draw a chip over it never
+ * registered. From the outside that reads as the app printing its own syntax
+ * at you, with nothing anywhere saying why.
  */
+let groupPluginProblem = '';
+
 function installGroupPlugin(crepe) {
     const kit = window.CarrotMilkdownKit;
-    if (!crepe || !kit || !kit.$prose || !kit.prose) return false;
-    try {
-        crepe.editor.use(kit.$prose(() => groupProsePlugin()));
-        return true;
-    } catch (_) {
+    if (!crepe) {
+        groupPluginProblem = 'the editor did not start';
         return false;
     }
+    if (!kit) {
+        groupPluginProblem = 'the editor bundle did not load';
+        return false;
+    }
+    if (!kit.$prose || !kit.prose) {
+        // The specific one worth naming: a desktop build carrying a vendor
+        // bundle older than the feature. Everything looks fine and no chip is
+        // ever drawn.
+        groupPluginProblem = 'this editor bundle is older than group chips'
+                           + ' — it exports no decoration hooks';
+        return false;
+    }
+    try {
+        crepe.editor.use(kit.$prose(() => groupProsePlugin()));
+        groupPluginProblem = '';
+        return true;
+    } catch (exc) {
+        groupPluginProblem = 'the editor refused the chip plugin'
+                           + (exc && exc.message ? ' — ' + exc.message : '');
+        return false;
+    }
+}
+
+/** Markers in the file and no chips on the screen — say so, and offer a way out.
+ *
+ * This is the one failure in the Write tab that puts editor syntax in front of
+ * the reader, so it is the one that must not be silent. Checked by comparing
+ * the two facts rather than by trusting the install: a plugin that registered
+ * and then drew nothing fails exactly the same way from where the user sits.
+ */
+function checkGroupChips() {
+    const strip = document.getElementById('doc-note');
+    if (!strip) return;
+    let markers = 0;
+    try {
+        markers = groupsInDocument().length;
+    } catch (_) {
+        return;     // no editor open
+    }
+    const chips = document.querySelectorAll('.cg-chip').length;
+    if (!markers || chips) {
+        strip.classList.add('hidden');
+        strip.innerHTML = '';
+        return;
+    }
+    const why = groupPluginProblem || 'the chips could not be drawn';
+    strip.classList.remove('hidden');
+    strip.innerHTML = '<span class="doc-note-text">'
+        + escHtml(`This document has ${markers} group${markers === 1 ? '' : 's'} in it, `
+                  + `shown as raw comments because ${why}. They still route correctly `
+                  + 'when sent.')
+        + '</span>'
+        + '<button class="doc-note-act" data-act="strip">Remove them</button>';
+    strip.querySelector('[data-act="strip"]').onclick = () => removeAllGroupMarkers();
+}
+
+/** Take the markers out of the document, for somebody who cannot see the chips.
+ *
+ * Their routes go with them — that is the honest cost, and the alternative is
+ * a document you cannot read. `stripGroupMarkers` is the same function the
+ * composer uses when staging a document, so there is one definition of what a
+ * marker is.
+ */
+async function removeAllGroupMarkers() {
+    const cleaned = stripGroupMarkers(getEditorMarkdown());
+    await mountEditor(cleaned);
+    scheduleNoteSave();
+    setNoteStatus('group markers removed — their routes went with them');
 }
 
 // ===== Making one =====

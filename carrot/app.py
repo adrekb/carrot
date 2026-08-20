@@ -2227,6 +2227,37 @@ def _restore_carried(carried: List[str], final: str) -> str:
 # else — no question, no narrative of its own to defend — which is the whole
 # reason it can mark its own work here at all.
 
+# One. The shape is a preference the model can be told once; asking twice for
+# the same rewrite spends a round on something it has already declined to do.
+MAX_ROWS_NUDGES = 1
+
+# ===== What the server says it read =====
+#
+# Everything else in this file *estimates* the prompt — four characters to the
+# token — and compares that estimate to a window it believes it has. Both
+# halves have been wrong at once: the estimator is approximate by construction,
+# and the window was being read off the model's ceiling rather than the
+# `num_ctx` the request actually runs in. When two wrong numbers agree with
+# each other nothing notices, and Ollama silently drops the front of the prompt
+# — the system directive — while the meter reports 12% full.
+#
+# `prompt_eval_count` comes back on the final frame and is measured by the thing
+# doing the truncating. Two uses, and the second is the quieter one:
+#
+#   * a prompt that fills the window was truncated to fit, so say so and make
+#     room before the next round rather than after the answer comes back wrong;
+#   * the ratio between what was measured and what we estimated calibrates the
+#     estimator for the rest of the turn. A turn full of JSON tool results is
+#     denser than four characters per token and a turn of English is thinner;
+#     one real measurement is worth more than a better constant.
+#
+# A prompt at 98% of the window is treated as truncated. Not 100%: the server
+# leaves itself room to generate, so a truncated prompt lands just under the
+# ceiling rather than exactly on it.
+OVERFLOW_FRACTION = 0.98
+# Below this the ratio is noise — a short prompt measured against a short
+# estimate swings wildly and would make the meter jump around for no reason.
+CALIBRATION_MIN_TOKENS = 500
 MAX_SUPPORT_NUDGES = 1
 # The checker has to see at least what the model saw. It was 2500 against a
 # 6000-character page, so it was grading an answer on 40% of the source — and
@@ -2308,6 +2339,76 @@ SUPPORT_NUDGE = (
 
 def _support_nudge(claims: List[str]) -> str:
     return SUPPORT_NUDGE.format(listed="\n".join(f"- {c}" for c in claims))
+
+
+# ===== An answer that is a table someone typed out =====
+#
+# The reported reply was fifteen lines of
+#
+#     2026 Chevrolet Corvette ZR1X Horsepower: 1250 hp @ 7000 RPM [url]
+#     2026 Chevrolet Corvette ZR1X Torque: 973 lb-ft [url]
+#
+# — the full name of the car restated at the head of every line, one field per
+# line, nothing joined to anything. It is a spreadsheet transposed into prose
+# and it reads as one; the two disagreeing torque figures sit as separate rows
+# rather than as the contradiction the reader has to resolve.
+#
+# The preamble now asks for sentences, and a model this size will still do it,
+# so there is a gate as well as a rule. It only runs where a gate *can* run:
+# multi-turn buffers the prose until the checks pass, so nothing has reached
+# the screen and the answer can be sent back. Single-pass streams as it goes —
+# the same reason `_single_pass_gap` is not wired in.
+#
+# **The repeated opening is the signal, not the colons.** A list of
+# "Displacement: 5.5L" lines is a perfectly good spec list and sometimes the
+# right answer. What is never right is restating the subject on every line:
+# that only happens when a model is walking a table row by row, and it is the
+# one shape that cannot be defended as a choice.
+ROW_MIN_LINES = 4
+ROW_MIN_PREFIX_WORDS = 3
+ROW_PREFIX_SHARE = 0.75
+
+ROWS_NUDGE = (
+    "Every line of that answer opens with the same words — \"{prefix}\" — and "
+    "carries one field after a colon. That is a table typed out line by line, "
+    "not an answer.\n"
+    "Write it again as prose, to the person who asked. Name the subject once "
+    "and then talk about it; put related figures in the same sentence; where "
+    "two sources give different numbers for the same thing, say that in a "
+    "sentence instead of listing both as though they were separate facts. Keep "
+    "every figure and every source link you already have."
+)
+
+
+def _leading_words(line: str, count: int) -> str:
+    return " ".join(line.split()[:count]).lower()
+
+
+def _rows_not_prose(answer: str) -> Optional[str]:
+    """The repeated opening, if the answer is a transposed table.
+
+    Returns the phrase every line begins with, which is what the nudge quotes
+    back — a rule the model can see itself having broken is one it can fix.
+    """
+    lines = [ln.strip() for ln in (answer or "").splitlines() if ln.strip()]
+    # Headings and fenced code are somebody structuring an answer on purpose.
+    lines = [ln for ln in lines if not ln.startswith("#") and not ln.startswith("```")]
+    if len(lines) < ROW_MIN_LINES:
+        return None
+
+    prefix = _leading_words(lines[0], ROW_MIN_PREFIX_WORDS)
+    if len(prefix.split()) < ROW_MIN_PREFIX_WORDS:
+        return None
+    sharing = [ln for ln in lines
+               if _leading_words(ln, ROW_MIN_PREFIX_WORDS) == prefix]
+    if len(sharing) < max(ROW_MIN_LINES, int(len(lines) * ROW_PREFIX_SHARE)):
+        return None
+    # And each of those is a field rather than a sentence — a colon with
+    # something after it, no full stop before the colon.
+    fields = [ln for ln in sharing if re.search(r"^[^.!?]{3,}?:\s*\S", ln)]
+    if len(fields) < len(sharing):
+        return None
+    return " ".join(lines[0].split()[:ROW_MIN_PREFIX_WORDS])
 
 
 def _search_gate_gap(searches: int, reads: int) -> Optional[str]:
@@ -2612,6 +2713,26 @@ SEARCH_PREAMBLE = (
     "with something you have heard of — if the results show it means something "
     "other than you assumed, say so in the answer, and if you genuinely cannot "
     "identify it, ask rather than answering about a different thing.\n"
+    # A run shipped its entire deliberation as the answer: a numbered
+    # "Thinking Process", the sources restated as bullet notes, three drafts of
+    # the reply, and a closing "Let's go." — then the actual answer underneath
+    # it. Everything above the answer was the model working, printed at the
+    # person who asked. Said here rather than in one mode's directive because
+    # it happened on a search turn and could happen on any of them.
+    "Deliberating is not answering. Whatever weighing up, drafting or "
+    "checking-against-the-brief you do, do not write it in the reply: no "
+    "\"Thinking Process\", no restating your instructions back, no numbered "
+    "plan of how you will respond, no draft followed by a revision. The reply "
+    "begins at the first word of the answer.\n"
+    # The same run then answered as fifteen lines of
+    # "2026 Chevrolet Corvette ZR1X Horsepower: 1250 hp @ 7000 RPM [url]" —
+    # the subject restated on every line, each fact alone, nothing joined up.
+    # It is a spreadsheet transposed into prose, and it reads as one.
+    "Write sentences, not rows. Name the subject once and then talk about it: "
+    "an answer that repeats the full name of the thing at the start of every "
+    "line, one field per line, is a table someone has typed out longhand. "
+    "Related figures belong in the same sentence, and figures that disagree "
+    "belong in a sentence that says so.\n"
 )
 
 MULTI_SEARCH_DIRECTIVE = (
@@ -2798,36 +2919,52 @@ def search_directive(mode: str) -> str:
 
 # What Ollama said a model can hold, kept between turns.
 #
-# `OllamaClient` caches this per instance, and a new instance was being built
-# for every turn — so the cache was always empty and every local turn paid an
-# HTTP round trip to /api/show before it could send its first token. A model's
-# ceiling does not change while it is installed; the setting layered on top of
-# it does, and that is read fresh below.
-_PROBED_WINDOWS: Dict[str, int] = {}
+# The cache that used to live here is gone, not lost: `OllamaClient` keeps
+# `_context_length` on the *class*, so the /api/show round trip happens once
+# per process however many client instances a turn builds. Measured: 2.0s on
+# the first call, 1.6ms from a second instance.
 
 
 def _window_tokens(resolved) -> int:
-    """How much this route can hold, or 0 when nobody knows.
+    """How much room this turn actually has, or 0 when nobody knows.
 
     Zero is not a failure to handle — it is the honest answer for a custom
     endpoint nobody has told us about, and it turns the context check off
     rather than inventing a ceiling and stopping turns at it.
+
+    **For a local model this is the window we ask for, not the one the model
+    could hold.** Those are different numbers and using the wrong one made the
+    whole context system report on a turn that was not happening:
+
+    `context_limit` is the model's ceiling — 262,144 for the Qwen3.8 9B distil.
+    `context_length` is what Carrot passes as `num_ctx`, which is that ceiling
+    clamped by the configured window, and defaults to 32,768 so a 256k KV cache
+    does not turn a laptop into a swap file. Ollama truncates at `num_ctx`.
+
+    Metering the ceiling meant the meter, the pruner, `rounds_left` and the
+    stop-and-answer gate all believed there were eight times more tokens than
+    the request would be allowed. Nothing ever pruned, because 30k of read pages
+    is nowhere near 90% of 262,144 — and Ollama quietly dropped the *front* of
+    the prompt instead, which is where the system directive lives. The reported
+    turn came back having written out its own deliberation and then a table,
+    with a list of constraints it had invented for itself: the model was
+    reconstructing instructions that had been evicted before it ever saw them.
+
+    The ceiling is still the right number for the model picker, which is
+    describing the model. This describes the turn.
     """
     try:
-        probed = 0
         if getattr(resolved, "local", False):
-            if resolved.model in _PROBED_WINDOWS:
-                probed = _PROBED_WINDOWS[resolved.model]
-            else:
-                try:
-                    from .ollama_client import OllamaClient
+            try:
+                from .ollama_client import OllamaClient
 
-                    probed = int(OllamaClient().context_limit(resolved.model) or 0)
-                except Exception:
-                    probed = 0
-                _PROBED_WINDOWS[resolved.model] = probed
+                effective = int(OllamaClient().context_length(resolved.model) or 0)
+            except Exception:
+                effective = 0
+            if effective:
+                return effective
         found = ctxwin_mod.window_for(
-            getattr(resolved, "provider", "") or "ollama", resolved.model, probed=probed)
+            getattr(resolved, "provider", "") or "ollama", resolved.model)
         return int(found.get("tokens") or 0)
     except Exception:
         return 0
@@ -3149,6 +3286,13 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
     yield {"search_mode": mode}
 
     tools = _available_tools(mode)
+    # What was actually asked, for the pruner. The last thing the user said
+    # before the turn started — everything appended after this point is a nudge
+    # written by us, and trimming pages against our own prompts would keep the
+    # paragraphs that talk about citations rather than the ones with the
+    # answer in them.
+    question_terms = pruning_mod.terms_of(next(
+        (m.get("content") for m in reversed(history) if m.get("role") == "user"), ""))
     # The old ceiling, kept only as the shape of "how much work is normal" for
     # the nudges that tell the model how many rounds it has left. What
     # actually stops the loop is the window filling up.
@@ -3216,6 +3360,12 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
     # Capped at one. It costs a model call and a round, and a checker allowed
     # to argue twice about the same paragraph would spend the budget on style.
     support_nudges = 0
+    rows_nudges = 0
+    # Ground truth from the last round, and what we had estimated for it.
+    measured_prompt = 0
+    measured_window = 0
+    estimate_scale = 1.0
+    truncated = False
     final_text = ""
     stalled = False
     # What the provider said when it stopped talking to us, if it did. This
@@ -3298,8 +3448,11 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
         # round whether or not it is near the limit, because the meter this
         # feeds is most useful while there is still room to act on it — a bar
         # that only appears once the turn is doomed is an epitaph.
-        used = tools_tokens + ctxwin_mod.estimate_tokens(
+        estimated = tools_tokens + ctxwin_mod.estimate_tokens(
             json.dumps(working, default=str))
+        # Corrected by whatever the server last told us about its own reading
+        # of a prompt this shape. One measurement beats a better constant.
+        used = int(estimated * estimate_scale)
         # How many more rounds there is room for, which is what the nudges and
         # the replanner mean when they say "rounds left".
         #
@@ -3321,7 +3474,7 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
             yield {"context": {"used": used, "window": window,
                                "fraction": round(used / window, 3),
                                "round": round_index + 1}}
-            if used > window * CONTEXT_STOP_FRACTION and round_index:
+            if (used > window * CONTEXT_STOP_FRACTION or truncated) and round_index:
                 # Make room before giving up the tools.
                 #
                 # Ending the turn here is right for a question and wrong for
@@ -3335,9 +3488,16 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
                 # are separate and why nothing here calls a model.
                 before = used
                 want = int(used - window * CONTEXT_RESUME_FRACTION)
-                if pruning_mod.prunable_tokens(working) >= min(
+                # The question's own words, so a page is cut down to the part
+                # that answers it rather than to its first four hundred
+                # characters — which on a web page is the navigation. Taken
+                # from the history rather than from a `message` parameter this
+                # function does not have: the nudges append user turns of their
+                # own, so `working` no longer ends with the question by the
+                # time there is anything to prune.
+                if pruning_mod.prunable_tokens(working, question_terms) >= min(
                         want, int(window * MIN_WORTHWHILE_PRUNE)):
-                    working, pruned = pruning_mod.prune(working, want)
+                    working, pruned = pruning_mod.prune(working, want, question_terms)
                     used = tools_tokens + ctxwin_mod.estimate_tokens(
                         json.dumps(working, default=str))
                     trimmed = pruned["tool_results"] + pruned["replies"]
@@ -3380,6 +3540,11 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
                     yield {"thinking": event["text"]}
                 elif event["type"] == "tool_calls":
                     tool_calls.extend(event["calls"])
+                elif event["type"] == "usage":
+                    # Measured, not estimated. Handled after the stream so the
+                    # answer is not interrupted to talk about bookkeeping.
+                    measured_prompt = int(event.get("prompt_tokens") or 0)
+                    measured_window = int(event.get("window") or 0)
                 else:
                     # Through the gate rather than straight out. Text held back
                     # for one chunk is the price of catching a marker split
@@ -3410,6 +3575,27 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
             break
 
         content_str = "".join(content_parts)
+
+        # What the request actually cost, against what we thought it would.
+        if measured_prompt:
+            if estimated >= CALIBRATION_MIN_TOKENS:
+                estimate_scale = max(0.5, min(2.0, measured_prompt / estimated))
+            ceiling = measured_window or window
+            was_truncated = bool(ceiling) and measured_prompt >= ceiling * OVERFLOW_FRACTION
+            if was_truncated and not truncated:
+                # Said out loud. The user's copy of this failure was an answer
+                # that had lost its instructions and did not know it — the one
+                # thing worse than running out of room is running out of room
+                # silently.
+                yield {"stage": "context",
+                       "detail": f"the model read {measured_prompt:,} tokens of a "
+                                 f"{ceiling:,}-token window — the prompt was truncated "
+                                 "to fit, so some of it never reached the model"}
+            truncated = was_truncated
+            yield {"context": {"used": measured_prompt, "window": ceiling,
+                               "fraction": round(measured_prompt / ceiling, 3) if ceiling else 0,
+                               "round": round_index + 1, "measured": True}}
+            measured_prompt = 0
 
         # Stopped mid-answer. What was already written is kept and stored:
         # a stop is "that is enough", not "throw it away", and half an answer
@@ -3558,6 +3744,22 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
                     working.append({"role": "user", "content": reason})
                     # The carried opening was part of the answer just judged, so
                     # it must not be prepended a second time to the rewrite.
+                    carried = []
+                    continue
+
+            # After the truth checks, because a rewrite for shape should be
+            # done on text that has already had its unsourced claims taken out
+            # — otherwise the model reformats a paragraph it is about to be
+            # asked to change again.
+            if not stalled and gated and rows_nudges < MAX_ROWS_NUDGES:
+                repeated = _rows_not_prose(answer)
+                if repeated and rounds_left >= 1:
+                    rows_nudges += 1
+                    reason = ROWS_NUDGE.format(prefix=repeated)
+                    yield {"gate": {"reason": reason, "rows": repeated,
+                                    "searches": searches, "reads": reads}}
+                    working.append({"role": "assistant", "content": content_str})
+                    working.append({"role": "user", "content": reason})
                     carried = []
                     continue
 

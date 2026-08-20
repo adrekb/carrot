@@ -54,8 +54,13 @@ class TestItSizesTheModelToTheMachine:
         assert entry["download_gb"] <= hub.FIRST_RUN_DOWNLOAD_CEILING_GB
 
     def test_the_machines_real_ceiling_is_still_offered(self):
-        """The cap is on the silent default, not on what the user may choose —
-        the splash still preselects the strongest thing that fits."""
+        """The cap is on the silent default, not on what the user may choose.
+
+        The splash used to preselect the strongest thing that fits; it no
+        longer preselects anything (see `TestNothingIsChosenForYou`). What this
+        holds is unchanged either way: `recommend()["best"]` may exceed the
+        download ceiling that `default_model()` obeys, because one is an offer
+        and the other is what happens to somebody who said nothing."""
         with machine(64.0, "metal"):
             best = hub.recommend(hub.BUNDLED_CATALOG, specs(64.0, "metal"))["best"]
             assert best["download_gb"] > hub.FIRST_RUN_DOWNLOAD_CEILING_GB
@@ -319,14 +324,38 @@ class TestFindingModelsThatExistToday:
         assert 'id="splash-find"' in (root / "index.html").read_text(encoding="utf-8")
         assert "splashFindForMachine" in (root / "js" / "app.js").read_text(encoding="utf-8")
 
-    def test_it_is_a_button_and_not_automatic(self):
-        """The first screen should not depend on the network, and a
-        local-first app should not reach out before it is asked."""
+    def test_the_search_runs_on_open(self):
+        """Reversed, deliberately, and worth recording as a reversal.
+
+        This used to assert the opposite — "the first screen should not depend
+        on the network, and a local-first app should not reach out before it is
+        asked" — and it was a fair position. It was overruled by the person
+        whose app it is, on the grounds that a first-run screen showing an
+        empty row and a button reads as a screen with nothing on it, and the
+        one list on it that is actually current was hidden behind a press.
+
+        The trade is real and is not being papered over: first run now makes a
+        request to Hugging Face before anybody asks it to. What survives of the
+        old position is that the reach-out is *labelled* — the note says "Live
+        from Hugging Face" — and that it falls back to the bundled catalog,
+        which says it is the bundled catalog.
+
+        Note also how the old test failed to catch its own reversal: it looked
+        for `hub/search` inside `renderSplashPicks`, and the call went into
+        `showSplash` instead. It stayed green while the property it named
+        stopped being true, which is worse than going red.
+        """
         from pathlib import Path
         js = (Path(__file__).resolve().parents[1] / "carrot" / "web" / "js"
               / "app.js").read_text(encoding="utf-8")
-        render = js[js.index("function renderSplashPicks"):js.index("function renderSplashCards")]
-        assert "hub/search" not in render
+        show = js[js.index("async function showSplash("):js.index("function syncSplashSetupButton")]
+        assert "await splashFindForMachine();" in show
+
+    def test_the_reach_out_says_where_it_went(self):
+        from pathlib import Path
+        js = (Path(__file__).resolve().parents[1] / "carrot" / "web" / "js"
+              / "app.js").read_text(encoding="utf-8")
+        assert "Live from Hugging Face" in js
 
     def test_the_splash_names_no_model_until_it_has_looked(self):
         """Naming a model on the setup screen from a list compiled months ago
@@ -492,3 +521,62 @@ class TestTheQuantDescentHasAFloor:
 
     def test_a_model_that_needs_two_bit_to_fit_is_reported_as_too_big(self):
         assert hub.quant_plan(70.0, 12.0)["fit"] == "too_big"
+class TestNothingIsChosenForYou:
+    """The splash preselected the first card, so "Set up now" was pressable by
+    somebody who had read none of them and would install whatever happened to
+    rank first. That is a decision made on the user's behalf and then hidden
+    inside a button that does not mention it.
+
+    Skip is the way to not choose, and it still sizes to the machine — so the
+    screen now has an explicit answer for "I do not want to think about this"
+    and does not need a silent one.
+    """
+
+    def js(self):
+        from pathlib import Path
+
+        return (Path(__file__).resolve().parents[1] / "carrot" / "web" / "js"
+                / "app.js").read_text(encoding="utf-8")
+
+    def cards(self):
+        js = self.js()
+        return js[js.index("function renderSplashCards"):js.index("async function splashFindForMachine")]
+
+    def test_the_first_card_is_not_selected(self):
+        body = self.cards()
+        assert "Preselect the first" not in body
+        assert "splashModel = picks[0]" not in body
+
+    def test_the_button_refuses_until_something_is_picked(self):
+        js = self.js()
+        assert "function syncSplashSetupButton" in js
+        block = js[js.index("function syncSplashSetupButton"):]
+        block = block[:block.index("\n}")]
+        assert "btn.disabled = !ready" in block
+        assert "Pick a model to continue" in block
+
+    def test_an_empty_screen_is_not_a_dead_end(self):
+        """With no cards there is nothing to pick, and refusing to proceed
+        would trap somebody who is offline."""
+        js = self.js()
+        block = js[js.index("function syncSplashSetupButton"):]
+        block = block[:block.index("\n}")]
+        assert "!!splashModel || !cards" in block
+
+    def test_choosing_a_card_enables_it(self):
+        assert "syncSplashSetupButton();" in self.cards()
+
+    def test_choosing_from_the_full_catalog_enables_it_too(self):
+        js = self.js()
+        block = js[js.index("function pickSplashModel"):]
+        block = block[:block.index("\n}")]
+        assert "syncSplashSetupButton();" in block
+
+    def test_skip_is_still_there_and_still_sizes(self):
+        js = self.js()
+        block = js[js.index("function skipModelChoice"):]
+        block = block[:block.index("\n}")]
+        # `null` sends the server to `get_target_model()`, which asks the Hub
+        # what fits rather than reaching a constant.
+        assert "splashModel = null;" in block
+        assert "runBootstrap();" in block

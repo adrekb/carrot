@@ -359,3 +359,96 @@ class TestTheDarkThemeIsActuallyBlack:
         still a lit edge under the composer, which is where it was working."""
         strength = re.search(r"--wash-strength:\s*([0-9.]+);", CSS).group(1)
         assert 0 < float(strength) <= 0.5, strength
+
+
+# ===== A tinted chip has to bring its own ink =====
+#
+# Reported as one word: "illegible". The selected Agent filter in the history
+# popover was near-black text on a dark green wash.
+#
+# The cause is a cascade gap rather than a bad colour. `.history-chip.active`
+# sets a solid accent fill *and* `--on-accent`, which is a near-black chosen to
+# sit on solid orange. `.history-chip.chip-agent.active` is more specific and
+# replaced the fill with a 14% green tint — and said nothing about the ink, so
+# the near-black stayed behind on it at 1.64:1. Whatever overrides the
+# background has to override the foreground with it; they are one decision.
+
+
+def _light_token(name):
+    """The winning value under `:root[data-theme="light"]`."""
+    stripped = _COMMENT.sub("", CSS)
+    value = None
+    for selectors, body in _BLOCK.findall(stripped):
+        parts = [p.strip() for p in selectors.split(",")]
+        if not any(p == ':root[data-theme="light"]' for p in parts):
+            continue
+        for found_name, found_value in re.findall(r"(--[a-z0-9-]+):\s*([^;]+);", body):
+            if found_name == name:
+                value = found_value.strip()
+    if value is None:
+        return _dark_token(name)     # the light theme inherits what it does not restate
+    return value
+
+
+def _mix(foreground, background, fraction):
+    """`color-mix(in srgb, fg N%, transparent)` over a known surface."""
+    fg = [int(foreground.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4)]
+    bg = [int(background.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4)]
+    return "#%02x%02x%02x" % tuple(
+        round(fg[i] * fraction + bg[i] * (1 - fraction)) for i in range(3))
+
+
+class TestTheTintedHistoryChipsAreReadable:
+
+    def _rule(self, selector):
+        block = CSS[CSS.index(selector):]
+        return block[block.index("{") + 1:block.index("}")]
+
+    @pytest.mark.parametrize("selector", [
+        ".history-chip.chip-agent.active {",
+        ".history-chip.chip-code.active {",
+    ])
+    def test_a_rule_that_changes_the_fill_also_changes_the_ink(self, selector):
+        rule = self._rule(selector)
+        assert "background:" in rule
+        # A real `color` declaration, not the tail of `border-color:` — which
+        # is a substring of it, and which every one of these rules has. The
+        # first version of this test asserted `"color:" in rule` and passed
+        # against the very CSS it was written to catch.
+        assert re.search(r"(?:^|;|\s)color\s*:", rule),             "the fill is overridden and the ink inherited"
+
+    @pytest.mark.parametrize("selector", [
+        ".history-chip.chip-agent.active {",
+        ".history-chip.chip-code.active {",
+    ])
+    def test_the_ink_is_the_one_measured_below(self, selector):
+        # The contrast test reads tokens; this is what ties the rule to it.
+        assert "color: var(--text)" in self._rule(selector)
+
+    @pytest.mark.parametrize("token", ["--green", "--yellow"])
+    def test_the_label_clears_aa_on_its_own_tint_in_both_themes(self, token):
+        """Every surface a history chip can land on, in both themes.
+
+        `--text` rather than the status colour: making the label green reads
+        well in three of the four cases, and the light theme's yellow on its
+        own 14% tint measures 4.35:1 — under the floor at 11px, on the
+        *lightest* surface it can sit on and worse on the others."""
+        for reader, surfaces in (
+            (_dark_token, ("--surface-pop", "--card", "--bg")),
+            (_light_token, ("--surface-pop", "--card", "--bg")),
+        ):
+            ink = reader("--text")
+            tint = reader(token)
+            for surface in surfaces:
+                ground = reader(surface)
+                if not ground.startswith("#"):
+                    continue
+                background = _mix(tint, ground, 0.14)
+                assert _ratio(ink, background) >= 4.5, (
+                    f"{token} chip: {ink} on {background} "
+                    f"({reader.__name__} {surface}) is {_ratio(ink, background):.2f}:1")
+
+    def test_the_near_black_that_caused_it_is_gone_from_these_rules(self):
+        for selector in (".history-chip.chip-agent.active {",
+                         ".history-chip.chip-code.active {"):
+            assert "--on-accent" not in self._rule(selector)

@@ -206,17 +206,79 @@ function hydrateBlocks(root) {
 // this app exists not to do.
 const CITE_MAX_CHARS = 34;
 
+/** `example.com` from a URL, without the `www.` nobody reads. */
+function citeDomain(href) {
+    try {
+        return new URL(href).hostname.replace(/^www\./i, '');
+    } catch (_) {
+        return '';
+    }
+}
+
+/** Undo the damage of a URL written inside square brackets.
+ *
+ * `[https://…]` is not a markdown link — there is no text part — so the parser
+ * autolinks the bare URL and leaves the `[` as literal text before it. The
+ * closing bracket is worse than left over: GFM autolinking takes it *into* the
+ * URL, so the href ends `…/2026/%5D` and the citation is a 404. Every source
+ * link in the reported answer was broken this way, which is a good deal more
+ * than a cosmetic problem — they are there to be checked.
+ *
+ * Only when there is an unclosed `[` immediately before the link, which is
+ * what says the bracket was punctuation rather than part of the address.
+ */
+function repairBracketedUrl(link) {
+    const before = link.previousSibling;
+    if (!before || before.nodeType !== 3 || !/\[$/.test(before.nodeValue)) return;
+
+    const href = link.getAttribute('href') || '';
+    const closed = /%5D$/i.test(href) || /\]$/.test(href);
+    const after = link.nextSibling;
+    const trailing = after && after.nodeType === 3 && /^\]/.test(after.nodeValue);
+    if (!closed && !trailing) return;
+
+    if (closed) link.setAttribute('href', href.replace(/(?:%5D|\])$/i, ''));
+    if (trailing) after.nodeValue = after.nodeValue.slice(1);
+    before.nodeValue = before.nodeValue.slice(0, -1);
+}
+
 function markCitations(root) {
     for (const link of root.querySelectorAll('a[href]')) {
         const href = link.getAttribute('href') || '';
         if (!/^https?:/i.test(href)) continue;
-        const text = (link.textContent || '').trim();
+        let text = (link.textContent || '').trim();
+
+        // A bare URL as the link text.
+        //
+        // This was skipped, on the reasoning that a URL is not a name — and
+        // then the length cap dropped it anyway, because a real one is eighty
+        // characters and the cap is thirty-four. The result was the failure
+        // this fixes: an answer whose every citation was a raw URL wrapping
+        // across three lines, in an app that had a chip for exactly this.
+        //
+        // A URL is not a name, but it *contains* one. The domain is the name of
+        // the source, which is all a citation has to say; the rest of it is on
+        // the hover and in the href, where it can still be checked.
+        if (/^https?:/i.test(text)) {
+            // The href first: a bracket-mangled address is broken whether or
+            // not it ends up as a chip, and the title and domain below should
+            // both be read off the repaired one.
+            repairBracketedUrl(link);
+            const fixed = link.getAttribute('href') || '';
+            const domain = citeDomain(fixed);
+            if (!domain) continue;
+            const parent = link.parentElement;
+            if (parent && parent.childNodes.length === 1) continue;
+            link.textContent = domain;
+            link.classList.add('cite-chip');
+            link.title = fixed;
+            continue;
+        }
+
         // A citation names its source. A link whose text is a sentence is the
         // author linking a phrase, and turning that into a chip would be
         // rewriting their prose.
         if (!text || text.length > CITE_MAX_CHARS || text.split(/\s+/).length > 4) continue;
-        // A bare URL as the text is not a name either.
-        if (/^https?:/i.test(text)) continue;
         // Only mid-flow links: one that is the whole of its own line is a
         // list of sources, which already reads correctly.
         const parent = link.parentElement;
@@ -517,6 +579,10 @@ async function mountEditor(markdown) {
         await crepeInstance.create();
         crepeReady = true;
         showNoteFormatBar();
+        // A beat after the first render, because the chips are decorations and
+        // they are drawn by the editor rather than by us — asking before it has
+        // painted would report every document as broken.
+        if (typeof checkGroupChips === 'function') setTimeout(checkGroupChips, 250);
     } catch (e) {
         crepeInstance = null;
         crepeReady = false;

@@ -452,6 +452,26 @@ class OllamaClient:
             if msg.get("content"):
                 yield from tag_filter.feed(msg["content"])
             if data.get("done", False):
+                # What the server says it actually read.
+                #
+                # Everything upstream *estimates* the prompt at four characters
+                # to the token and compares that to a window it believes it has.
+                # Both halves of that have been wrong at once — an estimator is
+                # approximate by construction, and the window was being read off
+                # the model's ceiling rather than the `num_ctx` the request runs
+                # in. When they are wrong together nothing notices, because the
+                # two numbers agree with each other and neither is measured.
+                #
+                # `prompt_eval_count` is measured. It is the one figure in the
+                # turn that comes from the thing doing the truncating, and a
+                # prompt that fills the window is a prompt that had its front
+                # dropped to fit. Reported rather than acted on here: this class
+                # streams, and what to do about it is the caller's decision.
+                self._note_metrics(model, data)
+                sent = int(data.get("prompt_eval_count") or 0)
+                if sent:
+                    yield {"type": "usage", "prompt_tokens": sent,
+                           "window": self.context_length(model)}
                 break
         yield from tag_filter.flush()
 
