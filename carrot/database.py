@@ -672,6 +672,10 @@ ADDED_COLUMNS = (
     ("conversation_summaries", "digest", "TEXT DEFAULT ''"),
     ("conversation_summaries", "digest_through", "INTEGER DEFAULT 0"),
     ("conversation_summaries", "digest_updated_at", "TEXT DEFAULT ''"),
+    # Which model wrote it — empty when none would, which the UI says out loud
+    # rather than leaving the reader to wonder why the summary is a list of
+    # their own sentences.
+    ("conversation_summaries", "digest_model", "TEXT DEFAULT ''"),
 )
 
 # Indexes over columns that ADDED_COLUMNS creates. These cannot live in SCHEMA,

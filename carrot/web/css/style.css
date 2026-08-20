@@ -848,13 +848,43 @@ body {
   color: var(--on-accent);
 }
 
+/* The answer has no bubble.
+ *
+ * Both sides were in boxes, which is the shape of a messaging app: two people
+ * of equal standing, each utterance a discrete object you might reply to. That
+ * is not what this is. One side is a person asking, briefly and occasionally;
+ * the other is prose — paragraphs, lists, tables, code, diagrams, sometimes
+ * two thousand words of it — and prose does not want a container. The bubble
+ * put a hard edge, a border and sixteen pixels of padding around the one thing
+ * on the screen that is meant to be *read*, and repeated that box down the
+ * whole transcript.
+ *
+ * So the box belongs to the question and the answer is simply the page. The
+ * asymmetry is the information: what is boxed is what you said, and everything
+ * else is the reply. It is also what makes a long answer read as a document
+ * rather than as a very tall speech bubble, and it gives the code blocks and
+ * tables inside it the full measure instead of the measure minus two paddings
+ * and two borders.
+ *
+ * The alignment still says whose turn it is — yours to the right, in accent;
+ * this one to the left, flush with the column.
+ */
 .message.assistant { align-self: flex-start; }
 .message.assistant .content {
-  background: var(--card2);
-  border: 1px solid var(--border);
-  border-bottom-left-radius: var(--r-xs);
+  padding: 2px 0;
+  background: none;
+  border: 0;
+  border-radius: 0;
 }
-.message.assistant .content.error { border-color: rgba(255, 93, 93, 0.4); color: var(--red); }
+/* A failed turn was a red *border*, and there is no border now. Red text, which
+   is what the border was standing in for and is legible without a box around
+   it. The rule down the side keeps it reading as one block rather than as a
+   paragraph that happens to be coloured. */
+.message.assistant .content.error {
+  color: var(--red);
+  border-left: 2px solid rgba(255, 93, 93, 0.4);
+  padding-left: var(--s-4);
+}
 
 /* Copy, rerun, branch.
  *
@@ -1211,6 +1241,131 @@ details.trace[open] > .trace-summary::before { transform: rotate(90deg); }
 .list-item strong { font-size: var(--text-base); font-weight: 600; }
 .list-item .sub { color: var(--muted); font-size: var(--text-sm); margin-top: 4px; }
 .list-item .body { color: var(--muted); font-size: var(--text-base); margin-top: 6px; line-height: 1.5; }
+
+/* ===== Search results =====
+ *
+ * Rows rather than cards. The cards spent 75px each on a date, a role, a title
+ * and 400 characters of body, so seven results filled a screen and none of
+ * them said which words had matched — the reader did the search again by eye.
+ *
+ * One container with hairlines between rows, rather than seven bordered boxes
+ * with gaps: a list of things of the same kind should read as one object, and
+ * the gaps were most of the height. */
+.s-list {
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  background: var(--card);
+}
+.s-list .empty { padding: var(--s-5); }
+/* Before the first search there is nothing in it, and a bordered box with
+   nothing in it is a 2px line under the input that looks like a mistake. */
+.s-list:empty { display: none; }
+.s-row + .s-row { border-top: 1px solid var(--border); }
+.s-row.sel { background: var(--card2); }
+/* The whole line is the control. A row where only the chevron is clickable is
+   a row people click and nothing happens. */
+.s-line {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  width: 100%;
+  padding: 7px 12px;
+  background: none;
+  border: 0;
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.s-line:hover { background: var(--surface-hover); }
+.s-chev {
+  width: 11px; height: 11px;
+  flex: 0 0 auto;
+  color: var(--faint);
+  transform: rotate(-90deg);
+  transition: transform var(--dur-2) var(--ease);
+}
+.s-row.open .s-chev { transform: rotate(0deg); }
+/* Who said it, in three or six characters. A column rather than a sentence, so
+   the eye can skip it. */
+.s-who {
+  flex: 0 0 44px;
+  color: var(--faint);
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+/* The line the match is in. It takes the space, because it is the answer. */
+.s-snip {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+.s-snip mark, .s-full mark {
+  background: var(--accent-soft);
+  color: var(--text);
+  border-radius: var(--r-xs);
+  padding: 0 2px;
+}
+/* Where it came from, and when. Fixed and shrinking, so the rows line up into
+   columns instead of every one wrapping differently. */
+.s-where {
+  flex: 0 1 200px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--faint);
+  font-size: var(--text-2xs);
+  text-align: right;
+}
+.s-when {
+  flex: 0 0 62px;
+  color: var(--faint);
+  font-size: var(--text-2xs);
+  text-align: right;
+}
+/* Opened: the whole message, and the way in. */
+.s-body {
+  padding: var(--s-2) 12px var(--s-4) 36px;
+  background: var(--bg2);
+  border-top: 1px solid var(--border);
+}
+.s-full {
+  color: var(--text);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+.s-acts {
+  display: flex; align-items: center; gap: var(--s-4);
+  margin-top: var(--s-3);
+}
+.s-open {
+  padding: 3px 10px;
+  border: 1px solid var(--border-hi);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text);
+  font-size: var(--text-2xs);
+  cursor: pointer;
+}
+.s-open:hover { background: var(--surface-hover); }
+.s-score { color: var(--faint); font-size: var(--text-2xs); }
+/* What the search was, under it. The mode matters: a hybrid run and one that
+   fell back to keywords find different things, and looked identical here. */
+.s-foot {
+  padding: var(--s-3) var(--s-2) 0;
+  color: var(--faint);
+  font-size: var(--text-2xs);
+}
 
 .tag {
   display: inline-block;

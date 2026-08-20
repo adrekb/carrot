@@ -933,3 +933,46 @@ class TestTheSendControlSaysOneThingOnce:
         assert "button.textContent = 'Send'" in docagent
         # Where it goes is still said, on the hover.
         assert "Send this note (or the selected text) to ${spec.label}" in docagent
+
+
+class TestOnlyTheQuestionIsInABox:
+    """Both sides used to be bubbles, which is the shape of a messaging app:
+    two people of equal standing, each utterance a discrete object. That is not
+    what this is. One side is a person asking, briefly; the other is prose —
+    paragraphs, tables, code, sometimes two thousand words of it — and prose
+    does not want a container around it, repeated down the whole transcript.
+
+    So the box belongs to the question. The asymmetry is the information: what
+    is boxed is what you said, everything else is the reply.
+    """
+
+    def content_rules(self, selector):
+        css = read("css", "style.css")
+        block = css[css.index(selector):]
+        return block[block.index("{") + 1:block.index("}")]
+
+    def test_the_answer_has_no_bubble(self):
+        rules = self.content_rules(".message.assistant .content {")
+        assert "background: none" in rules
+        assert "border: 0" in rules
+        assert "border-radius: 0" in rules
+
+    def test_the_answer_is_not_indented_by_a_bubble_that_is_not_there(self):
+        # 16px of horizontal padding existed to hold text off a border. With no
+        # border it is an indent with nothing to explain it, and it takes the
+        # measure away from the tables and code blocks inside.
+        rules = self.content_rules(".message.assistant .content {")
+        assert "padding: 2px 0" in rules
+
+    def test_the_question_keeps_its_box(self):
+        rules = self.content_rules(".message.user .content {")
+        assert "background: var(--accent-fill" in rules
+        assert "border: 1px solid" in rules
+
+    def test_a_failed_turn_is_still_marked_without_one(self):
+        # It was a red *border*, and there is no border now. Red text plus a
+        # rule down the side, so it still reads as one block rather than as a
+        # paragraph that happens to be coloured.
+        rules = self.content_rules(".message.assistant .content.error {")
+        assert "color: var(--red)" in rules
+        assert "border-left:" in rules

@@ -793,7 +793,11 @@
         <input type="text" id="search-input" placeholder="Search across all conversations and content" onkeydown="if(event.key==='Enter')doSearch()">
         <button class="btn btn-primary" onclick="doSearch()">Search</button>
       </div>
-      <div id="search-results" class="list"></div>
+      <!-- One line per hit, with the whole message behind the chevron. Seven
+           cards used a screen to say what forty rows say now, and none of them
+           marked the words that had matched. -->
+      <div id="search-results" class="s-list"></div>
+      <div id="search-foot" class="s-foot"></div>
     </div>
   </section>
 

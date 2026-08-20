@@ -6126,15 +6126,46 @@ async def conversation_digest(conv_id: str):
     return summarize_mod.digest_state(conv_id, title=conv.get("title") or "")
 
 
+def _digest_routes() -> List[router_mod.Route]:
+    """Which models may write a summary, best first.
+
+    Summarising is local-only by default, and rightly so — the *rolling*
+    summary runs on every message, and escalating that to a cloud key would be
+    expensive for no gain. But this button is pressed once per conversation, by
+    hand, and inherits that default: a user with a cloud key and no Ollama
+    would press it and get a bullet list of their own sentences every time,
+    with a working model one tab away.
+
+    So the chat route is a second candidate. It is not a guess about what the
+    user wants — it is the model they are demonstrably talking to, and if it
+    can answer them it can summarise them. Deduplicated, because on the common
+    setup both of these are the same on-device model and trying it twice would
+    only double the wait before the transcript fallback.
+    """
+    candidates = [
+        router_mod.route(task=router_mod.TASK_SUMMARIZE),
+        router_mod.route(task=router_mod.TASK_CHAT),
+    ]
+    ordered: List[router_mod.Route] = []
+    seen = set()
+    for candidate in candidates:
+        key = (candidate.provider, candidate.model)
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(candidate)
+    return ordered
+
+
 @app.post("/api/conversations/{conv_id}/digest")
 async def write_conversation_digest(conv_id: str):
     """Write (or rewrite) the conversation's summary document.
 
-    Routed as a ``summarize`` task, so it lands on whatever model the user
-    assigned to summarising rather than on their chat model — and if no model
-    answers, `build_digest` falls back to the transcript's own shape rather
-    than to an error, because the machines most likely to have no model running
-    are the ones this feature is for.
+    If nothing answers, `build_digest` falls back to the transcript's own shape
+    rather than to an error — the machines most likely to have no model running
+    are the ones this feature is for — and reports which model wrote it, so the
+    UI can say that no model did rather than leaving the reader to wonder why
+    their summary is a list of their own sentences.
     """
     conv = conv_mod.get_conversation(conv_id)
     if conv is None:
@@ -6143,7 +6174,7 @@ async def write_conversation_digest(conv_id: str):
         return summarize_mod.build_digest(
             conv_id,
             title=conv.get("title") or "",
-            route=router_mod.route(task=router_mod.TASK_SUMMARIZE),
+            routes=_digest_routes(),
             complete=router_mod.complete,
         )
     except ValueError as exc:

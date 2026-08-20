@@ -124,9 +124,19 @@ function renderDigestPop() {
     }
 
     const stale = digestState.stale;
+    // No model answered, so what is on screen is the transcript's own shape
+    // rather than a summary of it. Said here, with the way to fix it, because
+    // the difference is otherwise a line of italics inside the document that
+    // reads like part of the summary.
+    const unwritten = !digestState.model
+        ? '<div class="digest-stale">No model answered, so this lists what was '
+          + 'said rather than what it amounted to. Start a local model, or assign '
+          + 'one under Settings → Models, then Rewrite.</div>'
+        : '';
     body.innerHTML =
         (stale ? '<div class="digest-stale">Out of date — there have been turns '
                  + 'since this was written.</div>' : '')
+        + unwritten
         + '<div class="digest-name">' + escHtml(digestState.filename) + '</div>'
         + '<div class="digest-md md">' + mdToHtml(digestState.markdown || '') + '</div>';
     foot.innerHTML = [

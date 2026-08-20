@@ -11,11 +11,14 @@ into the existing summary, so cost stays flat no matter how long the chat runs.
 
 from __future__ import annotations
 
+import logging
 import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from .database import get_db
+
+LOG = logging.getLogger(__name__)
 
 # Turns kept verbatim at the end of the context window.
 RECENT_WINDOW = 20
@@ -60,6 +63,7 @@ def get_summary(conversation_id: str) -> Optional[Dict[str, Any]]:
         "digest": row["digest"] if "digest" in keys else "",
         "digest_through": row["digest_through"] if "digest_through" in keys else 0,
         "digest_updated_at": row["digest_updated_at"] if "digest_updated_at" in keys else "",
+        "digest_model": row["digest_model"] if "digest_model" in keys else "",
     }
 
 
@@ -272,6 +276,7 @@ def _digest_row(conversation_id: str) -> Dict[str, Any]:
         "markdown": existing.get("digest") or "",
         "covered_through": existing.get("digest_through") or 0,
         "updated_at": existing.get("digest_updated_at") or "",
+        "model": existing.get("digest_model") or "",
     }
 
 
@@ -287,18 +292,19 @@ def _conversation_messages(conversation_id: str) -> List[Dict[str, Any]]:
     return [{"id": r["id"], "role": r["role"], "content": r["content"] or ""} for r in rows]
 
 
-def save_digest(conversation_id: str, markdown: str, covered_through: int):
+def save_digest(conversation_id: str, markdown: str, covered_through: int, model: str = ""):
     conn = get_db()
     conn.execute(
         """INSERT INTO conversation_summaries
            (conversation_id, summary, covered_through, message_count, updated_at,
-            digest, digest_through, digest_updated_at)
-           VALUES (?, '', 0, 0, ?, ?, ?, ?)
+            digest, digest_through, digest_updated_at, digest_model)
+           VALUES (?, '', 0, 0, ?, ?, ?, ?, ?)
            ON CONFLICT(conversation_id) DO UPDATE SET
                digest = excluded.digest,
                digest_through = excluded.digest_through,
-               digest_updated_at = excluded.digest_updated_at""",
-        (conversation_id, _now(), markdown[:MAX_DIGEST_CHARS], covered_through, _now()),
+               digest_updated_at = excluded.digest_updated_at,
+               digest_model = excluded.digest_model""",
+        (conversation_id, _now(), markdown[:MAX_DIGEST_CHARS], covered_through, _now(), model),
     )
     conn.commit()
     conn.close()
@@ -392,17 +398,30 @@ def digest_state(conversation_id: str, title: str = "") -> Dict[str, Any]:
         "messages": len(messages),
         "exists": bool(stored["markdown"]),
         "stale": bool(stored["markdown"]) and latest > stored["covered_through"],
+        # Which model wrote it, or empty when nothing would. Reported rather
+        # than only printed inside the file, because "no model answered" is a
+        # thing the UI should be able to say *and offer to fix*, and grepping
+        # it back out of the markdown would be reading our own prose.
+        "model": stored["model"],
     }
 
 
 def build_digest(conversation_id: str, title: str = "",
-                 route=None, complete=None) -> Dict[str, Any]:
+                 routes=None, complete=None) -> Dict[str, Any]:
     """Write the conversation's document and store it.
 
-    ``route`` and ``complete`` are injected so the caller decides which model
-    writes it — the app passes the router's, and a caller that passes neither
-    gets the deterministic version, which is a real code path rather than a
-    stub for one.
+    ``routes`` is a *list*, tried in order, and that is the whole of how this
+    feature stops being a button that never works. Summarising is a local-only
+    task by default — sensibly, because the rolling summary runs on every
+    message — so a user with a cloud key and no Ollama would have pressed this
+    and received a bullet list of their own sentences, every time, with a
+    working model sitting one tab away. The chain says: the model you assigned
+    to summarising, then the one you are already talking to, then the
+    transcript's own shape.
+
+    ``complete`` is injected alongside so a caller that passes neither gets the
+    deterministic version — which is a real code path rather than a stub for
+    one, and the path taken on the machines this feature is most for.
     """
     messages = _conversation_messages(conversation_id)
     if not messages:
@@ -417,25 +436,38 @@ def build_digest(conversation_id: str, title: str = "",
     lines = [f"{m['role']}: {m['content'][:DIGEST_MESSAGE_CHARS]}" for m in recent]
     transcript = "\n".join(lines)[-DIGEST_TRANSCRIPT_CHARS:]
 
+    prompt = (f"Conversation: {title or 'untitled'}\n\n"
+              + (f"Summary of the earlier part:\n{earlier}\n\n" if earlier else "")
+              + f"Transcript:\n{transcript}")
+
     body = ""
     model_name = ""
-    if route is not None and complete is not None:
-        prompt = (f"Conversation: {title or 'untitled'}\n\n"
-                  + (f"Summary of the earlier part:\n{earlier}\n\n" if earlier else "")
-                  + f"Transcript:\n{transcript}")
+    for candidate in (routes or []):
+        if complete is None or candidate is None:
+            continue
+        named = getattr(candidate, "model", "") or "?"
         try:
-            written = complete(route, [
+            written = complete(candidate, [
                 {"role": "system", "content": DIGEST_PROMPT.format(max_chars=MAX_DIGEST_CHARS)},
                 {"role": "user", "content": prompt},
             ])
-        except Exception:
-            written = ""
+        except Exception as exc:
+            # Logged, not swallowed. The fallback below is deliberate and
+            # produces a usable file either way, which is exactly what makes a
+            # silent `except` here so expensive: "no model answered" and "the
+            # model timed out on a long thread" are the same screen, and only
+            # one of them is worth doing anything about.
+            LOG.info("digest: %s could not write it: %s", named, exc)
+            continue
         if written and written.strip():
             body = _strip_own_title(written.strip())
-            model_name = getattr(route, "model", "") or ""
+            model_name = named if named != "?" else ""
+            break
+        LOG.info("digest: %s answered with nothing", named)
     if not body:
         body = _digest_without_a_model(messages)
 
     markdown = f"{_digest_header(title, len(messages), model_name)}\n\n{body}"
-    save_digest(conversation_id, markdown, covered_through=messages[-1]["id"])
+    save_digest(conversation_id, markdown, covered_through=messages[-1]["id"],
+                model=model_name)
     return digest_state(conversation_id, title=title)

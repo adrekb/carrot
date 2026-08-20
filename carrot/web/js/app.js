@@ -3710,26 +3710,9 @@ async function speakText(text) {
 }
 
 // ===== Search =====
-async function doSearch() {
-    const q = document.getElementById('search-input').value.trim();
-    if (!q) return;
-    const container = document.getElementById('search-results');
-    container.innerHTML = '<div class="empty">Searching…</div>';
-    try {
-        const results = await api(`/api/search?q=${encodeURIComponent(q)}&limit=20`);
-        container.innerHTML = `<div class="empty">${results.count} results for "${escHtml(q)}"</div>`;
-        for (const r of results.results) {
-            const div = document.createElement('div');
-            div.className = 'list-item';
-            div.innerHTML = `
-                <div class="sub">${escHtml((r.timestamp || '').slice(0, 16).replace('T', ' '))} · ${escHtml(r.role)} · ${escHtml(r.conversation_title || r.conversation_id)}</div>
-                <div class="body">${escHtml((r.content || '').slice(0, 400))}</div>`;
-            container.appendChild(div);
-        }
-    } catch (e) {
-        container.innerHTML = `<div class="empty">${escHtml(e.message)}</div>`;
-    }
-}
+// `doSearch` lives in js/search.js. It was here, and the file next to it was a
+// stub with a comment saying so — which is one function in the wrong file and
+// one file with no reason to exist, from the same decision.
 
 // ===== Terminal =====
 function toggleTerminal() {

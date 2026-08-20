@@ -56,7 +56,7 @@ class TestTheDocument:
 
     def test_it_is_markdown_with_a_title_and_its_provenance(self, conversation):
         state = summarize.build_digest(conversation["id"], title=conversation["title"],
-                                       route=FakeRoute(), complete=fake_complete)
+                                       routes=[FakeRoute()], complete=fake_complete)
         assert state["markdown"].splitlines()[0] == "# Group pills and the ProseMirror layer"
         # Who wrote it and over how much. A file that says it summarises three
         # messages is one the reader can decide whether to trust.
@@ -76,12 +76,12 @@ class TestTheDocument:
             return "# A title it was told not to write\n\n## What this was about\nThe chip."
 
         state = summarize.build_digest(conversation["id"], title="Real title",
-                                       route=FakeRoute(), complete=titled)
+                                       routes=[FakeRoute()], complete=titled)
         assert state["markdown"].splitlines()[0] == "# Real title"
         assert "A title it was told not to write" not in state["markdown"]
 
     def test_it_is_capped(self, conversation):
-        state = summarize.build_digest(conversation["id"], title="x", route=FakeRoute(),
+        state = summarize.build_digest(conversation["id"], title="x", routes=[FakeRoute()],
                                        complete=lambda *_: "z" * 99999)
         assert len(state["markdown"]) <= summarize.MAX_DIGEST_CHARS
 
@@ -100,13 +100,13 @@ class TestWithoutAModel:
             raise RuntimeError("ollama is not running")
 
         state = summarize.build_digest(conversation["id"], title=conversation["title"],
-                                       route=FakeRoute(), complete=broken)
+                                       routes=[FakeRoute()], complete=broken)
         assert state["exists"]
         assert "without a model" in state["markdown"]
 
     def test_a_model_that_answers_with_nothing_falls_back_too(self, conversation):
         state = summarize.build_digest(conversation["id"], title="x",
-                                       route=FakeRoute(), complete=lambda *_: "   ")
+                                       routes=[FakeRoute()], complete=lambda *_: "   ")
         assert "without a model" in state["markdown"]
 
 
@@ -163,7 +163,7 @@ class TestItSharesARowWithTheRollingSummary:
             return "## What this was about\nx"
 
         summarize.build_digest(conversation["id"], title="x",
-                               route=FakeRoute(), complete=capture)
+                               routes=[FakeRoute()], complete=capture)
         assert "THE EARLIER PART, ALREADY CONDENSED" in seen["prompt"]
 
 
@@ -197,6 +197,105 @@ class TestTheEndpoints:
         conv = conv_mod.create_conversation(title="empty")
         assert client.post(f"/api/conversations/{conv['id']}/digest").status_code == 400
 
+
+class TestWhichModelWritesIt:
+    """Summarising is local-only by default, and rightly so — the *rolling*
+    summary runs on every message. This button is pressed once, by hand, and
+    inherited that default: a user with a cloud key and no Ollama would have
+    got a bullet list of their own sentences every time, with a working model
+    one tab away."""
+
+    def test_the_routes_are_tried_in_order(self, conversation):
+        tried = []
+
+        class First:
+            model = "the-summarize-model"
+
+        class Second:
+            model = "the-chat-model"
+
+        def only_the_second_answers(route, _messages):
+            tried.append(route.model)
+            if route.model == "the-summarize-model":
+                raise RuntimeError("that provider is not configured")
+            return "## What this was about\nx"
+
+        state = summarize.build_digest(conversation["id"], title="x",
+                                       routes=[First(), Second()],
+                                       complete=only_the_second_answers)
+        assert tried == ["the-summarize-model", "the-chat-model"]
+        assert state["model"] == "the-chat-model"
+
+    def test_the_first_that_answers_wins_and_the_rest_are_not_called(self, conversation):
+        tried = []
+
+        class R:
+            def __init__(self, model):
+                self.model = model
+
+        def answer(route, _messages):
+            tried.append(route.model)
+            return "## What this was about\nx"
+
+        summarize.build_digest(conversation["id"], title="x",
+                               routes=[R("a"), R("b")], complete=answer)
+        assert tried == ["a"]
+
+    def test_the_model_that_wrote_it_is_reported(self, conversation):
+        summarize.build_digest(conversation["id"], title="x",
+                               routes=[FakeRoute()], complete=fake_complete)
+        assert summarize.digest_state(conversation["id"])["model"] == "phi4:14b"
+
+    def test_no_model_reports_no_model(self, conversation):
+        # The field the UI reads to say "this lists what was said rather than
+        # what it amounted to" — and to offer the way to fix it.
+        summarize.build_digest(conversation["id"], title="x")
+        assert summarize.digest_state(conversation["id"])["model"] == ""
+
+    def test_a_model_that_fails_says_why_in_the_log(self, conversation, caplog):
+        """The fallback is deliberate and produces a usable file either way,
+        which is exactly what makes a silent `except` here expensive: "no model
+        is running" and "the model timed out on a long thread" are the same
+        screen, and only one of them is worth doing anything about. It cost an
+        hour of guessing at a failure that had left no trace."""
+        def broken(_route, _messages):
+            raise TimeoutError("read timed out")
+
+        with caplog.at_level("INFO", logger="carrot.summarize"):
+            summarize.build_digest(conversation["id"], title="x",
+                                   routes=[FakeRoute()], complete=broken)
+        assert "phi4:14b" in caplog.text
+        assert "read timed out" in caplog.text
+
+    def test_a_model_that_answers_with_nothing_says_that_too(self, conversation, caplog):
+        with caplog.at_level("INFO", logger="carrot.summarize"):
+            summarize.build_digest(conversation["id"], title="x",
+                                   routes=[FakeRoute()], complete=lambda *_: "")
+        assert "answered with nothing" in caplog.text
+
+    def test_the_chat_model_is_the_second_candidate(self, isolated_db):
+        from carrot import app as carrot_app, router as router_mod
+
+        routes = carrot_app._digest_routes()
+        assert routes, "nothing may write a summary"
+        # Deduplicated: on the common setup both tasks resolve to the same
+        # on-device model, and trying it twice would only double the wait
+        # before the transcript fallback.
+        assert len({(r.provider, r.model) for r in routes}) == len(routes)
+        assert routes[0].task == router_mod.TASK_SUMMARIZE
+
+    def test_a_cloud_only_setup_still_reaches_a_model(self, isolated_db, monkeypatch):
+        from carrot import app as carrot_app, router as router_mod
+
+        # Summarize stays on-device (it is local-only and unpinned); chat is
+        # assigned to a cloud provider. Without the chain this is the setup
+        # that could never produce a written summary.
+        monkeypatch.setattr(router_mod, "assignment",
+                            lambda task: {"provider": "openai", "model": "gpt-x"}
+                            if task == router_mod.TASK_CHAT else None)
+        monkeypatch.setattr(router_mod.providers_mod, "usable", lambda provider: True)
+        routes = carrot_app._digest_routes()
+        assert "gpt-x" in [r.model for r in routes]
 
 # ===== The corner icon =====
 #
@@ -247,6 +346,12 @@ class TestTheIcon:
         # order matters: clear the room, then put the file on the table.
         body = digest_js[digest_js.index("function attachDigest"):]
         assert body.index("if (fresh) newChat();") < body.index("stageDocument(")
+
+    def test_it_says_when_no_model_wrote_it(self, digest_js):
+        # Otherwise the difference is a line of italics inside the document,
+        # which reads like part of the summary rather than a fact about it.
+        assert "!digestState.model" in digest_js
+        assert "Settings" in digest_js and "Models" in digest_js
 
     def test_writing_one_is_the_only_action_that_costs_a_model_call(self, digest_js):
         posts = re.findall(r"api\([^)]*\{\s*method:\s*'POST'", digest_js, re.DOTALL)
