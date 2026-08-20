@@ -396,7 +396,11 @@ function cmdKeydown(event) {
 function cmdInputChanged() {
     const input = document.getElementById('cmd-input');
     const val = input.value;
-    if (val.startsWith('/')) {
+    // One slash is skills, two is documents. Without the second test both
+    // menus opened on `//`: the picker offering documents, and the skill pop
+    // stacked over it filtering the catalogue for a skill named "/" and
+    // reporting, accurately and uselessly, that there were no matching skills.
+    if (val.startsWith('/') && !val.startsWith('//')) {
         showSkillPop(val.slice(1).trim().toLowerCase());
     } else {
         hideSkillPop();
@@ -2069,27 +2073,139 @@ async function sendChat() {
 let pendingAttachments = [];
 const ATTACH_MAX_BYTES = 20 * 1024 * 1024;
 
+// What is attached, in one line however much of it there is.
+//
+// The tray drew one full-width chip per file, stacked, directly above the
+// composer — which is fine for one and a layout bug for four: it grows upward
+// into the resume bar and the document picker, both of which live in that same
+// strip of space. A tray whose height depends on how many files you attached
+// is a tray that eventually covers something.
+//
+// So it counts instead. One pill per kind — documents, images — with the
+// count on it, which is the thing you actually want to know at a glance and
+// is one line whether it is two files or twenty. The names are on the pill's
+// tooltip, and clicking it opens the full list so anything can still be taken
+// off individually.
+//
+// A single attachment stays a full chip. Collapsing one file to "📄 1" is
+// counting for the sake of it, and it hides the name in the one case where
+// there is room to show it.
+const ATTACH_KINDS = [
+    { id: 'image', icon: 'i-image', one: 'image', many: 'images' },
+    { id: 'pdf', icon: 'i-file-pdf', one: 'PDF', many: 'PDFs' },
+    { id: 'doc', icon: 'i-doc', one: 'document', many: 'documents' },
+];
+
+let attachTrayOpen = false;
+
+function attachKind(attachment) {
+    if ((attachment.mime || '').startsWith('image/')) return 'image';
+    if ((attachment.mime || '') === 'application/pdf' || /\.pdf$/i.test(attachment.name || '')) {
+        return 'pdf';
+    }
+    return 'doc';
+}
+
 function attachIcon(mime, name) {
-    if ((mime || '').startsWith('image/')) return 'i-image';
-    if ((mime || '') === 'application/pdf' || /\.pdf$/i.test(name || '')) return 'i-file-pdf';
-    return 'i-doc';
+    return ATTACH_KINDS.find(k => k.id === attachKind({ mime, name })).icon;
+}
+
+function attachChipHtml(attachment, index) {
+    return `
+        <span class="attach-chip">
+          ${attachment.thumb
+            ? `<img src="${attachment.thumb}" alt="">`
+            : `<svg class="ico"><use href="#${attachIcon(attachment.mime, attachment.name)}"/></svg>`}
+          <span class="attach-name" title="${escHtml(attachment.name)}">${escHtml(attachment.name)}</span>
+          <span class="attach-size">${fmtBytes(attachment.bytes)}</span>
+          <button class="attach-x" title="Remove" onclick="removeAttachment(${index})">
+            <svg class="ico"><use href="#i-x"/></svg>
+          </button>
+        </span>`;
 }
 
 function renderAttachTray() {
     const tray = document.getElementById('attach-tray');
     if (!tray) return;
     tray.classList.toggle('hidden', !pendingAttachments.length);
-    tray.innerHTML = pendingAttachments.map((a, i) => `
-        <span class="attach-chip">
-          ${a.thumb
-            ? `<img src="${a.thumb}" alt="">`
-            : `<svg class="ico"><use href="#${attachIcon(a.mime, a.name)}"/></svg>`}
-          <span class="attach-name" title="${escHtml(a.name)}">${escHtml(a.name)}</span>
-          <span class="attach-size">${fmtBytes(a.bytes)}</span>
-          <button class="attach-x" title="Remove" onclick="removeAttachment(${i})">
-            <svg class="ico"><use href="#i-x"/></svg>
-          </button>
-        </span>`).join('');
+    if (!pendingAttachments.length) {
+        attachTrayOpen = false;
+        tray.innerHTML = '';
+        return;
+    }
+
+    // Labelled, because the Context pill is a few pixels away counting
+    // standing sources and these are not that. A file here rides this one
+    // message; a source there answers every turn until it is switched off.
+    // Unlabelled, five chips beside "Context · 2 sources" read as one system
+    // contradicting itself.
+    const label = '<span class="attach-label">Attached</span>';
+    if (pendingAttachments.length === 1 || attachTrayOpen) {
+        tray.innerHTML = label + pendingAttachments.map(attachChipHtml).join('')
+            + (pendingAttachments.length > 1
+                ? '<button class="attach-fold" onclick="toggleAttachTray()">Collapse</button>'
+                : '');
+        return;
+    }
+
+    tray.innerHTML = label + ATTACH_KINDS.map(kind => {
+        const mine = pendingAttachments.filter(a => attachKind(a) === kind.id);
+        if (!mine.length) return '';
+        const names = mine.map(a => a.name).join('\n');
+        const total = mine.reduce((sum, a) => sum + (a.bytes || 0), 0);
+        return `
+        <button class="attach-count" onclick="toggleAttachTray()"
+                title="${escHtml(names)}">
+          <svg class="ico"><use href="#${kind.icon}"/></svg>
+          <span class="attach-n">${mine.length}</span>
+          <span class="attach-kind">${escHtml(mine.length === 1 ? kind.one : kind.many)}</span>
+          <span class="attach-size">${fmtBytes(total)}</span>
+        </button>`;
+    }).join('')
+    + '<button class="attach-x attach-clear" title="Remove all" onclick="clearAttachments()">'
+    + '<svg class="ico"><use href="#i-x"/></svg></button>';
+}
+
+function toggleAttachTray() {
+    attachTrayOpen = !attachTrayOpen;
+    renderAttachTray();
+}
+
+/** Put a document into the composer as a chip rather than sending it as the message.
+ *
+ * Sending a note to chat used to paste the whole thing in as the turn: the
+ * transcript opened with a wall of the user's own markdown — group markers and
+ * all — and the question they actually wanted to ask had nowhere to go, because
+ * the message had already been sent. A document is material, not a question.
+ * So it arrives the way any other file does, as a chip above an empty box, and
+ * the prompt is the thing you type next.
+ *
+ * It rides the attachment pipeline rather than a second one beside it. The
+ * server already turns a text attachment into prompt material for any model,
+ * the tray already draws the chip, and the transcript already names what was
+ * attached — none of which needed a document-shaped copy of itself.
+ */
+function stageDocument(name, text) {
+    // Group markers are editor syntax and must not travel. The server takes
+    // them out of anything sent through /api/doc/send; this path is not that
+    // path, so it takes them out here.
+    const body = typeof stripGroupMarkers === 'function'
+        ? stripGroupMarkers(text) : String(text || '');
+    if (!body.trim()) return false;
+    // `btoa` is bytes, not characters: a document with an em dash in it — which
+    // is to say most of them — throws without this step.
+    const bytes = new TextEncoder().encode(body);
+    let binary = '';
+    for (const byte of bytes) binary += String.fromCharCode(byte);
+    pendingAttachments.push({
+        name: /\.md$/i.test(name) ? name : `${name}.md`,
+        mime: 'text/markdown',
+        bytes: bytes.length,
+        data: btoa(binary),
+        thumb: null,
+    });
+    renderAttachTray();
+    return true;
 }
 
 function removeAttachment(index) {

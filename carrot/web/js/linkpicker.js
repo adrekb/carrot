@@ -167,20 +167,49 @@ function positionLinkMenu() {
     menu.style.bottom = Math.round(window.innerHeight - box.top + 6) + 'px';
 }
 
-function chooseLink(doc) {
+// Picked documents become a chip, not `[[Title]]` in the box.
+//
+// The tradeoff is deliberate and worth naming, because it reverses what this
+// file used to argue. `[[Title]]` was a *reference*: the server read the
+// document at send time, so editing the note afterwards changed what the next
+// turn saw. A chip is a snapshot — what the document said when you attached it.
+//
+// The chip wins because the reference was invisible. `[[Q3 plan]]` sitting in
+// the message box looks like something you typed by accident, it has to be
+// deleted character by character to undo, and it says nothing about how much
+// document is about to be sent. A chip is the same object the paperclip and a
+// document sent from Work both produce, it has a size on it and an × to remove
+// it, and it leaves the box empty for the question — which is the thing the
+// person actually came to write.
+//
+// Snapshot is also the more honest reading of the gesture: "attach this" is a
+// statement about the document as it is now.
+async function chooseLink(doc) {
     if (!doc || !linkState) return;
     const input = document.getElementById('cmd-input');
-    const before = input.value.slice(0, linkState.start);
-    const after = input.value.slice(linkState.end);
-    const inserted = `[[${doc.title}]] `;
-    input.value = before + inserted + after;
-    const caret = before.length + inserted.length;
-    input.setSelectionRange(caret, caret);
+    // Held now, because `hideLinkMenu` clears `linkState` and the fetch below
+    // resumes after it has gone.
+    const at = linkState.start;
+    // The trigger text goes whatever happens — leaving `//` in the box after
+    // picking something is the failure people notice.
+    input.value = input.value.slice(0, at) + input.value.slice(linkState.end);
+    input.setSelectionRange(at, at);
     hideLinkMenu();
     input.focus();
-    // The composer's own listeners do the rest: the Context chip recounts, and
-    // the send button notices there is something to send.
     input.dispatchEvent(new Event('input'));
+
+    try {
+        const note = await api(`/api/notes/${doc.id}`);
+        if (typeof stageDocument === 'function') stageDocument(note.title || doc.title, note.body || '');
+    } catch (_) {
+        // Falling back to the link rather than dropping the pick on the floor:
+        // the server still resolves `[[Title]]`, so an unreachable fetch costs
+        // the chip and nothing else.
+        const inserted = `[[${doc.title}]] `;
+        input.value = input.value.slice(0, at) + inserted + input.value.slice(at);
+        input.setSelectionRange(at + inserted.length, at + inserted.length);
+        input.dispatchEvent(new Event('input'));
+    }
 }
 
 // Keys are handled before the composer's own, and only while the menu is up —

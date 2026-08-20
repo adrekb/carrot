@@ -58,9 +58,15 @@ function renderContext() {
     }
     // The count is of what is actually going, not of what is switched on: a
     // calendar that is enabled and empty is not an item in the prompt.
+    // "sources", not "items". The attachment tray sits an inch away counting
+    // files, and two adjacent counters both saying "items" read as one counter
+    // disagreeing with itself — five files in the tray, "2 items" here, both
+    // true and neither legible. They count different things and are different
+    // things: a file rides this one message, a source is standing and answers
+    // every turn until it is switched off. The nouns should say so.
     if (label) {
         label.textContent = 'Context · ' + contextData.items
-            + ' item' + (contextData.items === 1 ? '' : 's');
+            + ' source' + (contextData.items === 1 ? '' : 's');
     }
     if (!list) return;
     list.innerHTML = contextData.sources.map(source => {

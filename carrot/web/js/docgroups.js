@@ -75,6 +75,22 @@ function parseGroupAttrs(text) {
     return attrs;
 }
 
+/** A document with its group markers taken out.
+ *
+ * The server strips these in `doc_agent.resolve`, which covers everything sent
+ * through `/api/doc/send`. A document staged into the composer does not go
+ * that way: it rides the ordinary attachment pipeline, so without this the
+ * markers reach the model inside the .md itself — invisible in the chip, and
+ * the whole reason they were being complained about in the first place.
+ */
+function stripGroupMarkers(text) {
+    const kept = String(text || '').split('\n').filter(line => {
+        const trimmed = line.trim();
+        return !GROUP_OPEN.test(trimmed) && !GROUP_CLOSE.test(trimmed);
+    });
+    return kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 /** The files a group cites, decoded back into ordinary paths. */
 function groupFiles(attrs) {
     if (!attrs.files) return [];

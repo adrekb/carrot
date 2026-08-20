@@ -216,7 +216,17 @@ async function dispatchDoc(payload, label) {
         return;
     }
 
+    // Chat is the one destination that is a conversation rather than a job, so
+    // the document is staged instead of sent: it becomes a chip in the
+    // composer and the box is left empty and focused for the question. The
+    // other two fire immediately because "send this to Research" is already
+    // the whole instruction.
     switchTab('workspace');
+    if (typeof stageDocument === 'function' && stageDocument(label, payload.text)) {
+        const input = document.getElementById('cmd-input');
+        if (input) input.focus();
+        return;
+    }
     clearChatEmpty();
     appendMessage('user', payload.text);
     if (!currentConversationId) {

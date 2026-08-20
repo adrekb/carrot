@@ -4050,14 +4050,25 @@ input:focus, select:focus, textarea:focus { background: rgba(255, 255, 255, 0.06
    opaque surface it is a stray white hairline with nothing to explain it. */
 
 /* ===== Attachments ===== */
+/* Inside the composer, above the input — not floating over the space above it.
+   Absolutely positioned, the tray overlaid whatever was in that strip: the
+   resume bar, the "things need attention" line, the document picker. Counting
+   the attachments bounded its height but not its overlap, because the problem
+   was never how tall it was; it was that it sat on top of something instead of
+   taking up room. In the flow it pushes the composer's own content and cannot
+   cover anything. */
 #attach-tray {
-  position: absolute;
-  bottom: calc(100% + 8px);
-  left: 0;
-  right: 0;
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 7px;
+  margin-bottom: 8px;
+  /* Two rows, then it scrolls. The composer is pinned to the bottom of the
+     window and grows upward, so an unbounded tray walks up the page and into
+     whatever is above it — which is the thing being fixed, and it would come
+     straight back the moment somebody expanded a long list. */
+  max-height: 76px;
+  overflow-y: auto;
 }
 .attach-chip {
   display: inline-flex;
@@ -4090,6 +4101,38 @@ input:focus, select:focus, textarea:focus { background: rgba(255, 255, 255, 0.06
   border-radius: var(--r-xs);
 }
 .attach-x:hover { background: rgba(255, 255, 255, 0.09); color: var(--text); }
+
+/* Counted, so the tray is one line whether it holds two files or twenty. It
+   sits in the same strip as the resume bar and the document picker, and a tray
+   that grows with its contents is one that eventually covers them. */
+.attach-count {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--card2);
+  color: var(--text);
+  font: inherit; font-size: var(--text-xs);
+  cursor: pointer;
+}
+.attach-count:hover { border-color: var(--border-hi); }
+.attach-count .ico { width: 14px; height: 14px; color: var(--accent); flex-shrink: 0; }
+.attach-n { font-variant-numeric: tabular-nums; font-weight: 600; }
+.attach-kind { color: var(--muted); }
+.attach-fold {
+  border: 0; background: none; padding: 4px 8px;
+  color: var(--muted); font: inherit; font-size: var(--text-2xs); cursor: pointer;
+}
+.attach-fold:hover { color: var(--text); }
+/* Says which of the two systems this row is. The Context pill counts standing
+   sources; this counts files riding one message. */
+.attach-label {
+  color: var(--faint);
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  flex: none;
+}
 .attach-x .ico { width: 13px; height: 13px; }
 
 /* Whole-window drop target.
