@@ -760,3 +760,357 @@ class TestTheDropdownArrowSurvivesItsOwnStylesheet:
         # is no background-image here, and would otherwise match.
         declarations = re.sub(r"/\*.*?\*/", "", light, flags=re.S)
         assert "background-image" not in declarations
+
+
+class TestThePhoneLayout:
+    """The app is reachable from a phone now, which makes 375px a real width
+    rather than a hypothetical one. It used to lay out at a 672px minimum and
+    get scaled down by the browser — legible, in the way a photograph of a
+    document is legible."""
+
+    @property
+    def phone_block(self):
+        css = read("css", "style.css")
+        start = css.index("@media (max-width: 640px)")
+        return css[start:]
+
+    def test_there_is_a_phone_breakpoint(self):
+        assert "@media (max-width: 640px)" in read("css", "style.css")
+
+    def test_the_rail_becomes_a_drawer(self):
+        """216px of sidebar on a 375px screen is not a sidebar. It holds what
+        is running and what failed, so it cannot simply be hidden either."""
+        block = self.phone_block
+        assert "--nav-w: 0px" in block
+        assert "body.nav-open .app-nav" in block
+        assert "translateX(-100%)" in block
+
+    def test_the_composer_is_pinned_to_the_bottom_even_when_blank(self):
+        """`body.chat-blank` centres it under the question, which is right for
+        a window and wrong for a phone: `top: 50%` is measured against the
+        layout viewport, so the keyboard opens over the box you are typing
+        into."""
+        assert "body.chat-blank #cmdbar" in self.phone_block
+
+    def test_the_composer_controls_wrap_by_the_id_they_actually_have(self):
+        """Written as `.cmd-row` first, which matches nothing: the element is
+        `#cmd-row`. A selector for a class no element has is invisible — the
+        rule is in the stylesheet, the row still overflows, and nothing
+        anywhere reports a problem."""
+        assert "#cmd-row { flex-wrap: wrap" in self.phone_block
+        assert 'id="cmd-row"' in read("index.html")
+
+    def test_the_drawer_closes_when_something_in_it_is_chosen(self):
+        """A drawer left covering the thing you just asked for is the single
+        most common way this gets built wrong."""
+        app_js = read("js", "app.js")
+        assert "closeNavDrawer" in app_js
+        assert "nav-item, .nav-job, .nav-recent" in app_js
+
+
+class TestDiagramsAndMathsAreDrawnNotPrinted:
+    """A mermaid artifact was stored, listed, downloadable, editable — and
+    rendered as a <pre> full of `graph TD; A-->B`. The one kind of artifact
+    whose entire purpose is to be a picture was the only one shown as its
+    source."""
+
+    def test_mermaid_is_bundled_offline(self):
+        """Not a CDN. The argument of this app is that it runs on your machine,
+        and a diagram that only draws when the network is up would be the one
+        part of a reply that depends on somebody else's server."""
+        assert (WEB / "vendor" / "mermaid.js").exists()
+        build = read_py("webvendor/build.mjs")
+        assert "mermaid-entry.js" in build
+
+    def test_it_is_loaded_only_when_something_needs_it(self):
+        """3.3MB, and most conversations contain no diagram at all."""
+        features = read("js", "features.js")
+        assert "'/vendor/mermaid.js'" in features
+        assert '<script src="/vendor/mermaid.js"' not in read("index.html")
+
+    def test_a_mermaid_artifact_renders(self):
+        features = read("js", "features.js")
+        branch = features[features.index("artifact.kind === 'mermaid'"):][:400]
+        assert "renderMermaid" in branch
+        assert "textContent = artifact.content" not in branch
+
+    def test_fenced_blocks_are_marked_for_rendering(self):
+        features = read("js", "features.js")
+        assert "data-render" in features
+        assert "hydrateBlocks" in features and "hydrateBlocks" in read("js", "app.js")
+
+    def test_a_latex_document_stays_source(self):
+        r"""A \documentclass preamble is a file somebody wants to read and
+        copy, not an expression to typeset — and KaTeX cannot render one."""
+        features = read("js", "features.js")
+        assert "isLatexDocument" in features
+        assert "documentclass" in features
+
+    def test_a_broken_diagram_shows_its_source_and_the_reason(self):
+        """One line away from working, usually. Showing nothing hides both the
+        mistake and the content."""
+        features = read("js", "features.js")
+        assert "mermaid-error" in features
+        assert "artifact-mermaid-source" in features
+
+
+class TestTheChatButtonStartsANewOne:
+    def test_it_is_its_own_handler(self):
+        """Pressing it from elsewhere navigates; pressing it while already in a
+        conversation starts a fresh one, which is what every app with a compose
+        button does and what people try here first."""
+        index = read("index.html")
+        assert 'data-tab="workspace" onclick="goToChat()"' in index
+        app_js = read("js", "app.js")
+        goto = app_js[app_js.index("function goToChat"):][:600]
+        assert "newChat()" in goto
+        # An empty new session is left alone: clearing a blank screen reads as
+        # a dead button.
+        assert "currentConversationId" in goto
+
+
+class TestSeveralDocumentsOpenAtOnce:
+    """Work held exactly one. Opening a second closed the first — not visibly,
+    it just stopped being on screen — so anything needing two documents at the
+    same time meant going back to the grid and losing your place in both."""
+
+    def test_the_strip_exists_and_is_loaded(self):
+        index = read("index.html")
+        assert 'id="doc-tabs"' in index
+        assert '<script src="/js/doctabs.js"></script>' in index
+
+    def test_switching_saves_the_one_being_left_first(self):
+        """Autosave is on an 800ms timer, so leaving a document within a second
+        of typing in it would drop the last thing typed — which is exactly when
+        somebody switches away."""
+        tabs = read("js", "doctabs.js")
+        switch = tabs[tabs.index("async function switchToDoc"):][:400]
+        assert "await flushPendingNoteSave()" in switch
+        assert switch.index("flushPendingNoteSave") < switch.index("openNote")
+        assert "async function flushPendingNoteSave" in read("js", "features.js")
+
+    def test_a_document_opens_once(self):
+        """Two tabs on one file is two editors on one autosave, and the second
+        one to save wins."""
+        tabs = read("js", "doctabs.js")
+        opened = tabs[tabs.index("function noteOpened"):][:600]
+        assert "openDocs.find(d => d.id === note.id)" in opened
+
+    def test_closing_the_last_one_goes_to_the_grid(self):
+        """Not to an empty editor pointed at no document."""
+        tabs = read("js", "doctabs.js")
+        close = tabs[tabs.index("async function closeDoc"):][:900]
+        assert "showWriteStart" in close
+
+    def test_a_deleted_document_loses_its_tab(self):
+        assert "forgetDoc" in read("js", "features.js")
+        assert "function forgetDoc" in read("js", "doctabs.js")
+
+    def test_one_document_shows_no_strip(self):
+        """A single tab is chrome that explains itself and nothing else."""
+        tabs = read("js", "doctabs.js")
+        assert "openDocs.length < 2" in tabs
+
+
+class TestTheWorkBadgeSaysWhatItCounts:
+    def test_it_names_notifications_rather_than_documents(self):
+        """A bare number beside the word "Work" reads as a count of the things
+        Work contains, which is documents. It counts unread notifications."""
+        index = read("index.html")
+        badge = index[index.index('id="notification-badge"'):][:220]
+        assert "Unread notifications" in badge
+        agentops = read("js", "agentops.js")
+        assert "unread notification" in agentops
+
+
+class TestTheSendControlSaysOneThingOnce:
+    def test_the_button_does_not_repeat_the_destination(self):
+        """The picker immediately to its left already says Chat. Printing the
+        same word in the button beside it reads as two controls that both do
+        something with chat, rather than one control and the place it points."""
+        docagent = read("js", "docagent.js")
+        assert "`Send to ${spec.label}`" not in docagent
+        assert "button.textContent = 'Send'" in docagent
+        # Where it goes is still said, on the hover.
+        assert "Send this note (or the selected text) to ${spec.label}" in docagent
+
+
+class TestOnlyTheQuestionIsInABox:
+    """Both sides used to be bubbles, which is the shape of a messaging app:
+    two people of equal standing, each utterance a discrete object. That is not
+    what this is. One side is a person asking, briefly; the other is prose —
+    paragraphs, tables, code, sometimes two thousand words of it — and prose
+    does not want a container around it, repeated down the whole transcript.
+
+    So the box belongs to the question. The asymmetry is the information: what
+    is boxed is what you said, everything else is the reply.
+    """
+
+    def content_rules(self, selector):
+        css = read("css", "style.css")
+        block = css[css.index(selector):]
+        return block[block.index("{") + 1:block.index("}")]
+
+    def test_the_answer_has_no_bubble(self):
+        rules = self.content_rules(".message.assistant .content {")
+        assert "background: none" in rules
+        assert "border: 0" in rules
+        assert "border-radius: 0" in rules
+
+    def test_the_answer_is_not_indented_by_a_bubble_that_is_not_there(self):
+        # 16px of horizontal padding existed to hold text off a border. With no
+        # border it is an indent with nothing to explain it, and it takes the
+        # measure away from the tables and code blocks inside.
+        rules = self.content_rules(".message.assistant .content {")
+        assert "padding: 2px 0" in rules
+
+    def test_the_question_keeps_its_box(self):
+        rules = self.content_rules(".message.user .content {")
+        assert "background: var(--accent-fill" in rules
+        assert "border: 1px solid" in rules
+
+    def test_a_failed_turn_is_still_marked_without_one(self):
+        # It was a red *border*, and there is no border now. Red text plus a
+        # rule down the side, so it still reads as one block rather than as a
+        # paragraph that happens to be coloured.
+        rules = self.content_rules(".message.assistant .content.error {")
+        assert "color: var(--red)" in rules
+        assert "border-left:" in rules
+
+
+class TestRenderedMarkdownIsNotPreformattedText:
+    """`.content` is `white-space: pre-wrap`, which is right while an answer is
+    still arriving as text and wrong the moment it becomes elements: the
+    newlines *between* those elements start rendering as real blank lines.
+
+    Six of them in one answer — 196px of nothing, measured — in every markdown
+    reply this app has ever drawn. It went unnoticed for as long as there was a
+    bubble whose background made the hole read as generous padding.
+    """
+
+    def test_rendered_markdown_drops_pre_wrap(self):
+        css = read("css", "style.css")
+        assert ".message .content.md { white-space: normal; }" in css
+
+    def test_a_typed_message_keeps_its_line_breaks(self):
+        # The rule is on `.md`, and only the assistant's content gets that
+        # class — a question typed across three lines is text, and pre-wrap is
+        # what keeps those lines.
+        app = read("js", "app.js")
+        assert '<div class="content md">' in app
+        css = read("css", "style.css")
+        block = css[css.index(".message .content {"):]
+        assert "white-space: pre-wrap" in block[:block.index("}")]
+
+    def test_the_class_arrives_with_the_first_chunk(self):
+        # It was added when the turn landed, so an answer streamed with a blank
+        # line between every block and then jumped shorter by a couple of
+        # hundred pixels the instant it finished.
+        app = read("js", "app.js")
+        block = app[app.index("if (payload.chunk) {"):]
+        block = block[:block.index("box.scrollTop")]
+        assert "contentEl.classList.add('md')" in block
+
+    def test_nothing_hangs_off_the_bottom_of_an_answer(self):
+        # A paragraph's margin under the last line pushes the Copy/Rerun row
+        # away from the thing it acts on.
+        css = read("css", "style.css")
+        assert ".message .content.md > :last-child { margin-bottom: 0; }" in css
+
+
+class TestARunLogIsALogNotTheAnswer:
+    """Two of the events a run emits carry arbitrary text, and both printed in
+    full: an action whose arguments fall back to `JSON.stringify` — so `finish`
+    arrived as its entire summary on one unwrapped line — and an observation,
+    which for a page read is the whole page. A car specification site came
+    through as four hundred lines of nav links above the answer."""
+
+    def test_a_long_step_is_one_line_with_the_rest_behind_a_chevron(self):
+        agents = read("js", "agents.js")
+        assert "function agentFoldedStep(" in agents
+        assert "agent-fold-line" in agents
+        assert "agent-fold-body hidden" in agents
+
+    def test_folded_is_the_default(self):
+        # A run with forty steps cannot open forty of them and still be a log.
+        agents = read("js", "agents.js")
+        body = agents[agents.index("function agentFoldedStep("):]
+        body = body[:body.index("\nfunction ", 1)]
+        assert 'class="agent-fold-body hidden"' in body
+
+    def test_a_step_that_fits_on_the_line_gets_no_chevron(self):
+        # A disclosure that opens onto the text already showing is a control
+        # that does nothing.
+        agents = read("js", "agents.js")
+        body = agents[agents.index("function agentFoldedStep("):]
+        body = body[:body.index("\nfunction ", 1)]
+        assert "text.length <= AGENT_LINE_CHARS" in body
+        assert "return agentStep(label + preview, kind);" in body
+
+    def test_the_preview_is_built_in_one_place(self):
+        # It was built at the call sites *and* appended here, which put the
+        # same sentence on the line twice for every short step.
+        agents = read("js", "agents.js")
+        calls = []
+        for match in re.finditer(r"(?<!function )agentFoldedStep\(", agents):
+            calls.append(agents[match.end():match.end() + 200])
+        assert calls, "nothing calls it"
+        for call in calls:
+            assert "agentFirstLine" not in call, \
+                "a call site previews the body that agentFoldedStep already previews"
+
+    def test_both_unbounded_events_go_through_it(self):
+        agents = read("js", "agents.js")
+        assert "agentFoldedStep(\n" in agents or "agentFoldedStep(" in agents
+        # The action's raw arguments, and the observation's whole result.
+        assert "JSON.stringify(event.action.arguments || {}, null, 2)" in agents
+        assert "agentFoldedStep('', seen, 'observation'" in agents
+        # And neither is printed unbounded any more.
+        assert "escHtml(event.observation.result)" not in agents
+        assert "escHtml(event.action.label || JSON.stringify" not in agents
+
+    def test_an_opened_step_cannot_bury_the_log_under_it(self):
+        css = read("css", "style.css")
+        block = css[css.index(".agent-fold-body {"):]
+        block = block[:block.index("}")]
+        assert "max-height" in block and "overflow: auto" in block
+
+    def test_a_step_is_a_line_and_not_a_card(self):
+        """Twenty steps were twenty filled panels with twenty coloured bars,
+        stacked between the question and the answer. A lot of furniture for a
+        record you glance at."""
+        css = read("css", "style.css")
+        block = css[css.index(".agent-step {"):]
+        block = block[:block.index("}")]
+        assert "background:" not in block
+        assert "border-left:" not in block
+        assert "border-radius:" not in block
+
+    def test_the_accent_is_on_the_word_and_not_on_a_bar_beside_it(self):
+        # A stripe down every step colours the whole row; the accent is worth
+        # more spent on the one word you scan the column for. It is a token, so
+        # it is whatever the current theme calls its own.
+        css = read("css", "style.css")
+        assert ".agent-step.action { border-left-color: var(--accent); }" not in css
+        block = css[css.index(".agent-action {"):]
+        block = block[:block.index("}")]
+        assert "color: var(--accent-hi)" in block
+
+    def test_the_two_exceptional_states_keep_their_colour(self):
+        css = read("css", "style.css")
+        assert ".agent-step.denied { color: var(--red); }" in css
+        assert ".agent-step.question { color: var(--yellow); }" in css
+
+    def test_an_injection_attempt_is_still_a_box(self):
+        # The one event the user must not be able to scroll past, which is
+        # exactly the argument for it being the only one still drawn as one.
+        css = read("css", "style.css")
+        block = css[css.index(".agent-step.injection {"):]
+        block = block[:block.index("}")]
+        assert "border: 1px solid var(--red)" in block
+        assert "background:" in block
+
+    def test_the_line_says_how_much_is_behind_it(self):
+        agents = read("js", "agents.js")
+        assert "function agentSize(" in agents
+        assert "agent-fold-size" in agents

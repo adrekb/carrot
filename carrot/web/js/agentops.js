@@ -196,6 +196,13 @@ function renderNotificationBadge(count) {
     const badge = document.getElementById('notification-badge');
     if (!badge) return;
     badge.textContent = count > 99 ? '99+' : String(count);
+    // Said in full wherever the number is. It rides on the Work button, where
+    // a bare "7" reads as seven documents — which is the thing Work is full
+    // of, and not what this counts.
+    const said = count === 1 ? '1 unread notification'
+                             : `${count} unread notifications`;
+    badge.title = said;
+    badge.setAttribute('aria-label', said);
     badge.classList.toggle('hidden', !count);
 }
 

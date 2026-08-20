@@ -198,14 +198,28 @@ class TestTheCodeTabHasAHistory:
 
 
 class TestTheRailNamesItsSections:
-    """Small caps tracked out at 0.08em is a dashboard's voice. The rail is a
-    sidebar, and the thing it is actually like sets its headings in the same
-    case as the rows under them and tells them apart by weight."""
+    """Small caps tracked out at 0.08em is a dashboard's voice, and the rail is
+    a sidebar — so the headings are still set in the same face and weight as
+    the rows under them rather than shouted.
 
-    @pytest.mark.parametrize("label", [">recent</summary>", "'in progress'",
-                                       "'needs a look'"])
-    def test_the_headings_are_lowercase(self, label):
+    They are sentence case rather than all-lowercase. All-lowercase read as a
+    style being applied to them; these are the names of the things the rail is
+    for, and a name takes a capital.
+
+    There are three of them now. "In progress" and "Needs a look" were one box
+    whose heading changed depending on what was in it, which meant a scheduled
+    task and a failed one sat in the same list looking alike."""
+
+    @pytest.mark.parametrize("label", [">Recent</summary>", "'Running'",
+                                       "'Needs attention'", "'Scheduled'"])
+    def test_the_headings_are_sentence_case(self, label):
         assert label in read("js", "activity.js")
+
+    @pytest.mark.parametrize("label", [">recent</summary>", "'in progress'"])
+    def test_the_old_lowercase_headings_are_gone(self, label):
+        """Both spellings present would mean one of them is drawn somewhere
+        this did not look."""
+        assert label not in read("js", "activity.js")
 
     def test_the_style_matches(self):
         css = read("css", "style.css")
@@ -381,11 +395,19 @@ class TestTheRailIsAGlanceNotAList:
         you look to find out whether something is still going, and a section
         that vanishes when the answer is no makes the question unanswerable
         without opening a tab."""
-        assert "Nothing for now" in read("js", "activity.js")
+        assert "Nothing running" in read("js", "activity.js")
         assert ".nav-idle" in read("css", "style.css")
 
-    def test_it_is_called_in_progress(self):
-        assert "'in progress'" in read("js", "activity.js")
+    def test_the_other_two_sections_are_absent_when_empty(self):
+        """The opposite rule, and for the same reason: a permanent "nothing has
+        failed" is a box that is right about nothing, and people stop reading
+        those. Only the section you consult deserves an empty state."""
+        activity = read("js", "activity.js")
+        assert "if (stalled.length || failed.length) {" in activity
+        assert "if (scheduled.length) {" in activity
+
+    def test_the_live_section_is_called_running(self):
+        assert "railSectionHead('Running'" in read("js", "activity.js")
 
 
 class TestTheHistoryMenuHoldsBoth:

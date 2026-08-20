@@ -641,6 +641,59 @@ def ingest(text: str, origin: str, context: Optional["RunContext"] = None) -> st
 # ===== Budgets, cancellation, and per-run state =====
 
 
+# What each limit is, what it may be set to, and what it is for.
+#
+# The four numbers were settable already — `Budget.from_config` has always read
+# them out of config — but nothing wrote them, so the only way to change how
+# long a run may go on for was to edit the database. The panel said "A run stops
+# after 40 steps, 900s, 30 navigations, or 10 distinct sites" and offered no way
+# to disagree with any of it.
+#
+# **The bounds live here rather than on the inputs.** These are the numbers that
+# stop a runaway agent, so the floor is not a UI nicety: a `max_steps` of 0
+# would end every run before its first action, and a `max_domains` of 0 would
+# make the domain check meaningless. A value read from config is clamped on the
+# way *out*, which is the one place every caller passes through — a bound
+# enforced only by an `min=` attribute is enforced by whatever last wrote to the
+# config table, and `/api/config/{key}` will take anything.
+#
+# The ceilings are generous rather than tight. Somebody who wants a two-hour run
+# across two hundred pages is allowed to have one; what they are not allowed is
+# a budget that does not stop.
+BUDGET_LIMITS: Dict[str, Dict[str, Any]] = {
+    "max_steps": {
+        "key": "agent_max_steps", "default": 40, "min": 1, "max": 500,
+        "label": "Steps", "unit": "actions",
+        "help": "One click, one keystroke or one read is a step.",
+    },
+    "max_seconds": {
+        "key": "agent_max_seconds", "default": 900, "min": 30, "max": 7200,
+        "label": "Time", "unit": "seconds",
+        "help": "Wall clock from the first action, however little it has done.",
+    },
+    "max_navigations": {
+        "key": "agent_max_navigations", "default": 30, "min": 1, "max": 300,
+        "label": "Navigations", "unit": "page loads",
+        "help": "How many pages it may open. A loop that reloads is caught here first.",
+    },
+    "max_domains": {
+        "key": "agent_max_domains", "default": 10, "min": 1, "max": 100,
+        "label": "Distinct sites", "unit": "sites",
+        "help": "How far it may wander from where you sent it.",
+    },
+}
+
+
+def _clamped(field: str, value: Any) -> int:
+    """One budget number, forced into the range that makes it a budget."""
+    spec = BUDGET_LIMITS[field]
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return spec["default"]
+    return max(spec["min"], min(spec["max"], number))
+
+
 @dataclass
 class Budget:
     max_steps: int = 40
@@ -651,15 +704,16 @@ class Budget:
     @classmethod
     def from_config(cls, overrides: Optional[Dict[str, Any]] = None) -> "Budget":
         settings = get_config()
-        budget = cls(
-            max_steps=int(settings.get("agent_max_steps", 40)),
-            max_seconds=int(settings.get("agent_max_seconds", 900)),
-            max_navigations=int(settings.get("agent_max_navigations", 30)),
-            max_domains=int(settings.get("agent_max_domains", 10)),
-        )
+        budget = cls(**{
+            field: _clamped(field, settings.get(spec["key"], spec["default"]))
+            for field, spec in BUDGET_LIMITS.items()
+        })
+        # A per-run override is clamped by the same rule. It arrives from the
+        # request body, so trusting it would be a way to ask for a run with no
+        # ceiling at all.
         for key, value in (overrides or {}).items():
-            if hasattr(budget, key) and isinstance(value, int) and value > 0:
-                setattr(budget, key, value)
+            if key in BUDGET_LIMITS:
+                setattr(budget, key, _clamped(key, value))
         return budget
 
     def as_dict(self) -> Dict[str, Any]:
@@ -1084,5 +1138,9 @@ def status() -> Dict[str, Any]:
         "desktop_control_enabled": bool(settings.get("agent_desktop_control_enabled", False)),
         "critical_actions_enabled": bool(settings.get("agent_allow_critical_actions", False)),
         "budget": Budget.from_config().as_dict(),
+        # What each of those numbers is and what it may be set to, so the panel
+        # draws its inputs from the same bounds the kernel enforces rather than
+        # from a second copy in the browser that can drift out of agreement.
+        "budget_limits": {field: dict(spec) for field, spec in BUDGET_LIMITS.items()},
         "active_runs": active_runs(),
     }

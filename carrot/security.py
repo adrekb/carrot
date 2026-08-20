@@ -66,7 +66,13 @@ LEGACY_TOKEN_PATH = os.path.join(
 # which has no session token and cannot be given one. It is safe to leave open
 # because it is useless without a `state` this process generated and is still
 # holding in memory — an unknown state is rejected before anything happens.
-PUBLIC_PATHS = {"/", "/api/health", "/favicon.ico", "/api/auth/callback"}
+# `/api/pair` is reachable without a token because a phone that has never
+# been paired has no token to present — that is the entire point of it.
+# What stands in for authentication there is the six-character code
+# showing on the computer, which is open for five minutes, spent on first
+# use, and shut by five wrong guesses. See pairing.py.
+PUBLIC_PATHS = {"/", "/api/health", "/favicon.ico", "/api/auth/callback",
+                "/api/pair", "/api/pair/requirements"}
 PUBLIC_PREFIXES = (
     "/css/", "/js/", "/vendor/", "/assets/", "/docs", "/openapi.json", "/redoc",
     # Local webhooks carry their own per-hook token, checked in constant time,

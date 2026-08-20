@@ -337,3 +337,46 @@ class TestChartsAreDataNotMarkup:
         the model still holds the numbers, not become a blank card in chat."""
         with pytest.raises(artifacts.ArtifactError):
             artifacts.create("chart", "<svg>nope</svg>")
+
+
+class TestCorrectingAnArtifact:
+    """The unrendered ones are the reason this exists: LaTeX that did not
+    compile, a mermaid diagram with a typo on line four, a chart one column
+    short. All of them are text that is nearly right, and until now the only
+    thing to do with a nearly-right artifact was ask the model again."""
+
+    def test_text_kinds_can_be_corrected_in_place(self, isolated_db):
+        made = artifacts.create("mermaid", "graph TD; A-->B", title="flow")
+        updated = artifacts.update(made["id"], "graph TD; A-->C")
+        assert updated["id"] == made["id"], "the id has to survive"
+        assert updated["content"] == "graph TD; A-->C"
+
+    def test_the_id_survives_because_a_message_refers_to_it(self, isolated_db):
+        """A correction that minted a new artifact would leave the old one
+        still embedded in what was said, and the new one belonging to
+        nothing."""
+        made = artifacts.create("markdown", "# first", conversation_id="c1")
+        artifacts.update(made["id"], "# second")
+        assert [a["id"] for a in artifacts.for_conversation("c1")] == [made["id"]]
+
+    @pytest.mark.parametrize("kind,content", [
+        ("image", "data:image/png;base64,iVBORw0KGgo="),
+        ("video", "data:video/mp4;base64,AAAA"),
+    ])
+    def test_output_is_not_editable(self, isolated_db, kind, content):
+        """An image is the output of something rather than the something, so
+        editing its content would mean editing base64."""
+        made = artifacts.create(kind, content)
+        with pytest.raises(artifacts.ArtifactNotEditable):
+            artifacts.update(made["id"], "anything")
+
+    def test_an_edit_is_sanitised_like_a_creation(self, isolated_db):
+        """"The model wrote this" and "the user edited it" are the same trust
+        level — which is to say not one that lets script into the app."""
+        made = artifacts.create("svg", '<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>')
+        out = artifacts.update(
+            made["id"], '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>')
+        assert "script" not in out["content"]
+
+    def test_editing_something_that_is_gone_is_not_a_crash(self, isolated_db):
+        assert artifacts.update("nosuchid", "x") is None

@@ -85,10 +85,18 @@ function renderDestinationPicker() {
         <option value="${escHtml(option.value)}" title="${escHtml(option.help)}"
                 ${option.value === current ? 'selected' : ''}>${escHtml(option.label)}</option>`).join('');
 
+    // "Send", not "Send to Chat". The picker immediately to its left already
+    // says Chat; printing the same word again in the button next to it reads
+    // as two controls that both do something with chat, rather than as one
+    // control and the place it points. Where it goes stays on the hover, for
+    // the button and the picker both.
     const button = document.getElementById('doc-send-btn');
     if (button) {
         const spec = docDestinations.find(d => d.id === docDestination);
-        button.textContent = spec ? `Send to ${spec.label}` : 'Send';
+        button.textContent = 'Send';
+        button.title = spec
+            ? `Send this note (or the selected text) to ${spec.label}`
+            : 'Send this note (or the selected text)';
     }
 }
 
@@ -178,31 +186,63 @@ async function sendDocToAgent() {
 
     const title = document.getElementById('note-title').value.trim() || 'Untitled note';
     const label = partial ? `${title} (selection)` : title;
-    const payload = {
+    await dispatchDoc({
         text,
         note_id: currentNoteId,
         title: label,
         conversation_id: currentConversationId,
         destination: docDestination,
         option: docOption,
-    };
+    }, label);
+}
+
+// Where a piece of a document goes, given a destination. Split out of
+// `sendDocToAgent` so that a *group* — a marked region with its own route —
+// travels the same three paths as the whole note rather than growing a second
+// implementation that drifts from this one.
+// `quiet` is what a batch run passes, and it changes two things.
+//
+// **It does not leave the document.** Sending one group is a decision to go
+// and watch it; running twenty is a decision to stay where you are. Flipping
+// the tab per group would drag the user through research, agent and chat and
+// back, and the whole reason a group carries its own progress bar is so the
+// document can be the place you watch from.
+//
+// **Chat sends rather than stages.** Staging is the right answer for one
+// document — it becomes a chip and you type the question that goes with it.
+// In a batch it is the wrong answer twice: nobody is there to type twenty
+// questions, and a "Run all" that finishes by putting twenty chips in the tray
+// has run nothing at all.
+async function dispatchDoc(payload, label, options = {}) {
+    const docDestination = payload.destination;
+    const quiet = !!options.quiet;
 
     if (docDestination === 'research') {
-        switchTab('research');
+        if (!quiet) switchTab('research');
         prepareResearchPanes(label);
         await streamResearchInto(payload);
         return;
     }
     if (docDestination === 'agent') {
-        switchTab('agent');
+        if (!quiet) switchTab('agent');
         prepareAgentPanes();
         await streamAgentInto(payload);
         return;
     }
 
-    switchTab('workspace');
+    // Chat is the one destination that is a conversation rather than a job, so
+    // the document is staged instead of sent: it becomes a chip in the
+    // composer and the box is left empty and focused for the question. The
+    // other two fire immediately because "send this to Research" is already
+    // the whole instruction.
+    if (!quiet) switchTab('workspace');
+    if (!quiet && typeof stageDocument === 'function' && stageDocument(label, payload.text)) {
+        const input = document.getElementById('cmd-input');
+        if (input) input.focus();
+        return;
+    }
     clearChatEmpty();
-    appendMessage('user', text);
+    appendMessage('user', payload.text);
     if (!currentConversationId) {
         document.getElementById('chat-title').textContent = label.slice(0, 42);
     }

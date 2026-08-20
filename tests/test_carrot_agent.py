@@ -240,13 +240,14 @@ def _script(monkeypatch, steps):
     """Drive the loop through a fixed sequence of decisions."""
     remaining = list(steps)
 
-    def fake_decide(task, surface, plan, history):
+    def fake_decide(task, surface, plan, history, prior=""):
         return remaining.pop(0) if remaining else {
             "action": "finish", "arguments": {"summary": "done"}, "thought": "",
         }
 
     monkeypatch.setattr(agent, "decide", fake_decide)
-    monkeypatch.setattr(agent, "make_plan", lambda task, surface: "1. do the thing")
+    monkeypatch.setattr(agent, "make_plan",
+                        lambda task, surface, prior="": "1. do the thing")
 
 
 def test_a_run_records_its_plan_and_finishes(isolated_db, fake_ollama, monkeypatch):
@@ -301,7 +302,7 @@ def test_desktop_control_stays_refused_while_it_is_switched_off(isolated_db, fak
 
 def test_a_run_stops_at_its_step_budget(isolated_db, fake_ollama, monkeypatch):
     """A model that never finishes is stopped by the budget, not by luck."""
-    monkeypatch.setattr(agent, "make_plan", lambda task, surface: "plan")
+    monkeypatch.setattr(agent, "make_plan", lambda task, surface, prior="": "plan")
     monkeypatch.setattr(agent, "decide", lambda *a, **k: {
         "action": "launch_app", "arguments": {"app": "never-allowed"}, "thought": "",
     })

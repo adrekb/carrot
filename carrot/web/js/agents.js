@@ -212,7 +212,13 @@ function makeResearchHandler() {
     let report = '';
 
     return event => {
-        if (event.run_id) researchRunId = event.run_id;
+        if (event.run_id) {
+            researchRunId = event.run_id;
+            // A group in a document that sent this needs the run's id to watch
+            // it — see js/docgroups.js. Reported here because this is the only
+            // place the id exists before the run is over.
+            if (typeof groupRunStarted === 'function') groupRunStarted('research', event.run_id);
+        }
         if (event.stage) traceLine('research-trace', `${event.stage}: ${event.detail || ''}`, 'stage');
         // The same checklist chat uses. Sub-questions run in parallel, so
         // they tick out of order as each thread lands — which is honest about
@@ -399,17 +405,82 @@ function renderPolicy(policy) {
             : '<span class="muted small">No stored credentials.</span>';
     }
 
-    const budget = document.getElementById('policy-budget');
-    if (budget) {
-        budget.textContent =
-            `A run stops after ${policy.budget.max_steps} steps, ${policy.budget.max_seconds}s, ` +
-            `${policy.budget.max_navigations} navigations, or ${policy.budget.max_domains} distinct sites.`;
-    }
+    renderBudget(policy);
 
     const desktopToggle = document.getElementById('policy-desktop-control');
     if (desktopToggle) desktopToggle.checked = !!policy.desktop_control_enabled;
     const criticalToggle = document.getElementById('policy-critical');
     if (criticalToggle) criticalToggle.checked = !!policy.critical_actions_enabled;
+}
+
+// ===== The limits, as four numbers you can change =====
+//
+// They were a sentence: "A run stops after 40 steps, 900s, 30 navigations, or
+// 10 distinct sites." Every one of those was already read from config, so the
+// only thing missing between reading that sentence and disagreeing with it was
+// somewhere to type — and the only way to actually change one was to edit the
+// database by hand.
+//
+// The fields are built from the server's own `budget_limits` rather than from a
+// list here, so the bounds on the input are the bounds the kernel enforces. A
+// second copy in the browser is a copy that drifts, and the direction it drifts
+// in is an input that happily accepts a number the run will quietly ignore.
+
+function renderBudget(policy) {
+    const host = document.getElementById('policy-budget');
+    if (!host) return;
+    const limits = policy.budget_limits || {};
+    const fields = Object.keys(limits);
+    if (!fields.length) {
+        // An older backend. Say the numbers rather than drawing controls that
+        // would write keys it does not read.
+        host.textContent = `A run stops after ${policy.budget.max_steps} steps, `
+            + `${policy.budget.max_seconds}s, ${policy.budget.max_navigations} navigations, `
+            + `or ${policy.budget.max_domains} distinct sites.`;
+        return;
+    }
+    host.innerHTML = '<p class="muted small budget-lead">A run stops at whichever '
+        + 'of these it reaches first.</p>'
+        + '<div class="budget-grid">'
+        + fields.map(field => {
+            const spec = limits[field];
+            return `
+              <label class="budget-field" title="${escHtml(spec.help || '')}">
+                <span class="budget-label">${escHtml(spec.label)}</span>
+                <input type="number" class="budget-input" data-field="${escHtml(field)}"
+                       value="${Number(policy.budget[field])}"
+                       min="${Number(spec.min)}" max="${Number(spec.max)}" step="1">
+                <span class="budget-unit">${escHtml(spec.unit || '')}</span>
+                <span class="budget-range">${Number(spec.min)}–${Number(spec.max)}</span>
+              </label>`;
+        }).join('')
+        + '</div>';
+    for (const input of host.querySelectorAll('.budget-input')) {
+        input.onchange = () => saveBudgetField(input, limits[input.dataset.field]);
+    }
+}
+
+/** Write one limit, having first put it inside the range it is allowed.
+ *
+ * Clamped here as well as on the server — not instead of. The server is what
+ * makes the bound real; this is what stops the box showing 9999 next to a run
+ * that will stop at 500 and leaving the reader to wonder which is true.
+ */
+async function saveBudgetField(input, spec) {
+    if (!spec) return;
+    // An emptied box is "put it back", not "make it as small as possible".
+    // `Number('')` is 0, which is finite and clamps to the floor — so clearing
+    // the field gave 30 seconds while typing gibberish gave the default 900,
+    // from the same gesture meaning the same thing.
+    const typed = String(input.value).trim();
+    let value = typed === '' ? spec.default : Math.round(Number(typed));
+    if (!Number.isFinite(value)) value = spec.default;
+    value = Math.max(spec.min, Math.min(spec.max, value));
+    input.value = value;
+    await api(`/api/config/${spec.key}`, {
+        method: 'PUT', body: JSON.stringify(value),
+    });
+    loadAgent();
 }
 
 async function setPolicyFlag(key, value) {
@@ -467,6 +538,78 @@ function agentStep(html, kind) {
     step.innerHTML = html;
     host.appendChild(step);
     step.scrollIntoView({ block: 'nearest' });
+    return step;
+}
+
+// ===== A step is one line until you ask for the rest =====
+//
+// Two of the events a run emits carry an arbitrary amount of text, and both
+// were being printed in full:
+//
+//   * an **action**, whose arguments fall back to `JSON.stringify` when the
+//     server sends no label — so `finish` arrived as its entire summary,
+//     escaped, on one unwrapped line of mono;
+//   * an **observation**, which for a page read is the whole page. A car
+//     specification site came through as four hundred lines of nav links
+//     before the answer that mentioned none of them.
+//
+// The run log is a record of what happened, not the thing you are reading; the
+// answer underneath is. So each step is a line, and the line says what kind of
+// thing it is and how much of it there is. What was on screen is one click
+// away rather than in front of the answer.
+//
+// Folded only when there is something to fold. A step whose whole content fits
+// on the line gets no chevron, because a disclosure that opens onto the text
+// already showing is a control that does nothing.
+
+const AGENT_LINE_CHARS = 110;
+
+function agentSize(text) {
+    const n = (text || '').length;
+    if (n < 1000) return n + ' chars';
+    return (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k chars';
+}
+
+/** A step whose body may be any length.
+ *
+ * `label` names what happened and is always on the line. `body` is the text of
+ * arbitrary size — the arguments, or what a page said. It goes on the line too
+ * when it fits there, and behind a chevron when it does not.
+ *
+ * The caller passes the body once and never previews it itself: the first
+ * version had the call sites building the preview *and* this function
+ * appending the body, which put the same sentence on the line twice for every
+ * short step.
+ */
+function agentFoldedStep(label, body, kind, bodyClass) {
+    const text = String(body == null ? '' : body);
+    const cls = bodyClass || 'agent-args';
+    const preview = text ? `<span class="${cls}">${escHtml(agentFirstLine(text))}</span>` : '';
+    if (!text.includes('\n') && text.length <= AGENT_LINE_CHARS) {
+        return agentStep(label + preview, kind);
+    }
+    const step = agentStep(
+        `<button type="button" class="agent-fold-line">`
+        + `<svg class="ico agent-fold-chev"><use href="#i-chevron"/></svg>`
+        + `<span class="agent-fold-head">${label}${preview}</span>`
+        + `<span class="agent-fold-size">${escHtml(agentSize(text))}</span>`
+        + `</button>`
+        + `<pre class="agent-fold-body hidden">${escHtml(text)}</pre>`,
+        kind);
+    const line = step.querySelector('.agent-fold-line');
+    const full = step.querySelector('.agent-fold-body');
+    line.onclick = () => {
+        const opening = full.classList.contains('hidden');
+        full.classList.toggle('hidden', !opening);
+        step.classList.toggle('open', opening);
+    };
+    return step;
+}
+
+/** The first line of something, flattened, for the line of a folded step. */
+function agentFirstLine(text, limit = 90) {
+    const flat = String(text || '').replace(/\s+/g, ' ').trim();
+    return flat.length <= limit ? flat : flat.slice(0, limit).trimEnd() + '…';
 }
 
 // ===== The work log =====
@@ -546,7 +689,13 @@ async function runAgentStream(url, payload) {
     try {
         await streamTrace(url, payload,
             event => {
-                if (event.run_id) agentRunId = event.run_id;
+                if (event.run_id) {
+                    agentRunId = event.run_id;
+                    // A group in a document that sent this needs the run's id to watch
+                    // it — see js/docgroups.js. Reported here because this is the only
+                    // place the id exists before the run is over.
+                    if (typeof groupRunStarted === 'function') groupRunStarted('agent', event.run_id);
+                }
                 if (event.plan) {
                     const plan = document.getElementById('agent-plan');
                     plan.classList.remove('hidden');
@@ -567,10 +716,15 @@ async function runAgentStream(url, payload) {
                 if (event.approval_resolved) dismissApprovalPrompt(event.approval_resolved.id);
                 if (event.thought) agentStep(`<span class="agent-thought">${escHtml(event.thought)}</span>`, 'thought');
                 if (event.action) {
-                    agentStep(
-                        `<span class="agent-action">${escHtml(event.action.action)}</span>` +
-                        `<span class="agent-args">${escHtml(event.action.label || JSON.stringify(event.action.arguments))}</span>`,
-                        'action');
+                    // A label when the server sent one — it is written for a
+                    // person. Otherwise the arguments, which are JSON and
+                    // occasionally the whole answer, so they get a preview on
+                    // the line and the rest behind the chevron.
+                    const detail = event.action.label
+                        || JSON.stringify(event.action.arguments || {}, null, 2);
+                    agentFoldedStep(
+                        `<span class="agent-action">${escHtml(event.action.action)}</span>`,
+                        detail, 'action');
                 }
                 if (event.denied) {
                     agentStep(
@@ -578,7 +732,10 @@ async function runAgentStream(url, payload) {
                         'denied');
                 }
                 if (event.observation) {
-                    agentStep(`<span class="agent-observation">${escHtml(event.observation.result)}</span>`, 'observation');
+                    // What the page or the tool actually said. For a read that
+                    // is the whole page, which used to go on screen entire.
+                    const seen = String(event.observation.result || '');
+                    agentFoldedStep('', seen, 'observation', 'agent-observation');
                 }
                 if (event.injection_warning) {
                     agentStep(

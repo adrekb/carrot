@@ -283,9 +283,46 @@ def resolve_destination(value: str) -> Tuple[str, str, str]:
     return head, tail, ""
 
 
+# A group's markers are editor syntax, not content.
+#
+# They are HTML comments so that they are invisible in every markdown reader
+# and survive a round trip through the editor untouched — but "invisible when
+# rendered" is not the same as "absent from the file", and the file is what
+# gets sent. A note with two groups in it arrived at the model as prose
+# interleaved with `<!--carrot:group to=research/quick files=existing.py-->`:
+# an instruction-shaped string, aimed at something that is not the model,
+# sitting in the middle of the user's question.
+#
+# The `@/` directives go the same way and for the same reason. They are how a
+# document says where it is going, which is a fact about the send and not part
+# of what is being asked — and a group's send writes them explicitly, so
+# leaving them in would mean every routed paragraph reached the model with
+# `@/to/research/deep` stapled to it.
+#
+# Stripped here rather than at each send, because `resolve` is the one place
+# every destination's prompt is built and so the one place it cannot be
+# forgotten. Both are stripped *after* parsing, so removing them from the
+# prompt costs nothing that reads them.
+GROUP_MARKER = re.compile(r"^[ ]{0,3}<!--[ ]*/?[ ]*carrot:group[^>]*-->[ ]*$", re.MULTILINE)
+DIRECTIVE_LINE = re.compile(r"^[ ]{0,3}@/(?:to|model)/[^\s]*[ ]*$", re.MULTILINE)
+
+
+def strip_directives(text: str) -> str:
+    """A document with its markers and routing lines out, and no new gaps.
+
+    Only whole lines: `@/file/router.py` written mid-sentence is a citation the
+    reader put there on purpose, and a paragraph that mentions its own sources
+    should still read like one.
+    """
+    without = DIRECTIVE_LINE.sub("", GROUP_MARKER.sub("", text or ""))
+    # A marker sat between blank lines, so taking it out leaves three newlines
+    # where the document had one paragraph break.
+    return re.sub(r"\n{3,}", "\n\n", without).strip()
+
+
 def resolve(text: str, task: str = router_mod.TASK_CHAT) -> ResolvedDoc:
     """Turn a document (or a selection from one) into a ready-to-send turn."""
-    resolved = ResolvedDoc(prompt=(text or "").strip())
+    resolved = ResolvedDoc(prompt=strip_directives(text))
     references = parse_references(text)
     resolved.references = references
 

@@ -118,6 +118,32 @@ class TestTheEndpoint:
         expected = sum(1 for s in payload["sources"] if s["present"] and s["enabled"])
         assert payload["items"] == expected
 
+    def test_a_present_source_carries_the_text_itself(self, client):
+        """The row said "Answer style · 408 chars" and nothing about what those
+        408 characters instruct. The size answers "is it there"; the question
+        people actually have is what it says."""
+        payload = client.get("/api/context", params={"message": "hi"}).json()
+        style = next(s for s in payload["sources"] if s["id"] == "style")
+        assert style["present"] is True
+        assert style["preview"].strip()
+
+    def test_an_absent_source_previews_nothing(self, client):
+        payload = client.get("/api/context", params={"message": "hi"}).json()
+        calendar = next(s for s in payload["sources"] if s["id"] == "calendar")
+        assert calendar["preview"] == ""
+        assert calendar["truncated"] is False
+
+    def test_a_long_block_is_cut_and_says_so(self, client, isolated_db):
+        """A preview that silently stops is one that gets trusted about the
+        wrong things — so the cut is reported and the UI prints both numbers."""
+        long_style = "Write plainly. " * 400
+        config.set_config("answer_style_custom", long_style)
+        payload = client.get("/api/context", params={"message": "hi"}).json()
+        style = next(s for s in payload["sources"] if s["id"] == "style")
+        if style["chars"] > app_mod.CONTEXT_PREVIEW_CHARS:
+            assert style["truncated"] is True
+            assert len(style["preview"]) <= app_mod.CONTEXT_PREVIEW_CHARS
+
     def test_a_toggle_persists(self, client):
         client.post("/api/context/toggle", json={"source": "memory", "enabled": False})
         payload = client.get("/api/context").json()
@@ -181,13 +207,43 @@ class TestTheChip:
         js = (WEB / "js" / "context.js").read_text(encoding="utf-8")
         assert "source.present ? '' : ' idle'" in js
         css = (WEB / "css" / "style.css").read_text(encoding="utf-8")
-        assert ".context-row.idle" in css
+        # `.context-item` rather than `.context-row`: the row became a
+        # container the moment it grew a second control, so the state that
+        # describes the whole source moved up to it.
+        assert ".context-item.idle" in css
 
     def test_off_is_marked_twice_over(self):
         """On a list of ten rows a colour change alone reads as "less
         important" rather than "not going"."""
         css = (WEB / "css" / "style.css").read_text(encoding="utf-8")
-        assert "line-through" in re.search(r"\.context-row\.off[^}]*\}", css).group(0)
+        assert "line-through" in re.search(r"\.context-item\.off[^}]*\}", css).group(0)
+
+    def test_the_tick_and_the_eye_are_different_controls(self):
+        """One button meant the only thing you could do to a source was silence
+        it — you could never find out what it was you had silenced."""
+        js = (WEB / "js" / "context.js").read_text(encoding="utf-8")
+        assert "data-toggle=" in js and "data-open=" in js
+        assert "openContextSource" in js
+
+    def test_the_block_opens_on_the_reader_page_not_in_the_row(self):
+        """Ten rows that can each grow four hundred words is a list that
+        reorders itself under the hand every time you look at one — and a
+        layer over the composer lands under the picker and the command bar,
+        both of which sit higher in the stack. So it is a page you close."""
+        index = (WEB / "index.html").read_text(encoding="utf-8")
+        assert 'id="view-reader"' in index
+        assert 'id="reader-text"' in index
+        assert "openReaderPage" in (WEB / "js" / "context.js").read_text(encoding="utf-8")
+        app_js = (WEB / "js" / "app.js").read_text(encoding="utf-8")
+        assert "switchTab('reader')" in app_js
+        # Closing returns you where you were, rather than to a tab the reader
+        # picked on your behalf.
+        assert "readerReturnTab" in app_js
+
+    def test_the_reader_is_shared_with_the_scheduled_reports(self):
+        """Two pages differing only in their heading is two things to maintain
+        and one of them going stale."""
+        assert "openReaderPage" in (WEB / "js" / "scheduled.js").read_text(encoding="utf-8")
 
     def test_the_script_is_loaded(self):
         index = (WEB / "index.html").read_text(encoding="utf-8")

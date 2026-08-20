@@ -562,7 +562,13 @@ class OllamaClient:
     ) -> str:
         body = {
             "model": model or self.default_model,
-            "messages": messages,
+            # The third of the three ways into /api/chat, and the one that was
+            # still sending the transcript unmerged. A GGUF whose template
+            # raises on a second system block answers 500 for the whole
+            # request — see `merge_system_messages` — and this is the call the
+            # planner and the search-shaping steps go through, so a model that
+            # chatted fine died on anything that plans first.
+            "messages": merge_system_messages(messages),
             "stream": False,
             "options": self._options(model or self.default_model),
         }

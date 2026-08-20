@@ -28,6 +28,8 @@ import re
 import shutil
 import subprocess
 import sys
+
+from . import runner
 from typing import Any, Dict, List, Optional
 
 INSTALL_TIMEOUT = 300
@@ -105,10 +107,22 @@ def _python_argv(name: str) -> List[str]:
 
 
 def python_executable() -> str:
-    """The interpreter Run uses — which is the one that must get the package."""
+    """The interpreter Run uses — which is the one that must get the package.
+
+    Inside the frozen desktop build `sys.executable` is `carrot-backend.exe`,
+    not a Python, and running it with `-m pip` re-launches the app: a second
+    backend that tries to bind the port the first one is already holding, fails
+    with "only one usage of each socket address", and installs nothing. So the
+    frozen case has to go and find a real interpreter.
+
+    Which is `runner.find_python`, not a second copy of it — that one already
+    knows that `python3` is absent on Windows and that the `python.exe` on PATH
+    there is often a zero-byte App Execution Alias which opens the Microsoft
+    Store instead of running anything.
+    """
     if getattr(sys, "frozen", False):
-        return shutil.which("python3") or shutil.which("python") or "python3"
-    return sys.executable or shutil.which("python3") or "python3"
+        return runner.find_python() or "python3"
+    return sys.executable or runner.find_python() or "python3"
 
 
 MANAGERS: Dict[str, Manager] = {

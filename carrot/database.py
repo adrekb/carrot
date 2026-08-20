@@ -662,6 +662,20 @@ ADDED_COLUMNS = (
     ("goals", "message_id", "TEXT DEFAULT ''"),
     ("goals", "source_text", "TEXT DEFAULT ''"),
     ("goals", "decided_at", "TEXT DEFAULT ''"),
+    # The conversation's summary as a *document* — the .md you can hand to
+    # another chat instead of pasting a transcript into it. It shares a row
+    # with the rolling summary because both answer "what was this about", but
+    # it is a separate column because they are not the same artefact: the
+    # rolling one is prose for the model and covers only the turns that have
+    # aged out of the window, and this one is markdown for a person and covers
+    # the whole thread.
+    ("conversation_summaries", "digest", "TEXT DEFAULT ''"),
+    ("conversation_summaries", "digest_through", "INTEGER DEFAULT 0"),
+    ("conversation_summaries", "digest_updated_at", "TEXT DEFAULT ''"),
+    # Which model wrote it — empty when none would, which the UI says out loud
+    # rather than leaving the reader to wonder why the summary is a list of
+    # their own sentences.
+    ("conversation_summaries", "digest_model", "TEXT DEFAULT ''"),
 )
 
 # Indexes over columns that ADDED_COLUMNS creates. These cannot live in SCHEMA,

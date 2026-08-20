@@ -226,11 +226,25 @@ class TestItReachesTheChat:
         assert "matplotlib" in description
 
     def test_the_panel_gives_a_video_room_to_be_16_by_9(self):
+        """It used to be given 460px, because a fixed guess was the only tool
+        available: the frame is cross-origin by design and cannot be measured
+        from outside. The guess was wrong in both directions — 16:9 in a narrow
+        card letterboxed inside it, a wide one got a scrollbar.
+
+        The frame reports its own height now, so the guarantee has moved: the
+        video is never wider than the card, keeps its aspect ratio, and the
+        card follows whatever that comes to.
+        """
         from pathlib import Path
 
         features = (Path(__file__).resolve().parents[1] / "carrot" / "web" / "js"
                     / "features.js").read_text(encoding="utf-8")
-        assert "'video' ? '460px'" in features
+        shim = features[features.index("const ARTIFACT_SHIM"):
+                        features.index("function artifactFrame")]
+        assert "img, video, canvas, svg, iframe, table { max-width: 100%; }" in shim
+        assert "img, video, canvas { height: auto; }" in shim
+        assert "carrotArtifactHeight" in shim
+        assert "data-auto-height" in features or "autoHeight" in features
 
 
 def test_a_video_artifact_needs_a_real_video(isolated_db):

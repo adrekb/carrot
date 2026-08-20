@@ -548,7 +548,7 @@ class TestPythonIsFound:
         # `python3` is the Linux and macOS name; Windows ships `python.exe`.
         with patch.object(runner.shutil, "which",
                           side_effect=lambda n: r"C:\Python\python.exe" if n == "python" else None):
-            assert runner._find_python() == r"C:\Python\python.exe"
+            assert runner.find_python() == r"C:\Python\python.exe"
 
     def test_the_py_launcher_is_the_last_resort(self):
         from unittest.mock import patch
@@ -557,7 +557,7 @@ class TestPythonIsFound:
 
         with patch.object(runner.shutil, "which",
                           side_effect=lambda n: r"C:\Windows\py.exe" if n == "py" else None):
-            assert runner._find_python() == r"C:\Windows\py.exe"
+            assert runner.find_python() == r"C:\Windows\py.exe"
 
     def test_the_microsoft_store_stub_is_skipped(self, tmp_path):
         from unittest.mock import patch
@@ -571,7 +571,7 @@ class TestPythonIsFound:
         stub.write_bytes(b"")
         with patch.object(runner.shutil, "which",
                           side_effect=lambda n: str(stub) if n == "python3" else None):
-            assert runner._find_python() is None
+            assert runner.find_python() is None
 
     def test_nothing_installed_is_none_not_a_crash(self):
         from unittest.mock import patch
@@ -579,7 +579,7 @@ class TestPythonIsFound:
         from carrot import runner
 
         with patch.object(runner.shutil, "which", return_value=None):
-            assert runner._find_python() is None
+            assert runner.find_python() is None
 
 
 class TestTheQuestionFormIsWiredUp:

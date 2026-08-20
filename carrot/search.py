@@ -1,5 +1,6 @@
 import re
 import json
+import sqlite3
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 
@@ -68,6 +69,38 @@ def extract_keywords(query: str):
     tokens = re.findall(r"[a-z0-9_]+", query_lower)
     keywords = [t for t in tokens if t not in SEMANTIC_STOP_WORDS and len(t) > 1]
     return " ".join(keywords)
+
+
+# What a person types is not an FTS5 expression, and it was being handed to one
+# as if it were.
+#
+# `MATCH ?` parses its argument as a query language: parentheses group, a colon
+# is a column filter, a hyphen and an apostrophe are syntax, and `AND`/`OR`/
+# `NOT` are operators. So a search for `don't` raised `fts5: syntax error near
+# "'"`, `C:/path/to/file` raised `no such column: C`, and `a-b` raised
+# `no such column: b`. Every one of those reached the browser as a 500 —
+# ordinary punctuation in an ordinary search, answered with a stack trace.
+#
+# Each word is wrapped in double quotes instead, which makes it a phrase
+# literal: inside quotes FTS5 treats everything but a quote character as text,
+# and a doubled `""` is how a quote is escaped. Words are then joined by
+# nothing, which is FTS5's implicit AND — the behaviour the page already had
+# for a plain multi-word query, now the behaviour for every query.
+#
+# This does mean a typed `OR` is a search for the word "or" rather than an
+# operator. That is the right trade: nothing in the UI ever offered the query
+# language, and a search box that answers most punctuation with a server error
+# is broken in a way that a search box without boolean operators is not.
+def fts_query(text: str) -> str:
+    """One user's words, as an FTS5 expression that cannot be a syntax error."""
+    terms = []
+    for token in str(text or "").split():
+        # Strip the one character that still means something inside quotes,
+        # then quote. A token that was nothing but quotes drops out.
+        cleaned = token.replace('"', "").strip()
+        if cleaned:
+            terms.append(f'"{cleaned}"')
+    return " ".join(terms)
 
 
 def get_embedding(text: str) -> Optional[List[float]]:
@@ -165,6 +198,14 @@ def search_conversations(query: str, limit: int = 20, hybrid_weight: float = 0.5
     if not keywords:
         return {"results": [], "query": query, "time_range": None}
 
+    # The words a person typed become an expression that cannot be a syntax
+    # error. Kept separate from `keywords`, because the embedding below wants
+    # the prose and not the quoting.
+    match = fts_query(keywords)
+    if not match:
+        return {"results": [], "query": query, "time_range": time_info,
+                "count": 0, "mode": "fts_only"}
+
     from . import workspaces as workspaces_mod
 
     scope_sql, scope_params = workspaces_mod.scope_clause(
@@ -172,36 +213,16 @@ def search_conversations(query: str, limit: int = 20, hybrid_weight: float = 0.5
     )
 
     conn = get_db()
-    if time_info:
-        rows = conn.execute(
-            """
-            SELECT m.rowid as message_id, m.conversation_id, c.title as conversation_title,
-                   m.role, m.content, m.timestamp, rank
-            FROM messages_fts m
-            JOIN conversations c ON m.conversation_id = c.id
-            WHERE m.messages_fts MATCH ?
-              AND m.timestamp >= ?
-              AND m.timestamp <= ?
-            """ + scope_sql + """
-            ORDER BY rank
-            LIMIT ?
-            """,
-            (keywords, start, end, *scope_params, limit * 3),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            """
-            SELECT m.rowid as message_id, m.conversation_id, c.title as conversation_title,
-                   m.role, m.content, m.timestamp, rank
-            FROM messages_fts m
-            JOIN conversations c ON m.conversation_id = c.id
-            WHERE m.messages_fts MATCH ?
-            """ + scope_sql + """
-            ORDER BY rank
-            LIMIT ?
-            """,
-            (keywords, *scope_params, limit * 3),
-        ).fetchall()
+    # Belt to the quoting's braces. `fts_query` is what stops a syntax error
+    # being possible; this is what stops a future edit to it from turning one
+    # into a 500 again. An unparseable query is an empty result, not a crash.
+    try:
+        rows = _fts_rows(conn, match, time_info, start, end,
+                         scope_sql, scope_params, limit)
+    except sqlite3.OperationalError:
+        conn.close()
+        return {"results": [], "query": query, "time_range": time_info,
+                "count": 0, "mode": "fts_only"}
 
     fts_results = []
     for row in rows:
@@ -217,7 +238,49 @@ def search_conversations(query: str, limit: int = 20, hybrid_weight: float = 0.5
             }
         )
     conn.close()
+    return _rank_and_format(fts_results, keywords, query, time_info, hybrid_weight, limit)
 
+
+def _fts_rows(conn, match, time_info, start, end, scope_sql, scope_params, limit):
+    """The keyword pass, as one statement or the other.
+
+    Two of them because the time-bounded query carries two more placeholders,
+    and the dates go in as parameters rather than into the SQL — which is the
+    reason this is a branch rather than another string being concatenated on.
+    """
+    if time_info:
+        return conn.execute(
+            """
+            SELECT m.rowid as message_id, m.conversation_id, c.title as conversation_title,
+                   m.role, m.content, m.timestamp, rank
+            FROM messages_fts m
+            JOIN conversations c ON m.conversation_id = c.id
+            WHERE m.messages_fts MATCH ?
+              AND m.timestamp >= ?
+              AND m.timestamp <= ?
+            """ + scope_sql + """
+            ORDER BY rank
+            LIMIT ?
+            """,
+            (match, start, end, *scope_params, limit * 3),
+        ).fetchall()
+    return conn.execute(
+        """
+        SELECT m.rowid as message_id, m.conversation_id, c.title as conversation_title,
+               m.role, m.content, m.timestamp, rank
+        FROM messages_fts m
+        JOIN conversations c ON m.conversation_id = c.id
+        WHERE m.messages_fts MATCH ?
+        """ + scope_sql + """
+        ORDER BY rank
+        LIMIT ?
+        """,
+        (match, *scope_params, limit * 3),
+    ).fetchall()
+
+
+def _rank_and_format(fts_results, keywords, query, time_info, hybrid_weight, limit):
+    """The semantic pass over what the keywords found, and the answer."""
     if not fts_results:
         return {
             "results": [],
