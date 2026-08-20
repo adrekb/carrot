@@ -2230,6 +2230,34 @@ def _restore_carried(carried: List[str], final: str) -> str:
 # One. The shape is a preference the model can be told once; asking twice for
 # the same rewrite spends a round on something it has already declined to do.
 MAX_ROWS_NUDGES = 1
+
+# ===== What the server says it read =====
+#
+# Everything else in this file *estimates* the prompt — four characters to the
+# token — and compares that estimate to a window it believes it has. Both
+# halves have been wrong at once: the estimator is approximate by construction,
+# and the window was being read off the model's ceiling rather than the
+# `num_ctx` the request actually runs in. When two wrong numbers agree with
+# each other nothing notices, and Ollama silently drops the front of the prompt
+# — the system directive — while the meter reports 12% full.
+#
+# `prompt_eval_count` comes back on the final frame and is measured by the thing
+# doing the truncating. Two uses, and the second is the quieter one:
+#
+#   * a prompt that fills the window was truncated to fit, so say so and make
+#     room before the next round rather than after the answer comes back wrong;
+#   * the ratio between what was measured and what we estimated calibrates the
+#     estimator for the rest of the turn. A turn full of JSON tool results is
+#     denser than four characters per token and a turn of English is thinner;
+#     one real measurement is worth more than a better constant.
+#
+# A prompt at 98% of the window is treated as truncated. Not 100%: the server
+# leaves itself room to generate, so a truncated prompt lands just under the
+# ceiling rather than exactly on it.
+OVERFLOW_FRACTION = 0.98
+# Below this the ratio is noise — a short prompt measured against a short
+# estimate swings wildly and would make the meter jump around for no reason.
+CALIBRATION_MIN_TOKENS = 500
 MAX_SUPPORT_NUDGES = 1
 # The checker has to see at least what the model saw. It was 2500 against a
 # 6000-character page, so it was grading an answer on 40% of the source — and
@@ -3333,6 +3361,11 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
     # to argue twice about the same paragraph would spend the budget on style.
     support_nudges = 0
     rows_nudges = 0
+    # Ground truth from the last round, and what we had estimated for it.
+    measured_prompt = 0
+    measured_window = 0
+    estimate_scale = 1.0
+    truncated = False
     final_text = ""
     stalled = False
     # What the provider said when it stopped talking to us, if it did. This
@@ -3415,8 +3448,11 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
         # round whether or not it is near the limit, because the meter this
         # feeds is most useful while there is still room to act on it — a bar
         # that only appears once the turn is doomed is an epitaph.
-        used = tools_tokens + ctxwin_mod.estimate_tokens(
+        estimated = tools_tokens + ctxwin_mod.estimate_tokens(
             json.dumps(working, default=str))
+        # Corrected by whatever the server last told us about its own reading
+        # of a prompt this shape. One measurement beats a better constant.
+        used = int(estimated * estimate_scale)
         # How many more rounds there is room for, which is what the nudges and
         # the replanner mean when they say "rounds left".
         #
@@ -3438,7 +3474,7 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
             yield {"context": {"used": used, "window": window,
                                "fraction": round(used / window, 3),
                                "round": round_index + 1}}
-            if used > window * CONTEXT_STOP_FRACTION and round_index:
+            if (used > window * CONTEXT_STOP_FRACTION or truncated) and round_index:
                 # Make room before giving up the tools.
                 #
                 # Ending the turn here is right for a question and wrong for
@@ -3504,6 +3540,11 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
                     yield {"thinking": event["text"]}
                 elif event["type"] == "tool_calls":
                     tool_calls.extend(event["calls"])
+                elif event["type"] == "usage":
+                    # Measured, not estimated. Handled after the stream so the
+                    # answer is not interrupted to talk about bookkeeping.
+                    measured_prompt = int(event.get("prompt_tokens") or 0)
+                    measured_window = int(event.get("window") or 0)
                 else:
                     # Through the gate rather than straight out. Text held back
                     # for one chunk is the price of catching a marker split
@@ -3534,6 +3575,27 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
             break
 
         content_str = "".join(content_parts)
+
+        # What the request actually cost, against what we thought it would.
+        if measured_prompt:
+            if estimated >= CALIBRATION_MIN_TOKENS:
+                estimate_scale = max(0.5, min(2.0, measured_prompt / estimated))
+            ceiling = measured_window or window
+            was_truncated = bool(ceiling) and measured_prompt >= ceiling * OVERFLOW_FRACTION
+            if was_truncated and not truncated:
+                # Said out loud. The user's copy of this failure was an answer
+                # that had lost its instructions and did not know it — the one
+                # thing worse than running out of room is running out of room
+                # silently.
+                yield {"stage": "context",
+                       "detail": f"the model read {measured_prompt:,} tokens of a "
+                                 f"{ceiling:,}-token window — the prompt was truncated "
+                                 "to fit, so some of it never reached the model"}
+            truncated = was_truncated
+            yield {"context": {"used": measured_prompt, "window": ceiling,
+                               "fraction": round(measured_prompt / ceiling, 3) if ceiling else 0,
+                               "round": round_index + 1, "measured": True}}
+            measured_prompt = 0
 
         # Stopped mid-answer. What was already written is kept and stored:
         # a stop is "that is enough", not "throw it away", and half an answer
