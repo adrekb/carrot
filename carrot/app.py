@@ -2227,6 +2227,9 @@ def _restore_carried(carried: List[str], final: str) -> str:
 # else — no question, no narrative of its own to defend — which is the whole
 # reason it can mark its own work here at all.
 
+# One. The shape is a preference the model can be told once; asking twice for
+# the same rewrite spends a round on something it has already declined to do.
+MAX_ROWS_NUDGES = 1
 MAX_SUPPORT_NUDGES = 1
 # The checker has to see at least what the model saw. It was 2500 against a
 # 6000-character page, so it was grading an answer on 40% of the source — and
@@ -2308,6 +2311,76 @@ SUPPORT_NUDGE = (
 
 def _support_nudge(claims: List[str]) -> str:
     return SUPPORT_NUDGE.format(listed="\n".join(f"- {c}" for c in claims))
+
+
+# ===== An answer that is a table someone typed out =====
+#
+# The reported reply was fifteen lines of
+#
+#     2026 Chevrolet Corvette ZR1X Horsepower: 1250 hp @ 7000 RPM [url]
+#     2026 Chevrolet Corvette ZR1X Torque: 973 lb-ft [url]
+#
+# — the full name of the car restated at the head of every line, one field per
+# line, nothing joined to anything. It is a spreadsheet transposed into prose
+# and it reads as one; the two disagreeing torque figures sit as separate rows
+# rather than as the contradiction the reader has to resolve.
+#
+# The preamble now asks for sentences, and a model this size will still do it,
+# so there is a gate as well as a rule. It only runs where a gate *can* run:
+# multi-turn buffers the prose until the checks pass, so nothing has reached
+# the screen and the answer can be sent back. Single-pass streams as it goes —
+# the same reason `_single_pass_gap` is not wired in.
+#
+# **The repeated opening is the signal, not the colons.** A list of
+# "Displacement: 5.5L" lines is a perfectly good spec list and sometimes the
+# right answer. What is never right is restating the subject on every line:
+# that only happens when a model is walking a table row by row, and it is the
+# one shape that cannot be defended as a choice.
+ROW_MIN_LINES = 4
+ROW_MIN_PREFIX_WORDS = 3
+ROW_PREFIX_SHARE = 0.75
+
+ROWS_NUDGE = (
+    "Every line of that answer opens with the same words — \"{prefix}\" — and "
+    "carries one field after a colon. That is a table typed out line by line, "
+    "not an answer.\n"
+    "Write it again as prose, to the person who asked. Name the subject once "
+    "and then talk about it; put related figures in the same sentence; where "
+    "two sources give different numbers for the same thing, say that in a "
+    "sentence instead of listing both as though they were separate facts. Keep "
+    "every figure and every source link you already have."
+)
+
+
+def _leading_words(line: str, count: int) -> str:
+    return " ".join(line.split()[:count]).lower()
+
+
+def _rows_not_prose(answer: str) -> Optional[str]:
+    """The repeated opening, if the answer is a transposed table.
+
+    Returns the phrase every line begins with, which is what the nudge quotes
+    back — a rule the model can see itself having broken is one it can fix.
+    """
+    lines = [ln.strip() for ln in (answer or "").splitlines() if ln.strip()]
+    # Headings and fenced code are somebody structuring an answer on purpose.
+    lines = [ln for ln in lines if not ln.startswith("#") and not ln.startswith("```")]
+    if len(lines) < ROW_MIN_LINES:
+        return None
+
+    prefix = _leading_words(lines[0], ROW_MIN_PREFIX_WORDS)
+    if len(prefix.split()) < ROW_MIN_PREFIX_WORDS:
+        return None
+    sharing = [ln for ln in lines
+               if _leading_words(ln, ROW_MIN_PREFIX_WORDS) == prefix]
+    if len(sharing) < max(ROW_MIN_LINES, int(len(lines) * ROW_PREFIX_SHARE)):
+        return None
+    # And each of those is a field rather than a sentence — a colon with
+    # something after it, no full stop before the colon.
+    fields = [ln for ln in sharing if re.search(r"^[^.!?]{3,}?:\s*\S", ln)]
+    if len(fields) < len(sharing):
+        return None
+    return " ".join(lines[0].split()[:ROW_MIN_PREFIX_WORDS])
 
 
 def _search_gate_gap(searches: int, reads: int) -> Optional[str]:
@@ -2612,6 +2685,26 @@ SEARCH_PREAMBLE = (
     "with something you have heard of — if the results show it means something "
     "other than you assumed, say so in the answer, and if you genuinely cannot "
     "identify it, ask rather than answering about a different thing.\n"
+    # A run shipped its entire deliberation as the answer: a numbered
+    # "Thinking Process", the sources restated as bullet notes, three drafts of
+    # the reply, and a closing "Let's go." — then the actual answer underneath
+    # it. Everything above the answer was the model working, printed at the
+    # person who asked. Said here rather than in one mode's directive because
+    # it happened on a search turn and could happen on any of them.
+    "Deliberating is not answering. Whatever weighing up, drafting or "
+    "checking-against-the-brief you do, do not write it in the reply: no "
+    "\"Thinking Process\", no restating your instructions back, no numbered "
+    "plan of how you will respond, no draft followed by a revision. The reply "
+    "begins at the first word of the answer.\n"
+    # The same run then answered as fifteen lines of
+    # "2026 Chevrolet Corvette ZR1X Horsepower: 1250 hp @ 7000 RPM [url]" —
+    # the subject restated on every line, each fact alone, nothing joined up.
+    # It is a spreadsheet transposed into prose, and it reads as one.
+    "Write sentences, not rows. Name the subject once and then talk about it: "
+    "an answer that repeats the full name of the thing at the start of every "
+    "line, one field per line, is a table someone has typed out longhand. "
+    "Related figures belong in the same sentence, and figures that disagree "
+    "belong in a sentence that says so.\n"
 )
 
 MULTI_SEARCH_DIRECTIVE = (
@@ -3216,6 +3309,7 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
     # Capped at one. It costs a model call and a round, and a checker allowed
     # to argue twice about the same paragraph would spend the budget on style.
     support_nudges = 0
+    rows_nudges = 0
     final_text = ""
     stalled = False
     # What the provider said when it stopped talking to us, if it did. This
@@ -3558,6 +3652,22 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
                     working.append({"role": "user", "content": reason})
                     # The carried opening was part of the answer just judged, so
                     # it must not be prepended a second time to the rewrite.
+                    carried = []
+                    continue
+
+            # After the truth checks, because a rewrite for shape should be
+            # done on text that has already had its unsourced claims taken out
+            # — otherwise the model reformats a paragraph it is about to be
+            # asked to change again.
+            if not stalled and gated and rows_nudges < MAX_ROWS_NUDGES:
+                repeated = _rows_not_prose(answer)
+                if repeated and rounds_left >= 1:
+                    rows_nudges += 1
+                    reason = ROWS_NUDGE.format(prefix=repeated)
+                    yield {"gate": {"reason": reason, "rows": repeated,
+                                    "searches": searches, "reads": reads}}
+                    working.append({"role": "assistant", "content": content_str})
+                    working.append({"role": "user", "content": reason})
                     carried = []
                     continue
 

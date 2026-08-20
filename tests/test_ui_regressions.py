@@ -1114,3 +1114,59 @@ class TestARunLogIsALogNotTheAnswer:
         agents = read("js", "agents.js")
         assert "function agentSize(" in agents
         assert "agent-fold-size" in agents
+
+
+class TestABareUrlCitationIsStillACitation:
+    """An answer arrived with every source written as `[https://…/2026/]` —
+    bare URLs in square brackets, which is not markdown link syntax. Two things
+    went wrong with that, and the second is not cosmetic.
+
+    **No chips.** `markCitations` skipped a link whose text was a URL, on the
+    reasoning that a URL is not a name — and the length cap would have dropped
+    it anyway, a real one being eighty characters against a cap of thirty-four.
+    So the answer rendered as raw addresses wrapping across three lines each, in
+    an app that has a chip for exactly this.
+
+    **Broken links.** GFM autolinking takes the closing bracket *into* the URL,
+    so every href ended `%5D` and every citation was a 404. They are there to be
+    checked; one that cannot be opened is worse than none.
+    """
+
+    def block(self, name):
+        js = read("js", "features.js")
+        return js.split(f"function {name}(")[1].split("\n}")[0]
+
+    def test_a_bare_url_is_named_by_its_domain(self):
+        # A URL is not a name, but it contains one. The rest is on the hover
+        # and in the href, where it can still be checked.
+        block = self.block("markCitations")
+        assert "citeDomain(fixed)" in block
+        assert "link.textContent = domain;" in block
+
+    def test_the_domain_drops_the_www_nobody_reads(self):
+        assert r"replace(/^www\./i, '')" in self.block("citeDomain")
+
+    def test_the_swallowed_bracket_is_taken_back_out_of_the_href(self):
+        block = self.block("repairBracketedUrl")
+        assert "%5D" in block
+        assert "link.setAttribute('href'" in block
+
+    def test_it_only_fires_when_the_bracket_was_punctuation(self):
+        # An address that genuinely ends in %5D, with no unclosed `[` before
+        # it, is left alone.
+        block = self.block("repairBracketedUrl")
+        assert "before.nodeType !== 3" in block
+        assert r"/\[$/.test(before.nodeValue)" in block
+
+    def test_the_href_is_repaired_before_it_is_read(self):
+        # The title and the domain are both taken off the address, so fixing it
+        # afterwards would leave a chip named from the broken one.
+        block = self.block("markCitations")
+        assert block.index("repairBracketedUrl(link)") < block.index("citeDomain(fixed)")
+
+    def test_a_source_list_is_still_left_alone(self):
+        # A URL that is the whole of its own line is a sources list. The new
+        # branch has to respect that too, not only the old one.
+        block = self.block("markCitations")
+        bare = block[block.index("if (/^https?:/i.test(text)) {"):]
+        assert "childNodes.length === 1" in bare[:bare.index("continue;\n        }")]

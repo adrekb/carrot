@@ -962,3 +962,155 @@ class TestTheCheckerSeesWhatTheModelSaw:
         source = __import__("pathlib").Path(
             app.__file__).read_text(encoding="utf-8")
         assert "item['text'][:DIGEST_CHARS]" in source
+
+
+class TestTheAnswerIsNotTheWorking:
+    """The same reported question, one failure later. Having found the right
+    car this time, the model shipped its entire deliberation as the reply: a
+    numbered "Thinking Process", the sources restated as bullet notes, a list
+    of constraints it had invented for itself, three drafts of the answer and a
+    closing "Let's go." — and then, underneath all of it, the answer.
+
+    Then the answer itself was fifteen lines of
+
+        2026 Chevrolet Corvette ZR1X Horsepower: 1250 hp @ 7000 RPM [url]
+
+    with the full name of the car restated on every line, one field per line,
+    and the two disagreeing torque figures listed as separate rows rather than
+    as the disagreement it is. A spreadsheet typed out longhand.
+
+    Both go in the preamble rather than in one mode's directive: it happened on
+    a search turn and could happen on any of them.
+    """
+
+    def preamble(self):
+        from carrot import app as A
+
+        return A.SEARCH_PREAMBLE
+
+    def test_the_deliberation_is_not_the_reply(self):
+        text = self.preamble()
+        assert "Deliberating is not answering" in text
+        assert "The reply begins at the first word of the answer" in text
+
+    def test_the_specific_shapes_it_took_are_named(self):
+        # A rule stated only in the abstract is one a model reads past. These
+        # are the exact artefacts that arrived on screen.
+        text = self.preamble()
+        assert "Thinking Process" in text
+        assert "no draft followed by a revision" in text
+        assert "restating your instructions back" in text
+
+    def test_an_answer_is_sentences_rather_than_rows(self):
+        text = self.preamble()
+        assert "Write sentences, not rows" in text
+        assert "Name the subject once" in text
+
+    def test_disagreeing_figures_belong_in_one_sentence(self):
+        # 973 lb-ft and 828 lb-ft arrived as two unrelated rows, which reads as
+        # two facts rather than as one contradiction the reader has to resolve.
+        assert "belong in a sentence that says so" in self.preamble()
+
+    def test_every_search_mode_carries_it(self):
+        from carrot import app as A
+
+        for mode in (A.SEARCH_SINGLE, A.SEARCH_MULTI):
+            directive = A.search_directive(mode)
+            assert "Deliberating is not answering" in directive, mode
+            assert "Write sentences, not rows" in directive, mode
+
+
+class TestAnAnswerThatIsATableTypedOutLonghand:
+    """The reply that prompted this was fifteen lines of
+
+        2026 Chevrolet Corvette ZR1X Horsepower: 1250 hp @ 7000 RPM [url]
+        2026 Chevrolet Corvette ZR1X Torque: 973 lb-ft [url]
+
+    with the car's full name restated at the head of every line and nothing
+    joined to anything. The two disagreeing torque figures sat as separate rows
+    rather than as the contradiction a reader has to resolve.
+
+    The preamble asks for sentences; a 9B model will still do it, so there is a
+    gate as well as a rule. The signal is the **repeated opening**, not the
+    colons: a list of "Displacement: 5.5L" lines is a perfectly good spec list
+    and sometimes the right answer, but restating the subject on every line
+    only happens when a model is walking a table row by row.
+    """
+
+    def rows(self, answer):
+        from carrot import app as A
+
+        return A._rows_not_prose(answer)
+
+    def test_the_reported_answer(self):
+        answer = "\n".join(
+            f"2026 Chevrolet Corvette ZR1X {field}: {value} [https://carbuzz.com/x]"
+            for field, value in [
+                ("Drivetrain", "All-Wheel Drive"),
+                ("Transmission", "8-speed dual-clutch automatic"),
+                ("Horsepower", "1250 hp @ 7000 RPM"),
+                ("Torque", "973 lb-ft"),
+                ("Engine", "5.5-Liter twin-turbo LT7 V8 hybrid"),
+            ])
+        assert self.rows(answer) == "2026 Chevrolet Corvette"
+
+    def test_an_honest_spec_list_is_left_alone(self):
+        # Same colons, no repeated subject. This is a list because the content
+        # is a list, which is allowed.
+        assert self.rows("Displacement: 5.5 litres\nHorsepower: 1,250 hp\n"
+                         "Torque: 828 lb-ft\nTransmission: 8-speed dual-clutch") is None
+
+    def test_prose_is_left_alone(self):
+        assert self.rows(
+            "The 2026 Corvette ZR1X is the all-wheel-drive version of the ZR1.\n"
+            "Its 5.5-litre V8 makes 1,064 hp and a front motor adds 186 more.\n"
+            "Sources disagree on torque: Carbuzz gives 973 lb-ft, Car and\n"
+            "Driver lists 828 at 6,000 rpm.") is None
+
+    def test_a_claim_first_bullet_list_is_left_alone(self):
+        # The shape the balanced answer style actually asks for.
+        assert self.rows(
+            "- **Power.** 1,250 hp combined.\n"
+            "- **Torque.** Sources disagree: 973 or 828 lb-ft.\n"
+            "- **Weight.** 3,914 lb for the coupe.\n"
+            "- **Price.** From $207,395.") is None
+
+    def test_headed_prose_is_left_alone(self):
+        assert self.rows(
+            "## Powertrain\n"
+            "Powertrain figures are as follows and the engine is a 5.5 litre V8.\n"
+            "## Performance\n"
+            "Performance is quick, reaching 60 mph in about two seconds.") is None
+
+    def test_three_rows_are_not_enough_to_call_it(self):
+        # A short run of parallel lines is a coincidence; four is a habit.
+        assert self.rows("Alpha One: a\nAlpha One: b\nAlpha One: c") is None
+
+    def test_the_nudge_quotes_the_phrase_back(self):
+        from carrot import app as A
+
+        text = A.ROWS_NUDGE.format(prefix="2026 Chevrolet Corvette")
+        # A rule the model can see itself having broken is one it can fix.
+        assert "2026 Chevrolet Corvette" in text
+        assert "Keep every figure and every source link" in text
+        assert "say that in a sentence" in text
+
+    def test_it_only_runs_where_a_gate_can_run(self):
+        # Multi-turn buffers the prose until the checks pass, so nothing has
+        # reached the screen and the answer can be sent back. Single-pass
+        # streams as it goes — the same reason `_single_pass_gap` is unwired.
+        source = read_app_source()
+        block = source[source.index("if not stalled and gated and rows_nudges"):]
+        assert "gated" in block[:80]
+
+    def test_it_asks_once(self):
+        from carrot import app as A
+
+        assert A.MAX_ROWS_NUDGES == 1
+
+
+def read_app_source():
+    from pathlib import Path
+
+    return (Path(__file__).resolve().parents[1] / "carrot" / "app.py").read_text(
+        encoding="utf-8")
