@@ -70,16 +70,88 @@ _NOTE = ("\n\n[… {dropped:,} characters trimmed to make room in the context "
 _PROSE_NOTE = "\n\n[… {dropped:,} characters of this earlier reply trimmed for room.]"
 
 
+# ===== Which four hundred characters =====
+#
+# Trimming kept the head of a result, which is right for a directory listing or
+# a search result — the head identifies it — and wrong for a page. The head of a
+# web page is the navigation. A reported turn read a car specification site and
+# what came back began "Autocatalog Blog Login Register Car", and there were
+# sixty more lines of it before any specification; cut to four hundred
+# characters that page contributes its own menu and nothing else.
+#
+# So the trim keeps the head *and* the passages that mention what was asked.
+# A page reduced to its relevant paragraphs still supports the citation that
+# was taken from it; a page reduced to its menu supports nothing, and the model
+# either re-reads it — spending the round the trim was meant to save — or
+# answers without it.
+#
+# No model call, for the reason in the module docstring. This is a substring
+# search over paragraphs, which cannot fail and costs nothing.
+
+# Enough to say what the source is: the URL and the origin banner a read
+# carries, which is how the model tells one trimmed result from another.
+HEAD_CHARS = 220
+# A paragraph shorter than this is a nav item or a caption, not a passage.
+MIN_PASSAGE_CHARS = 40
+# Words too short or too common to mean anything as a match.
+_STOP = {
+    "the", "and", "for", "with", "what", "which", "who", "whom", "that", "this",
+    "from", "into", "about", "are", "was", "were", "has", "have", "had", "its",
+    "how", "why", "when", "where", "does", "did", "you", "your", "can", "will",
+    "specs", "spec", "tell", "give", "list", "show", "find", "please",
+}
+
+
+def terms_of(question: str) -> Tuple[str, ...]:
+    """The words worth looking for in a page, taken from the question."""
+    import re
+
+    words = re.findall(r"[a-z0-9][a-z0-9.\-]{2,}", str(question or "").lower())
+    return tuple(dict.fromkeys(w for w in words if w not in _STOP))
+
+
+def _relevant(content: str, keep: int, terms: Tuple[str, ...]) -> str:
+    """The head, plus the passages that mention the question, within `keep`.
+
+    Document order throughout: a page read out of order is harder to quote from
+    than a shorter one, and the model is going to cite this.
+    """
+    head = content[:HEAD_CHARS]
+    room = keep - len(head)
+    if room <= 0 or not terms:
+        return content[:keep]
+
+    lowered = [p.strip() for p in content[HEAD_CHARS:].split("\n") if p.strip()]
+    kept: List[str] = []
+    for passage in lowered:
+        if len(passage) < MIN_PASSAGE_CHARS:
+            continue
+        low = passage.lower()
+        if not any(term in low for term in terms):
+            continue
+        if len(passage) > room:
+            passage = passage[:room]
+        kept.append(passage)
+        room -= len(passage) + 1
+        if room <= 0:
+            break
+    if not kept:
+        return content[:keep]
+    return head + "\n…\n" + "\n".join(kept)
+
+
 def _content(message: Dict[str, Any]) -> str:
     return str(message.get("content") or "")
 
 
-def _trim(message: Dict[str, Any], keep: int, note: str) -> Tuple[Dict[str, Any], int]:
+def _trim(message: Dict[str, Any], keep: int, note: str,
+          terms: Tuple[str, ...] = ()) -> Tuple[Dict[str, Any], int]:
     """A copy of `message` with its content cut, and the tokens that frees."""
     content = _content(message)
     if len(content) <= keep:
         return message, 0
-    shortened = content[:keep] + note.format(dropped=len(content) - keep)
+    kept = _relevant(content, keep, terms) if terms else content[:keep]
+    shortened = kept + note.format(dropped=len(content) - len(kept))
     freed = estimate_tokens(content) - estimate_tokens(shortened)
     trimmed = dict(message)
     trimmed["content"] = shortened
@@ -93,7 +165,7 @@ def tokens_in(messages: List[Dict[str, Any]]) -> int:
     return estimate_tokens(json.dumps(messages, default=str))
 
 
-def prunable_tokens(messages: List[Dict[str, Any]]) -> int:
+def prunable_tokens(messages: List[Dict[str, Any]], terms: Tuple[str, ...] = ()) -> int:
     """What pruning would free, without doing it.
 
     The caller needs this before it decides between pruning and giving up: a
@@ -109,7 +181,10 @@ def prunable_tokens(messages: List[Dict[str, Any]]) -> int:
     for role, keep, note in (("tool", TRIMMED_RESULT_CHARS, _NOTE),
                              ("assistant", TRIMMED_PROSE_CHARS, _PROSE_NOTE)):
         for _, message in _trimmable(messages, role):
-            total += _trim(message, keep, note)[1]
+            # With the same terms the real trim will use — a relevance-kept
+            # result is longer than a head-kept one, and an estimate taken
+            # without them promises room that pruning will not deliver.
+            total += _trim(message, keep, note, terms if role == "tool" else ())[1]
     return total
 
 
@@ -130,7 +205,8 @@ def _trimmable(messages: List[Dict[str, Any]], role: str):
     return [(i, messages[i]) for i in eligible]
 
 
-def prune(messages: List[Dict[str, Any]], free_tokens: int) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+def prune(messages: List[Dict[str, Any]], free_tokens: int,
+          terms: Tuple[str, ...] = ()) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Trim `messages` until roughly `free_tokens` have been recovered.
 
     Returns a new list and a report of what happened. Stops as soon as the
@@ -146,7 +222,7 @@ def prune(messages: List[Dict[str, Any]], free_tokens: int) -> Tuple[List[Dict[s
     # separate budgets mean anything: everything here is recoverable by calling
     # the tool again, and nothing below is.
     for index, message in _trimmable(out, "tool"):
-        trimmed, freed = _trim(message, TRIMMED_RESULT_CHARS, _NOTE)
+        trimmed, freed = _trim(message, TRIMMED_RESULT_CHARS, _NOTE, terms)
         if not freed:
             continue
         out[index] = trimmed

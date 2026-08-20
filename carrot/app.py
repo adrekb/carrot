@@ -2891,36 +2891,52 @@ def search_directive(mode: str) -> str:
 
 # What Ollama said a model can hold, kept between turns.
 #
-# `OllamaClient` caches this per instance, and a new instance was being built
-# for every turn — so the cache was always empty and every local turn paid an
-# HTTP round trip to /api/show before it could send its first token. A model's
-# ceiling does not change while it is installed; the setting layered on top of
-# it does, and that is read fresh below.
-_PROBED_WINDOWS: Dict[str, int] = {}
+# The cache that used to live here is gone, not lost: `OllamaClient` keeps
+# `_context_length` on the *class*, so the /api/show round trip happens once
+# per process however many client instances a turn builds. Measured: 2.0s on
+# the first call, 1.6ms from a second instance.
 
 
 def _window_tokens(resolved) -> int:
-    """How much this route can hold, or 0 when nobody knows.
+    """How much room this turn actually has, or 0 when nobody knows.
 
     Zero is not a failure to handle — it is the honest answer for a custom
     endpoint nobody has told us about, and it turns the context check off
     rather than inventing a ceiling and stopping turns at it.
+
+    **For a local model this is the window we ask for, not the one the model
+    could hold.** Those are different numbers and using the wrong one made the
+    whole context system report on a turn that was not happening:
+
+    `context_limit` is the model's ceiling — 262,144 for the Qwen3.8 9B distil.
+    `context_length` is what Carrot passes as `num_ctx`, which is that ceiling
+    clamped by the configured window, and defaults to 32,768 so a 256k KV cache
+    does not turn a laptop into a swap file. Ollama truncates at `num_ctx`.
+
+    Metering the ceiling meant the meter, the pruner, `rounds_left` and the
+    stop-and-answer gate all believed there were eight times more tokens than
+    the request would be allowed. Nothing ever pruned, because 30k of read pages
+    is nowhere near 90% of 262,144 — and Ollama quietly dropped the *front* of
+    the prompt instead, which is where the system directive lives. The reported
+    turn came back having written out its own deliberation and then a table,
+    with a list of constraints it had invented for itself: the model was
+    reconstructing instructions that had been evicted before it ever saw them.
+
+    The ceiling is still the right number for the model picker, which is
+    describing the model. This describes the turn.
     """
     try:
-        probed = 0
         if getattr(resolved, "local", False):
-            if resolved.model in _PROBED_WINDOWS:
-                probed = _PROBED_WINDOWS[resolved.model]
-            else:
-                try:
-                    from .ollama_client import OllamaClient
+            try:
+                from .ollama_client import OllamaClient
 
-                    probed = int(OllamaClient().context_limit(resolved.model) or 0)
-                except Exception:
-                    probed = 0
-                _PROBED_WINDOWS[resolved.model] = probed
+                effective = int(OllamaClient().context_length(resolved.model) or 0)
+            except Exception:
+                effective = 0
+            if effective:
+                return effective
         found = ctxwin_mod.window_for(
-            getattr(resolved, "provider", "") or "ollama", resolved.model, probed=probed)
+            getattr(resolved, "provider", "") or "ollama", resolved.model)
         return int(found.get("tokens") or 0)
     except Exception:
         return 0
@@ -3242,6 +3258,13 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
     yield {"search_mode": mode}
 
     tools = _available_tools(mode)
+    # What was actually asked, for the pruner. The last thing the user said
+    # before the turn started — everything appended after this point is a nudge
+    # written by us, and trimming pages against our own prompts would keep the
+    # paragraphs that talk about citations rather than the ones with the
+    # answer in them.
+    question_terms = pruning_mod.terms_of(next(
+        (m.get("content") for m in reversed(history) if m.get("role") == "user"), ""))
     # The old ceiling, kept only as the shape of "how much work is normal" for
     # the nudges that tell the model how many rounds it has left. What
     # actually stops the loop is the window filling up.
@@ -3429,9 +3452,16 @@ def _agentic_chat_events(history, resolved, skill=None, conversation_id=None,
                 # are separate and why nothing here calls a model.
                 before = used
                 want = int(used - window * CONTEXT_RESUME_FRACTION)
-                if pruning_mod.prunable_tokens(working) >= min(
+                # The question's own words, so a page is cut down to the part
+                # that answers it rather than to its first four hundred
+                # characters — which on a web page is the navigation. Taken
+                # from the history rather than from a `message` parameter this
+                # function does not have: the nudges append user turns of their
+                # own, so `working` no longer ends with the question by the
+                # time there is anything to prune.
+                if pruning_mod.prunable_tokens(working, question_terms) >= min(
                         want, int(window * MIN_WORTHWHILE_PRUNE)):
-                    working, pruned = pruning_mod.prune(working, want)
+                    working, pruned = pruning_mod.prune(working, want, question_terms)
                     used = tools_tokens + ctxwin_mod.estimate_tokens(
                         json.dumps(working, default=str))
                     trimmed = pruned["tool_results"] + pruned["replies"]
